@@ -9,77 +9,23 @@
 // Pair layout (u64): low 32 bits = key (only low 24 used), high 32 bits = index.
 //   key(pair)   = (uint)(pair & 0xFFFFFFFF)      // collision key, 24-bit
 //   index(pair) = (uint)(pair >> 32)             // element slot in this round
-// Radix: 8-bit digit x 3 passes over bytes 0,1,2 of the low word => sorts the
-// 24-bit key exactly. The sort is STABLE (LSD requires per-digit stability), so
-// equal-key runs preserve input order -- the oracle uses std::stable_sort by key.
+// Radix: tiled 4-bit digit x 6 passes over the low 24 bits => sorts the 24-bit
+// key exactly. The sort is STABLE (LSD requires per-digit stability), so equal-key
+// runs preserve input order -- the oracle uses std::stable_sort by key.
 //
-// WG (work-items per group) and the scan BLOCK are both SORT_WG. One element per
-// work-item in P1 (simple + correct; P4 tiles for speed). Launches are rounded up
-// to a multiple of SORT_WG and every kernel bounds-checks g < n, so any n works.
+// WG (work-items per group) and the scan BLOCK are both SORT_WG. Launches are
+// rounded up to a multiple of SORT_WG and every kernel bounds-checks g < n, so
+// any n works. Validated in isolation in tests/test_gpu_sort.cpp.
 
 #ifndef SORT_WG
 #define SORT_WG 256u
 #endif
-#define SORT_RADIX 256u          // 8-bit digit
-#define SORT_INVALID_DIGIT 0x100u // padding lanes (g>=n): never match a real digit
 
 inline uint sort_key(ulong pair)   { return (uint)(pair & 0xFFFFFFFFul); }
 inline uint sort_index(ulong pair)  { return (uint)(pair >> 32); }
 
-// --- radix pass, step 1: per-workgroup 256-bin histogram of one digit ----------
-// Writes the group's bin counts BIN-MAJOR: wghist[bin*ngroups + wg] = count.
-// Exclusive-scanning that bin-major array (scan_block/scan_add below) yields, at
-// [bin*ngroups+wg], the global base for this (wg,bin): (all elements in smaller
-// bins) + (this bin's elements in earlier workgroups). That is exactly the sorted
-// destination base the reorder needs.
-__kernel void radix_histogram(__global const ulong* pairs,
-                              __global uint* wghist,
-                              uint shift, uint n, uint ngroups) {
-    __local uint h[SORT_RADIX];
-    uint l = get_local_id(0);
-    for (uint i = l; i < SORT_RADIX; i += get_local_size(0)) h[i] = 0;
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    uint g = get_global_id(0);
-    if (g < n) {
-        uint d = (sort_key(pairs[g]) >> shift) & 0xFFu;
-        atomic_inc(&h[d]);
-    }
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    uint wg = get_group_id(0);
-    for (uint b = l; b < SORT_RADIX; b += get_local_size(0))
-        wghist[b * ngroups + wg] = h[b];
-}
-
-// --- radix pass, step 3: stable scatter to sorted positions --------------------
-// wgoffset[bin*ngroups+wg] is the exclusive-scanned base (from step 2). Each
-// element's destination = base(bin) + its stable rank among same-digit elements
-// earlier in THIS workgroup. Rank is an O(WG) count over the group's digits
-// (mean group is tiny; correctness-first -- P4 replaces with a local scan).
-__kernel void radix_reorder(__global const ulong* pairs_in,
-                            __global ulong* pairs_out,
-                            __global const uint* wgoffset,
-                            uint shift, uint n, uint ngroups) {
-    __local uint dig[SORT_WG];
-    uint l = get_local_id(0);
-    uint g = get_global_id(0);
-    ulong pair = 0;
-    uint d = SORT_INVALID_DIGIT;
-    if (g < n) { pair = pairs_in[g]; d = (sort_key(pair) >> shift) & 0xFFu; }
-    dig[l] = d;
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    if (g < n) {
-        uint rank = 0;
-        for (uint j = 0; j < l; ++j) if (dig[j] == d) ++rank;   // stable: earlier lanes first
-        uint wg = get_group_id(0);
-        pairs_out[wgoffset[d * ngroups + wg] + rank] = pair;
-    }
-}
-
 // ===========================================================================
-// Tiled CUB-style radix (P4): 4-bit digit x 6 passes. Each workgroup owns a
+// Tiled CUB-style radix (the production sort): 4-bit digit x 6 passes. Each workgroup owns a
 // TILE = SORT_WG * SORT_IPT block; a coalesced strided load stages the tile into
 // __local, then threads process BLOCKED sub-ranges so a per-thread private
 // histogram + a cross-thread scan gives each element its stable rank in local
@@ -248,14 +194,6 @@ __kernel void collision_emit(__global const ulong* pairs, __global const uint* o
 // Depends on bh3.cl (bh3_combine) and round.cl (BH3_MAX_LEAVES) -- compiled in
 // the order {bh3, round, sort}, so both symbols are visible here.
 // ===========================================================================
-
-// key_extract: one coalesced pass building the (key,index) pairs the radix sort
-// consumes. index = the element's slot in work[r]; key = its 24-bit collision key.
-__kernel void key_extract(uint N, __global const ulong* work, __global ulong* pairs) {
-    uint g = get_global_id(0);
-    if (g >= N) return;
-    pairs[g] = ((ulong)g << 32) | (uint)(work[(size_t)g*7] & 0xFFFFFFu);
-}
 
 // round_match_sorted: the coalescing match. Over the key-sorted pairs, each
 // equal-key run's START lane emits its C(m,2) children at the run's prefix-sum

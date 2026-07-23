@@ -274,8 +274,9 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
 
 // ===========================================================================
 // Phase-D3: sort-based collision finder (host driver for kernels/opencl/sort.cl).
-// Enabled per-solve by env MXBM_SORT_MATCH; replaces scatter()+match() with
-// key_extract -> stable radix sort -> collision run-scan -> coalesced emit.
+// The DEFAULT collision path (MXBM_LEGACY_MATCH opts back into scatter+match);
+// replaces scatter()+match() with (sort pair fused into mix) -> tiled radix sort
+// -> collision run-scan -> coalesced emit.
 // ===========================================================================
 namespace {
 constexpr uint32_t kSortWG = 256u;
