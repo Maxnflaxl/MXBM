@@ -85,7 +85,7 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     char device_row[256];
     std::snprintf(device_row, sizeof device_row,
         "%-17s%6.2f %6.2f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
-        "CPU 0 reference", s.sol60, 0.0, s.iter60,
+        s.device_label.c_str(), s.sol60, 0.0, s.iter60,
         shares.c_str(), best.c_str(),
         "--", "--", "--", "--", "--", "--");
 

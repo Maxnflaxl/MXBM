@@ -75,6 +75,7 @@ public:
         double best_share_units;
         long long last_latency_ms;          // -1 until the first record_result
         std::string pool;                   // "host:port"
+        std::string device_label;           // e.g. "NVIDIA GeForce RTX 4070 Ti SUPER" or "CPU 0 reference"
         long long connect_ms;               // TCP+TLS handshake duration
         std::chrono::seconds uptime;
         std::string last_job_id;
@@ -82,6 +83,12 @@ public:
         uint64_t reconnects;
     };
     Snapshot snapshot() const;
+
+    // Sets the miner/worker display name shown in the stats table and the
+    // /summary API (e.g. the GPU device name, or "CPU 0 reference"). Set once
+    // at startup after the solver backend is chosen; thread-safe. Defaults to
+    // "GPU 0" since the GPU solver is the default backend.
+    void set_device_label(std::string label);
 
     // Test seam (same documented-seam pattern as Client::handle_line and
     // Engine::submit_fn): defaults to std::chrono::steady_clock::now in the
@@ -134,6 +141,7 @@ private:
 
     std::string last_job_id_;
     double last_job_units_ = 0.0;
+    std::string device_label_ = "GPU 0";
 };
 
 } } // namespace mxbm::miner

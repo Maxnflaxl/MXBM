@@ -339,7 +339,7 @@ std::string HttpSummary::build_body() const {
 
     json worker;
     worker["Index"] = 0;
-    worker["Name"] = "CPU 0 reference";
+    worker["Name"] = s.device_label;
     worker["Performance"] = s.sol60;
     worker["Iterations_s"] = s.iter60;
     j["Workers"] = json::array();

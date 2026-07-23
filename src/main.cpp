@@ -206,6 +206,10 @@ int main(int argc, char** argv) {
     // attempted", so the fallback message doesn't claim "no GPU is
     // available" right under a console line that just said otherwise.
     bool gpu_attempt_failed = false;
+    // Worker/device label shown in the stats table, the /summary API, and the
+    // "Found a share" line. Defaults to the GPU (the default backend); set to
+    // the CPU reference below only when SolverRef is actually chosen.
+    std::string worker_label = "GPU 0";
 
 #ifdef MXBM_HAVE_OPENCL
     if ((opts.solver == "gpu" || opts.solver == "auto") && gpu::GpuSolver::available()) {
@@ -227,8 +231,10 @@ int main(int argc, char** argv) {
 #ifdef MXBM_HAVE_BEAM_ORACLE
     if (!solver && (opts.solver == "ref" || opts.solver == "auto")) {
         solver = std::make_unique<miner::SolverRef>();
+        worker_label = "CPU 0 reference";
     }
 #endif
+    stats.set_device_label(worker_label);
     if (!solver && gpu_attempt_failed) {
         ui::console::info("Falling back to monitoring jobs only (no solving)");
     } else if (!solver) {
@@ -250,7 +256,7 @@ int main(int argc, char** argv) {
     std::unique_ptr<miner::Engine> engine;
     if (solver) {
         engine = std::make_unique<miner::Engine>(client, *solver);
-        engine->submit_fn = [&client, &stats](const stratum::Solution& s) {
+        engine->submit_fn = [&client, &stats, worker_label](const stratum::Solution& s) {
             // Achieved difficulty for the "Found a share" line and the best-share
             // stat: decode the 104-byte solution back out of its hex `output`
             // field, SHA-256 it (same predicate Engine's own clears_difficulty()
@@ -265,7 +271,7 @@ int main(int argc, char** argv) {
                 uint8_t hash[32];
                 sha256(soln, sizeof soln, hash);
                 double units = pow::achieved_units(hash);
-                ui::console::share_found("CPU 0", units);
+                ui::console::share_found(worker_label.c_str(), units);
                 stats.record_share_found(units);
             }
             stats.record_submit(s.id);

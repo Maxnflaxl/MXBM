@@ -82,6 +82,7 @@ int main() {
         s.best_share_units = 1234.0;
         s.last_latency_ms = 12;
         s.pool = "pool.example.com:1130";
+        s.device_label = "CPU 0 reference";   // the stats row's worker name is now snapshot-driven
         s.connect_ms = 999;   // must be ignored: last_latency_ms >= 0 takes priority
         s.uptime = std::chrono::seconds(8130);
         s.last_job_id = "";
