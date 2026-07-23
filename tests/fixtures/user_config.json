@@ -1,0 +1,11 @@
+{
+  "RIG1": {
+    "ALGO": "BEAM-III",
+    "APIPORT": 8080,
+    "POOLS": [
+      {"POOL": "pool.example.com:1130", "USER": "addr123.rig1", "PASS": "x"},
+      {"POOL": "backup.example.com:3334", "USER": "addr123.rig1"}
+    ]
+  },
+  "RIG2": { "ALGO": "BEAM-III", "POOLS": [ {"POOL": "other.example.com:5252", "USER": "addr456"} ] }
+}

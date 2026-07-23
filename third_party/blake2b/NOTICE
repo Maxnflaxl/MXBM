@@ -1,0 +1,4 @@
+BLAKE2 reference C implementation (blake2.h, blake2-impl.h, blake2b-ref.c)
+Copyright 2012, Samuel Neves <sneves@dei.uc.pt>.
+Licensed under CC0 1.0 Universal (public domain). https://blake2.net
+Vendored into MXBM as third_party/blake2b/ so the core is self-contained.

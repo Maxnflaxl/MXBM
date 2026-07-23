@@ -1,0 +1,5 @@
+SHA-256 (sha256.h, sha256.c) — public-domain reference implementation of
+FIPS 180-4, written for MXBM from the published specification (no upstream
+project; standard message schedule, round constants, and compression
+function). No copyright is claimed; released into the public domain.
+Vendored into MXBM as third_party/sha256/ so the core is self-contained.

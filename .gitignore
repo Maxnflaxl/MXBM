@@ -1,0 +1,32 @@
+# Build output
+/build/
+/out/
+*.o
+*.obj
+*.exe
+*.cubin
+*.ptx
+*.fatbin
+
+# CUDA / HIP intermediates
+*.i
+*.ii
+*.gpu
+*.cudafe*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Benchmark raw captures (keep summaries, not multi-GB traces)
+/benchmarks/**/*.ncu-rep
+/benchmarks/**/*.nsys-rep
+/benchmarks/**/*.qdrep
+
+# Orchestration scratch / ledger — never commit
+/.superpowers/
+
+# Internal working docs (research, planning, roadmap, legal notes) — not shipped publicly
+/docs-internal/
