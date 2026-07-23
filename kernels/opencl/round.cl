@@ -126,8 +126,11 @@ __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_ide
         for (uint j = i + 1u; j < k; ++j) {
             if (ka != lkeys[j]) continue;
             uint sb = lidx[j];
-            uint la = lead_identity ? sa : all_lead_in[in_lead_off + sa];
-            uint lb = lead_identity ? sb : all_lead_in[in_lead_off + sb];
+            // Lead == the element's tree[0] == its first materialized leaf, so
+            // read it straight from leaves_in (all_lead is redundant with E3a and
+            // no longer written -- see below). in_lead_off/all_lead_in unused now.
+            uint la = lead_identity ? sa : leaves_in[(size_t)sa*BH3_MAX_LEAVES];
+            uint lb = lead_identity ? sb : leaves_in[(size_t)sb*BH3_MAX_LEAVES];
             uint left = sa, right = sb, ll = la;
             if (lb < la || (lb == la && sb < sa)) { left = sb; right = sa; ll = lb; }
             ulong ea[7], eb[7], ec[7];
@@ -137,7 +140,7 @@ __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_ide
             if (oi < out_capacity) {
                 for (int w = 0; w < 7; ++w) out_work[(size_t)oi*7 + w] = ec[w];
                 all_left[out_off + oi] = left; all_right[out_off + oi] = right;
-                all_lead[out_off + oi] = ll;
+                // all_lead[out_off + oi] = ll;  // DROPPED: == leaves_out[oi*9] (redundant)
                 // E3a: child's pre-order leaf prefix = left parent's full prefix
                 // (s_in leaves) then the right parent's, truncated to s_out. s_in
                 // is the FULL leaf count for work[r] (r<=4), so no left leaf is

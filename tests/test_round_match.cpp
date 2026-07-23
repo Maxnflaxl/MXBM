@@ -237,6 +237,13 @@ static void test_r1_match(Runtime& rt) {
     check(pb.capacity == N, "r=1: pipeline capacity == 4096");
 
     rt.write(pb.work[(1) & 1].get(), mixedWork.size() * 8, mixedWork.data());
+    // (E3a) Populate the round-1 leaf prefix (each seed's single leaf == tree[0])
+    // so match can grow child prefixes and read the lead from leaves[slot*9].
+    {
+        std::vector<uint32_t> lv1((size_t)pb.capacity * 9, 0);
+        for (uint32_t i = 0; i < N; ++i) lv1[(size_t)i*9] = in[i].tree[0];
+        rt.write(pb.leaves[(1) & 1].get(), lv1.size() * 4, lv1.data());
+    }
 
     scatter(rt, pb, bud, N, /*workIndex=*/1);
     {
@@ -255,15 +262,18 @@ static void test_r1_match(Runtime& rt) {
     // Round 1's children land in pb.work[2] (r+1), back-ref row (r-1)*capacity == 0.
     std::vector<uint64_t> gpuWork((size_t)outN * 7);
     rt.read(pb.work[(2) & 1].get(), gpuWork.size() * 8, gpuWork.data());
-    std::vector<uint32_t> allLeft(5 * (size_t)pb.capacity), allRight(5 * (size_t)pb.capacity), allLead(5 * (size_t)pb.capacity);
+    std::vector<uint32_t> allLeft(5 * (size_t)pb.capacity), allRight(5 * (size_t)pb.capacity);
     rt.read(pb.left.get(),  allLeft.size()  * 4, allLeft.data());
     rt.read(pb.right.get(), allRight.size() * 4, allRight.data());
-    rt.read(pb.lead.get(),  allLead.size()  * 4, allLead.data());
+    // Lead == the child's first materialized leaf (all_lead dropped). Round-1
+    // children live in work[2] = leaves[(1+1)&1], AoS stride 9.
+    std::vector<uint32_t> outLeaves((size_t)pb.capacity * 9);
+    rt.read(pb.leaves[(1 + 1) & 1].get(), outLeaves.size() * 4, outLeaves.data());
     std::vector<uint32_t> gpuLeft(outN), gpuRight(outN), gpuLead(outN);
     for (uint32_t i = 0; i < outN; ++i) {
         gpuLeft[i]  = allLeft[i];
         gpuRight[i] = allRight[i];
-        gpuLead[i]  = allLead[i];
+        gpuLead[i]  = outLeaves[(size_t)i * 9];   // child's lead == its leaf[0]
     }
 
     check_multiset_eq(cpu_keys(cpuChildren), gpu_keys(gpuWork, gpuLeft, gpuRight, outN), "r=1");
@@ -561,15 +571,20 @@ static void test_r3_match(Runtime& rt) {
 
     std::vector<uint64_t> gpuWork((size_t)outN * 7);
     rt.read(pb.work[(4) & 1].get(), gpuWork.size() * 8, gpuWork.data());
-    std::vector<uint32_t> allLeft(5 * (size_t)capacity), allRight(5 * (size_t)capacity), allLead(5 * (size_t)capacity);
+    std::vector<uint32_t> allLeft(5 * (size_t)capacity), allRight(5 * (size_t)capacity);
     rt.read(pb.left.get(),  allLeft.size()  * 4, allLeft.data());
     rt.read(pb.right.get(), allRight.size() * 4, allRight.data());
-    rt.read(pb.lead.get(),  allLead.size()  * 4, allLead.data());
+    // Lead is no longer a separate array (all_lead dropped) -- it IS each element's
+    // first materialized leaf. Input leaves = work[3]=leaves[3&1]; child leaves =
+    // work[4]=leaves[(3+1)&1] (AoS, stride 9).
+    std::vector<uint32_t> inLeaves((size_t)capacity * 9), outLeaves((size_t)capacity * 9);
+    rt.read(pb.leaves[3 & 1].get(),       inLeaves.size()  * 4, inLeaves.data());
+    rt.read(pb.leaves[(3 + 1) & 1].get(), outLeaves.size() * 4, outLeaves.data());
     std::vector<uint32_t> gpuLeft(outN), gpuRight(outN), gpuLead(outN);
     for (uint32_t i = 0; i < outN; ++i) {
         gpuLeft[i]  = allLeft[outOff + i];
         gpuRight[i] = allRight[outOff + i];
-        gpuLead[i]  = allLead[outOff + i];
+        gpuLead[i]  = outLeaves[(size_t)i * 9];   // child's lead == its leaf[0]
     }
 
     check_multiset_eq(cpu_keys(cpuChildren), gpu_keys(gpuWork, gpuLeft, gpuRight, outN), "r=3");
@@ -583,8 +598,8 @@ static void test_r3_match(Runtime& rt) {
     // the forced-pair survivor count.
     int orderMismatches = 0, equalLeadCount = 0;
     for (uint32_t i = 0; i < outN; ++i) {
-        uint32_t leadL = allLead[inLeadOff + gpuLeft[i]];
-        uint32_t leadR = allLead[inLeadOff + gpuRight[i]];
+        uint32_t leadL = inLeaves[(size_t)gpuLeft[i] * 9];   // lead == input elem's leaf[0]
+        uint32_t leadR = inLeaves[(size_t)gpuRight[i] * 9];
         bool ok = (leadL < leadR) || (leadL == leadR && gpuLeft[i] < gpuRight[i]);
         if (!ok) ++orderMismatches;
         if (leadL == leadR) ++equalLeadCount;
