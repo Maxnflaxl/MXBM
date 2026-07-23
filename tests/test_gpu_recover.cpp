@@ -41,7 +41,9 @@ int main() {
 
     Budget b = compute_budget(d.global_mem, d.max_alloc);
     PipelineBuffers pb = alloc_pipeline(rt, b);
-    check(pb.capacity == b.elems_per_round, "pipeline capacity == elems_per_round");
+    // capacity = seed count + collision headroom (buffers hold rounds 1-2's
+    // above-2^25 collision counts without a nondeterministic out_capacity clamp).
+    check(pb.capacity == b.capacity, "pipeline capacity == b.capacity (seed count + headroom)");
 
     std::printf("  running run_pipeline() over the full seed layer on the KAT prePow...\n");
     auto t0 = std::chrono::steady_clock::now();

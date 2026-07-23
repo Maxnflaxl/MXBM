@@ -64,7 +64,10 @@ int main() {
     check(b.elems_per_round == (1u << 25), "device budget keeps the full 2^25 seed layer (no memory-driven truncation on this hardware)");
 
     PipelineBuffers pb = alloc_pipeline(rt, b);
-    check(pb.capacity == b.elems_per_round, "pipeline capacity == elems_per_round (2^25)");
+    // capacity carries collision headroom ABOVE the 2^25 seed count so rounds 1-2
+    // never clamp (see Budget::capacity / the pairDrops==0 assertion below).
+    check(pb.capacity == b.capacity, "pipeline capacity == b.capacity (seed count + headroom)");
+    check(b.capacity > b.elems_per_round, "budget reserves collision headroom (capacity > 2^25 seed count) on this card");
 
     std::printf("  running run_pipeline() over the full 2^25 seed layer on the KAT prePow...\n");
     auto t0 = std::chrono::steady_clock::now();
@@ -96,6 +99,16 @@ int main() {
     }
     std::printf("  totals: bucketDrops=%u pairDrops=%u\n", totalBucketDrops, totalPairDrops);
     std::printf("  wall-clock: %.3fs\n", wallSecs);
+
+    // NO GENUINE COLLISION MAY BE DROPPED. A round that emits more children than
+    // out_capacity clamps the excess in nondeterministic atomic-cursor order, so
+    // WHICH children survive varies run-to-run -- and a dropped child can be a
+    // valid solution's ancestor, silently losing that solution (~10% of solves).
+    // The verify gate keeps that SAFE (never a bad submit) but LOSSY. A correct
+    // full search must size the buffers with enough headroom over the 2^25 seed
+    // count that every genuine collision fits: bucketDrops == pairDrops == 0.
+    check(totalBucketDrops == 0, "no element dropped by scatter overflow (bucketDrops == 0)");
+    check(totalPairDrops == 0, "no genuine collision dropped by out_capacity clamp (pairDrops == 0) -- else solutions are lost nondeterministically");
 
     // ---- PERF (deliberately unmissable) --------------------------------
     // One solve's cost, printed next to the reference miner's reference so "1.27s" reads

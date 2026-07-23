@@ -22,6 +22,19 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom) 
     if (epr == 0) epr = 1;
     b.elems_per_round = (uint32_t)epr;
 
+    // Buffer / out_capacity headroom over the seed count. Each round's genuine
+    // collision count fluctuates a few thousand ABOVE elems_per_round (Poisson,
+    // std ~ sqrt(2^25) ~ 5800); without headroom, out_capacity clamps that
+    // excess in nondeterministic atomic order and a clamped child can be a
+    // valid solution's ancestor -> ~10% of solves silently lose a solution.
+    // epr/32 (~3.1%, ~1M elements at 2^25) is >100x the observed excess, and is
+    // itself capped by what VRAM allows (rounds_cap) so smaller cards that only
+    // just fit the seed layer keep capacity == elems_per_round (no headroom, but
+    // also no worse than before). Never below epr.
+    uint64_t cap = min_u64(rounds_cap, epr + epr / 32);
+    if (cap < epr) cap = epr;
+    b.capacity = (uint32_t)cap;
+
     // Small buckets keep the sortless all-pairs match cheap: mean ~32/bucket.
     uint32_t lg = 0; while ((1ull << (lg+1)) <= b.elems_per_round) ++lg;   // floor(log2)
     b.bucket_bits = lg >= 15 ? (lg - 5) : 10;         // clamp low

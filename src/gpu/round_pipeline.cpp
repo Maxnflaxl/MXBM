@@ -35,7 +35,12 @@ uint32_t lout_for(int r) {
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     PipelineBuffers p;
-    p.capacity = b.elems_per_round;
+    // Buffers/out_capacity are sized to b.capacity (= seed count + headroom) so a
+    // round's genuine collision count, which fluctuates a few thousand above the
+    // 2^25 seed count, is never clamped (see Budget::capacity). b.capacity == 0
+    // (synthetic tests that hand-build a Budget) falls back to elems_per_round --
+    // those tests supply their own non-overflowing data, so no headroom is needed.
+    p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
 
     // Each resident element is 7 x uint64 (56 B) of work state, matching
     // kSeedElemBytes; all 6 slots (work[0..5]) share this per-element shape.
@@ -71,7 +76,10 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
     cl_mem ppMem   = mp.get();
     cl_mem workMem = pb.work[1].get();
 
-    const uint32_t total = pb.capacity;
+    // Generate exactly the SEED COUNT (elems_per_round, 2^25 on a full-search
+    // card), NOT pb.capacity -- the buffers are larger than the seed count by
+    // the collision headroom, and BeamHash III has exactly 2^25 seed indices.
+    const uint32_t total = (b.elems_per_round != 0) ? b.elems_per_round : pb.capacity;
     const uint32_t batch = (b.seed_batch != 0) ? b.seed_batch : total;
     for (uint32_t begin = 0; begin < total; begin += batch) {
         uint32_t count = (total - begin < batch) ? (total - begin) : batch;
@@ -266,7 +274,11 @@ PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, c
     mix_seeds(rt, pb, b, pp);
     result.t_seed_ms = ms_since(tSeed);
 
-    uint32_t prevN = pb.capacity;   // mix_seeds writes the FULL [0,capacity) range into work[1]
+    // Round 1 processes exactly the SEED COUNT (elems_per_round), not pb.capacity
+    // -- mix_seeds populated work[1][0, seed_count); the buffers' headroom tail
+    // [seed_count, capacity) is unwritten and unread here (only rounds 1-2's
+    // OUTPUTS grow into it, which is the whole point of the headroom).
+    uint32_t prevN = (b.elems_per_round != 0) ? b.elems_per_round : pb.capacity;
     for (int r = 1; r <= 5; ++r) {
         RoundStats& st = result.rounds[r - 1];
         if (prevN == 0) {
