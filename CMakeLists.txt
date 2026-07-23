@@ -186,10 +186,19 @@ if(OpenCL_FOUND)
   add_test(NAME budget COMMAND test_budget)
 
   set(MXBM_KERNELS_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_kernels.h)
-  set(MXBM_KERNEL_FILES ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl)
+  set(MXBM_KERNEL_FILES
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/seed.cl)
+  # The Unix Makefiles generator flattens ';' (the CMake list separator) to a
+  # space when a list is embedded inside a quoted COMMAND argument, since a raw
+  # ';' in a Make recipe line would otherwise end the shell command early. With
+  # a single-file list that was never exercised; with two-or-more files it
+  # silently merges all paths into one bogus argument. Join on ',' (not special
+  # to Make/shell) instead and split it back apart in EmbedKernels.cmake.
+  list(JOIN MXBM_KERNEL_FILES "," MXBM_KERNEL_FILES_ARG)
   add_custom_command(
     OUTPUT ${MXBM_KERNELS_HEADER}
-    COMMAND ${CMAKE_COMMAND} -DKERNEL_FILES="${MXBM_KERNEL_FILES}"
+    COMMAND ${CMAKE_COMMAND} -DKERNEL_FILES="${MXBM_KERNEL_FILES_ARG}"
             -DOUT_FILE=${MXBM_KERNELS_HEADER}
             -P ${CMAKE_SOURCE_DIR}/cmake/EmbedKernels.cmake
     DEPENDS ${MXBM_KERNEL_FILES} ${CMAKE_SOURCE_DIR}/cmake/EmbedKernels.cmake
@@ -201,6 +210,12 @@ if(OpenCL_FOUND)
   target_include_directories(test_cl_primitives PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_cl_primitives PRIVATE mxbm_gpu)
   add_test(NAME cl_primitives COMMAND test_cl_primitives)
+
+  add_executable(test_gpu_seed tests/test_gpu_seed.cpp)
+  add_dependencies(test_gpu_seed mxbm_kernels_gen)
+  target_include_directories(test_gpu_seed PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_gpu_seed PRIVATE mxbm_gpu)
+  add_test(NAME gpu_seed COMMAND test_gpu_seed)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()
