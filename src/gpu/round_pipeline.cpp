@@ -17,6 +17,10 @@ uint32_t padnum_for(int r) {
     static const uint32_t T[5] = {1u, 2u, 4u, 6u, 9u};
     return T[r - 1];
 }
+uint32_t lout_for(int r) {
+    static const uint32_t T[5] = {424u, 400u, 376u, 288u, 24u};
+    return T[r - 1];
+}
 } // namespace
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
@@ -24,8 +28,12 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     p.capacity = b.elems_per_round;
 
     // Each resident element is 7 x uint64 (56 B) of work state, matching
-    // kSeedElemBytes; work[0] (transient seed stage) and work[1..5] (round
-    // r=1..5 output) all share this per-element shape.
+    // kSeedElemBytes; all 6 slots (work[0..5]) share this per-element shape.
+    // Usage: mix_seeds() writes round 1's mixed input into work[1]; for
+    // round r, match() reads round r's input from work[r] and writes round
+    // r's children (round r+1's input) into work[r+1] -- except r==5, which
+    // has no round 6 to feed and writes its children into work[0], the only
+    // otherwise-idle slot (mix_seeds never touches work[0]).
     const size_t elemBytes = (size_t)p.capacity * 7 * 8;
     for (int i = 0; i < 6; ++i)
         p.work[i] = rt.alloc(CL_MEM_READ_WRITE, elemBytes);
@@ -113,6 +121,83 @@ void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int 
     rt.set_arg(k.get(), 5, sizeof(cl_mem), &bucketSlotsMem);
     rt.set_arg(k.get(), 6, sizeof(cl_mem), &countersMem);
     rt.run1d(k.get(), N);
+}
+
+uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, uint32_t& pair_drops) {
+    (void)inN;  // round_match iterates buckets (already sized by scatter()), not raw elements.
+
+    // Zero only counters[0] (out_count) and counters[2] (pair_drops); leave
+    // counters[1] (bucket_drops, owned by scatter) and [3] (spare) as-is.
+    uint32_t counters[4];
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    counters[0] = 0u;
+    counters[2] = 0u;
+    rt.write(pb.counters.get(), sizeof counters, counters);
+
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog.get(), "round_match");
+
+    uint32_t Lout         = lout_for(r);
+    uint32_t bucketBits   = b.bucket_bits;
+    uint32_t slots        = b.slots_per_bucket;
+    uint32_t leadIdentity = (r == 1) ? 1u : 0u;
+    uint32_t inLeadOff    = (r >= 2) ? (uint32_t)(r - 2) * pb.capacity : 0u;
+    uint32_t outOff       = (uint32_t)(r - 1) * pb.capacity;
+    uint32_t outCapacity  = pb.capacity;
+
+    // Round r's own resident elements live in pb.work[r]; its children
+    // become round r+1's resident elements, in pb.work[r+1] -- except r==5,
+    // which has no round 6 and reuses pb.work[0] (see match()'s doc comment
+    // in round_pipeline.h).
+    cl_mem bucketCountMem = pb.bucket_count.get();
+    cl_mem bucketSlotsMem = pb.bucket_slots.get();
+    cl_mem inWorkMem      = pb.work[r].get();
+    cl_mem outWorkMem     = pb.work[(r < (int)kNumRounds) ? r + 1 : 0].get();
+    cl_mem leadMem        = pb.lead.get();   // aliased: all_lead_in (read) + all_lead (write) -- disjoint row ranges per round
+    cl_mem leftMem        = pb.left.get();
+    cl_mem rightMem       = pb.right.get();
+    cl_mem countersMem    = pb.counters.get();
+
+    rt.set_arg(k.get(), 0, Lout);
+    rt.set_arg(k.get(), 1, bucketBits);
+    rt.set_arg(k.get(), 2, slots);
+    rt.set_arg(k.get(), 3, leadIdentity);
+    rt.set_arg(k.get(), 4, inLeadOff);
+    rt.set_arg(k.get(), 5, outOff);
+    rt.set_arg(k.get(), 6, outCapacity);
+    rt.set_arg(k.get(), 7, sizeof(cl_mem), &bucketCountMem);
+    rt.set_arg(k.get(), 8, sizeof(cl_mem), &bucketSlotsMem);
+    rt.set_arg(k.get(), 9, sizeof(cl_mem), &inWorkMem);
+    rt.set_arg(k.get(), 10, sizeof(cl_mem), &outWorkMem);
+    rt.set_arg(k.get(), 11, sizeof(cl_mem), &leadMem);
+    rt.set_arg(k.get(), 12, sizeof(cl_mem), &leftMem);
+    rt.set_arg(k.get(), 13, sizeof(cl_mem), &rightMem);
+    rt.set_arg(k.get(), 14, sizeof(cl_mem), &leadMem);
+    rt.set_arg(k.get(), 15, sizeof(cl_mem), &countersMem);
+
+    rt.run1d(k.get(), b.num_buckets);
+
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    pair_drops = counters[2];
+    return (counters[0] < outCapacity) ? counters[0] : outCapacity;
+}
+
+uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats) {
+    if (r >= 2) mix_level(rt, pb, r, inN);
+    scatter(rt, pb, b, inN, /*workIndex=*/r);
+
+    uint32_t counters[4];
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    uint32_t bucket_drops = counters[1];
+
+    uint32_t pair_drops = 0;
+    uint32_t outN = match(rt, pb, b, r, inN, pair_drops);
+
+    stats.in = inN;
+    stats.out = outN;
+    stats.bucket_drops = bucket_drops;
+    stats.pair_drops = pair_drops;
+    return outN;
 }
 
 }} // namespace mxbm::gpu
