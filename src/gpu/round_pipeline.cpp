@@ -27,6 +27,13 @@ uint32_t padnum_for(int r) {
     static const uint32_t T[5] = {1u, 2u, 4u, 6u, 9u};
     return T[r - 1];
 }
+// E3a: leaves stored per work[r] element = its FULL pre-order leaf prefix
+// (2^(r-1), capped by what the next round needs). r<=4 are full so a child's
+// prefix = concat of its two parents' prefixes; work[5] needs only padNum(5)=9.
+uint32_t sleaves_for(int r) {
+    static const uint32_t T[5] = {1u, 2u, 4u, 8u, 9u};
+    return T[r - 1];
+}
 uint32_t lout_for(int r) {
     static const uint32_t T[5] = {424u, 400u, 376u, 288u, 24u};
     return T[r - 1];
@@ -52,6 +59,13 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     for (int i = 0; i < 2; ++i)
         p.work[i] = rt.alloc(CL_MEM_READ_WRITE, elemBytes);
 
+    // E3a leaf prefixes: ping-pong SoA, sized to the max prefix (9 leaves/elem at
+    // work[5]). ~9*capacity*4 = 1.25 GB each; the 6->2 work-buffer reclaim leaves
+    // ample room. leaves[r&1] holds work[r]'s prefix (mirrors the work ping-pong).
+    const size_t leavesBytes = (size_t)9 * p.capacity * sizeof(uint32_t);
+    for (int i = 0; i < 2; ++i)
+        p.leaves[i] = rt.alloc(CL_MEM_READ_WRITE, leavesBytes);
+
     // Consolidated flat back-ref arrays: 5 rounds x capacity slots, uint32 each.
     const size_t backrefBytes = (size_t)5 * p.capacity * 4;
     p.left  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
@@ -74,6 +88,8 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
     Mem mp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
     cl_mem ppMem   = mp.get();
     cl_mem workMem = pb.work[1].get();
+    cl_mem leavesMem = pb.leaves[1].get();   // leaves for work[1] (== leaves[1&1])
+    uint32_t capacity = pb.capacity;
 
     // Generate exactly the SEED COUNT (elems_per_round, 2^25 on a full-search
     // card), NOT pb.capacity -- the buffers are larger than the seed count by
@@ -86,6 +102,8 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
         rt.set_arg(k.get(), 1, begin);
         rt.set_arg(k.get(), 2, count);
         rt.set_arg(k.get(), 3, sizeof(cl_mem), &workMem);
+        rt.set_arg(k.get(), 4, sizeof(cl_mem), &leavesMem);
+        rt.set_arg(k.get(), 5, capacity);
         rt.run1d(k.get(), count);
     }
 }
@@ -94,22 +112,18 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
     Kernel k = rt.kernel(prog, "round_mix");
 
-    uint32_t level    = (uint32_t)(r - 1);
     uint32_t capacity = pb.capacity;
     uint32_t padNum   = padnum_for(r);
     uint32_t Lmix     = lmix_for(r);
-    cl_mem workMem  = pb.work[r & 1].get();
-    cl_mem leftMem  = pb.left.get();
-    cl_mem rightMem = pb.right.get();
+    cl_mem workMem   = pb.work[r & 1].get();
+    cl_mem leavesMem = pb.leaves[r & 1].get();   // E3a: work[r]'s materialized prefix
 
-    rt.set_arg(k.get(), 0, level);
-    rt.set_arg(k.get(), 1, N);
-    rt.set_arg(k.get(), 2, capacity);
-    rt.set_arg(k.get(), 3, padNum);
-    rt.set_arg(k.get(), 4, Lmix);
-    rt.set_arg(k.get(), 5, sizeof(cl_mem), &workMem);
-    rt.set_arg(k.get(), 6, sizeof(cl_mem), &leftMem);
-    rt.set_arg(k.get(), 7, sizeof(cl_mem), &rightMem);
+    rt.set_arg(k.get(), 0, N);
+    rt.set_arg(k.get(), 1, capacity);
+    rt.set_arg(k.get(), 2, padNum);
+    rt.set_arg(k.get(), 3, Lmix);
+    rt.set_arg(k.get(), 4, sizeof(cl_mem), &workMem);
+    rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesMem);
     rt.run1d(k.get(), N);
 }
 
@@ -222,6 +236,17 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
 
     rt.set_arg(k.get(), 16, (size_t)slots * sizeof(uint32_t), nullptr);
     rt.set_arg(k.get(), 17, (size_t)slots * sizeof(uint32_t), nullptr);
+
+    // E3a: grow leaf prefixes. Parents live in work[r] -> leaves[r&1]; children go
+    // to work[r+1] -> leaves[(r+1)&1]. s_out==0 for r==5 (its output isn't mixed).
+    cl_mem leavesInMem  = pb.leaves[r & 1].get();
+    cl_mem leavesOutMem = pb.leaves[(r + 1) & 1].get();
+    uint32_t sIn  = sleaves_for(r);
+    uint32_t sOut = (r < (int)kNumRounds) ? sleaves_for(r + 1) : 0u;
+    rt.set_arg(k.get(), 18, sizeof(cl_mem), &leavesInMem);
+    rt.set_arg(k.get(), 19, sizeof(cl_mem), &leavesOutMem);
+    rt.set_arg(k.get(), 20, sIn);
+    rt.set_arg(k.get(), 21, sOut);
 
     rt.run1d(k.get(), (size_t)b.num_buckets * W, W);
 

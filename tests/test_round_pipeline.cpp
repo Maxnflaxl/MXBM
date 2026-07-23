@@ -159,6 +159,16 @@ static void test_r5_survivor(Runtime& rt) {
     lead[3 * (size_t)capacity + 1] = leaves0[0];
     rt.write(pb.lead.get(), lead.size() * 4, lead.data());
 
+    // (E3a) Materialize each staged element's 9-leaf prefix into leaves[5&1]
+    // (AoS, stride 9) so round_mix reads it directly instead of the old back-ref
+    // DFS -- the previous round's match would have produced exactly these.
+    {
+        std::vector<uint32_t> lv((size_t)capacity * 9, 0);
+        for (size_t i = 0; i < leaves0.size() && i < 9; ++i) lv[0*9 + i] = leaves0[i];
+        for (size_t i = 0; i < leaves1.size() && i < 9; ++i) lv[1*9 + i] = leaves1[i];
+        rt.write(pb.leaves[(5) & 1].get(), lv.size() * 4, lv.data());
+    }
+
     const uint32_t N = 2;   // round 5's own resident element count (the 2 staged slots)
     mix_level(rt, pb, /*r=*/5, N);
 

@@ -1,13 +1,20 @@
 // BeamHash III Wagner-round kernels (mix / scatter / match).
 // Consumes bh3.cl primitives (compiled together; bh3.cl listed first).
 
+// E3a leaf-prefix layout: AoS with fixed stride = max prefix (9 = padNum(5)).
+// element g's leaves are the contiguous block [g*9 .. g*9+9). Contiguous per-child
+// writes in round_match (the hot producer) beat SoA's 9 scattered cache lines.
+#define BH3_MAX_LEAVES 9u
+
 // round1_mix_seeds: seed_element(pp,begin+g) mixed with the single-leaf tree
 // {begin+g} at Lmix=448 (round 1's shape), written to work[] at the ABSOLUTE
 // index (begin+g)*7 -- not the batch-local g*7 -- since callers may drive
 // this over multiple begin/count batches that all land in the same
 // consolidated work buffer.
 __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count,
-                               __global ulong* work /* seed-work buffer, absolute */) {
+                               __global ulong* work /* seed-work buffer, absolute */,
+                               __global uint* leaves_out /* SoA leaves for work[1]: leaf i at i*capacity+g */,
+                               uint capacity) {
     uint g = (uint)get_global_id(0);
     if (g >= count) return;
     uint idx = begin + g;
@@ -17,27 +24,21 @@ __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count
     uint tree1[1] = { idx };
     e[0] = bh3_apply_mix(e, tree1, 1u, 448u);
     for (int k = 0; k < 7; ++k) work[(size_t)idx*7 + k] = e[k];
+    // E3a: round-1 elements have a single leaf (the seed index itself). Stored so
+    // round_match can grow leaf lists incrementally and round_mix skips the DFS.
+    leaves_out[(size_t)idx*BH3_MAX_LEAVES] = idx;   // leaf 0 of element idx (AoS: idx*9+0)
 }
-// r>=2: mix level-(r-1) elements in place, reconstructing their leaf prefix.
-__kernel void round_mix(uint level /* = r-1, in 1..4 */, uint N, uint capacity,
-                        uint padNum, uint Lmix,
+// r>=2: mix in place using the element's pre-order leaf prefix. E3a: the prefix
+// was materialized by the previous round's match (concat of the two parents'
+// prefixes), stored SoA as leaves_in[i*capacity + g], so this reads padNum leaves
+// directly (coalesced across g) instead of the old latency-bound back-ref DFS.
+__kernel void round_mix(uint N, uint capacity, uint padNum, uint Lmix,
                         __global ulong* work,               // level's work buffer
-                        __global const uint* all_left,      // consolidated
-                        __global const uint* all_right) {
+                        __global const uint* leaves_in) {   // AoS leaf prefix (g*9+i) for these elems
     uint g = (uint)get_global_id(0);
     if (g >= N) return;
-    uint tree[9]; uint got = 0u;
-    uint lvl[8]; uint slt[8]; int sp = 0;      // explicit pre-order stack
-    lvl[0] = level; slt[0] = g; sp = 1;
-    while (sp > 0 && got < padNum) {
-        --sp;
-        uint lv = lvl[sp], sl = slt[sp];
-        uint off = (lv - 1u) * capacity;
-        uint L = all_left[off + sl], R = all_right[off + sl];
-        if (lv == 1u) { tree[got++] = L; if (got < padNum) tree[got++] = R; }
-        else { lvl[sp] = lv-1u; slt[sp] = R; ++sp;   // right pushed first,
-               lvl[sp] = lv-1u; slt[sp] = L; ++sp; } // left pops first
-    }
+    uint tree[9];
+    for (uint i = 0; i < padNum; ++i) tree[i] = leaves_in[(size_t)g*BH3_MAX_LEAVES + i];
     ulong e[7];
     for (int k = 0; k < 7; ++k) e[k] = work[(size_t)g*7 + k];
     e[0] = bh3_apply_mix(e, tree, padNum, Lmix);
@@ -98,7 +99,10 @@ __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_ide
                           __global const uint* all_lead_in,   // same buffer as lead; read at in_lead_off
                           __global uint* all_left, __global uint* all_right, __global uint* all_lead,
                           __global uint* counters /* [0]=out_count, [2]=pair_drops */,
-                          __local uint* lkeys, __local uint* lidx) {
+                          __local uint* lkeys, __local uint* lidx,
+                          __global const uint* leaves_in,  // AoS leaf prefix (slot*9+i) of INPUT elems (work[r])
+                          __global uint* leaves_out,       // SoA leaf prefix of the CHILDREN (work[r+1])
+                          uint s_in, uint s_out) {         // leaves/elem in / out (s_out==0 -> skip, r==5)
     uint b = (uint)get_group_id(0);
     uint t = (uint)get_local_id(0);
     uint W = (uint)get_local_size(0);
@@ -134,6 +138,16 @@ __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_ide
                 for (int w = 0; w < 7; ++w) out_work[(size_t)oi*7 + w] = ec[w];
                 all_left[out_off + oi] = left; all_right[out_off + oi] = right;
                 all_lead[out_off + oi] = ll;
+                // E3a: child's pre-order leaf prefix = left parent's full prefix
+                // (s_in leaves) then the right parent's, truncated to s_out. s_in
+                // is the FULL leaf count for work[r] (r<=4), so no left leaf is
+                // missing. Stored SoA (stride out_capacity) so round_mix reads it
+                // coalesced. s_out==0 for r==5 (its output is never mixed).
+                for (uint i = 0; i < s_out; ++i) {
+                    uint leaf = (i < s_in) ? leaves_in[(size_t)left*BH3_MAX_LEAVES + i]
+                                           : leaves_in[(size_t)right*BH3_MAX_LEAVES + (i - s_in)];
+                    leaves_out[(size_t)oi*BH3_MAX_LEAVES + i] = leaf;
+                }
             } else atomic_inc(&counters[2]);
         }
     }

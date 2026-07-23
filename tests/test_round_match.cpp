@@ -522,6 +522,16 @@ static void test_r3_match(Runtime& rt) {
     rt.write(pb.left.get(),  fx.left.size()  * 4, fx.left.data());
     rt.write(pb.right.get(), fx.right.size() * 4, fx.right.data());
     rt.write(pb.lead.get(),  fx.lead.size()  * 4, fx.lead.data());
+    // (E3a) Materialize each level-2 element's 4-leaf prefix (== elems[k].tree)
+    // into leaves[3&1] (AoS, stride 9) so round_mix reads it directly and match
+    // grows the children's prefixes -- the previous round's match would have.
+    {
+        std::vector<uint32_t> lv((size_t)capacity * 9, 0);
+        for (uint32_t k = 0; k < Ntotal; ++k)
+            for (size_t i = 0; i < fx.elems[k].tree.size() && i < 9; ++i)
+                lv[(size_t)k*9 + i] = fx.elems[k].tree[i];
+        rt.write(pb.leaves[(3) & 1].get(), lv.size() * 4, lv.data());
+    }
 
     const uint32_t padNum3 = ref::padNum(3), Lmix3 = ref::Lmix(3), Lout3 = ref::Lout(3);
     check(padNum3 == 4u && Lmix3 == 400u, "r=3: padNum(3)==4, Lmix(3)==400 (sanity)");
@@ -626,6 +636,13 @@ static void test_r3_match(Runtime& rt) {
         rt.write(pb2.left.get(),  fx.left.size()  * 4, fx.left.data());
         rt.write(pb2.right.get(), fx.right.size() * 4, fx.right.data());
         rt.write(pb2.lead.get(),  fx.lead.size()  * 4, fx.lead.data());
+        {   // (E3a) same leaf-prefix materialization as the direct path above
+            std::vector<uint32_t> lv2((size_t)capacity * 9, 0);
+            for (uint32_t k = 0; k < Ntotal; ++k)
+                for (size_t i = 0; i < fx.elems[k].tree.size() && i < 9; ++i)
+                    lv2[(size_t)k*9 + i] = fx.elems[k].tree[i];
+            rt.write(pb2.leaves[(3) & 1].get(), lv2.size() * 4, lv2.data());
+        }
         RoundStats stats;
         uint32_t outN2 = run_single_round(rt, pb2, bud, /*r=*/3, Ntotal, stats);
         check(outN2 == outN, "r=3: run_single_round() child count == direct match() child count");

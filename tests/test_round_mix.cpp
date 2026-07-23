@@ -99,12 +99,12 @@ static void test_round_mix_reconstruct(Runtime& rt) {
     PipelineBuffers pb = alloc_pipeline(rt, bud);
     check(pb.capacity == capacity, "synthetic pipeline capacity == 8");
 
-    rt.write(pb.left.get(),  left.size()  * 4, left.data());
-    rt.write(pb.right.get(), right.size() * 4, right.data());
+    // (E3a) Back-refs are NOT uploaded -- round_mix no longer walks them. They
+    // live only on the CPU to derive the EXPECTED leaf prefix (ref::first_leaves),
+    // which is exactly what the previous round's match would have materialized.
+    const uint32_t LSTRIDE = 9;   // AoS leaf stride (== BH3_MAX_LEAVES); element g at g*9+i
 
-    // 2 level-2 elements' work values (random via splitmix64), staged at
-    // slots E,F of round-3's own resident array (round r=3's INPUT elements
-    // ARE the level-(r-1)=2 row's entries -- the very back-refs above).
+    // 2 level-2 elements' work values (random via splitmix64), staged at slots E,F.
     uint64_t s = 0xDEC0DEu;
     std::vector<uint64_t> workE(7), workF(7);
     for (int w = 0; w < 7; ++w) workE[w] = sm(s);
@@ -112,7 +112,16 @@ static void test_round_mix_reconstruct(Runtime& rt) {
     auto stage_work3 = [&]() {
         std::vector<uint64_t> work3(pb.capacity * 7, 0);
         for (int w = 0; w < 7; ++w) { work3[slotE*7 + w] = workE[w]; work3[slotF*7 + w] = workF[w]; }
-        rt.write(pb.work[3].get(), work3.size() * 8, work3.data());
+        rt.write(pb.work[3 & 1].get(), work3.size() * 8, work3.data());
+    };
+    auto expected_leaves = [&](uint32_t slot, uint32_t need) {
+        return ref::first_leaves(left, right, capacity, /*level*/2, slot, need);
+    };
+    auto stage_leaves = [&](uint32_t need) {   // materialize the prefix E3a-style (AoS)
+        std::vector<uint32_t> lv((size_t)pb.capacity * LSTRIDE, 0);
+        auto le = expected_leaves(slotE, need), lf = expected_leaves(slotF, need);
+        for (uint32_t i = 0; i < need; ++i) { lv[slotE*LSTRIDE + i] = le[i]; lv[slotF*LSTRIDE + i] = lf[i]; }
+        rt.write(pb.leaves[3 & 1].get(), lv.size() * 4, lv.data());
     };
 
     const uint32_t padNum3 = ref::padNum(3), Lmix3 = ref::Lmix(3);
@@ -120,7 +129,7 @@ static void test_round_mix_reconstruct(Runtime& rt) {
     check(Lmix3 == 400u, "Lmix(3) == 400 (sanity)");
 
     auto cpu_mix = [&](uint32_t slot, const std::vector<uint64_t>& w, uint32_t need) {
-        std::vector<uint32_t> leaves = ref::first_leaves(left, right, capacity, /*level*/2, slot, need);
+        std::vector<uint32_t> leaves = expected_leaves(slot, need);
         bh3::Elem e{}; for (int k = 0; k < 7; ++k) e.w[k] = w[k];
         bh3::apply_mix(e, leaves.data(), (uint32_t)leaves.size(), Lmix3);
         return e.w[0];
@@ -128,12 +137,13 @@ static void test_round_mix_reconstruct(Runtime& rt) {
 
     // (b1) natural shape via mix_level(r=3): padNum=4, Lmix=400.
     stage_work3();
+    stage_leaves(padNum3);
     mix_level(rt, pb, /*r=*/3, /*N=*/2);
     {
         std::vector<uint64_t> got(pb.capacity * 7);
-        rt.read(pb.work[3].get(), got.size() * 8, got.data());
-        check_eq_u64(got[slotE*7], cpu_mix(slotE, workE, padNum3), "mix_level(r=3) slot E: w[0] == CPU reconstructed mix");
-        check_eq_u64(got[slotF*7], cpu_mix(slotF, workF, padNum3), "mix_level(r=3) slot F: w[0] == CPU reconstructed mix");
+        rt.read(pb.work[3 & 1].get(), got.size() * 8, got.data());
+        check_eq_u64(got[slotE*7], cpu_mix(slotE, workE, padNum3), "mix_level(r=3) slot E: w[0] == CPU mix from materialized leaves");
+        check_eq_u64(got[slotF*7], cpu_mix(slotF, workF, padNum3), "mix_level(r=3) slot F: w[0] == CPU mix from materialized leaves");
         int bad = 0;
         for (int k = 1; k < 7; ++k) {
             if (got[slotE*7+k] != workE[k]) ++bad;
@@ -142,29 +152,28 @@ static void test_round_mix_reconstruct(Runtime& rt) {
         check(bad == 0, "mix_level(r=3): w[1..6] unchanged (only w[0] overwritten in place)");
     }
 
-    // (b2) padNum-truncation case: padNum=3 (< the natural 4), exercising the
-    // DFS's mid-subtree early-stop. mix_level()'s fixed signature has no
-    // padNum override, so this calls the round_mix kernel directly.
+    // (b2) padNum-truncation: padNum=3 (< the natural 4). round_mix reads only
+    // the first 3 leaves of the stored prefix (pre-order is prefix-consistent).
+    // Direct kernel call for the padNum override (mix_level has no such knob).
     stage_work3();
+    stage_leaves(padNum3);   // full 4-leaf prefix stored; the kernel reads the first 3
     {
         Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
         Kernel k = rt.kernel(prog.get(), "round_mix");
-        uint32_t level = 2u, N = 2u, cap = capacity, padNum = 3u, Lmix = Lmix3;
-        cl_mem workMem = pb.work[3].get(), leftMem = pb.left.get(), rightMem = pb.right.get();
-        rt.set_arg(k.get(), 0, level);
-        rt.set_arg(k.get(), 1, N);
-        rt.set_arg(k.get(), 2, cap);
-        rt.set_arg(k.get(), 3, padNum);
-        rt.set_arg(k.get(), 4, Lmix);
-        rt.set_arg(k.get(), 5, sizeof(cl_mem), &workMem);
-        rt.set_arg(k.get(), 6, sizeof(cl_mem), &leftMem);
-        rt.set_arg(k.get(), 7, sizeof(cl_mem), &rightMem);
+        uint32_t N = 2u, cap = capacity, padNum = 3u, Lmix = Lmix3;
+        cl_mem workMem = pb.work[3 & 1].get(), leavesMem = pb.leaves[3 & 1].get();
+        rt.set_arg(k.get(), 0, N);
+        rt.set_arg(k.get(), 1, cap);            // capacity arg (unused by AoS round_mix, kept in signature)
+        rt.set_arg(k.get(), 2, padNum);
+        rt.set_arg(k.get(), 3, Lmix);
+        rt.set_arg(k.get(), 4, sizeof(cl_mem), &workMem);
+        rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesMem);
         rt.run1d(k.get(), N);
 
         std::vector<uint64_t> got(pb.capacity * 7);
-        rt.read(pb.work[3].get(), got.size() * 8, got.data());
-        check_eq_u64(got[slotE*7], cpu_mix(slotE, workE, padNum), "truncation(padNum=3) slot E: w[0] == CPU reconstructed mix");
-        check_eq_u64(got[slotF*7], cpu_mix(slotF, workF, padNum), "truncation(padNum=3) slot F: w[0] == CPU reconstructed mix");
+        rt.read(pb.work[3 & 1].get(), got.size() * 8, got.data());
+        check_eq_u64(got[slotE*7], cpu_mix(slotE, workE, padNum), "truncation(padNum=3) slot E: w[0] == CPU mix");
+        check_eq_u64(got[slotF*7], cpu_mix(slotF, workF, padNum), "truncation(padNum=3) slot F: w[0] == CPU mix");
     }
 
     // Sanity: the kernel source really was embedded (both kernel names present).
