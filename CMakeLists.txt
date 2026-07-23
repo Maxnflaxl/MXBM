@@ -174,6 +174,7 @@ if(OpenCL_FOUND)
   target_include_directories(mxbm_gpu PUBLIC src)
   target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
   target_sources(mxbm_gpu PRIVATE src/gpu/budget.cpp)
+  target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
 
   add_executable(test_cl_smoke tests/test_cl_smoke.cpp)
   target_include_directories(test_cl_smoke PRIVATE tests src)
@@ -184,6 +185,11 @@ if(OpenCL_FOUND)
   target_include_directories(test_budget PRIVATE tests src)
   target_link_libraries(test_budget PRIVATE mxbm_gpu)
   add_test(NAME budget COMMAND test_budget)
+
+  add_executable(test_round_reconstruct tests/test_round_reconstruct.cpp)
+  target_include_directories(test_round_reconstruct PRIVATE tests src src/beamhash)
+  target_link_libraries(test_round_reconstruct PRIVATE mxbm_gpu)
+  add_test(NAME round_reconstruct COMMAND test_round_reconstruct)
 
   set(MXBM_KERNELS_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_kernels.h)
   set(MXBM_KERNEL_FILES
