@@ -10,7 +10,14 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom) 
     b.usable     = (uint64_t)((double)global_mem * headroom);
     b.target_elems = 1u << kTargetElemsLog2;
 
-    uint64_t rounds_cap = b.usable / ((uint64_t)kNumRounds * kResidentElemBytes);
+    // Per-element resident cost of the as-built Phase-B layout: 6 work buffers
+    // (work[0..5] -- one per round r=1..5 plus work[0] for the round-5 output)
+    // at kSeedElemBytes each, and the consolidated back-ref rows (already folded
+    // into kResidentElemBytes' 12 B). kNumRounds*kResidentElemBytes counts 5 work
+    // buffers + back-refs (5*68=340); +kSeedElemBytes (56) adds the 6th work
+    // buffer -> 396 B/elem. Sizing to this keeps "auto-tighten on smaller cards"
+    // truthful (a 5*68 divisor under-provisions and would over-allocate).
+    uint64_t rounds_cap = b.usable / ((uint64_t)kNumRounds * kResidentElemBytes + kSeedElemBytes);
     uint64_t epr = min_u64(b.target_elems, rounds_cap);
     if (epr == 0) epr = 1;
     b.elems_per_round = (uint32_t)epr;

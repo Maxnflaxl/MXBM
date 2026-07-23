@@ -26,9 +26,10 @@ int main() {
     check(b8.elems_per_round < (1u<<25), "8GB clamps elems/round below 2^25 (honest drop)");
     check(b8.elems_per_round > 0, "8GB still positive elems/round");
     check(b8.seed_batch*56ull <= 2*GiB, "8GB seed_batch fits max_alloc");
-    // elems_per_round == 21,474,836 -> floor(log2) == 24 -> bucket_bits == 19.
-    check(b8.elems_per_round == 21474836u, "8GB elems_per_round == 21,474,836 (anchor for the bucket calc below)");
-    check(b8.bucket_bits == 19u, "8GB bucket_bits == 19 (floor(log2(21474836))=24, 24-5=19)");
+    // usable 7.30 GB / 396 B/elem (6 work buffers + backrefs) == 18,437,990
+    // -> floor(log2) == 24 -> bucket_bits == 19.
+    check(b8.elems_per_round == 18437990u, "8GB elems_per_round == 18,437,990 (7.30GB / 396 B/elem)");
+    check(b8.bucket_bits == 19u, "8GB bucket_bits == 19 (floor(log2(18437990))=24, 24-5=19)");
     check(b8.num_buckets == 524288u, "8GB uses 2^19 = 524288 buckets");
     check((uint64_t)b8.slots_per_bucket*b8.num_buckets >= b8.elems_per_round, "8GB total slots cover elems");
 
