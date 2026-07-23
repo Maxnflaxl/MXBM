@@ -78,11 +78,10 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
 
     p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
 
-    // Phase-D3 sort scratch, allocated only when the sort-based match is enabled
-    // (env MXBM_SORT_MATCH). ~512 MB (pairs) + 128 MB (hist) at 2^25 capacity,
-    // comfortably inside the headroom the 6->2 work-buffer reclaim freed. Left
-    // null otherwise so the default path costs nothing extra.
-    if (std::getenv("MXBM_SORT_MATCH")) {
+    // Phase-D3 sort scratch, allocated for the default sort-based match (skipped
+    // under MXBM_LEGACY_MATCH). ~512 MB (pairs) + 128 MB (hist) at 2^25 capacity,
+    // comfortably inside the headroom the 6->2 work-buffer reclaim freed.
+    if (std::getenv("MXBM_LEGACY_MATCH") == nullptr) {
         const size_t pairBytes = (size_t)p.capacity * sizeof(uint64_t);
         for (int i = 0; i < 2; ++i) p.sort_pairs[i] = rt.alloc(CL_MEM_READ_WRITE, pairBytes);
         p.sort_scan = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.capacity * 4);
@@ -454,10 +453,16 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
     return (total < outCapacity) ? total : outCapacity;
 }
 
+// Phase-D3: the sort-based collision finder is the DEFAULT collision path
+// (it beats scatter+match and is the coalescing foundation for further tuning);
+// set MXBM_LEGACY_MATCH to fall back to the old atomic-bucket scatter+match.
+// One source of truth, read once, shared by alloc_pipeline and run_single_round.
+bool use_sort_match() { static bool v = (std::getenv("MXBM_LEGACY_MATCH") == nullptr); return v; }
+
 uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats) {
-    // Phase-D3: route to the sort-based collision finder when enabled. Mix is
+    // Phase-D3: route to the sort-based collision finder by default. Mix is
     // unchanged (still E3a leaf-prefix mix); only scatter+match is replaced.
-    static const bool useSort = (std::getenv("MXBM_SORT_MATCH") != nullptr);
+    const bool useSort = use_sort_match();
     if (useSort) {
         auto tMixS = clk::now();
         if (r >= 2) mix_level(rt, pb, r, inN);

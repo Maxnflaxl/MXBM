@@ -297,16 +297,16 @@ if(OpenCL_FOUND)
   # same reason (slow-but-correct hardware).
   set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800)
 
-  # Phase-D3: the SAME golden binaries re-run through the sort-based collision
-  # finder (MXBM_SORT_MATCH=1) -- key_extract -> radix sort -> run-scan emit
-  # replacing scatter+match. Byte-identical goldens are the equivalence gate:
-  # gpu_rounds_sort covers all 5 rounds' children; gpu_solver_sort adds recover
-  # + the CPU is_valid_solution verify. Reuses the existing executables, so no
-  # extra build cost -- just an env-var-flipped invocation held to the suite.
-  add_test(NAME gpu_rounds_sort COMMAND test_gpu_rounds)
-  set_tests_properties(gpu_rounds_sort PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_SORT_MATCH=1")
-  add_test(NAME gpu_solver_sort COMMAND test_gpu_solver)
-  set_tests_properties(gpu_solver_sort PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_SORT_MATCH=1")
+  # Phase-D3: the sort-based collision finder (key_extract -> radix sort ->
+  # run-scan emit) is now the DEFAULT, so the plain gpu_rounds/gpu_solver gates
+  # above already exercise it. These extra gates re-run the SAME golden binaries
+  # through the LEGACY atomic-bucket scatter+match (MXBM_LEGACY_MATCH=1) so both
+  # collision paths stay byte-identical-to-goldens under CI. Reuses the existing
+  # executables -- just an env-var-flipped invocation held to the suite.
+  add_test(NAME gpu_rounds_legacy COMMAND test_gpu_rounds)
+  set_tests_properties(gpu_rounds_legacy PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LEGACY_MATCH=1")
+  add_test(NAME gpu_solver_legacy COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_legacy PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LEGACY_MATCH=1")
 
   # Phase-D benchmark harness (manual-run, NOT registered as a ctest gate):
   # repeats the full 2^25 solve N times, enforces the D0 correctness gate,
