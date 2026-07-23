@@ -111,3 +111,24 @@ __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_ide
         }
     }
 }
+// survivor_scan: scans round 5's children (in work[0] -- round_match's r==5
+// special case, which has no round 6 / work[6] to feed) for the ALL-ZERO
+// work vector. bh3_combine is XOR-based: a byte-identical pair (a==b in all
+// 7 words) XORs to zero, and Lout=24's masking of an already-zero word stays
+// zero -- so an all-zero child is EXACTLY "two round-4 elements collided AND
+// were byte-identical", a deterministic marker rather than a probabilistic
+// one. One work-item per candidate; counters[3] is the atomic (uncapped)
+// survivor count, repurposed from the otherwise-unused "spare" counter slot
+// -- the HOST must zero it before every launch (it is not self-resetting,
+// so a second call on the same counters buffer would otherwise accumulate).
+// Entries at oi>=cap are silently dropped -- no separate overflow counter,
+// since survivors are expected to be vanishingly rare against real data.
+__kernel void survivor_scan(uint N, __global const ulong* work,
+                            __global uint* out_slots, uint cap,
+                            __global uint* counters /* [3]=survivors */) {
+    uint g = (uint)get_global_id(0);
+    if (g >= N) return;
+    for (int w = 0; w < 7; ++w) if (work[(size_t)g*7 + w] != 0ul) return;
+    uint oi = atomic_inc(&counters[3]);
+    if (oi < cap) out_slots[oi] = g;
+}

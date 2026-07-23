@@ -1,6 +1,8 @@
 #pragma once
 #include "gpu/cl_runtime.h"
 #include "gpu/budget.h"
+#include <cstdint>
+#include <vector>
 
 namespace mxbm { namespace gpu {
 
@@ -64,5 +66,42 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
 // `stats` (in/out/bucket_drops/pair_drops) and returns the same child count
 // as match().
 uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats);
+
+// Survivor scan: after round 5's match() writes its children into
+// pb.work[0] (its r==5 special-case out_work -- see match()'s doc comment
+// above), scan those N children for the ALL-ZERO work vector (survivor_scan
+// kernel, kernels/opencl/round.cl) -- the deterministic signature of two
+// byte-identical round-4 elements having collided (bh3_combine is XOR-based:
+// a==b -> zero, at any Lout). Zeroes ONLY counters[3] (repurposed here as
+// the survivor count) via a targeted read-modify-write first, mirroring
+// match()'s own idiom for counters[0]/[2] -- else a second call on the same
+// PipelineBuffers would accumulate onto a stale count; counters[0..2] are
+// left untouched. Allocates its own `cap`-sized device buffer for the
+// survivor slot list (a one-shot, end-of-run scan, not a per-round hot
+// path, so this does not warrant a permanent PipelineBuffers member).
+// Returns the capacity-clamped survivor count (== survivor_slots.size()
+// after this call) and fills `survivor_slots` with the work[0] slot index
+// of every survivor, read back from the GPU.
+uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
+                        std::vector<uint32_t>& survivor_slots, uint32_t cap = 1024);
+
+// Full 5-round pipeline: mix_seeds (the FULL [0,pb.capacity) seed range,
+// batched by b.seed_batch) -> for r=1..5, run_single_round(r, prevN) with
+// each round's outN threaded as the next round's inN -> survivor_scan over
+// pb.work[0] (round 5's output) with N = round 5's child count. Empty-round
+// robustness: once prevN reaches 0 (real searches decay to 0 well before
+// round 5 -- see tests/test_round_pipeline.cpp section (b)), every
+// remaining round is recorded as an honest {in=0,out=0,bucket_drops=0,
+// pair_drops=0} WITHOUT dispatching a kernel -- a global_work_size==0
+// launch is invalid OpenCL, and mix_level/scatter (T2/T3, unmodified) do
+// not themselves guard against it. Logs one line per round
+// ("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n") -- honest drop
+// reporting, not just success counts.
+struct PipelineResult {
+    uint32_t survivors = 0;
+    std::vector<uint32_t> survivor_slots;
+    RoundStats rounds[5];
+};
+PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4]);
 
 }} // namespace mxbm::gpu

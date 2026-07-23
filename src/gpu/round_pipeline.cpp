@@ -1,5 +1,6 @@
 #include "gpu/round_pipeline.h"
 #include "generated/mxbm_kernels.h"
+#include <cstdio>
 #include <string>
 
 namespace mxbm { namespace gpu {
@@ -198,6 +199,70 @@ uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int
     stats.bucket_drops = bucket_drops;
     stats.pair_drops = pair_drops;
     return outN;
+}
+
+uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
+                        std::vector<uint32_t>& survivor_slots, uint32_t cap) {
+    survivor_slots.clear();
+    // A global_work_size==0 launch is invalid OpenCL; 0 candidates -> 0
+    // survivors, trivially, with no GPU round-trip needed.
+    if (N == 0) return 0u;
+
+    // Zero only counters[3] (repurposed here as the survivor count); leave
+    // [0..2] (owned by scatter()/match()) untouched -- same read-modify-write
+    // idiom match() already uses for its own slots.
+    uint32_t counters[4];
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    counters[3] = 0u;
+    rt.write(pb.counters.get(), sizeof counters, counters);
+
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog.get(), "survivor_scan");
+
+    Mem outSlots = rt.alloc(CL_MEM_READ_WRITE, (size_t)cap * 4);
+    // Round 5's children live in pb.work[0] (match()'s r==5 special case --
+    // CORRECTION 1 vs the brief's original text, which said work[5]).
+    cl_mem workMem     = pb.work[0].get();
+    cl_mem outSlotsMem = outSlots.get();
+    cl_mem countersMem = pb.counters.get();
+
+    rt.set_arg(k.get(), 0, N);
+    rt.set_arg(k.get(), 1, sizeof(cl_mem), &workMem);
+    rt.set_arg(k.get(), 2, sizeof(cl_mem), &outSlotsMem);
+    rt.set_arg(k.get(), 3, cap);
+    rt.set_arg(k.get(), 4, sizeof(cl_mem), &countersMem);
+    rt.run1d(k.get(), N);
+
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    uint32_t survivors = counters[3];
+    uint32_t clamped = (survivors < cap) ? survivors : cap;
+    survivor_slots.resize(clamped);
+    if (clamped > 0) rt.read(outSlots.get(), (size_t)clamped * 4, survivor_slots.data());
+    return clamped;
+}
+
+PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4]) {
+    PipelineResult result;
+    mix_seeds(rt, pb, b, pp);
+
+    uint32_t prevN = pb.capacity;   // mix_seeds writes the FULL [0,capacity) range into work[1]
+    for (int r = 1; r <= 5; ++r) {
+        RoundStats& st = result.rounds[r - 1];
+        if (prevN == 0) {
+            // Empty-round robustness: once the chain runs dry, every
+            // remaining round is honestly {0,0,0,0} -- 0 input can never
+            // produce a collision, and dispatching mix_level/scatter with
+            // N==0 would be an invalid (global_work_size==0) OpenCL launch.
+            st = RoundStats{};
+        } else {
+            prevN = run_single_round(rt, pb, b, r, prevN, st);
+        }
+        std::printf("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n",
+                    r, st.in, st.out, st.bucket_drops, st.pair_drops);
+    }
+
+    result.survivors = survivor_scan(rt, pb, prevN, result.survivor_slots);
+    return result;
 }
 
 }} // namespace mxbm::gpu
