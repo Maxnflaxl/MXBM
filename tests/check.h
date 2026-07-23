@@ -2,7 +2,12 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 namespace mxbm {
+// Quiet by default. Set MXBM_VERBOSE=1 to print section headers. (A local-only
+// verbose build additionally prints per-value success output; see the tests.)
+inline bool verbose() { static bool v = (std::getenv("MXBM_VERBOSE") != nullptr); return v; }
+inline void section(const char* title) { if (verbose()) std::printf("-- %s\n", title); }
 inline int& fail_count() { static int f = 0; return f; }
 inline void check(bool cond, const char* msg) {
     if (!cond) { std::printf("  FAIL: %s\n", msg); ++fail_count(); }
