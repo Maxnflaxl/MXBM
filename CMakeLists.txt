@@ -172,6 +172,7 @@ if(OpenCL_FOUND)
 
   add_library(mxbm_gpu STATIC src/gpu/cl_runtime.cpp)
   target_include_directories(mxbm_gpu PUBLIC src)
+  target_include_directories(mxbm_gpu PRIVATE ${CMAKE_BINARY_DIR})
   target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
   target_sources(mxbm_gpu PRIVATE src/gpu/budget.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
@@ -205,6 +206,7 @@ if(OpenCL_FOUND)
     COMMENT "Embedding OpenCL kernels -> mxbm_kernels.h"
     VERBATIM)
   add_custom_target(mxbm_kernels_gen DEPENDS ${MXBM_KERNELS_HEADER})
+  add_dependencies(mxbm_gpu mxbm_kernels_gen)   # round_pipeline.cpp includes the generated header
 
   add_executable(test_cl_primitives tests/test_cl_primitives.cpp)
   add_dependencies(test_cl_primitives mxbm_kernels_gen)
@@ -217,6 +219,12 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_seed PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_seed PRIVATE mxbm_gpu)
   add_test(NAME gpu_seed COMMAND test_gpu_seed)
+
+  add_executable(test_round_mix tests/test_round_mix.cpp)
+  add_dependencies(test_round_mix mxbm_kernels_gen)
+  target_include_directories(test_round_mix PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_round_mix PRIVATE mxbm_gpu)
+  add_test(NAME round_mix COMMAND test_round_mix)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()
