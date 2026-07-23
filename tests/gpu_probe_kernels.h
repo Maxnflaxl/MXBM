@@ -26,5 +26,30 @@ __kernel void probe_collision(__global const ulong* w0,   // [n]
     size_t i = get_global_id(0);
     out[i] = bh3_collision_bits(w0[i]);
 }
+// probe_apply_mix: case i has e at ework[i*8..i*8+6] (8-stride, pad slot unused
+// on input), tree at etree[i*16..], plus params[i*2]=treeLen, params[i*2+1]=Lmix.
+// Writes out[i] = apply_mix(e, tree, treeLen, Lmix).
+__kernel void probe_apply_mix(__global const ulong* ework,   // [n*8]
+                              __global const uint*  etree,   // [n*16]
+                              __global const uint*  params,  // [n*2]
+                              __global ulong* out) {         // [n]
+    size_t i = get_global_id(0);
+    ulong e[7]; for (int k=0;k<7;++k) e[k]=ework[i*8+k];
+    uint treeLen = params[i*2+0];
+    uint Lmix    = params[i*2+1];
+    uint tree[16]; for (int k=0;k<16;++k) tree[k]=etree[i*16+k];
+    out[i] = bh3_apply_mix(e, tree, treeLen, Lmix);
+}
+// probe_combine: a at aw[i*7..], b at bw[i*7..], Lout at lout[i]; out at o[i*7..].
+__kernel void probe_combine(__global const ulong* aw,    // [n*7]
+                            __global const ulong* bw,    // [n*7]
+                            __global const uint*  lout,  // [n]
+                            __global ulong* o) {         // [n*7]
+    size_t i = get_global_id(0);
+    ulong a[7],b[7],r[7];
+    for (int k=0;k<7;++k){ a[k]=aw[i*7+k]; b[k]=bw[i*7+k]; }
+    bh3_combine(a, b, lout[i], r);
+    for (int k=0;k<7;++k) o[i*7+k]=r[k];
+}
 )CLSRC";
 }} // namespace mxbm::gpu
