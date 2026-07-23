@@ -51,5 +51,14 @@ __kernel void probe_combine(__global const ulong* aw,    // [n*7]
     bh3_combine(a, b, lout[i], r);
     for (int k=0;k<7;++k) o[i*7+k]=r[k];
 }
+// probe_pack: case i packs idx[i*32..i*32+31] -> out[i*100..i*100+99].
+__kernel void probe_pack(__global const uint* idx,   // [n*32]
+                         __global uchar* out) {       // [n*100]
+    size_t i = get_global_id(0);
+    uint ix[32]; for (int k=0;k<32;++k) ix[k]=idx[i*32+k];
+    uchar packed[100];
+    bh3_pack_indices(ix, packed);
+    for (int k=0;k<100;++k) out[i*100+k]=packed[k];
+}
 )CLSRC";
 }} // namespace mxbm::gpu

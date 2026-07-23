@@ -66,3 +66,14 @@ inline void bh3_combine(const ulong a[7], const ulong b[7], uint Lout, ulong out
         else if (Lout - base < 64u) out[i] &= (((ulong)1 << (Lout - base)) - 1);
     }
 }
+
+// pack_indices: 32 x 25-bit little-endian indices -> 100 bytes.
+inline void bh3_pack_indices(const uint idx[32], uchar out[100]) {
+    for (int i = 0; i < 100; ++i) out[i] = 0;
+    for (int k = 0; k < 32; ++k)
+        for (int b = 0; b < 25; ++b)
+            if ((idx[k] >> b) & 1u) {
+                int pos = 25 * k + b;
+                out[pos >> 3] |= (uchar)(1u << (pos & 7));
+            }
+}

@@ -5,6 +5,7 @@
 #include "kat_vectors.h"
 #include "bh3_primitives.h"
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 using namespace mxbm;
@@ -164,6 +165,30 @@ static void test_combine(Runtime& rt, Program& prog) {
     check(bad==0, "combine differential (5120 cases across 5 Lout)");
 }
 
+static void test_pack(Runtime& rt, Program& prog) {
+    section("cl pack_indices == C++ pack_indices (KAT + differential)");
+    const size_t N = 2048;
+    std::vector<uint32_t> idx(N*32);
+    // Case 0 is the published KAT vector: idx[i] = (i*2654435761) & 0x1FFFFFF.
+    for (int i=0;i<32;++i) idx[i] = ((uint32_t)(i*2654435761u)) & 0x1FFFFFFu;
+    uint64_t s=0x99AA; for (size_t c=1;c<N;++c) for (int k=0;k<32;++k) idx[c*32+k]=(uint32_t)(sm(s)&0x1FFFFFFu);
+    std::vector<uint8_t> out(N*100);
+    Kernel k = rt.kernel(prog.get(), "probe_pack");
+    Mem mi=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR, idx.size()*4, idx.data());
+    Mem mo=rt.alloc(CL_MEM_WRITE_ONLY, out.size());
+    cl_mem a=mi.get(),b=mo.get();
+    rt.set_arg(k.get(),0,sizeof(cl_mem),&a); rt.set_arg(k.get(),1,sizeof(cl_mem),&b);
+    rt.run1d(k.get(), N);
+    rt.read(mo.get(), out.size(), out.data());
+    int bad=0;
+    for (size_t c=0;c<N;++c) {
+        uint8_t want[100]; bh3::pack_indices(&idx[c*32], want);
+        if (std::memcmp(&out[c*100], want, 100)!=0) { ++bad; }
+    }
+    check(bad==0, "pack_indices differential (2048 cases)");
+    check(std::memcmp(out.data(), kat::pack_expected, 100)==0, "pack case0 == 100-byte KAT");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
@@ -173,5 +198,6 @@ int main() {
     test_collision(rt, prog);
     test_apply_mix(rt, prog);
     test_combine(rt, prog);
+    test_pack(rt, prog);
     return summary("cl_primitives");
 }
