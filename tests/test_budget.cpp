@@ -21,6 +21,7 @@ int main() {
     check(b8.elems_per_round < (1u<<25), "8GB clamps elems/round below 2^25 (honest drop)");
     check(b8.elems_per_round > 0, "8GB still positive elems/round");
     check(b8.seed_batch*56ull <= 2*GiB, "8GB seed_batch fits max_alloc");
+    check(b8.num_buckets == 4096u, "8GB uses 4096 buckets (elems >= 2^22 -> bucket_bits=12)");
 
     // Apple M3 Max-like: huge unified memory, generous everything.
     Budget bm = compute_budget(110ull*GiB, 27ull*GiB);
