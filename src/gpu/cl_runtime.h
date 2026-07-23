@@ -78,6 +78,9 @@ public:
     Mem     alloc(cl_mem_flags flags, size_t bytes, void* host_ptr = nullptr);
     void    write(cl_mem buf, size_t bytes, const void* src);
     void    read(cl_mem buf, size_t bytes, void* dst);
+    // Blocking read of `bytes` from `offset` into buf (used for the sort path's
+    // total-child-count: two 4-byte element reads instead of a full readback).
+    void    read_at(cl_mem buf, size_t offset, size_t bytes, void* dst);
     // Fills the first `count` uint32_t elements of buf with `value` via
     // clEnqueueFillBuffer, then blocks (clFinish) until complete.
     void    fill_u32(cl_mem buf, uint32_t value, size_t count);

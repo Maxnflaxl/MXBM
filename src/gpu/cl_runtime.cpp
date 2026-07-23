@@ -138,6 +138,9 @@ void Runtime::write(cl_mem buf, size_t bytes, const void* src) {
 void Runtime::read(cl_mem buf, size_t bytes, void* dst) {
     check_cl(clEnqueueReadBuffer(q_, buf, CL_TRUE, 0, bytes, dst, 0, nullptr, nullptr), "clEnqueueReadBuffer");
 }
+void Runtime::read_at(cl_mem buf, size_t offset, size_t bytes, void* dst) {
+    check_cl(clEnqueueReadBuffer(q_, buf, CL_TRUE, offset, bytes, dst, 0, nullptr, nullptr), "clEnqueueReadBuffer");
+}
 void Runtime::fill_u32(cl_mem buf, uint32_t value, size_t count) {
     // NOTE: event=nullptr here is silently unreliable on at least one real
     // OpenCL implementation (Apple Silicon / macOS's OpenCL-over-Metal

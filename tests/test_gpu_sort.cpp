@@ -203,7 +203,10 @@ int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
     std::printf("  device: %s\n", rt.device().name.c_str());
-    Program prog = rt.build({std::string(kSortClSource)}, "");
+    // sort.cl's pipeline kernels reference bh3_combine (bh3.cl) + BH3_MAX_LEAVES
+    // (round.cl); compile all three in the {bh3, round, sort} order the pipeline uses.
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource),
+                             std::string(kSortClSource)}, "");
     test_scan(rt, prog.get());
     test_radix(rt, prog.get());
     test_collision(rt, prog.get());

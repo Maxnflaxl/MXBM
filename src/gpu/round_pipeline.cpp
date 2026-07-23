@@ -3,6 +3,7 @@
 #include "beamhash/bh3_primitives.h"
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace mxbm { namespace gpu {
@@ -76,6 +77,18 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     p.bucket_slots = rt.alloc(CL_MEM_READ_WRITE, (size_t)b.num_buckets * b.slots_per_bucket * 4);
 
     p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
+
+    // Phase-D3 sort scratch, allocated only when the sort-based match is enabled
+    // (env MXBM_SORT_MATCH). ~512 MB (pairs) + 128 MB (hist) at 2^25 capacity,
+    // comfortably inside the headroom the 6->2 work-buffer reclaim freed. Left
+    // null otherwise so the default path costs nothing extra.
+    if (std::getenv("MXBM_SORT_MATCH")) {
+        const size_t pairBytes = (size_t)p.capacity * sizeof(uint64_t);
+        for (int i = 0; i < 2; ++i) p.sort_pairs[i] = rt.alloc(CL_MEM_READ_WRITE, pairBytes);
+        p.sort_scan = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.capacity * 4);
+        const size_t ngroups = ((size_t)p.capacity + 255) / 256;
+        p.sort_hist = rt.alloc(CL_MEM_READ_WRITE, (size_t)256 * ngroups * 4);
+    }
 
     return p;
 }
@@ -255,7 +268,177 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
     return (counters[0] < outCapacity) ? counters[0] : outCapacity;
 }
 
+// ===========================================================================
+// Phase-D3: sort-based collision finder (host driver for kernels/opencl/sort.cl).
+// Enabled per-solve by env MXBM_SORT_MATCH; replaces scatter()+match() with
+// key_extract -> stable radix sort -> collision run-scan -> coalesced emit.
+// ===========================================================================
+namespace {
+constexpr uint32_t kSortWG = 256u;
+
+cl_program sort_prog(Runtime& rt) {
+    return rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
+                              std::string(kSortClSource)}, "");
+}
+
+// Generic exclusive prefix scan of `n` uints in `buf` (in place), via
+// scan_block + recursion on the per-block sums + scan_add (see sort.cl).
+void scan_exclusive(Runtime& rt, cl_program prog, cl_mem buf, uint32_t n) {
+    if (n == 0) return;
+    uint32_t nblocks = (n + kSortWG - 1) / kSortWG;
+    Mem blocksums = rt.alloc(CL_MEM_READ_WRITE, (size_t)nblocks * 4);
+    cl_mem bs = blocksums.get();
+    Kernel kb = rt.kernel(prog, "scan_block");
+    rt.set_arg(kb.get(), 0, sizeof(cl_mem), &buf);
+    rt.set_arg(kb.get(), 1, sizeof(cl_mem), &buf);
+    rt.set_arg(kb.get(), 2, sizeof(cl_mem), &bs);
+    rt.set_arg(kb.get(), 3, n);
+    rt.run1d(kb.get(), (size_t)nblocks * kSortWG, kSortWG);
+    if (nblocks > 1) {
+        scan_exclusive(rt, prog, bs, nblocks);
+        Kernel ka = rt.kernel(prog, "scan_add");
+        rt.set_arg(ka.get(), 0, sizeof(cl_mem), &buf);
+        rt.set_arg(ka.get(), 1, sizeof(cl_mem), &bs);
+        rt.set_arg(ka.get(), 2, n);
+        rt.run1d(ka.get(), (size_t)nblocks * kSortWG, kSortWG);
+    }
+}
+
+// Stable LSD radix sort of `n` (key,index) pairs by the low 24 bits (3 x 8-bit
+// passes). Ping-pongs pb.sort_pairs[0]<->[1]; caller must have loaded the input
+// into pairs[0]. Returns the cl_mem holding the sorted result (pairs[1] after 3
+// swaps). Uses pb.sort_hist for the per-pass bin-major histogram.
+cl_mem radix_sort_pairs(Runtime& rt, cl_program prog, PipelineBuffers& pb, uint32_t n) {
+    uint32_t ngroups = (n + kSortWG - 1) / kSortWG;
+    cl_mem cur = pb.sort_pairs[0].get(), other = pb.sort_pairs[1].get(), wh = pb.sort_hist.get();
+    Kernel kh = rt.kernel(prog, "radix_histogram");
+    Kernel kr = rt.kernel(prog, "radix_reorder");
+    for (uint32_t pass = 0; pass < 3; ++pass) {
+        uint32_t shift = pass * 8;
+        rt.set_arg(kh.get(), 0, sizeof(cl_mem), &cur);
+        rt.set_arg(kh.get(), 1, sizeof(cl_mem), &wh);
+        rt.set_arg(kh.get(), 2, shift);
+        rt.set_arg(kh.get(), 3, n);
+        rt.set_arg(kh.get(), 4, ngroups);
+        rt.run1d(kh.get(), (size_t)ngroups * kSortWG, kSortWG);
+
+        scan_exclusive(rt, prog, wh, 256u * ngroups);
+
+        rt.set_arg(kr.get(), 0, sizeof(cl_mem), &cur);
+        rt.set_arg(kr.get(), 1, sizeof(cl_mem), &other);
+        rt.set_arg(kr.get(), 2, sizeof(cl_mem), &wh);
+        rt.set_arg(kr.get(), 3, shift);
+        rt.set_arg(kr.get(), 4, n);
+        rt.set_arg(kr.get(), 5, ngroups);
+        rt.run1d(kr.get(), (size_t)ngroups * kSortWG, kSortWG);
+
+        cl_mem t = cur; cur = other; other = t;
+    }
+    return cur;
+}
+} // namespace
+
+// Sort-based replacement for scatter()+match(): identical child multiset (same
+// equal-24-bit-key collisions, same (lead,slot)-canonical children), just emitted
+// coalesced from sorted runs instead of scattered from atomic buckets. `bucket_
+// drops` is always 0 (the sort caps nothing per key); pair_drops reports children
+// beyond pb.capacity, same as match(). Returns the capacity-clamped child count.
+uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
+                      uint32_t N, uint32_t& pair_drops) {
+    (void)b;
+    cl_program prog = sort_prog(rt);
+    uint32_t outCapacity = pb.capacity;
+
+    // 1. key_extract: build (key,index) pairs into sort_pairs[0].
+    {
+        Kernel k = rt.kernel(prog, "key_extract");
+        cl_mem inWork = pb.work[r & 1].get();
+        cl_mem pairs0 = pb.sort_pairs[0].get();
+        rt.set_arg(k.get(), 0, N);
+        rt.set_arg(k.get(), 1, sizeof(cl_mem), &inWork);
+        rt.set_arg(k.get(), 2, sizeof(cl_mem), &pairs0);
+        rt.run1d(k.get(), N);
+    }
+
+    // 2. stable radix sort by 24-bit key.
+    cl_mem sorted = radix_sort_pairs(rt, prog, pb, N);
+
+    // 3. collision_count over the sorted runs -> sort_scan.
+    cl_mem scan = pb.sort_scan.get();
+    {
+        Kernel k = rt.kernel(prog, "collision_count");
+        rt.set_arg(k.get(), 0, sizeof(cl_mem), &sorted);
+        rt.set_arg(k.get(), 1, sizeof(cl_mem), &scan);
+        rt.set_arg(k.get(), 2, N);
+        rt.run1d(k.get(), (size_t)((N + kSortWG - 1) / kSortWG) * kSortWG, kSortWG);
+    }
+    // total children = exclusive-offset(last) + count(last). Grab count(last)
+    // BEFORE the in-place scan clobbers it (one 4-byte read), then offset(last).
+    uint32_t lastCount = 0;
+    rt.read_at(scan, (size_t)(N - 1) * 4, 4, &lastCount);
+    scan_exclusive(rt, prog, scan, N);
+    uint32_t lastOff = 0;
+    rt.read_at(scan, (size_t)(N - 1) * 4, 4, &lastOff);
+    uint32_t total = lastOff + lastCount;
+
+    // 4. emit. Zero counters[2] (pair_drops) first; leave the rest as-is.
+    uint32_t counters[4];
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    counters[2] = 0u;
+    rt.write(pb.counters.get(), sizeof counters, counters);
+
+    {
+        Kernel k = rt.kernel(prog, "round_match_sorted");
+        uint32_t Lout = lout_for(r);
+        uint32_t leadIdentity = (r == 1) ? 1u : 0u;
+        uint32_t outOff = (uint32_t)(r - 1) * pb.capacity;
+        cl_mem inWork  = pb.work[r & 1].get();
+        cl_mem outWork = pb.work[((r < (int)kNumRounds) ? r + 1 : 0) & 1].get();
+        cl_mem leftMem = pb.left.get(), rightMem = pb.right.get(), cnt = pb.counters.get();
+        cl_mem leavesIn = pb.leaves[r & 1].get(), leavesOut = pb.leaves[(r + 1) & 1].get();
+        uint32_t sIn = sleaves_for(r);
+        uint32_t sOut = (r < (int)kNumRounds) ? sleaves_for(r + 1) : 0u;
+        rt.set_arg(k.get(), 0, N);
+        rt.set_arg(k.get(), 1, Lout);
+        rt.set_arg(k.get(), 2, leadIdentity);
+        rt.set_arg(k.get(), 3, outOff);
+        rt.set_arg(k.get(), 4, outCapacity);
+        rt.set_arg(k.get(), 5, sizeof(cl_mem), &sorted);
+        rt.set_arg(k.get(), 6, sizeof(cl_mem), &scan);
+        rt.set_arg(k.get(), 7, sizeof(cl_mem), &inWork);
+        rt.set_arg(k.get(), 8, sizeof(cl_mem), &outWork);
+        rt.set_arg(k.get(), 9, sizeof(cl_mem), &leftMem);
+        rt.set_arg(k.get(), 10, sizeof(cl_mem), &rightMem);
+        rt.set_arg(k.get(), 11, sizeof(cl_mem), &cnt);
+        rt.set_arg(k.get(), 12, sizeof(cl_mem), &leavesIn);
+        rt.set_arg(k.get(), 13, sizeof(cl_mem), &leavesOut);
+        rt.set_arg(k.get(), 14, sIn);
+        rt.set_arg(k.get(), 15, sOut);
+        rt.run1d(k.get(), (size_t)((N + kSortWG - 1) / kSortWG) * kSortWG, kSortWG);
+    }
+
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    pair_drops = counters[2];
+    return (total < outCapacity) ? total : outCapacity;
+}
+
 uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats) {
+    // Phase-D3: route to the sort-based collision finder when enabled. Mix is
+    // unchanged (still E3a leaf-prefix mix); only scatter+match is replaced.
+    static const bool useSort = (std::getenv("MXBM_SORT_MATCH") != nullptr);
+    if (useSort) {
+        auto tMixS = clk::now();
+        if (r >= 2) mix_level(rt, pb, r, inN);
+        stats.t_mix_ms = (r >= 2) ? ms_since(tMixS) : 0.0;
+        auto tMatchS = clk::now();
+        uint32_t pd = 0;
+        uint32_t outNs = match_sorted(rt, pb, b, r, inN, pd);
+        stats.t_match_ms = ms_since(tMatchS);
+        stats.t_scatter_ms = 0.0;
+        stats.in = inN; stats.out = outNs; stats.bucket_drops = 0u; stats.pair_drops = pd;
+        return outNs;
+    }
+
     auto tMix = clk::now();
     if (r >= 2) mix_level(rt, pb, r, inN);
     stats.t_mix_ms = (r >= 2) ? ms_since(tMix) : 0.0;

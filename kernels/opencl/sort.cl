@@ -146,3 +146,72 @@ __kernel void collision_emit(__global const ulong* pairs, __global const uint* o
         for (uint b = a + 1; b < m; ++b)
             out[o++] = ((ulong)sort_index(pairs[g + a]) << 32) | sort_index(pairs[g + b]);
 }
+
+// ===========================================================================
+// Pipeline wiring: the sort-based replacement for round_scatter + round_match.
+// Depends on bh3.cl (bh3_combine) and round.cl (BH3_MAX_LEAVES) -- compiled in
+// the order {bh3, round, sort}, so both symbols are visible here.
+// ===========================================================================
+
+// key_extract: one coalesced pass building the (key,index) pairs the radix sort
+// consumes. index = the element's slot in work[r]; key = its 24-bit collision key.
+__kernel void key_extract(uint N, __global const ulong* work, __global ulong* pairs) {
+    uint g = get_global_id(0);
+    if (g >= N) return;
+    pairs[g] = ((ulong)g << 32) | (uint)(work[(size_t)g*7] & 0xFFFFFFu);
+}
+
+// round_match_sorted: the coalescing match. Over the key-sorted pairs, each
+// equal-key run's START lane emits its C(m,2) children at the run's prefix-sum
+// offset -- so children land DENSE and IN ORDER (out_work / left / right / leaves
+// all coalesced), the entire point of the sort rewrite. The per-pair body is
+// byte-for-byte the same contract as round_match: order the pair by (lead,slot)
+// (lead = the element's first materialized leaf, or its own slot at r==1), combine
+// at Lout (XOR-symmetric, so left/right choice doesn't change the child work),
+// and grow the child's pre-order leaf prefix (left parent's s_in leaves then the
+// right parent's, truncated to s_out; s_out==0 at r==5). Emission SLOT differs
+// from round_match's atomic order, but every downstream consumer (mix, survivor,
+// recover) is order-independent, so the solution set is identical.
+__kernel void round_match_sorted(uint N, uint Lout, uint lead_identity,
+                                 uint out_off, uint out_capacity,
+                                 __global const ulong* sorted_pairs,
+                                 __global const uint* offsets,
+                                 __global const ulong* in_work,
+                                 __global ulong* out_work,
+                                 __global uint* all_left, __global uint* all_right,
+                                 __global uint* counters,          // [2]=pair_drops
+                                 __global const uint* leaves_in,   // AoS prefix (slot*9+i) of work[r]
+                                 __global uint* leaves_out,        // AoS prefix of the children
+                                 uint s_in, uint s_out) {          // leaves/elem in / out (s_out==0 -> skip)
+    uint g = get_global_id(0);
+    if (g >= N) return;
+    uint ka = sort_key(sorted_pairs[g]);
+    if (g > 0 && sort_key(sorted_pairs[g - 1]) == ka) return;      // only run starts emit
+    uint m = 1;
+    while (g + m < N && sort_key(sorted_pairs[g + m]) == ka) ++m;
+
+    uint o = offsets[g];
+    for (uint a = 0; a < m; ++a) {
+        uint sa = sort_index(sorted_pairs[g + a]);
+        uint la = lead_identity ? sa : leaves_in[(size_t)sa*BH3_MAX_LEAVES];
+        for (uint bb = a + 1; bb < m; ++bb) {
+            uint sb = sort_index(sorted_pairs[g + bb]);
+            uint lb = lead_identity ? sb : leaves_in[(size_t)sb*BH3_MAX_LEAVES];
+            uint left = sa, right = sb;
+            if (lb < la || (lb == la && sb < sa)) { left = sb; right = sa; }
+            ulong ea[7], eb[7], ec[7];
+            for (int w = 0; w < 7; ++w) { ea[w] = in_work[(size_t)left*7+w]; eb[w] = in_work[(size_t)right*7+w]; }
+            bh3_combine(ea, eb, Lout, ec);
+            uint oi = o++;
+            if (oi < out_capacity) {
+                for (int w = 0; w < 7; ++w) out_work[(size_t)oi*7 + w] = ec[w];
+                all_left[out_off + oi] = left; all_right[out_off + oi] = right;
+                for (uint i = 0; i < s_out; ++i) {
+                    uint leaf = (i < s_in) ? leaves_in[(size_t)left*BH3_MAX_LEAVES + i]
+                                           : leaves_in[(size_t)right*BH3_MAX_LEAVES + (i - s_in)];
+                    leaves_out[(size_t)oi*BH3_MAX_LEAVES + i] = leaf;
+                }
+            } else atomic_inc(&counters[2]);
+        }
+    }
+}

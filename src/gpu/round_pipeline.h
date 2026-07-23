@@ -19,6 +19,14 @@ struct PipelineBuffers {
     Mem bucket_count;           // uint[num_buckets]
     Mem bucket_slots;           // uint[num_buckets*slots_per_bucket]
     Mem counters;               // uint[4]: {out_count, bucket_drops, pair_drops, spare}
+
+    // Phase-D3 sort-based collision finder scratch (allocated only when
+    // MXBM_SORT_MATCH is set; see match_sorted() in round_pipeline.cpp). The
+    // sort replaces scatter+match with a stable radix sort of (key,index) pairs
+    // then a coalesced run-scan emit -- see kernels/opencl/sort.cl.
+    Mem sort_pairs[2];          // ulong[capacity] ping-pong (key,index) pairs
+    Mem sort_scan;              // uint[capacity] collision counts -> prefix-sum offsets
+    Mem sort_hist;             // uint[256 * ceil(capacity/256)] radix bin-major histogram
 };
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b);
