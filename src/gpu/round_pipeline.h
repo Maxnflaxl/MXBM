@@ -1,6 +1,7 @@
 #pragma once
 #include "gpu/cl_runtime.h"
 #include "gpu/budget.h"
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -103,5 +104,23 @@ struct PipelineResult {
     RoundStats rounds[5];
 };
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4]);
+
+// Recover: for each survivor (a work[0] slot index from run_pipeline's
+// survivor_scan), walk its consolidated back-ref ancestry on-device (the
+// `recover` kernel, kernels/opencl/round.cl -- the SAME explicit-stack
+// pre-order DFS round_mix uses, but from level 5 down to level 1, collecting
+// all 32 leaves in tree order instead of feeding them to apply_mix) and pack
+// each leaf set into a 104-byte candidate via bh3::pack_indices (src/
+// beamhash/bh3_primitives.h, proven bit-identical in Phase A -- never
+// reimplemented here). Only `survivor_slots.size()*32` uints are read back
+// from the GPU -- never the multi-GB pb.left/right back-ref arrays
+// themselves. soln[0..99] is the packed index bitfield; soln[100..103] is
+// the extraNonce, left at 0 (a default-constructed std::array<uint8_t,104>
+// value-initializes to all-zero, so this falls out for free -- see
+// pack_indices, which only ever writes out[0..99]). No gate yet (e.g.
+// distinct-leaf / non-overlapping-tree checks) -- these are raw candidates,
+// deferred to a later Phase-C task.
+std::vector<std::array<uint8_t,104>> recover_candidates(Runtime& rt, PipelineBuffers& pb,
+                                                          const std::vector<uint32_t>& survivor_slots);
 
 }} // namespace mxbm::gpu

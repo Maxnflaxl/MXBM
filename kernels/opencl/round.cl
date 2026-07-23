@@ -132,3 +132,30 @@ __kernel void survivor_scan(uint N, __global const ulong* work,
     uint oi = atomic_inc(&counters[3]);
     if (oi < cap) out_slots[oi] = g;
 }
+// recover: one work-item per survivor. Walk the consolidated back-refs from the
+// round-5 survivor (slot in work[0], back-ref at row 4 = (5-1)*capacity) down to
+// round 1 (row 0, whose left/right entries ARE leaf indices), collecting all 32
+// leaves in tree order (pre-order: left subtree fully, then right -- the same
+// order round_mix's DFS uses and the verifier expects). No apply_mix.
+__kernel void recover(uint nSurv, __global const uint* surv_slots, uint capacity,
+                      __global const uint* all_left, __global const uint* all_right,
+                      __global uint* out /* [nSurv*32] */) {
+    uint i = (uint)get_global_id(0);
+    if (i >= nSurv) return;
+    uint got = 0u;
+    uint lvl[8], slt[8]; int sp = 0;
+    lvl[0] = 5u; slt[0] = surv_slots[i]; sp = 1;
+    while (sp > 0 && got < 32u) {
+        --sp;
+        uint lv = lvl[sp], sl = slt[sp];
+        uint off = (lv - 1u) * capacity;
+        uint L = all_left[off + sl], R = all_right[off + sl];
+        if (lv == 1u) {
+            out[(size_t)i*32u + got] = L; ++got;
+            if (got < 32u) { out[(size_t)i*32u + got] = R; ++got; }
+        } else {
+            lvl[sp] = lv - 1u; slt[sp] = R; ++sp;   // right pushed first,
+            lvl[sp] = lv - 1u; slt[sp] = L; ++sp;   // left pops first (pre-order)
+        }
+    }
+}

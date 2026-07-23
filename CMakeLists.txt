@@ -253,6 +253,16 @@ if(OpenCL_FOUND)
   # ~2^30 key-compares/round) -- compute-heavy but observed ~3s on an M3 Max;
   # generous timeout so a slow-but-correct run on lesser hardware isn't killed.
   set_tests_properties(gpu_rounds PROPERTIES TIMEOUT 1800)
+
+  add_executable(test_gpu_recover tests/test_gpu_recover.cpp)
+  add_dependencies(test_gpu_recover mxbm_kernels_gen)
+  target_include_directories(test_gpu_recover PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_gpu_recover PRIVATE mxbm_gpu)
+  add_test(NAME gpu_recover COMMAND test_gpu_recover)
+  # Phase-C Task 1: runs the same full 2^25 GPU Wagner search as gpu_rounds
+  # (~2-3s on an M3 Max) plus a cheap on-device recovery pass; same generous
+  # timeout as gpu_rounds for the same reason (slow-but-correct hardware).
+  set_tests_properties(gpu_recover PROPERTIES TIMEOUT 1800)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()

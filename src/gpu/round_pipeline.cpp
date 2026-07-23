@@ -1,5 +1,6 @@
 #include "gpu/round_pipeline.h"
 #include "generated/mxbm_kernels.h"
+#include "beamhash/bh3_primitives.h"
 #include <cstdio>
 #include <string>
 
@@ -263,6 +264,51 @@ PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, c
 
     result.survivors = survivor_scan(rt, pb, prevN, result.survivor_slots);
     return result;
+}
+
+std::vector<std::array<uint8_t,104>> recover_candidates(Runtime& rt, PipelineBuffers& pb,
+                                                          const std::vector<uint32_t>& survivor_slots) {
+    const size_t n = survivor_slots.size();
+    // Value-initialized: every byte starts at 0, so soln[100..103] (the
+    // extraNonce) is 0 without touching it below -- pack_indices only ever
+    // writes out[0..99].
+    std::vector<std::array<uint8_t,104>> out(n);
+    // A global_work_size==0 launch is invalid OpenCL; 0 survivors -> 0
+    // candidates, trivially, with no GPU round-trip needed (mirrors
+    // survivor_scan's own N==0 guard).
+    if (n == 0) return out;
+
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog.get(), "recover");
+
+    Mem slotsMem  = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
+                             n * sizeof(uint32_t), (void*)survivor_slots.data());
+    Mem leavesMem = rt.alloc(CL_MEM_READ_WRITE, n * 32 * sizeof(uint32_t));
+
+    uint32_t nSurv    = (uint32_t)n;
+    uint32_t capacity = pb.capacity;
+    cl_mem slotsRaw  = slotsMem.get();
+    cl_mem leftMem   = pb.left.get();
+    cl_mem rightMem  = pb.right.get();
+    cl_mem leavesRaw = leavesMem.get();
+
+    rt.set_arg(k.get(), 0, nSurv);
+    rt.set_arg(k.get(), 1, sizeof(cl_mem), &slotsRaw);
+    rt.set_arg(k.get(), 2, capacity);
+    rt.set_arg(k.get(), 3, sizeof(cl_mem), &leftMem);
+    rt.set_arg(k.get(), 4, sizeof(cl_mem), &rightMem);
+    rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesRaw);
+    rt.run1d(k.get(), n);
+
+    // Read back ONLY n*32 uints (the recovered leaves) -- never the
+    // multi-GB pb.left/right consolidated back-ref arrays themselves.
+    std::vector<uint32_t> leaves(n * 32);
+    rt.read(leavesMem.get(), leaves.size() * sizeof(uint32_t), leaves.data());
+
+    for (size_t i = 0; i < n; ++i)
+        bh3::pack_indices(&leaves[i * 32], out[i].data());
+
+    return out;
 }
 
 }} // namespace mxbm::gpu
