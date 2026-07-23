@@ -188,21 +188,16 @@ if(OpenCL_FOUND)
   set(MXBM_KERNELS_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_kernels.h)
   set(MXBM_KERNEL_FILES
       ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl
-      ${CMAKE_SOURCE_DIR}/kernels/opencl/seed.cl)
-  # The Unix Makefiles generator flattens ';' (the CMake list separator) to a
-  # space when a list is embedded inside a quoted COMMAND argument, since a raw
-  # ';' in a Make recipe line would otherwise end the shell command early. With
-  # a single-file list that was never exercised; with two-or-more files it
-  # silently merges all paths into one bogus argument. Join on ',' (not special
-  # to Make/shell) instead and split it back apart in EmbedKernels.cmake.
-  list(JOIN MXBM_KERNEL_FILES "," MXBM_KERNEL_FILES_ARG)
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/seed.cl
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/round.cl)
   add_custom_command(
     OUTPUT ${MXBM_KERNELS_HEADER}
-    COMMAND ${CMAKE_COMMAND} -DKERNEL_FILES="${MXBM_KERNEL_FILES_ARG}"
+    COMMAND ${CMAKE_COMMAND} "-DKERNEL_FILES=${MXBM_KERNEL_FILES}"
             -DOUT_FILE=${MXBM_KERNELS_HEADER}
             -P ${CMAKE_SOURCE_DIR}/cmake/EmbedKernels.cmake
     DEPENDS ${MXBM_KERNEL_FILES} ${CMAKE_SOURCE_DIR}/cmake/EmbedKernels.cmake
-    COMMENT "Embedding OpenCL kernels -> mxbm_kernels.h")
+    COMMENT "Embedding OpenCL kernels -> mxbm_kernels.h"
+    VERBATIM)
   add_custom_target(mxbm_kernels_gen DEPENDS ${MXBM_KERNELS_HEADER})
 
   add_executable(test_cl_primitives tests/test_cl_primitives.cpp)
