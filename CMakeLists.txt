@@ -209,7 +209,8 @@ if(OpenCL_FOUND)
   set(MXBM_KERNEL_FILES
       ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl
       ${CMAKE_SOURCE_DIR}/kernels/opencl/seed.cl
-      ${CMAKE_SOURCE_DIR}/kernels/opencl/round.cl)
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/round.cl
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/sort.cl)
   add_custom_command(
     OUTPUT ${MXBM_KERNELS_HEADER}
     COMMAND ${CMAKE_COMMAND} "-DKERNEL_FILES=${MXBM_KERNEL_FILES}"
@@ -232,6 +233,14 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_seed PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_seed PRIVATE mxbm_gpu)
   add_test(NAME gpu_seed COMMAND test_gpu_seed)
+
+  # Phase-D3 P1: sort-based collision-finder building blocks (kernels/opencl/
+  # sort.cl) verified in isolation vs CPU std::sort / group-by-key oracles.
+  add_executable(test_gpu_sort tests/test_gpu_sort.cpp)
+  add_dependencies(test_gpu_sort mxbm_kernels_gen)
+  target_include_directories(test_gpu_sort PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_gpu_sort PRIVATE mxbm_gpu)
+  add_test(NAME gpu_sort COMMAND test_gpu_sort)
 
   add_executable(test_round_mix tests/test_round_mix.cpp)
   add_dependencies(test_round_mix mxbm_kernels_gen)
