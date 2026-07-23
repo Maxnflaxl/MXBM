@@ -163,3 +163,21 @@ add_executable(test_version tests/test_version.cpp)
 target_include_directories(test_version PRIVATE tests src)
 target_link_libraries(test_version PRIVATE mxbm_version)
 add_test(NAME version COMMAND test_version)
+
+# ---- M3: OpenCL GPU solver (optional component) ----
+find_package(OpenCL)
+if(OpenCL_FOUND)
+  message(STATUS "OpenCL found: GPU targets enabled")
+  set(MXBM_HAVE_OPENCL ON)
+
+  add_library(mxbm_gpu STATIC src/gpu/cl_runtime.cpp)
+  target_include_directories(mxbm_gpu PUBLIC src)
+  target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
+
+  add_executable(test_cl_smoke tests/test_cl_smoke.cpp)
+  target_include_directories(test_cl_smoke PRIVATE tests src)
+  target_link_libraries(test_cl_smoke PRIVATE mxbm_gpu)
+  add_test(NAME cl_smoke COMMAND test_cl_smoke)
+else()
+  message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
+endif()
