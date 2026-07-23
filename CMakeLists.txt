@@ -173,11 +173,17 @@ if(OpenCL_FOUND)
   add_library(mxbm_gpu STATIC src/gpu/cl_runtime.cpp)
   target_include_directories(mxbm_gpu PUBLIC src)
   target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
+  target_sources(mxbm_gpu PRIVATE src/gpu/budget.cpp)
 
   add_executable(test_cl_smoke tests/test_cl_smoke.cpp)
   target_include_directories(test_cl_smoke PRIVATE tests src)
   target_link_libraries(test_cl_smoke PRIVATE mxbm_gpu)
   add_test(NAME cl_smoke COMMAND test_cl_smoke)
+
+  add_executable(test_budget tests/test_budget.cpp)
+  target_include_directories(test_budget PRIVATE tests src)
+  target_link_libraries(test_budget PRIVATE mxbm_gpu)
+  add_test(NAME budget COMMAND test_budget)
 
   set(MXBM_KERNELS_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_kernels.h)
   set(MXBM_KERNEL_FILES ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl)
