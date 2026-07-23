@@ -287,6 +287,14 @@ if(OpenCL_FOUND)
   # plus recovery plus the CPU verify gate; same generous timeout for the
   # same reason (slow-but-correct hardware).
   set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800)
+
+  # Phase-D benchmark harness (manual-run, NOT registered as a ctest gate):
+  # repeats the full 2^25 solve N times, enforces the D0 correctness gate,
+  # and reports median total + per-phase ms for comparing match-kernel variants.
+  add_executable(bench_rounds tests/bench_rounds.cpp)
+  add_dependencies(bench_rounds mxbm_kernels_gen)
+  target_include_directories(bench_rounds PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(bench_rounds PRIVATE mxbm_gpu)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()
