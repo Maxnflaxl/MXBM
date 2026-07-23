@@ -43,14 +43,13 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
 
     // Each resident element is 7 x uint64 (56 B) of work state, matching
-    // kSeedElemBytes; all 6 slots (work[0..5]) share this per-element shape.
-    // Usage: mix_seeds() writes round 1's mixed input into work[1]; for
-    // round r, match() reads round r's input from work[r] and writes round
-    // r's children (round r+1's input) into work[r+1] -- except r==5, which
-    // has no round 6 to feed and writes its children into work[0], the only
-    // otherwise-idle slot (mix_seeds never touches work[0]).
+    // kSeedElemBytes. PING-PONG: round r reads work[r&1] and writes work[(r+1)&1];
+    // r==5 writes work[0] (== work[(5+1)&1]). Only 2 logical round-slots are live
+    // at any instant (round r's input and its output) -- round r's input is dead
+    // the moment match(r) finishes, so its buffer is reused as round r+1's output.
+    // mix_seeds writes work[1]; survivor_scan/recover read the r5 output in work[0].
     const size_t elemBytes = (size_t)p.capacity * 7 * 8;
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 2; ++i)
         p.work[i] = rt.alloc(CL_MEM_READ_WRITE, elemBytes);
 
     // Consolidated flat back-ref arrays: 5 rounds x capacity slots, uint32 each.
@@ -99,7 +98,7 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     uint32_t capacity = pb.capacity;
     uint32_t padNum   = padnum_for(r);
     uint32_t Lmix     = lmix_for(r);
-    cl_mem workMem  = pb.work[r].get();
+    cl_mem workMem  = pb.work[r & 1].get();
     cl_mem leftMem  = pb.left.get();
     cl_mem rightMem = pb.right.get();
 
@@ -126,7 +125,7 @@ void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int 
 
     uint32_t bucketBits = b.bucket_bits;
     uint32_t slots       = b.slots_per_bucket;
-    cl_mem workMem        = pb.work[workIndex].get();
+    cl_mem workMem        = pb.work[workIndex & 1].get();
     cl_mem bucketCountMem = pb.bucket_count.get();
     cl_mem bucketSlotsMem = pb.bucket_slots.get();
     cl_mem countersMem    = pb.counters.get();
@@ -169,8 +168,8 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
     // in round_pipeline.h).
     cl_mem bucketCountMem = pb.bucket_count.get();
     cl_mem bucketSlotsMem = pb.bucket_slots.get();
-    cl_mem inWorkMem      = pb.work[r].get();
-    cl_mem outWorkMem     = pb.work[(r < (int)kNumRounds) ? r + 1 : 0].get();
+    cl_mem inWorkMem      = pb.work[r & 1].get();
+    cl_mem outWorkMem     = pb.work[((r < (int)kNumRounds) ? r + 1 : 0) & 1].get();
     cl_mem leadMem        = pb.lead.get();   // aliased: all_lead_in (read) + all_lead (write) -- disjoint row ranges per round
     cl_mem leftMem        = pb.left.get();
     cl_mem rightMem       = pb.right.get();

@@ -236,7 +236,7 @@ static void test_r1_match(Runtime& rt) {
     PipelineBuffers pb = alloc_pipeline(rt, bud);
     check(pb.capacity == N, "r=1: pipeline capacity == 4096");
 
-    rt.write(pb.work[1].get(), mixedWork.size() * 8, mixedWork.data());
+    rt.write(pb.work[(1) & 1].get(), mixedWork.size() * 8, mixedWork.data());
 
     scatter(rt, pb, bud, N, /*workIndex=*/1);
     {
@@ -254,7 +254,7 @@ static void test_r1_match(Runtime& rt) {
 
     // Round 1's children land in pb.work[2] (r+1), back-ref row (r-1)*capacity == 0.
     std::vector<uint64_t> gpuWork((size_t)outN * 7);
-    rt.read(pb.work[2].get(), gpuWork.size() * 8, gpuWork.data());
+    rt.read(pb.work[(2) & 1].get(), gpuWork.size() * 8, gpuWork.data());
     std::vector<uint32_t> allLeft(5 * (size_t)pb.capacity), allRight(5 * (size_t)pb.capacity), allLead(5 * (size_t)pb.capacity);
     rt.read(pb.left.get(),  allLeft.size()  * 4, allLeft.data());
     rt.read(pb.right.get(), allRight.size() * 4, allRight.data());
@@ -293,7 +293,7 @@ static void test_r1_match(Runtime& rt) {
     // CALLER's responsibility per its contract).
     {
         PipelineBuffers pb2 = alloc_pipeline(rt, bud);
-        rt.write(pb2.work[1].get(), mixedWork.size() * 8, mixedWork.data());
+        rt.write(pb2.work[(1) & 1].get(), mixedWork.size() * 8, mixedWork.data());
         RoundStats stats;
         uint32_t outN2 = run_single_round(rt, pb2, bud, /*r=*/1, N, stats);
         check(outN2 == outN, "r=1: run_single_round() child count == direct match() child count");
@@ -518,7 +518,7 @@ static void test_r3_match(Runtime& rt) {
     std::vector<uint64_t> work3((size_t)capacity * 7, 0);
     for (uint32_t k = 0; k < Ntotal; ++k)
         for (int w = 0; w < 7; ++w) work3[(size_t)k*7 + w] = fx.elems[k].w[w];
-    rt.write(pb.work[3].get(), work3.size() * 8, work3.data());
+    rt.write(pb.work[(3) & 1].get(), work3.size() * 8, work3.data());
     rt.write(pb.left.get(),  fx.left.size()  * 4, fx.left.data());
     rt.write(pb.right.get(), fx.right.size() * 4, fx.right.data());
     rt.write(pb.lead.get(),  fx.lead.size()  * 4, fx.lead.data());
@@ -550,7 +550,7 @@ static void test_r3_match(Runtime& rt) {
     const uint32_t inLeadOff = (3 - 2) * capacity;   // capacity
 
     std::vector<uint64_t> gpuWork((size_t)outN * 7);
-    rt.read(pb.work[4].get(), gpuWork.size() * 8, gpuWork.data());
+    rt.read(pb.work[(4) & 1].get(), gpuWork.size() * 8, gpuWork.data());
     std::vector<uint32_t> allLeft(5 * (size_t)capacity), allRight(5 * (size_t)capacity), allLead(5 * (size_t)capacity);
     rt.read(pb.left.get(),  allLeft.size()  * 4, allLeft.data());
     rt.read(pb.right.get(), allRight.size() * 4, allRight.data());
@@ -622,7 +622,7 @@ static void test_r3_match(Runtime& rt) {
     // "r>=2, mix in place" branch (the counterpart to r=1's above).
     {
         PipelineBuffers pb2 = alloc_pipeline(rt, bud);
-        rt.write(pb2.work[3].get(), work3.size() * 8, work3.data());
+        rt.write(pb2.work[(3) & 1].get(), work3.size() * 8, work3.data());
         rt.write(pb2.left.get(),  fx.left.size()  * 4, fx.left.data());
         rt.write(pb2.right.get(), fx.right.size() * 4, fx.right.data());
         rt.write(pb2.lead.get(),  fx.lead.size()  * 4, fx.lead.data());

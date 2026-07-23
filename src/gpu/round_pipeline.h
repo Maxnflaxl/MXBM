@@ -10,7 +10,9 @@ namespace mxbm { namespace gpu {
 
 struct PipelineBuffers {
     uint32_t capacity = 0;      // elems per round (= budget.elems_per_round)
-    Mem work[6];                // [0]=transient seed work; [1..5]=round r work (each capacity*7*8 B)
+    Mem work[2];                // ping-pong: round r reads work[r&1], writes work[(r+1)&1] (each
+                                // capacity*7*8 B). Only 2 of the logical 6 round-slots are ever live
+                                // at once, so 2 physical buffers suffice -- frees ~7.7 GB vs the old 6.
     Mem left, right, lead;      // consolidated: uint[5*capacity] each; round k at (k-1)*capacity
     Mem bucket_count;           // uint[num_buckets]
     Mem bucket_slots;           // uint[num_buckets*slots_per_bucket]

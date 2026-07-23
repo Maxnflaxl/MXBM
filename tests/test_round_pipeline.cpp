@@ -145,7 +145,7 @@ static void test_r5_survivor(Runtime& rt) {
     // leaves).
     std::vector<uint64_t> work5((size_t)capacity * 7, 0);
     for (int w = 0; w < 7; ++w) { work5[0 * 7 + w] = h.w[w]; work5[1 * 7 + w] = h.w[w]; }
-    rt.write(pb.work[5].get(), work5.size() * 8, work5.data());
+    rt.write(pb.work[(5) & 1].get(), work5.size() * 8, work5.data());
     rt.write(pb.left.get(),  h.left.size()  * 4, h.left.data());
     rt.write(pb.right.get(), h.right.size() * 4, h.right.data());
 
@@ -168,7 +168,7 @@ static void test_r5_survivor(Runtime& rt) {
     // untouched).
     {
         std::vector<uint64_t> mixed(2 * 7);
-        rt.read(pb.work[5].get(), mixed.size() * 8, mixed.data());
+        rt.read(pb.work[(5) & 1].get(), mixed.size() * 8, mixed.data());
         bool identical = true;
         for (int w = 0; w < 7; ++w) if (mixed[0 * 7 + w] != mixed[1 * 7 + w]) identical = false;
         check(identical, "r=5: GPU-mixed slot0 and slot1 are byte-identical (all 7 words)");
@@ -193,7 +193,7 @@ static void test_r5_survivor(Runtime& rt) {
     // The child landed in pb.work[0] (r==5's special-case out_work), NOT
     // pb.work[6] (which doesn't exist -- CORRECTION 1).
     std::vector<uint64_t> childWork(7, 0);
-    rt.read(pb.work[0].get(), childWork.size() * 8, childWork.data());
+    rt.read(pb.work[(0) & 1].get(), childWork.size() * 8, childWork.data());
     bool isZero = true;
     for (int w = 0; w < 7; ++w) if (childWork[w] != 0ull) isZero = false;
     check(isZero, "r=5: the one child's work is ALL-ZERO across all 7 words (bh3_combine(x,x,24): XOR==0)");
