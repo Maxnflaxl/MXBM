@@ -29,6 +29,40 @@
 using namespace mxbm;
 using namespace mxbm::gpu;
 
+// Verify one solve()'s result against the milestone contract: EXACTLY 3
+// solutions, each independently passing the CPU gate (bh3::is_valid_solution
+// -- re-checked from outside GpuSolver, never short-circuiting the gate), and
+// together == {golden[0..2]} byte-for-byte (distinct-match; GPU atomics make
+// solve()'s internal ordering nondeterministic). `pass` labels the check
+// messages so a failure names which solve() broke.
+static void verify_goldens(const std::vector<std::array<uint8_t, 104>>& sols, const char* pass) {
+    char lbl[128];
+    std::snprintf(lbl, sizeof lbl, "%s: solve() returns EXACTLY 3 solutions", pass);
+    check(sols.size() == 3, lbl);
+    for (size_t i = 0; i < sols.size(); ++i) {
+        bool ok = bh3::is_valid_solution(kat::input32, 32, kat::nonce0, sols[i].data());
+        std::snprintf(lbl, sizeof lbl, "%s: solution[%zu] independently passes the CPU gate", pass, i);
+        check(ok, lbl);
+        if (!ok) show_hex("FAILED-gate solution", sols[i].data(), 104);
+    }
+    bool matched[3] = {false, false, false};
+    int unmatched = 0;
+    for (size_t i = 0; i < sols.size(); ++i) {
+        int hit = -1;
+        for (int g = 0; g < 3; ++g) {
+            if (matched[g]) continue;
+            if (std::memcmp(sols[i].data(), kat::golden[g], 104) == 0) { hit = g; break; }
+        }
+        if (hit >= 0) matched[hit] = true;
+        else { ++unmatched; show_hex("unmatched solution", sols[i].data(), 104); }
+    }
+    std::snprintf(lbl, sizeof lbl, "%s: every returned solution matches a distinct golden", pass);
+    check(unmatched == 0, lbl);
+    std::snprintf(lbl, sizeof lbl, "%s: all 3 KAT goldens found, verified, returned", pass);
+    check(matched[0] && matched[1] && matched[2], lbl);
+    std::printf("  %s: matched goldens [%d,%d,%d]\n", pass, matched[0], matched[1], matched[2]);
+}
+
 int main() {
     if (!GpuSolver::available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     section("GpuSolver::solve(): full pipeline + recovery + CPU gate -> the 3 KAT goldens, verified");
@@ -38,55 +72,27 @@ int main() {
     std::printf("  device: %s | gmem=%.2fGiB | max_alloc=%.2fGiB | CUs=%u\n",
                 d.name.c_str(), d.global_mem / 1073741824.0, d.max_alloc / 1073741824.0, d.compute_units);
 
-    std::printf("  running GpuSolver::solve() over the full seed layer on the KAT input...\n");
+    // Solve #1.
+    std::printf("  solve #1 over the full seed layer on the KAT input...\n");
     auto t0 = std::chrono::steady_clock::now();
-    std::vector<std::array<uint8_t, 104>> sols = s.solve(kat::input32, kat::nonce0);
+    std::vector<std::array<uint8_t, 104>> sols1 = s.solve(kat::input32, kat::nonce0);
+    std::printf("  solve #1: %.3fs, %zu solution(s)\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), sols1.size());
+    verify_goldens(sols1, "solve#1");
+
+    // Solve #2 on the SAME GpuSolver -- this is production's continuous-mining
+    // mode: the Engine calls solve() back-to-back over incrementing nonces,
+    // reusing the persistent PipelineBuffers. The per-run GPU state (counters[3]
+    // survivor count, bucket counts) MUST be re-zeroed each call; if it weren't,
+    // solve #2 would yield garbage the gate rejects -- the pool stays safe, but
+    // the miner would mine NOTHING from the second nonce onward. Same
+    // (input, nonce) -> the same 3 verified goldens proves the reuse is clean.
+    std::printf("  solve #2 on the SAME solver (persistent-buffer reuse -- the continuous-mining path)...\n");
     auto t1 = std::chrono::steady_clock::now();
-    double wallSecs = std::chrono::duration<double>(t1 - t0).count();
-    std::printf("  wall-clock: %.3fs, %zu solution(s) returned\n", wallSecs, sols.size());
-
-    // THE MILESTONE, part 1: exactly 3 solutions -- the GPU search found all
-    // 3 known survivors AND every one of them cleared the CPU gate (no
-    // false-positive is_zero round-5 collision that fails distinct/indexAfter
-    // is silently returned; none of the 3 real goldens is silently dropped).
-    check(sols.size() == 3, "GpuSolver::solve() returns EXACTLY 3 solutions for the KAT input");
-
-    // THE MILESTONE, part 2: every returned solution independently passes
-    // the same CPU gate solve() itself already filtered through -- this is
-    // solve()'s own contract, re-checked here from the outside (the test
-    // never reaches into GpuSolver's internals to short-circuit the gate).
-    for (size_t i = 0; i < sols.size(); ++i) {
-        bool ok = bh3::is_valid_solution(kat::input32, 32, kat::nonce0, sols[i].data());
-        char lbl[80];
-        std::snprintf(lbl, sizeof lbl, "solution[%zu] independently passes bh3::is_valid_solution (the CPU gate)", i);
-        check(ok, lbl);
-        if (!ok) show_hex("FAILED-gate solution", sols[i].data(), 104);
-    }
-
-    // THE MILESTONE, part 3: the returned SET equals {golden[0], golden[1],
-    // golden[2]} byte-for-byte (multiset/distinct-match -- solve()'s
-    // internal ordering is whatever the GPU's atomics produced).
-    bool matched[3] = {false, false, false};
-    int unmatchedCount = 0;
-    for (size_t i = 0; i < sols.size(); ++i) {
-        int hit = -1;
-        for (int g = 0; g < 3; ++g) {
-            if (matched[g]) continue;
-            if (std::memcmp(sols[i].data(), kat::golden[g], 104) == 0) { hit = g; break; }
-        }
-        if (hit >= 0) {
-            matched[hit] = true;
-            if (mxbm::verbose())
-                std::printf("  solution[%zu] == golden[%d]\n", i, hit);
-        } else {
-            ++unmatchedCount;
-            show_hex("unmatched solution", sols[i].data(), 104);
-        }
-    }
-    check(unmatchedCount == 0, "every returned solution matches a distinct golden solution");
-    check(matched[0] && matched[1] && matched[2], "all 3 KAT golden solutions were found, verified, and returned");
-
-    std::printf("  matched goldens: [%d,%d,%d]\n", matched[0], matched[1], matched[2]);
+    std::vector<std::array<uint8_t, 104>> sols2 = s.solve(kat::input32, kat::nonce0);
+    std::printf("  solve #2: %.3fs, %zu solution(s)\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count(), sols2.size());
+    verify_goldens(sols2, "solve#2");
 
     return summary("gpu_solver");
 }
