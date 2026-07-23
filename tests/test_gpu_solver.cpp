@@ -35,6 +35,19 @@ using namespace mxbm::gpu;
 // together == {golden[0..2]} byte-for-byte (distinct-match; GPU atomics make
 // solve()'s internal ordering nondeterministic). `pass` labels the check
 // messages so a failure names which solve() broke.
+// One solve's end-to-end throughput next to the reference miner's reference -- the
+// headline that makes "too slow" obvious from an integration-test run. Logged,
+// never asserted (wall-time flakes across GPUs); per-phase drill-down lives in
+// test_gpu_rounds.cpp, which drives run_pipeline directly.
+static void perf_line(const char* pass, double secs) {
+    const double kRefSolPerSec = 53.0, kSolsPerNonce = 1.9;
+    const double kRefSolvePerSec = kRefSolPerSec / kSolsPerNonce;   // ~28 solve/s
+    double sps = secs > 0.0 ? 1.0 / secs : 0.0;
+    std::printf("  [PERF] %s: %.2f solve/s (~%.1f sol/s) | ref the reference miner ~%.0f sol/s (~%.0f solve/s) | ~%.0fx slower\n",
+                pass, sps, sps * kSolsPerNonce, kRefSolPerSec, kRefSolvePerSec,
+                sps > 0.0 ? kRefSolvePerSec / sps : 0.0);
+}
+
 static void verify_goldens(const std::vector<std::array<uint8_t, 104>>& sols, const char* pass) {
     char lbl[128];
     std::snprintf(lbl, sizeof lbl, "%s: solve() returns EXACTLY 3 solutions", pass);
@@ -76,8 +89,9 @@ int main() {
     std::printf("  solve #1 over the full seed layer on the KAT input...\n");
     auto t0 = std::chrono::steady_clock::now();
     std::vector<std::array<uint8_t, 104>> sols1 = s.solve(kat::input32, kat::nonce0);
-    std::printf("  solve #1: %.3fs, %zu solution(s)\n",
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), sols1.size());
+    double secs1 = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  solve #1: %.3fs, %zu solution(s)\n", secs1, sols1.size());
+    perf_line("solve#1", secs1);
     verify_goldens(sols1, "solve#1");
 
     // Solve #2 on the SAME GpuSolver -- this is production's continuous-mining
@@ -90,8 +104,9 @@ int main() {
     std::printf("  solve #2 on the SAME solver (persistent-buffer reuse -- the continuous-mining path)...\n");
     auto t1 = std::chrono::steady_clock::now();
     std::vector<std::array<uint8_t, 104>> sols2 = s.solve(kat::input32, kat::nonce0);
-    std::printf("  solve #2: %.3fs, %zu solution(s)\n",
-                std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count(), sols2.size());
+    double secs2 = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
+    std::printf("  solve #2: %.3fs, %zu solution(s)\n", secs2, sols2.size());
+    perf_line("solve#2", secs2);
     verify_goldens(sols2, "solve#2");
 
     return summary("gpu_solver");

@@ -39,7 +39,16 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N);
 // capacity when they arrived.
 void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int workIndex);
 
-struct RoundStats { uint32_t in = 0, out = 0; uint32_t bucket_drops = 0, pair_drops = 0; };
+// Per-round counts + per-phase GPU timing (ms). run1d() clFinish()es after
+// every kernel, so a host-side steady_clock around each phase call is an
+// accurate GPU time, not just an enqueue time. t_mix_ms is 0 for r==1 (its
+// mix is round1_mix_seeds, timed as the pipeline's t_seed_ms instead) and for
+// any round short-circuited by the prevN==0 empty-round path.
+struct RoundStats {
+    uint32_t in = 0, out = 0;
+    uint32_t bucket_drops = 0, pair_drops = 0;
+    double t_mix_ms = 0.0, t_scatter_ms = 0.0, t_match_ms = 0.0;
+};
 
 // Match: sortless all-pairs collision search within every scattered bucket
 // (round_match kernel). Reads pb.work[r] (round r's fully mixed resident
@@ -120,6 +129,10 @@ struct PipelineResult {
     uint32_t survivors = 0;
     std::vector<uint32_t> survivor_slots;
     RoundStats rounds[5];
+    // GPU timing (ms) for the phases that live outside the per-round loop, plus
+    // the whole-pipeline total (seed -> 5 rounds -> survivor_scan). Together
+    // with rounds[*].t_*_ms this fully accounts for one solve's device time.
+    double t_seed_ms = 0.0, t_survivor_ms = 0.0, t_total_ms = 0.0;
 };
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
                              const std::atomic<bool>* abort = nullptr, bool verbose = true);

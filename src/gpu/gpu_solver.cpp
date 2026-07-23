@@ -1,6 +1,9 @@
 #include "gpu/gpu_solver.h"
 #include "beamhash/bh3_blake2b.h"
 #include "beamhash/bh3_verify.h"
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 namespace mxbm { namespace gpu {
 
@@ -17,6 +20,14 @@ GpuSolver::GpuSolver() {
 bool GpuSolver::available() { return Runtime::any_device_available(); }
 
 std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
+    // Opt-in per-solve profiling: run with MXBM_PROFILE=1 to print a one-line
+    // GPU-time breakdown (seed | per-round mix/scatter/match | survivor |
+    // recover | verify) every solve, plus the derived solve/s next to
+    // the reference miner's reference. Off by default (read once) so production mining
+    // stays quiet.
+    static const bool profile = (std::getenv("MXBM_PROFILE") != nullptr);
+    auto tSolve = std::chrono::steady_clock::now();
+
     // Clear any abort left set by a prior call's request_abort() -- each
     // solve() starts clean, exactly like run_pipeline's own doc contract.
     abort_.store(false, std::memory_order_relaxed);
@@ -35,23 +46,48 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
     // nonce attempt, so the per-round printf (default-on for the direct
     // pipeline tests) would spam stdout every round of every attempt.
     PipelineResult res = run_pipeline(rt_, pb_, budget_, prePow, &abort_, /*verbose=*/false);
-    if (res.survivors == 0) return {};
-
-    // Raw candidates: on-device back-ref recovery + host-side pack_indices
-    // (C-T1, unmodified) -- NOT yet gated; the rounds only enforced the
-    // 24-bit collision, so some of these may fail full Equihash validity.
-    std::vector<std::array<uint8_t, 104>> cand = recover_candidates(rt_, pb_, res.survivor_slots);
 
     // THE CPU VERIFY GATE (permanent anti-cheat): only candidates that pass
     // bh3::is_valid_solution -- which recomputes prePow from the candidate's
     // own extraNonce and enforces the FULL Equihash validity, including the
     // distinct-leaf and indexAfter checks the GPU rounds deliberately skip
     // -- are ever returned. No candidate is exempted or returned unchecked.
+    // (The common per-nonce case is 0 survivors -> empty `out`, same as the
+    // old early return; recover/verify only run when there's something to gate.)
     std::vector<std::array<uint8_t, 104>> out;
-    out.reserve(cand.size());
-    for (const auto& c : cand)
-        if (bh3::is_valid_solution(input, 32, nonce, c.data()))
-            out.push_back(c);
+    double tRecoverMs = 0.0, tVerifyMs = 0.0;
+    uint32_t nCand = 0;
+    if (res.survivors != 0) {
+        // Raw candidates: on-device back-ref recovery + host-side pack_indices
+        // (C-T1, unmodified) -- NOT yet gated; the rounds only enforced the
+        // 24-bit collision, so some of these may fail full Equihash validity.
+        auto tRec = std::chrono::steady_clock::now();
+        std::vector<std::array<uint8_t, 104>> cand = recover_candidates(rt_, pb_, res.survivor_slots);
+        tRecoverMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tRec).count();
+        nCand = (uint32_t)cand.size();
+
+        auto tVer = std::chrono::steady_clock::now();
+        out.reserve(cand.size());
+        for (const auto& c : cand)
+            if (bh3::is_valid_solution(input, 32, nonce, c.data()))
+                out.push_back(c);
+        tVerifyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tVer).count();
+    }
+
+    if (profile) {
+        double total = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tSolve).count();
+        double sps = total > 0.0 ? 1000.0 / total : 0.0;
+        std::printf("[prof] total=%.1fms  %.2f solve/s (~%.1f sol/s | the reference miner ref ~53) | seed=%.1f",
+                    total, sps, sps * 1.9, res.t_seed_ms);
+        for (int r = 0; r < 5; ++r) {
+            const RoundStats& st = res.rounds[r];
+            std::printf(" r%d=%.1f[mx%.1f sc%.1f mt%.1f]", r + 1,
+                        st.t_mix_ms + st.t_scatter_ms + st.t_match_ms,
+                        st.t_mix_ms, st.t_scatter_ms, st.t_match_ms);
+        }
+        std::printf(" | surv=%.1f rec=%.1f ver=%.1f | survivors=%u cand=%u sols=%zu\n",
+                    res.t_survivor_ms, tRecoverMs, tVerifyMs, res.survivors, nCand, out.size());
+    }
     return out;
 }
 

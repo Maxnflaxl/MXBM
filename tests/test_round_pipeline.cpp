@@ -267,10 +267,12 @@ static void test_full_pipeline_vs_cpu(Runtime& rt) {
         std::printf("  b: CPU round %d -> %u children\n", r, cpuCounts[r - 1]);
     }
 
-    std::printf("  round |    GPU out |    CPU out | bucketDrops |   pairDrops\n");
+    std::printf("  round |    GPU out |    CPU out | bucketDrops |   pairDrops |   mix |  scat | match ms\n");
     for (int r = 1; r <= 5; ++r) {
         const RoundStats& st = res.rounds[r - 1];
-        std::printf("    r%d  | %10u | %10u | %12u | %12u\n", r, st.out, cpuCounts[r - 1], st.bucket_drops, st.pair_drops);
+        std::printf("    r%d  | %10u | %10u | %12u | %12u | %5.1f | %5.1f | %5.1f\n",
+                    r, st.out, cpuCounts[r - 1], st.bucket_drops, st.pair_drops,
+                    st.t_mix_ms, st.t_scatter_ms, st.t_match_ms);
 
         char lbl[80];
         // GPU's own chaining: round r's `in` must equal round (r-1)'s CPU
@@ -288,6 +290,9 @@ static void test_full_pipeline_vs_cpu(Runtime& rt) {
         check(st.pair_drops == 0u, lbl);
     }
 
+    std::printf("  b: timing: seed=%.1fms survivor=%.1fms pipeline-total=%.1fms (%.2f solve/s at this 2^20 mini-scale)\n",
+                res.t_seed_ms, res.t_survivor_ms, res.t_total_ms,
+                res.t_total_ms > 0.0 ? 1000.0 / res.t_total_ms : 0.0);
     std::printf("  b: run_pipeline reported %u survivor(s) (is_zero children among round 5's %u; expected ~0 for real, distinct data)\n",
                 res.survivors, res.rounds[4].out);
     check(res.survivor_slots.size() == res.survivors, "b: survivor_slots.size() == the reported survivor count");

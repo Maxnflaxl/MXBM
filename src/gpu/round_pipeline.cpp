@@ -1,12 +1,20 @@
 #include "gpu/round_pipeline.h"
 #include "generated/mxbm_kernels.h"
 #include "beamhash/bh3_primitives.h"
+#include <chrono>
 #include <cstdio>
 #include <string>
 
 namespace mxbm { namespace gpu {
 
 namespace {
+// GPU phase timing. run1d() clFinish()es after each kernel launch (see
+// cl_runtime.cpp), so wall-clock around a phase call == that phase's device
+// time; no CL event profiling needed.
+using clk = std::chrono::steady_clock;
+inline double ms_since(clk::time_point t0) {
+    return std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+}
 // Round table (r=1..5). Mirrors tests/round_ref.h's ref::Lmix/ref::padNum
 // formulas (pinned equal by tests/test_round_reconstruct.cpp's
 // test_round_table) -- copied here as literal values since round_pipeline.cpp
@@ -185,15 +193,22 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
 }
 
 uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats) {
+    auto tMix = clk::now();
     if (r >= 2) mix_level(rt, pb, r, inN);
+    stats.t_mix_ms = (r >= 2) ? ms_since(tMix) : 0.0;
+
+    auto tScatter = clk::now();
     scatter(rt, pb, b, inN, /*workIndex=*/r);
+    stats.t_scatter_ms = ms_since(tScatter);
 
     uint32_t counters[4];
     rt.read(pb.counters.get(), sizeof counters, counters);
     uint32_t bucket_drops = counters[1];
 
+    auto tMatch = clk::now();
     uint32_t pair_drops = 0;
     uint32_t outN = match(rt, pb, b, r, inN, pair_drops);
+    stats.t_match_ms = ms_since(tMatch);
 
     stats.in = inN;
     stats.out = outN;
@@ -245,7 +260,11 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
                              const std::atomic<bool>* abort, bool verbose) {
     PipelineResult result;
+    auto tPipeline = clk::now();
+
+    auto tSeed = clk::now();
     mix_seeds(rt, pb, b, pp);
+    result.t_seed_ms = ms_since(tSeed);
 
     uint32_t prevN = pb.capacity;   // mix_seeds writes the FULL [0,capacity) range into work[1]
     for (int r = 1; r <= 5; ++r) {
@@ -260,8 +279,9 @@ PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, c
             prevN = run_single_round(rt, pb, b, r, prevN, st);
         }
         if (verbose) {
-            std::printf("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n",
-                        r, st.in, st.out, st.bucket_drops, st.pair_drops);
+            std::printf("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u | mix=%.1f scatter=%.1f match=%.1f ms\n",
+                        r, st.in, st.out, st.bucket_drops, st.pair_drops,
+                        st.t_mix_ms, st.t_scatter_ms, st.t_match_ms);
         }
 
         // Abort check: after every round (so, for r==5, also strictly
@@ -271,7 +291,16 @@ PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, c
         if (abort && abort->load(std::memory_order_relaxed)) return PipelineResult{};
     }
 
+    auto tSurvivor = clk::now();
     result.survivors = survivor_scan(rt, pb, prevN, result.survivor_slots);
+    result.t_survivor_ms = ms_since(tSurvivor);
+    result.t_total_ms = ms_since(tPipeline);
+
+    if (verbose) {
+        double sps = result.t_total_ms > 0.0 ? 1000.0 / result.t_total_ms : 0.0;
+        std::printf("  [pipeline] seed=%.1f survivor=%.1f total=%.1f ms  ->  %.2f solve/s\n",
+                    result.t_seed_ms, result.t_survivor_ms, result.t_total_ms, sps);
+    }
     return result;
 }
 

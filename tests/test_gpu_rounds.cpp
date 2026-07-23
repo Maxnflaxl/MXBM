@@ -72,11 +72,13 @@ int main() {
     auto t1 = std::chrono::steady_clock::now();
     double wallSecs = std::chrono::duration<double>(t1 - t0).count();
 
-    std::printf("  round |        in |       out | bucketDrops | pairDrops\n");
+    std::printf("  round |        in |       out | bucketDrops | pairDrops |   mix ms | scatr ms | match ms\n");
     uint32_t totalBucketDrops = 0, totalPairDrops = 0;
     for (int r = 0; r < 5; ++r) {
         const RoundStats& st = res.rounds[r];
-        std::printf("    r%d  | %9u | %9u | %11u | %9u\n", r + 1, st.in, st.out, st.bucket_drops, st.pair_drops);
+        std::printf("    r%d  | %9u | %9u | %11u | %9u | %8.1f | %8.1f | %8.1f\n",
+                    r + 1, st.in, st.out, st.bucket_drops, st.pair_drops,
+                    st.t_mix_ms, st.t_scatter_ms, st.t_match_ms);
         totalBucketDrops += st.bucket_drops;
         totalPairDrops   += st.pair_drops;
 
@@ -94,6 +96,34 @@ int main() {
     }
     std::printf("  totals: bucketDrops=%u pairDrops=%u\n", totalBucketDrops, totalPairDrops);
     std::printf("  wall-clock: %.3fs\n", wallSecs);
+
+    // ---- PERF (deliberately unmissable) --------------------------------
+    // One solve's cost, printed next to the reference miner's reference so "1.27s" reads
+    // as "~35x too slow", not "test passed". Timing is hardware-dependent, so
+    // this is LOGGED, never asserted -- a wall-time gate would flake across
+    // GPUs (M3 Max vs 4070 Ti vs a CI software rasterizer). The number beside
+    // the reference is the catch; a human reads it.
+    {
+        const double kRefSolPerSec  = 53.0;   // the reference miner ~53 sol/s, RTX 4070 Ti SUPER
+        const double kSolsPerNonce  = 1.9;    // Equihash <150,5> statistical avg solutions/nonce
+        const double kRefSolvePerSec = kRefSolPerSec / kSolsPerNonce;   // ~28 solve/s
+        double solvePerSec = wallSecs > 0 ? 1.0 / wallSecs : 0.0;
+        std::printf("\n  ==================== PERF ====================\n");
+        std::printf("  this GPU : 1 solve in %.3fs  ->  %.2f solve/s  (~%.1f sol/s at ~%.1f sol/solve)\n",
+                    wallSecs, solvePerSec, solvePerSec * kSolsPerNonce, kSolsPerNonce);
+        std::printf("  reference: the reference miner ~%.0f sol/s  (~%.0f solve/s)  on a 4070 Ti SUPER\n",
+                    kRefSolPerSec, kRefSolvePerSec);
+        if (solvePerSec > 0.0)
+            std::printf("  verdict  : ~%.0fx slower than reference  (unoptimized kernels = Phase D)\n",
+                        kRefSolvePerSec / solvePerSec);
+        std::printf("  breakdown: seed=%.1fms  survivor=%.1fms  pipeline-total=%.1fms\n",
+                    res.t_seed_ms, res.t_survivor_ms, res.t_total_ms);
+        std::printf("  =============================================\n\n");
+    }
+    // Smoke check on the instrumentation itself (NOT a perf gate): the timers
+    // must actually be populated, so a future refactor that silently drops the
+    // per-phase timing fails here instead of going dark.
+    check(res.t_total_ms > 0.0, "pipeline timing is populated (t_total_ms > 0)");
 
     std::printf("  survivors=%u survivor_slots.size()=%zu (tests/vectors/beamhash3-kat.md documents exactly 3 known goldens for this KAT input)\n",
                 res.survivors, res.survivor_slots.size());
