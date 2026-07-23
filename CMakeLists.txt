@@ -99,6 +99,11 @@ target_include_directories(test_engine PRIVATE tests src)
 target_link_libraries(test_engine PRIVATE mxbm_miner)
 add_test(NAME engine COMMAND test_engine)
 
+add_executable(test_engine_iterate tests/test_engine_iterate.cpp)
+target_include_directories(test_engine_iterate PRIVATE tests src)
+target_link_libraries(test_engine_iterate PRIVATE mxbm_miner Threads::Threads)
+add_test(NAME engine_iterate COMMAND test_engine_iterate)
+
 add_executable(test_stats tests/test_stats.cpp)
 target_include_directories(test_stats PRIVATE tests src)
 target_link_libraries(test_stats PRIVATE mxbm_miner)

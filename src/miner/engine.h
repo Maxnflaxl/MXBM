@@ -46,11 +46,25 @@ namespace mxbm { namespace miner {
 //   or a direct process_job() call as the unit tests make) nothing is
 //   superseded.
 //
-// With today's CPU reference solver, solve() cannot be interrupted
-// mid-flight: stop() sets a flag and joins, but a solve() already in
-// progress must still return on its own first, so stop()/the destructor
-// can block for as long as that call takes. M3's abortable (GPU) solver
-// closes this gap.
+// worker_main() mines a taken (job, nonceprefix) pair CONTINUOUSLY: it
+// calls process_job() repeatedly -- each call tries the next nonce, see
+// nonce_counter_'s own comment -- until either a newer job lands in the
+// mailbox (has_job_) or stop() is requested, re-checking both under
+// mailbox_mutex_ between iterations. To keep that loop responsive, on_job()
+// and stop() both call solver_.request_abort() (Solver::request_abort(),
+// default no-op -- see solver.h) so a solve() already in flight returns
+// promptly instead of running to completion: on_job() calls it right after
+// posting the new job to the mailbox, stop() calls it before signalling
+// stop_requested_ and joining.
+//
+// With today's CPU reference solver (SolverRef), whose request_abort() is
+// the inherited no-op, this closes nothing: solve() still cannot be
+// interrupted mid-flight, so stop()/on_job()/the destructor can still block
+// for as long as that call takes. M3's abortable GPU solver (GpuSolver,
+// src/gpu/gpu_solver.h) is what actually closes the gap: it polls an
+// atomic abort flag between rounds and resets that flag itself at the
+// start of every solve() call, so Engine never has to (and never does)
+// reset it -- a newly-switched-to job's first solve() always runs clean.
 class Engine {
 public:
     Engine(stratum::Client& client, Solver& solver);
@@ -68,16 +82,24 @@ public:
     // and records the pair as the latest one to process, then wakes the
     // worker thread. Must run on Client::run()'s thread -- see the class
     // comment for why that's what makes the current_nonceprefix() read
-    // here race-free. Cheap, never blocks on solving -- wire this to
-    // stratum::Client::on_job for live mining.
+    // here race-free. Also asks the solver to abort any in-flight solve()
+    // (Solver::request_abort() -- cheap, non-blocking) right after posting
+    // the mailbox, so the worker abandons the superseded job's current
+    // nonce attempt promptly instead of finishing it first. Never blocks on
+    // solving -- wire this to stratum::Client::on_job for live mining.
     void on_job(const stratum::Job& job);
 
     // Spawns the worker thread (loop: wait for a job, take the latest
-    // (job, nonceprefix) pair, process_job it). No-op if already started.
+    // (job, nonceprefix) pair, then process_job() it repeatedly -- mining
+    // that job continuously, one new nonce per call -- until a newer job or
+    // a stop request preempts it). No-op if already started.
     void start();
 
-    // Signals the worker thread to stop and joins it (see class comment for
-    // why this can block on an in-flight solve()). No-op if not started.
+    // Asks the solver to abort any in-flight solve(), signals the worker
+    // thread to stop, and joins it (see class comment for why this is only
+    // prompt with an abortable solver -- with SolverRef's inherited no-op
+    // request_abort(), this can still block on an in-flight solve() for as
+    // long as that call takes). No-op if not started.
     void stop();
 
     // Test seam (mirrors Client::handle_line's role): defaults to

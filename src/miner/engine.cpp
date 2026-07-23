@@ -111,6 +111,12 @@ void Engine::on_job(const stratum::Job& job) {
         has_job_ = true;
     }
     mailbox_cv_.notify_one();
+    // Ask any in-flight solve() to return promptly so the worker abandons
+    // the now-superseded job's current nonce attempt instead of finishing
+    // it first. Default no-op (solver.h) on solvers, like SolverRef, that
+    // can't interrupt mid-call -- cheap and safe to call unconditionally
+    // either way.
+    solver_.request_abort();
 }
 
 void Engine::start() {
@@ -122,6 +128,11 @@ void Engine::start() {
 
 void Engine::stop() {
     if (!started_) return;
+    // Ask any in-flight solve() to return promptly, before signalling
+    // stop_requested_, so a multi-second-or-longer solve() doesn't make
+    // this join() block for its full remaining duration. Default no-op
+    // (solver.h) on solvers, like SolverRef, that can't interrupt mid-call.
+    solver_.request_abort();
     {
         std::lock_guard<std::mutex> lock(mailbox_mutex_);
         stop_requested_ = true;
@@ -143,7 +154,33 @@ void Engine::worker_main() {
             prefix = latest_nonceprefix_;
             has_job_ = false;
         }
-        process_job(job, prefix);   // may block here for minutes with the reference solver
+        // A malformed job.input never becomes solvable, and process_job()
+        // treats it as an instant no-op early-return (from_hex_strict fails
+        // before any solve()). Mining it in the continuous inner loop below
+        // would busy-spin one core until the next job arrives -- job/prefix
+        // are fixed for the whole inner loop, so the malformed condition can
+        // never clear. Validate once here and, if bad, drop straight back to
+        // waiting for a newer job.
+        {
+            uint8_t input32[32];
+            if (!from_hex_strict(job.input, input32, 32)) continue;
+        }
+        // Mine this job continuously: each process_job() call tries the
+        // next nonce (nonce_counter_ advances every call -- see its own
+        // comment). Keep calling it for this SAME (job, prefix) until a
+        // newer job lands in the mailbox or a stop is requested --
+        // re-checked under mailbox_mutex_ between iterations so a
+        // concurrent on_job()/stop() is never missed. When this breaks for
+        // a new job, the outer loop above picks it up immediately (its
+        // cv.wait()'s predicate is already satisfied, so it returns without
+        // actually blocking), and solve()'s own abort-flag reset (e.g.
+        // GpuSolver, src/gpu/gpu_solver.cpp) makes that next call start
+        // clean.
+        while (true) {
+            process_job(job, prefix);   // may block here for a while with a real solver
+            std::lock_guard<std::mutex> lock(mailbox_mutex_);
+            if (stop_requested_ || has_job_) break;
+        }
     }
 }
 
