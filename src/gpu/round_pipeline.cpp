@@ -193,7 +193,38 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
     rt.set_arg(k.get(), 14, sizeof(cl_mem), &leadMem);
     rt.set_arg(k.get(), 15, sizeof(cl_mem), &countersMem);
 
-    rt.run1d(k.get(), b.num_buckets);
+    // LOCAL-MEMORY BUCKET STAGING (Phase-D winner): one workgroup per bucket
+    // cooperatively stages this bucket's `slots` keys + element indices into two
+    // dynamic __local uint arrays (args 16,17) with a coalesced pass, then the W
+    // work-items split the O(k^2) all-pairs scan (row i owned by work-item i%W)
+    // entirely out of __local. Split width W is set to ~mean bucket occupancy so
+    // there is about one outer row per work-item with minimal idle lanes: D0
+    // found W=mean (32) beats the naive W=slots (64), which left half the group
+    // idle since mean k = elems/num_buckets ~ 32 << slots. global = num_buckets*W
+    // is a whole multiple of W as OpenCL requires.
+    const DeviceInfo& dev = rt.device();
+
+    // Guard the dynamic __local request (two uint arrays of `slots`) against the
+    // device's per-workgroup local memory. At slots 64 this is 512 B vs a 48 KB
+    // limit -- trivially safe -- but a hand-built Budget with huge slots must
+    // fail loudly here rather than launch with a silently-clamped shared buffer.
+    const size_t localBytes = (size_t)slots * sizeof(uint32_t) * 2u;
+    if (dev.local_mem != 0 && localBytes > dev.local_mem)
+        throw ClError(CL_INVALID_WORK_GROUP_SIZE,
+                      "round_match staging: __local " + std::to_string(localBytes) +
+                      " B exceeds device local mem " + std::to_string(dev.local_mem) + " B");
+
+    uint32_t mean = (b.num_buckets != 0u) ? (b.elems_per_round / b.num_buckets) : slots;
+    uint32_t W = (mean != 0u) ? mean : 1u;
+    if (W > slots) W = slots;                                  // never exceed staged slots
+    if (dev.max_work_group != 0 && W > dev.max_work_group)     // respect device group cap
+        W = (uint32_t)dev.max_work_group;
+    if (W == 0u) W = 1u;
+
+    rt.set_arg(k.get(), 16, (size_t)slots * sizeof(uint32_t), nullptr);
+    rt.set_arg(k.get(), 17, (size_t)slots * sizeof(uint32_t), nullptr);
+
+    rt.run1d(k.get(), (size_t)b.num_buckets * W, W);
 
     rt.read(pb.counters.get(), sizeof counters, counters);
     pair_drops = counters[2];

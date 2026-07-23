@@ -55,6 +55,8 @@ Runtime::Runtime() {
     clGetDeviceInfo(dev_, CL_DEVICE_GLOBAL_MEM_SIZE,     sizeof info_.global_mem,    &info_.global_mem,    nullptr);
     clGetDeviceInfo(dev_, CL_DEVICE_MAX_MEM_ALLOC_SIZE,  sizeof info_.max_alloc,     &info_.max_alloc,     nullptr);
     clGetDeviceInfo(dev_, CL_DEVICE_MAX_COMPUTE_UNITS,   sizeof info_.compute_units, &info_.compute_units, nullptr);
+    clGetDeviceInfo(dev_, CL_DEVICE_LOCAL_MEM_SIZE,      sizeof info_.local_mem,     &info_.local_mem,     nullptr);
+    clGetDeviceInfo(dev_, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof info_.max_work_group,&info_.max_work_group,nullptr);
     cl_int err = CL_SUCCESS;
     ctx_ = clCreateContext(nullptr, 1, &dev_, nullptr, nullptr, &err);
     check_cl(err, "clCreateContext");

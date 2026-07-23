@@ -27,6 +27,8 @@ struct DeviceInfo {
     cl_ulong global_mem = 0;   // CL_DEVICE_GLOBAL_MEM_SIZE
     cl_ulong max_alloc  = 0;   // CL_DEVICE_MAX_MEM_ALLOC_SIZE
     cl_uint  compute_units = 0;
+    cl_ulong local_mem  = 0;     // CL_DEVICE_LOCAL_MEM_SIZE (bytes of __local per workgroup)
+    size_t   max_work_group = 0; // CL_DEVICE_MAX_WORK_GROUP_SIZE (work-items per group)
 };
 
 // Move-only RAII owner for an OpenCL handle type T released by Rel.

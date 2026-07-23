@@ -76,6 +76,19 @@ __kernel void round_scatter(uint N, uint bucket_bits, uint slots,
 // based) plus a consolidated back-ref triple at all_left/all_right/all_lead
 // [out_off+oi]. counters[0] is the raw (uncapped) atomic child count;
 // entries at oi>=out_capacity are dropped and tallied in counters[2].
+// LOCAL-MEMORY BUCKET STAGING variant: one WORKGROUP per bucket. The group
+// cooperatively stages this bucket's per-slot 24-bit collision keys and element
+// indices into __local memory with a single coalesced pass over global memory
+// (one element-key read per slot instead of O(k^2) re-reads), then runs the
+// all-pairs collision scan entirely out of __local. The expensive 56-byte
+// element read + bh3_combine only fires for ACTUAL colliding pairs (rare), so
+// the ~2B uncoalesced key re-reads of the per-work-item version collapse to
+// ~33M staged loads. Output multiset is identical: every i<j pair is owned by
+// exactly one work-item (the one whose strided row set contains i), the same
+// (lead,slot) tie-break picks left/right/lead, and children/back-refs are
+// appended via the same atomic counters[0] cursor (emission order is free --
+// the tests compare as multisets). lkeys/lidx are __local scratch sized to
+// `slots` uints each, supplied by the host as dynamic local args.
 __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_identity,
                           uint in_lead_off, uint out_off, uint out_capacity,
                           __global const uint* bucket_count,
@@ -84,17 +97,31 @@ __kernel void round_match(uint Lout, uint bucket_bits, uint slots, uint lead_ide
                           __global ulong* out_work,
                           __global const uint* all_lead_in,   // same buffer as lead; read at in_lead_off
                           __global uint* all_left, __global uint* all_right, __global uint* all_lead,
-                          __global uint* counters /* [0]=out_count, [2]=pair_drops */) {
-    uint b = (uint)get_global_id(0);
+                          __global uint* counters /* [0]=out_count, [2]=pair_drops */,
+                          __local uint* lkeys, __local uint* lidx) {
+    uint b = (uint)get_group_id(0);
+    uint t = (uint)get_local_id(0);
+    uint W = (uint)get_local_size(0);
     uint cnt = bucket_count[b];
     uint k = cnt < slots ? cnt : slots;
-    for (uint i = 0; i + 1u < k; ++i) {
-        uint sa = bucket_slots[(size_t)b*slots + i];
-        uint ka = (uint)(in_work[(size_t)sa*7] & 0xFFFFFFu);
+
+    // Stage: coalesced read of each member's slot index + 24-bit key into local.
+    size_t base = (size_t)b * slots;
+    for (uint p = t; p < k; p += W) {
+        uint g = bucket_slots[base + p];
+        lidx[p]  = g;
+        lkeys[p] = (uint)(in_work[(size_t)g*7] & 0xFFFFFFu);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    // All-pairs scan in local memory. Work-item t owns rows i = t, t+W, t+2W...
+    // so each unordered pair (i<j) is handled exactly once.
+    for (uint i = t; i + 1u < k; i += W) {
+        uint sa = lidx[i];
+        uint ka = lkeys[i];
         for (uint j = i + 1u; j < k; ++j) {
-            uint sb = bucket_slots[(size_t)b*slots + j];
-            uint kb = (uint)(in_work[(size_t)sb*7] & 0xFFFFFFu);
-            if (ka != kb) continue;
+            if (ka != lkeys[j]) continue;
+            uint sb = lidx[j];
             uint la = lead_identity ? sa : all_lead_in[in_lead_off + sa];
             uint lb = lead_identity ? sb : all_lead_in[in_lead_off + sb];
             uint left = sa, right = sb, ll = la;
