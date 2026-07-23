@@ -308,22 +308,39 @@ void scan_exclusive(Runtime& rt, cl_program prog, cl_mem buf, uint32_t n) {
 // passes). Ping-pongs pb.sort_pairs[0]<->[1]; caller must have loaded the input
 // into pairs[0]. Returns the cl_mem holding the sorted result (pairs[1] after 3
 // swaps). Uses pb.sort_hist for the per-pass bin-major histogram.
+bool sort_profile() { static bool v = (std::getenv("MXBM_SORT_PROFILE") != nullptr); return v; }
+
+// Tiled CUB-style radix sort (P4): 6 x 4-bit passes, TILE = kSortWG*kSortIPT per
+// workgroup, 16-bin bin-major histogram + local stable multisplit -- replaces the
+// P1 one-elem/thread sort (validated head-to-head in test_gpu_sort: ~9.5 ms vs
+// ~40 ms GPU-side at 2^25). 6 passes end in sort_pairs[0] (even count), so callers
+// that loaded the input into pairs[0] get the sorted result there.
+constexpr uint32_t kSortIPT = 8u;
+constexpr uint32_t kSortTile = kSortWG * kSortIPT;
+
 cl_mem radix_sort_pairs(Runtime& rt, cl_program prog, PipelineBuffers& pb, uint32_t n) {
-    uint32_t ngroups = (n + kSortWG - 1) / kSortWG;
+    uint32_t ngroups = (n + kSortTile - 1) / kSortTile;
     cl_mem cur = pb.sort_pairs[0].get(), other = pb.sort_pairs[1].get(), wh = pb.sort_hist.get();
-    Kernel kh = rt.kernel(prog, "radix_histogram");
-    Kernel kr = rt.kernel(prog, "radix_reorder");
-    for (uint32_t pass = 0; pass < 3; ++pass) {
-        uint32_t shift = pass * 8;
+    Kernel kh = rt.kernel(prog, "radix4_histogram");
+    Kernel kr = rt.kernel(prog, "radix4_reorder");
+    double tHist = 0, tScan = 0, tReo = 0;
+    const bool prof = sort_profile();
+    for (uint32_t pass = 0; pass < 6; ++pass) {
+        uint32_t shift = pass * 4;
+        auto t0 = clk::now();
         rt.set_arg(kh.get(), 0, sizeof(cl_mem), &cur);
         rt.set_arg(kh.get(), 1, sizeof(cl_mem), &wh);
         rt.set_arg(kh.get(), 2, shift);
         rt.set_arg(kh.get(), 3, n);
         rt.set_arg(kh.get(), 4, ngroups);
         rt.run1d(kh.get(), (size_t)ngroups * kSortWG, kSortWG);
+        if (prof) tHist += ms_since(t0);
 
-        scan_exclusive(rt, prog, wh, 256u * ngroups);
+        auto t1 = clk::now();
+        scan_exclusive(rt, prog, wh, 16u * ngroups);
+        if (prof) tScan += ms_since(t1);
 
+        auto t2 = clk::now();
         rt.set_arg(kr.get(), 0, sizeof(cl_mem), &cur);
         rt.set_arg(kr.get(), 1, sizeof(cl_mem), &other);
         rt.set_arg(kr.get(), 2, sizeof(cl_mem), &wh);
@@ -331,9 +348,12 @@ cl_mem radix_sort_pairs(Runtime& rt, cl_program prog, PipelineBuffers& pb, uint3
         rt.set_arg(kr.get(), 4, n);
         rt.set_arg(kr.get(), 5, ngroups);
         rt.run1d(kr.get(), (size_t)ngroups * kSortWG, kSortWG);
+        if (prof) tReo += ms_since(t2);
 
         cl_mem t = cur; cur = other; other = t;
     }
+    if (prof) std::printf("      [sort] hist=%.1f binscan=%.1f reorder=%.1f ms (6x4-bit, ngroups=%u)\n",
+                          tHist, tScan, tReo, ngroups);
     return cur;
 }
 } // namespace
@@ -348,8 +368,10 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
     (void)b;
     cl_program prog = sort_prog(rt);
     uint32_t outCapacity = pb.capacity;
+    const bool prof = sort_profile();
 
     // 1. key_extract: build (key,index) pairs into sort_pairs[0].
+    auto tKe = clk::now();
     {
         Kernel k = rt.kernel(prog, "key_extract");
         cl_mem inWork = pb.work[r & 1].get();
@@ -359,11 +381,13 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
         rt.set_arg(k.get(), 2, sizeof(cl_mem), &pairs0);
         rt.run1d(k.get(), N);
     }
+    double tKeyExtract = prof ? ms_since(tKe) : 0.0;
 
     // 2. stable radix sort by 24-bit key.
     cl_mem sorted = radix_sort_pairs(rt, prog, pb, N);
 
     // 3. collision_count over the sorted runs -> sort_scan.
+    auto tCnt = clk::now();
     cl_mem scan = pb.sort_scan.get();
     {
         Kernel k = rt.kernel(prog, "collision_count");
@@ -372,6 +396,7 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
         rt.set_arg(k.get(), 2, N);
         rt.run1d(k.get(), (size_t)((N + kSortWG - 1) / kSortWG) * kSortWG, kSortWG);
     }
+    double tCount = prof ? ms_since(tCnt) : 0.0;
     // total children = exclusive-offset(last) + count(last). Grab count(last)
     // BEFORE the in-place scan clobbers it (one 4-byte read), then offset(last).
     uint32_t lastCount = 0;
@@ -381,12 +406,15 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
     rt.read_at(scan, (size_t)(N - 1) * 4, 4, &lastOff);
     uint32_t total = lastOff + lastCount;
 
+    double tScanTotal = prof ? ms_since(tCnt) - tCount : 0.0;
+
     // 4. emit. Zero counters[2] (pair_drops) first; leave the rest as-is.
     uint32_t counters[4];
     rt.read(pb.counters.get(), sizeof counters, counters);
     counters[2] = 0u;
     rt.write(pb.counters.get(), sizeof counters, counters);
 
+    auto tEm = clk::now();
     {
         Kernel k = rt.kernel(prog, "round_match_sorted");
         uint32_t Lout = lout_for(r);
@@ -416,6 +444,10 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
         rt.set_arg(k.get(), 15, sOut);
         rt.run1d(k.get(), (size_t)((N + kSortWG - 1) / kSortWG) * kSortWG, kSortWG);
     }
+
+    double tEmit = prof ? ms_since(tEm) : 0.0;
+    if (prof) std::printf("    [match_sorted r%d N=%u] keyx=%.1f count=%.1f scan=%.1f emit=%.1f ms (children=%u)\n",
+                          r, N, tKeyExtract, tCount, tScanTotal, tEmit, total);
 
     rt.read(pb.counters.get(), sizeof counters, counters);
     pair_drops = counters[2];

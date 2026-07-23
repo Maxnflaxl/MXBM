@@ -78,6 +78,102 @@ __kernel void radix_reorder(__global const ulong* pairs_in,
     }
 }
 
+// ===========================================================================
+// Tiled CUB-style radix (P4): 4-bit digit x 6 passes. Each workgroup owns a
+// TILE = SORT_WG * SORT_IPT block; a coalesced strided load stages the tile into
+// __local, then threads process BLOCKED sub-ranges so a per-thread private
+// histogram + a cross-thread scan gives each element its stable rank in local
+// (= global) order WITHOUT the O(256)-per-element loop the 1-elem reorder used.
+// 16 bins keep the private histogram + bin-major scan tiny. Validated against the
+// std::stable_sort oracle in test_gpu_sort before wiring into the pipeline.
+// ===========================================================================
+#ifndef SORT_IPT
+#define SORT_IPT 8u
+#endif
+#define SORT_TILE (SORT_WG * SORT_IPT)
+#define SORT_RADIX4 16u
+#define SORT_DIG4(pair,shift) ((uint)((sort_key(pair) >> (shift)) & 0xFu))
+
+// Tiled histogram of one 4-bit digit: 16-bin local histogram over the tile,
+// written BIN-MAJOR (wghist[bin*ngroups+wg]) for the same exclusive-scan-to-base
+// scheme as the 8-bit path. Reads are strided (coalesced); order is irrelevant.
+__kernel void radix4_histogram(__global const ulong* pairs,
+                               __global uint* wghist,
+                               uint shift, uint n, uint ngroups) {
+    __local uint h[SORT_RADIX4];
+    uint l = get_local_id(0);
+    if (l < SORT_RADIX4) h[l] = 0;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    uint wg = get_group_id(0);
+    uint base = wg * SORT_TILE;
+    for (uint i = 0; i < SORT_IPT; ++i) {
+        uint g = base + i * SORT_WG + l;
+        if (g < n) atomic_inc(&h[SORT_DIG4(pairs[g], shift)]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (l < SORT_RADIX4) wghist[l * ngroups + wg] = h[l];
+}
+
+// Tiled stable reorder. wgoffset[bin*ngroups+wg] is the global base for this
+// (tile,bin). Each element's dest = that base + (same-bin elements in earlier
+// threads of this tile) + (same-bin earlier elements within this thread) -- a
+// stable rank in local order. Cross-thread bin bases come from a 16-bin scan
+// over the SORT_WG per-thread histograms (done by 16 lanes, serial over WG).
+__kernel void radix4_reorder(__global const ulong* pairs_in,
+                             __global ulong* pairs_out,
+                             __global const uint* wgoffset,
+                             uint shift, uint n, uint ngroups) {
+    __local ulong tile[SORT_TILE];
+    __local uint  thist[SORT_WG * SORT_RADIX4];   // per-thread histograms -> in-place exclusive prefix
+    uint l = get_local_id(0);
+    uint wg = get_group_id(0);
+    uint base = wg * SORT_TILE;
+    uint count = (base < n) ? (n - base) : 0;
+    if (count > SORT_TILE) count = SORT_TILE;
+
+    // Coalesced strided load into __local.
+    for (uint lp = l; lp < SORT_TILE; lp += SORT_WG)
+        if (base + lp < n) tile[lp] = pairs_in[base + lp];
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    // Per-thread private histogram over this thread's BLOCKED sub-range.
+    uint cnt[SORT_RADIX4];
+    for (uint b = 0; b < SORT_RADIX4; ++b) cnt[b] = 0;
+    for (uint i = 0; i < SORT_IPT; ++i) {
+        uint lp = l * SORT_IPT + i;
+        if (lp < count) ++cnt[SORT_DIG4(tile[lp], shift)];
+    }
+    for (uint b = 0; b < SORT_RADIX4; ++b) thist[l * SORT_RADIX4 + b] = cnt[b];
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    // Exclusive prefix across threads for each bin, IN PLACE (16 lanes, serial
+    // over WG): thist[t*16+l] becomes the count of same-bin elements in threads
+    // < t. Each lane owns bin column l, so the in-place rewrite is race-free.
+    if (l < SORT_RADIX4) {
+        uint acc = 0;
+        for (uint t = 0; t < SORT_WG; ++t) {
+            uint v = thist[t * SORT_RADIX4 + l];
+            thist[t * SORT_RADIX4 + l] = acc;
+            acc += v;
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    // Scatter: stable rank = wgoffset[bin] + cross-thread base + within-thread run.
+    uint run[SORT_RADIX4];
+    for (uint b = 0; b < SORT_RADIX4; ++b) run[b] = thist[l * SORT_RADIX4 + b];
+    for (uint i = 0; i < SORT_IPT; ++i) {
+        uint lp = l * SORT_IPT + i;
+        if (lp < count) {
+            ulong pr = tile[lp];
+            uint b = SORT_DIG4(pr, shift);
+            pairs_out[wgoffset[b * ngroups + wg] + run[b]] = pr;
+            ++run[b];
+        }
+    }
+}
+
 // --- generic exclusive prefix scan over a uint array ---------------------------
 // Blelloch work-efficient scan of one SORT_WG-sized block; writes each block's
 // total to blocksums[wg]. Host recursively scans blocksums, then scan_add folds

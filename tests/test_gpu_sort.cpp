@@ -89,6 +89,44 @@ static void radix_sort_pairs(Runtime& rt, cl_program prog, cl_mem buf, uint32_t 
     }
 }
 
+// Tiled 4-bit radix driver (P4): 6 passes, TILE=WG*IPT, 16-bin bin-major hist.
+// Same in-place contract as radix_sort_pairs (result ends back in `buf`).
+static const uint32_t SORT_IPT = 8;
+static const uint32_t SORT_TILE = SORT_WG * SORT_IPT;
+static void radix_sort_pairs_tiled(Runtime& rt, cl_program prog, cl_mem buf, uint32_t n) {
+    uint32_t ngroups = (n + SORT_TILE - 1) / SORT_TILE;
+    Mem tmp    = rt.alloc(CL_MEM_READ_WRITE, (size_t)n * 8);
+    Mem wghist = rt.alloc(CL_MEM_READ_WRITE, (size_t)16 * ngroups * 4);
+    Kernel kh = rt.kernel(prog, "radix4_histogram");
+    Kernel kr = rt.kernel(prog, "radix4_reorder");
+    cl_mem cur = buf, other = tmp.get(), wh = wghist.get();
+    for (uint32_t pass = 0; pass < 6; ++pass) {          // 6 x 4-bit = 24-bit key
+        uint32_t shift = pass * 4;
+        rt.set_arg(kh.get(), 0, sizeof(cl_mem), &cur);
+        rt.set_arg(kh.get(), 1, sizeof(cl_mem), &wh);
+        rt.set_arg(kh.get(), 2, shift);
+        rt.set_arg(kh.get(), 3, n);
+        rt.set_arg(kh.get(), 4, ngroups);
+        rt.run1d(kh.get(), (size_t)ngroups * SORT_WG, SORT_WG);
+
+        scan_exclusive(rt, prog, wh, 16u * ngroups);
+
+        rt.set_arg(kr.get(), 0, sizeof(cl_mem), &cur);
+        rt.set_arg(kr.get(), 1, sizeof(cl_mem), &other);
+        rt.set_arg(kr.get(), 2, sizeof(cl_mem), &wh);
+        rt.set_arg(kr.get(), 3, shift);
+        rt.set_arg(kr.get(), 4, n);
+        rt.set_arg(kr.get(), 5, ngroups);
+        rt.run1d(kr.get(), (size_t)ngroups * SORT_WG, SORT_WG);
+        cl_mem t = cur; cur = other; other = t;          // 6 passes -> ends in buf
+    }
+    if (cur != buf) {   // even passes -> already buf; guard anyway
+        std::vector<uint64_t> h((size_t)n);
+        rt.read(cur, (size_t)n * 8, h.data());
+        rt.write(buf, (size_t)n * 8, h.data());
+    }
+}
+
 // --- test 1: generic exclusive scan --------------------------------------------
 static void test_scan(Runtime& rt, cl_program prog) {
     section("scan_block/scan_add == exclusive_scan");
@@ -237,6 +275,50 @@ int main() {
         for (uint32_t i = 0; i < n; ++i) if (got[i] != oracle[i]) { if(bad<3) std::printf("  2^25 i=%u got key=%x idx=%u want key=%x idx=%u\n",i,pkey(got[i]),pidx(got[i]),pkey(oracle[i]),pidx(oracle[i])); ++bad; }
         std::printf("  3-pass radix sort of 2^25 pairs: %.2f ms  (P1 one-elem/thread, untuned)\n", ms);
         check(bad == 0, "stable radix sort n=2^25");
+    }
+
+    // P4: tiled 4-bit radix -- correctness across scales (incl heavy collisions)
+    // then a 2^25 timing head-to-head vs the P1 baseline above.
+    {
+        section("tiled 4-bit radix (P4) == std::stable_sort by 24-bit key");
+        for (uint32_t n : {1u, 2u, 300u, 2048u, 2049u, 4096u, 100000u, (1u<<20)}) {
+            std::vector<uint64_t> pairs(n);
+            uint64_t s = 0x7117 + n;
+            uint32_t keymask = (n <= 4096u) ? 0xFFu : 0xFFFFFFu;
+            for (uint32_t i = 0; i < n; ++i)
+                pairs[i] = ((uint64_t)i << 32) | (uint32_t)(sm(s) & keymask);
+            std::vector<uint64_t> oracle = pairs;
+            std::stable_sort(oracle.begin(), oracle.end(),
+                [](uint64_t a, uint64_t b){ return pkey(a) < pkey(b); });
+            Mem buf = rt.alloc(CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, (size_t)n*8, pairs.data());
+            radix_sort_pairs_tiled(rt, prog.get(), buf.get(), n);
+            std::vector<uint64_t> got(n);
+            rt.read(buf.get(), (size_t)n*8, got.data());
+            int bad = 0;
+            for (uint32_t i = 0; i < n; ++i) if (got[i] != oracle[i]) { if(bad<3) std::printf("  tiled n=%u i=%u got key=%x idx=%u want key=%x idx=%u\n",n,i,pkey(got[i]),pidx(got[i]),pkey(oracle[i]),pidx(oracle[i])); ++bad; }
+            check(bad == 0, (std::string("tiled radix sort n=") + std::to_string(n)).c_str());
+        }
+        const uint32_t n = 1u << 25;
+        std::vector<uint64_t> pairs(n);
+        uint64_t s = 0x9AA9;
+        for (uint32_t i = 0; i < n; ++i)
+            pairs[i] = ((uint64_t)i << 32) | (uint32_t)(sm(s) & 0xFFFFFFu);
+        std::vector<uint64_t> oracle = pairs;
+        std::stable_sort(oracle.begin(), oracle.end(),
+            [](uint64_t a, uint64_t b){ return pkey(a) < pkey(b); });
+        Mem buf = rt.alloc(CL_MEM_READ_WRITE|CL_MEM_COPY_HOST_PTR, (size_t)n*8, pairs.data());
+        radix_sort_pairs_tiled(rt, prog.get(), buf.get(), n);   // warm
+        rt.write(buf.get(), (size_t)n*8, pairs.data());
+        auto t0 = std::chrono::steady_clock::now();
+        radix_sort_pairs_tiled(rt, prog.get(), buf.get(), n);
+        auto t1 = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        std::vector<uint64_t> got(n);
+        rt.read(buf.get(), (size_t)n*8, got.data());
+        int bad = 0;
+        for (uint32_t i = 0; i < n; ++i) if (got[i] != oracle[i]) ++bad;
+        std::printf("  6-pass TILED 4-bit radix of 2^25 pairs: %.2f ms  (IPT=%u, incl host copy-back)\n", ms, SORT_IPT);
+        check(bad == 0, "tiled radix sort n=2^25");
     }
     return summary("gpu_sort");
 }
