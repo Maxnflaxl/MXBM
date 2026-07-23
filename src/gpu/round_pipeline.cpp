@@ -88,4 +88,31 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     rt.run1d(k.get(), N);
 }
 
+void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int workIndex) {
+    // Zero bucket_count (arrival counters) and counters (incl. counters[1] =
+    // bucket_drops) before every scatter pass -- round_scatter's atomic_inc
+    // accumulates onto whatever is already there.
+    rt.fill_u32(pb.bucket_count.get(), 0u, b.num_buckets);
+    rt.fill_u32(pb.counters.get(), 0u, 4);
+
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog.get(), "round_scatter");
+
+    uint32_t bucketBits = b.bucket_bits;
+    uint32_t slots       = b.slots_per_bucket;
+    cl_mem workMem        = pb.work[workIndex].get();
+    cl_mem bucketCountMem = pb.bucket_count.get();
+    cl_mem bucketSlotsMem = pb.bucket_slots.get();
+    cl_mem countersMem    = pb.counters.get();
+
+    rt.set_arg(k.get(), 0, N);
+    rt.set_arg(k.get(), 1, bucketBits);
+    rt.set_arg(k.get(), 2, slots);
+    rt.set_arg(k.get(), 3, sizeof(cl_mem), &workMem);
+    rt.set_arg(k.get(), 4, sizeof(cl_mem), &bucketCountMem);
+    rt.set_arg(k.get(), 5, sizeof(cl_mem), &bucketSlotsMem);
+    rt.set_arg(k.get(), 6, sizeof(cl_mem), &countersMem);
+    rt.run1d(k.get(), N);
+}
+
 }} // namespace mxbm::gpu

@@ -15,7 +15,10 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom) 
     if (epr == 0) epr = 1;
     b.elems_per_round = (uint32_t)epr;
 
-    b.bucket_bits = (b.elems_per_round >= (1u << 22)) ? 12u : 10u;
+    // Small buckets keep the sortless all-pairs match cheap: mean ~32/bucket.
+    uint32_t lg = 0; while ((1ull << (lg+1)) <= b.elems_per_round) ++lg;   // floor(log2)
+    b.bucket_bits = lg >= 15 ? (lg - 5) : 10;         // clamp low
+    if (b.bucket_bits > 20) b.bucket_bits = 20;       // clamp high
     b.num_buckets = 1u << b.bucket_bits;
 
     uint64_t mean = (uint64_t)b.elems_per_round / b.num_buckets;

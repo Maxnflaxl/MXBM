@@ -43,3 +43,24 @@ __kernel void round_mix(uint level /* = r-1, in 1..4 */, uint N, uint capacity,
     e[0] = bh3_apply_mix(e, tree, padNum, Lmix);
     work[(size_t)g*7] = e[0];
 }
+// round_scatter: radix-bucket N mixed elements by the top bucket_bits of
+// their 24-bit collision key, so the sortless all-pairs match (T4) only
+// searches within a bucket. bucket_count[b] is the raw (uncapped) atomic
+// arrival count for bucket b; only the first `slots` arrivals are recorded
+// into bucket_slots -- the rest are dropped and tallied in counters[1].
+// Bucket order is nondeterministic under atomic_inc (host must compare
+// membership as SETS, not sequences). bucket_count/counters must be zeroed
+// by the caller (fill_u32) before this kernel runs.
+__kernel void round_scatter(uint N, uint bucket_bits, uint slots,
+                            __global const ulong* work,
+                            __global uint* bucket_count,
+                            __global uint* bucket_slots,
+                            __global uint* counters /* [1]=bucket_drops */) {
+    uint g = (uint)get_global_id(0);
+    if (g >= N) return;
+    uint key = (uint)(work[(size_t)g*7] & 0xFFFFFFu);
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&bucket_count[b]);
+    if (pos < slots) bucket_slots[(size_t)b*slots + pos] = g;
+    else atomic_inc(&counters[1]);
+}

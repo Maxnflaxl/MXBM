@@ -7,15 +7,16 @@ namespace {
 
 // First platform that has at least one device; prefer GPU, else any type.
 bool pick_device(cl_platform_id* plat_out, cl_device_id* dev_out) {
+    *dev_out = nullptr;
     cl_uint nplat = 0;
     if (clGetPlatformIDs(0, nullptr, &nplat) != CL_SUCCESS || nplat == 0) return false;
     std::vector<cl_platform_id> plats(nplat);
-    clGetPlatformIDs(nplat, plats.data(), nullptr);
+    if (clGetPlatformIDs(nplat, plats.data(), nullptr) != CL_SUCCESS) return false;
     for (cl_device_type type : {(cl_device_type)CL_DEVICE_TYPE_GPU, (cl_device_type)CL_DEVICE_TYPE_ALL}) {
         for (cl_platform_id p : plats) {
             cl_uint ndev = 0;
             if (clGetDeviceIDs(p, type, 0, nullptr, &ndev) == CL_SUCCESS && ndev > 0) {
-                clGetDeviceIDs(p, type, 1, dev_out, nullptr);
+                if (clGetDeviceIDs(p, type, 1, dev_out, nullptr) != CL_SUCCESS) continue;
                 *plat_out = p;
                 return true;
             }
@@ -108,6 +109,27 @@ void Runtime::write(cl_mem buf, size_t bytes, const void* src) {
 }
 void Runtime::read(cl_mem buf, size_t bytes, void* dst) {
     check_cl(clEnqueueReadBuffer(q_, buf, CL_TRUE, 0, bytes, dst, 0, nullptr, nullptr), "clEnqueueReadBuffer");
+}
+void Runtime::fill_u32(cl_mem buf, uint32_t value, size_t count) {
+    // NOTE: event=nullptr here is silently unreliable on at least one real
+    // OpenCL implementation (Apple Silicon / macOS's OpenCL-over-Metal
+    // shim): clEnqueueFillBuffer and the trailing clFinish both report
+    // CL_SUCCESS, yet the fill never lands -- the buffer is left with
+    // whatever it held before. Capturing the completion event and blocking
+    // on it explicitly (clWaitForEvents) is what actually forces the fill to
+    // execute; clFinish alone is not a sufficient barrier for this command
+    // on that stack. Confirmed by direct repro against real device memory.
+    cl_event evt = nullptr;
+    check_cl(clEnqueueFillBuffer(q_, buf, &value, sizeof(value), 0, count * sizeof(value), 0, nullptr, &evt),
+              "clEnqueueFillBuffer");
+    // Release the event before checking/throwing on its wait result (mirrors
+    // build()'s release-then-throw of `prog` on a failed clBuildProgram) so a
+    // failing clWaitForEvents can't leak `evt` past the throw; release runs
+    // exactly once either way.
+    cl_int waitErr = clWaitForEvents(1, &evt);
+    clReleaseEvent(evt);
+    check_cl(waitErr, "clWaitForEvents(fill_u32)");
+    check_cl(clFinish(q_), "clFinish");
 }
 void Runtime::set_arg(cl_kernel k, cl_uint i, size_t size, const void* val) {
     check_cl(clSetKernelArg(k, i, size, val), "clSetKernelArg");

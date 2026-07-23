@@ -27,4 +27,12 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
 // computed internally from r via the round table.
 void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N);
 
+// Scatter: radix-bucket pb.work[workIndex]'s N mixed elements by the top
+// b.bucket_bits of their 24-bit collision key (round_scatter kernel), so the
+// sortless all-pairs match (T4) only searches within a bucket. Zeroes
+// pb.bucket_count and pb.counters via fill_u32 first; counters[1] accumulates
+// bucket_drops -- elements whose bucket was already at b.slots_per_bucket
+// capacity when they arrived.
+void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int workIndex);
+
 }} // namespace mxbm::gpu

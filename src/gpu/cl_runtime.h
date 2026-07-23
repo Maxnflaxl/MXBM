@@ -9,6 +9,7 @@
   #include <CL/cl.h>
 #endif
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -66,6 +67,9 @@ public:
     Mem     alloc(cl_mem_flags flags, size_t bytes, void* host_ptr = nullptr);
     void    write(cl_mem buf, size_t bytes, const void* src);
     void    read(cl_mem buf, size_t bytes, void* dst);
+    // Fills the first `count` uint32_t elements of buf with `value` via
+    // clEnqueueFillBuffer, then blocks (clFinish) until complete.
+    void    fill_u32(cl_mem buf, uint32_t value, size_t count);
     void    set_arg(cl_kernel k, cl_uint i, size_t size, const void* val);
     template <class T> void set_arg(cl_kernel k, cl_uint i, const T& v) { set_arg(k, i, sizeof(T), &v); }
     void    run1d(cl_kernel k, size_t global, size_t local = 0);
