@@ -1,0 +1,109 @@
+// Task 6 -- Phase-B exit / milestone: a REAL full 2^25 GPU Wagner search
+// over the KAT input, proving run_pipeline() (T5's 5-round driver --
+// mix_seeds -> 5x run_single_round -> survivor_scan, src/gpu/round_pipeline.
+// {h,cpp}, reused here completely unmodified) finds genuine is_zero round-5
+// survivors on real device hardware. This is neither the synthetic/crafted
+// fixture of tests/test_round_pipeline.cpp section (a) (a hand-built
+// duplicated-history pair, exercising the r=5 special path in isolation) nor
+// that file's memory-limited 2^20 mini-search vs a CPU oracle (section (b));
+// it is the actual, full-scale search this whole phase has been building
+// toward.
+//
+// kat::input32/kat::nonce0 -> kat::prePow (tests/kat_vectors.h) is known to
+// have exactly 3 golden 104-byte solutions (tests/vectors/beamhash3-kat.md
+// section 5). Each golden's ancestry culminates in one round-5 collision
+// between two BYTE-IDENTICAL round-4 elements -- bh3_combine is XOR-based
+// (see kernels/opencl/round.cl's survivor_scan doc comment), so an all-zero
+// child is the deterministic signature of exactly that event. A genuine
+// is_zero round-5 survivor found by a real, non-crafted search over real
+// seed data therefore IS (for all practical purposes) a golden solution:
+// two DIFFERENT round-4 elements coincidentally XORing to all-zero across
+// all 7 words (448 bits) would require a 448-bit collision among ~2^25
+// candidates, astronomically implausible. This test's job is to prove the
+// search FINDS >=1 of them on real hardware; recovering and fully verifying
+// each survivor's 104-byte encoding against tests/vectors/beamhash3-kat.md
+// is deferred to Phase C.
+//
+// compute_budget() sizes every round's work/backref buffers AND match()'s
+// out_capacity to the SAME elems_per_round (== 2^25 on any device with
+// enough memory for the full resident set -- see tests/test_budget.cpp's
+// "M3Max keeps full 2^25" case), so a round whose TRUE collision count
+// exceeds that capacity drops the excess (honest pair_drops, never silently
+// resized or hidden). No headroom decoupling was added to alloc_pipeline /
+// run_pipeline for this task: the UNMODIFIED T5 pipeline already finds all 3
+// known goldens on real M3 Max hardware (see .superpowers/sdd/task-6-report.
+// md for the full per-round log), so the task brief's "if survivors==0, add
+// a search_capacity" fallback never triggers here.
+#include "gpu/cl_runtime.h"
+#include "gpu/round_pipeline.h"
+#include "kat_vectors.h"
+#include "check.h"
+#include <cstdint>
+#include <cstdio>
+#include <chrono>
+using namespace mxbm;
+using namespace mxbm::gpu;
+
+int main() {
+    if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
+    Runtime rt;
+    const DeviceInfo& d = rt.device();
+    section("Phase-B exit: real 2^25 GPU Wagner search finds is_zero survivor(s) on the KAT input");
+    std::printf("  device: %s | gmem=%.2fGiB | max_alloc=%.2fGiB | CUs=%u\n",
+                d.name.c_str(), d.global_mem / 1073741824.0, d.max_alloc / 1073741824.0, d.compute_units);
+
+    Budget b = compute_budget(d.global_mem, d.max_alloc);
+    std::printf("  budget: elems_per_round=%u bucket_bits=%u num_buckets=%u slots_per_bucket=%u seed_batch=%u\n",
+                b.elems_per_round, b.bucket_bits, b.num_buckets, b.slots_per_bucket, b.seed_batch);
+    // BeamHash III indices are 25-bit ([0,2^25)) -- the seed layer's size is
+    // a protocol constant, not a memory-scaling knob. On any device with
+    // enough memory for the full resident set (compute_budget's headroom
+    // math), elems_per_round == the full 2^25 -- confirmed here so a future
+    // run on a memory-constrained device fails LOUDLY (via this check) rather
+    // than silently searching a truncated seed range and calling it done.
+    check(b.elems_per_round == (1u << 25), "device budget keeps the full 2^25 seed layer (no memory-driven truncation on this hardware)");
+
+    PipelineBuffers pb = alloc_pipeline(rt, b);
+    check(pb.capacity == b.elems_per_round, "pipeline capacity == elems_per_round (2^25)");
+
+    std::printf("  running run_pipeline() over the full 2^25 seed layer on the KAT prePow...\n");
+    auto t0 = std::chrono::steady_clock::now();
+    PipelineResult res = run_pipeline(rt, pb, b, kat::prePow);
+    auto t1 = std::chrono::steady_clock::now();
+    double wallSecs = std::chrono::duration<double>(t1 - t0).count();
+
+    std::printf("  round |        in |       out | bucketDrops | pairDrops\n");
+    uint32_t totalBucketDrops = 0, totalPairDrops = 0;
+    for (int r = 0; r < 5; ++r) {
+        const RoundStats& st = res.rounds[r];
+        std::printf("    r%d  | %9u | %9u | %11u | %9u\n", r + 1, st.in, st.out, st.bucket_drops, st.pair_drops);
+        totalBucketDrops += st.bucket_drops;
+        totalPairDrops   += st.pair_drops;
+
+        // Sanity against silent early-collapse: rounds 1-4 (i<4) must each
+        // produce output, or a downstream 0 (and thus 0 survivors) would be
+        // indistinguishable from "the search legitimately petered out" vs "an
+        // earlier-task bug only exercised at full 2^25 scale". Round 5 (i==4)
+        // is covered by the survivors>=1 assertion below instead: it needs a
+        // non-zero survivor_scan hit, a strictly stronger condition than out>0.
+        if (r < 4) {
+            char lbl[96];
+            std::snprintf(lbl, sizeof lbl, "round %d produced output (out > 0) -- sanity vs silent early-collapse", r + 1);
+            check(st.out > 0, lbl);
+        }
+    }
+    std::printf("  totals: bucketDrops=%u pairDrops=%u\n", totalBucketDrops, totalPairDrops);
+    std::printf("  wall-clock: %.3fs\n", wallSecs);
+
+    std::printf("  survivors=%u survivor_slots.size()=%zu (tests/vectors/beamhash3-kat.md documents exactly 3 known goldens for this KAT input)\n",
+                res.survivors, res.survivor_slots.size());
+    check(res.survivor_slots.size() == res.survivors, "survivor_slots.size() == the reported survivor count");
+
+    // THE MILESTONE. Golden expectation: with a full, memory-generous budget
+    // (drops honestly logged above, not hidden), >=1 of the KAT input's 3
+    // known solutions must survive the search. Do NOT weaken this to >=0 or
+    // catch/ignore a failure -- a 0 here is a real, reportable bug.
+    check(res.survivors >= 1, "GPU 5-round search yields is_zero survivor(s) on KAT input");
+
+    return summary("gpu_rounds");
+}

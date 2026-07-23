@@ -243,6 +243,16 @@ if(OpenCL_FOUND)
   target_include_directories(test_round_pipeline PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_round_pipeline PRIVATE mxbm_gpu)
   add_test(NAME round_pipeline COMMAND test_round_pipeline)
+
+  add_executable(test_gpu_rounds tests/test_gpu_rounds.cpp)
+  add_dependencies(test_gpu_rounds mxbm_kernels_gen)
+  target_include_directories(test_gpu_rounds PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_gpu_rounds PRIVATE mxbm_gpu)
+  add_test(NAME gpu_rounds COMMAND test_gpu_rounds)
+  # Phase-B exit milestone: a real full 2^25 GPU Wagner search (5 rounds,
+  # ~2^30 key-compares/round) -- compute-heavy but observed ~3s on an M3 Max;
+  # generous timeout so a slow-but-correct run on lesser hardware isn't killed.
+  set_tests_properties(gpu_rounds PROPERTIES TIMEOUT 1800)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()
