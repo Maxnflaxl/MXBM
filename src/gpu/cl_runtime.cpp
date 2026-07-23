@@ -1,4 +1,6 @@
 #include "gpu/cl_runtime.h"
+#include <chrono>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -65,11 +67,12 @@ Runtime::Runtime() {
 }
 
 Runtime::~Runtime() {
+    for (auto& e : prog_cache_) if (e.second) clReleaseProgram(e.second);
     if (q_)   clReleaseCommandQueue(q_);
     if (ctx_) clReleaseContext(ctx_);
 }
 
-Program Runtime::build(const std::vector<std::string>& sources, const std::string& options) {
+cl_program Runtime::compile(const std::vector<std::string>& sources, const std::string& options) {
     std::vector<const char*> ptrs;
     std::vector<size_t> lens;
     ptrs.reserve(sources.size());
@@ -87,7 +90,30 @@ Program Runtime::build(const std::vector<std::string>& sources, const std::strin
         clReleaseProgram(prog);
         throw ClError(err, "clBuildProgram failed:\n" + log);
     }
-    return Program(prog);
+    return prog;
+}
+
+Program Runtime::build(const std::vector<std::string>& sources, const std::string& options) {
+    return Program(compile(sources, options));
+}
+
+cl_program Runtime::cached_program(const std::vector<std::string>& sources, const std::string& options) {
+    // Key = every source concatenated (with a separator that can't appear
+    // mid-source in a way that would alias two different lists) + options.
+    std::string key;
+    for (const auto& s : sources) { key += s; key.push_back('\x01'); }
+    key += '\x02';
+    key += options;
+    for (auto& e : prog_cache_) if (e.first == key) return e.second;
+    // Cache miss: compile once (the expensive step) and time it, so the
+    // one-off cost is visible -- on some drivers (NVIDIA) it is hundreds of ms
+    // and was previously being paid on every kernel launch of every solve.
+    auto t0 = std::chrono::steady_clock::now();
+    cl_program prog = compile(sources, options);   // owned by the cache
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  [gpu] compiled OpenCL program in %.0f ms (cached for reuse across all solves)\n", ms);
+    prog_cache_.emplace_back(std::move(key), prog);
+    return prog;
 }
 
 Kernel Runtime::kernel(cl_program prog, const char* name) {

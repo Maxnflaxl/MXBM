@@ -55,8 +55,8 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
 }
 
 void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4]) {
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog.get(), "round1_mix_seeds");
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog, "round1_mix_seeds");
 
     uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
     Mem mp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
@@ -76,8 +76,8 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
 }
 
 void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog.get(), "round_mix");
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog, "round_mix");
 
     uint32_t level    = (uint32_t)(r - 1);
     uint32_t capacity = pb.capacity;
@@ -105,8 +105,8 @@ void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int 
     rt.fill_u32(pb.bucket_count.get(), 0u, b.num_buckets);
     rt.fill_u32(pb.counters.get(), 0u, 4);
 
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog.get(), "round_scatter");
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog, "round_scatter");
 
     uint32_t bucketBits = b.bucket_bits;
     uint32_t slots       = b.slots_per_bucket;
@@ -136,8 +136,8 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
     counters[2] = 0u;
     rt.write(pb.counters.get(), sizeof counters, counters);
 
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog.get(), "round_match");
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog, "round_match");
 
     uint32_t Lout         = lout_for(r);
     uint32_t bucketBits   = b.bucket_bits;
@@ -217,8 +217,8 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
     counters[3] = 0u;
     rt.write(pb.counters.get(), sizeof counters, counters);
 
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog.get(), "survivor_scan");
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog, "survivor_scan");
 
     Mem outSlots = rt.alloc(CL_MEM_READ_WRITE, (size_t)cap * 4);
     // Round 5's children live in pb.work[0] (match()'s r==5 special case --
@@ -287,8 +287,8 @@ std::vector<std::array<uint8_t,104>> recover_candidates(Runtime& rt, PipelineBuf
     // survivor_scan's own N==0 guard).
     if (n == 0) return out;
 
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog.get(), "recover");
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
+    Kernel k = rt.kernel(prog, "recover");
 
     Mem slotsMem  = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
                              n * sizeof(uint32_t), (void*)survivor_slots.data());

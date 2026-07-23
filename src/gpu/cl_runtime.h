@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mxbm { namespace gpu {
@@ -63,6 +64,14 @@ public:
     const DeviceInfo& device() const { return info_; }
 
     Program build(const std::vector<std::string>& sources, const std::string& options);
+    // Like build(), but memoizes the compiled program (keyed by sources+options)
+    // for this Runtime's lifetime and returns a NON-owning cl_program (the
+    // Runtime owns it, released in ~Runtime). clBuildProgram is expensive
+    // (hundreds of ms on some drivers, e.g. NVIDIA); the round pipeline calls it
+    // many times per solve over the SAME kernel sources, so caching turns dozens
+    // of recompiles per search into one. clCreateKernel on the cached program
+    // stays cheap and is still done per call.
+    cl_program cached_program(const std::vector<std::string>& sources, const std::string& options);
     Kernel  kernel(cl_program prog, const char* name);
     Mem     alloc(cl_mem_flags flags, size_t bytes, void* host_ptr = nullptr);
     void    write(cl_mem buf, size_t bytes, const void* src);
@@ -84,6 +93,14 @@ private:
     cl_context       ctx_  = nullptr;
     cl_command_queue q_    = nullptr;
     DeviceInfo       info_;
+    // Program cache for cached_program(): {key, owned cl_program}. Small (the
+    // pipeline uses one source set), a linear scan is fine. Released in ~Runtime.
+    std::vector<std::pair<std::string, cl_program>> prog_cache_;
+
+    // Shared compile path for build()/cached_program(): clCreateProgramWithSource
+    // + clBuildProgram, throwing ClError with the build log on failure. Returns a
+    // raw cl_program the caller takes ownership of.
+    cl_program compile(const std::vector<std::string>& sources, const std::string& options);
 };
 
 }} // namespace mxbm::gpu
