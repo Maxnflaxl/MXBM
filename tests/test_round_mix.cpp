@@ -166,8 +166,10 @@ static void test_round_mix_reconstruct(Runtime& rt) {
         rt.set_arg(k.get(), 1, cap);            // capacity arg (unused by AoS round_mix, kept in signature)
         rt.set_arg(k.get(), 2, padNum);
         rt.set_arg(k.get(), 3, Lmix);
+        cl_mem pairsMem = pb.sort_pairs[0].get();   // D3: fused sort-pair output arg
         rt.set_arg(k.get(), 4, sizeof(cl_mem), &workMem);
         rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesMem);
+        rt.set_arg(k.get(), 6, sizeof(cl_mem), &pairsMem);
         rt.run1d(k.get(), N);
 
         std::vector<uint64_t> got(pb.capacity * 7);

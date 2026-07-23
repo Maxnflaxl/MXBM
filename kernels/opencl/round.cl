@@ -14,7 +14,8 @@
 __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count,
                                __global ulong* work /* seed-work buffer, absolute */,
                                __global uint* leaves_out /* SoA leaves for work[1]: leaf i at i*capacity+g */,
-                               uint capacity) {
+                               uint capacity,
+                               __global ulong* pairs_out /* D3: (key,index) pairs for the sort, fused */) {
     uint g = (uint)get_global_id(0);
     if (g >= count) return;
     uint idx = begin + g;
@@ -27,6 +28,9 @@ __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count
     // E3a: round-1 elements have a single leaf (the seed index itself). Stored so
     // round_match can grow leaf lists incrementally and round_mix skips the DFS.
     leaves_out[(size_t)idx*BH3_MAX_LEAVES] = idx;   // leaf 0 of element idx (AoS: idx*9+0)
+    // D3 fusion: emit the sort pair here (mix already holds the mixed key in e[0]),
+    // so the sort path needs no separate key_extract pass over work.
+    pairs_out[(size_t)idx] = ((ulong)idx << 32) | (uint)(e[0] & 0xFFFFFFu);
 }
 // r>=2: mix in place using the element's pre-order leaf prefix. E3a: the prefix
 // was materialized by the previous round's match (concat of the two parents'
@@ -34,7 +38,8 @@ __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count
 // directly (coalesced across g) instead of the old latency-bound back-ref DFS.
 __kernel void round_mix(uint N, uint capacity, uint padNum, uint Lmix,
                         __global ulong* work,               // level's work buffer
-                        __global const uint* leaves_in) {   // AoS leaf prefix (g*9+i) for these elems
+                        __global const uint* leaves_in,     // AoS leaf prefix (g*9+i) for these elems
+                        __global ulong* pairs_out) {        // D3: fused (key,index) sort pairs
     uint g = (uint)get_global_id(0);
     if (g >= N) return;
     uint tree[9];
@@ -43,6 +48,8 @@ __kernel void round_mix(uint N, uint capacity, uint padNum, uint Lmix,
     for (int k = 0; k < 7; ++k) e[k] = work[(size_t)g*7 + k];
     e[0] = bh3_apply_mix(e, tree, padNum, Lmix);
     work[(size_t)g*7] = e[0];
+    // D3 fusion: emit the sort pair from the freshly-mixed key (no key_extract pass).
+    pairs_out[(size_t)g] = ((ulong)g << 32) | (uint)(e[0] & 0xFFFFFFu);
 }
 // round_scatter: radix-bucket N mixed elements by the top bucket_bits of
 // their 24-bit collision key, so the sortless all-pairs match (T4) only

@@ -259,6 +259,10 @@ if(OpenCL_FOUND)
   target_include_directories(test_round_match PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_round_match PRIVATE mxbm_gpu)
   add_test(NAME round_match COMMAND test_round_match)
+  # test_round_match validates the LEGACY scatter+match kernels directly and its
+  # run_single_round() smoke sections upload pre-mixed work (no fused sort pair),
+  # so pin those to the legacy collision path (the sort path is now the default).
+  set_tests_properties(round_match PROPERTIES ENVIRONMENT "MXBM_LEGACY_MATCH=1")
 
   add_executable(test_round_pipeline tests/test_round_pipeline.cpp)
   add_dependencies(test_round_pipeline mxbm_kernels_gen)

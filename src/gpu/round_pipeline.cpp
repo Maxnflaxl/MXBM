@@ -78,10 +78,11 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
 
     p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
 
-    // Phase-D3 sort scratch, allocated for the default sort-based match (skipped
-    // under MXBM_LEGACY_MATCH). ~512 MB (pairs) + 128 MB (hist) at 2^25 capacity,
-    // comfortably inside the headroom the 6->2 work-buffer reclaim freed.
-    if (std::getenv("MXBM_LEGACY_MATCH") == nullptr) {
+    // Phase-D3 sort scratch. Always allocated: mix_seeds/round_mix now fuse the
+    // (key,index) sort pair into sort_pairs[0] (no separate key_extract pass), so
+    // even the legacy path writes it. ~512 MB (pairs) + 256 MB (hist+scan) at 2^25
+    // capacity, comfortably inside the headroom the 6->2 work-buffer reclaim freed.
+    {
         const size_t pairBytes = (size_t)p.capacity * sizeof(uint64_t);
         for (int i = 0; i < 2; ++i) p.sort_pairs[i] = rt.alloc(CL_MEM_READ_WRITE, pairBytes);
         p.sort_scan = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.capacity * 4);
@@ -101,6 +102,7 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
     cl_mem ppMem   = mp.get();
     cl_mem workMem = pb.work[1].get();
     cl_mem leavesMem = pb.leaves[1].get();   // leaves for work[1] (== leaves[1&1])
+    cl_mem pairsMem = pb.sort_pairs[0].get();   // D3: fused (key,index) sort pairs
     uint32_t capacity = pb.capacity;
 
     // Generate exactly the SEED COUNT (elems_per_round, 2^25 on a full-search
@@ -116,6 +118,7 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
         rt.set_arg(k.get(), 3, sizeof(cl_mem), &workMem);
         rt.set_arg(k.get(), 4, sizeof(cl_mem), &leavesMem);
         rt.set_arg(k.get(), 5, capacity);
+        rt.set_arg(k.get(), 6, sizeof(cl_mem), &pairsMem);
         rt.run1d(k.get(), count);
     }
 }
@@ -134,8 +137,10 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     rt.set_arg(k.get(), 1, capacity);
     rt.set_arg(k.get(), 2, padNum);
     rt.set_arg(k.get(), 3, Lmix);
+    cl_mem pairsMem = pb.sort_pairs[0].get();    // D3: fused (key,index) sort pairs
     rt.set_arg(k.get(), 4, sizeof(cl_mem), &workMem);
     rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesMem);
+    rt.set_arg(k.get(), 6, sizeof(cl_mem), &pairsMem);
     rt.run1d(k.get(), N);
 }
 
@@ -369,18 +374,10 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
     uint32_t outCapacity = pb.capacity;
     const bool prof = sort_profile();
 
-    // 1. key_extract: build (key,index) pairs into sort_pairs[0].
-    auto tKe = clk::now();
-    {
-        Kernel k = rt.kernel(prog, "key_extract");
-        cl_mem inWork = pb.work[r & 1].get();
-        cl_mem pairs0 = pb.sort_pairs[0].get();
-        rt.set_arg(k.get(), 0, N);
-        rt.set_arg(k.get(), 1, sizeof(cl_mem), &inWork);
-        rt.set_arg(k.get(), 2, sizeof(cl_mem), &pairs0);
-        rt.run1d(k.get(), N);
-    }
-    double tKeyExtract = prof ? ms_since(tKe) : 0.0;
+    // 1. (key,index) pairs are already in sort_pairs[0] -- FUSED into the mix that
+    // ran just before this (round1_mix_seeds / round_mix write the pair from the
+    // freshly-mixed key), so there is no separate key_extract pass.
+    double tKeyExtract = 0.0;
 
     // 2. stable radix sort by 24-bit key.
     cl_mem sorted = radix_sort_pairs(rt, prog, pb, N);
