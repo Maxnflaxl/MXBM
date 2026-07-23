@@ -30,3 +30,6 @@
 
 # Internal working docs (research, planning, roadmap, legal notes) — not shipped publicly
 /docs-internal/
+
+# Phase-D2 exploratory spikes (CUDA comparison, etc.) — not part of the build
+spike/
