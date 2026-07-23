@@ -184,6 +184,12 @@ if(OpenCL_FOUND)
   target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/gpu_solver.cpp)
 
+  # Wire the GPU solver into the mxbm binary itself (mxbm target already
+  # exists -- defined above -- so this just adds mxbm_gpu's PUBLIC
+  # include dirs / OpenCL::OpenCL / mxbm_beamhash link requirements to it).
+  target_link_libraries(mxbm PRIVATE mxbm_gpu)
+  target_compile_definitions(mxbm PRIVATE MXBM_HAVE_OPENCL)
+
   add_executable(test_cl_smoke tests/test_cl_smoke.cpp)
   target_include_directories(test_cl_smoke PRIVATE tests src)
   target_link_libraries(test_cl_smoke PRIVATE mxbm_gpu)

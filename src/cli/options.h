@@ -22,8 +22,9 @@ struct Options {
     bool nocolor = false;
     int  apiport = 0;                // 0 = API off
     int  shortstats = 15, longstats = 60;   // seconds, >=1
-    std::string devices;             // accepted, stored; "no GPU backend until M3" notice
-    bool watchdog_requested = false; // accepted; "watchdog arrives in Phase C" notice
+    std::string devices;             // accepted, stored; device SELECTION is a Phase-D notice
+    bool watchdog_requested = false; // accepted; watchdog monitoring notice
+    std::string solver = "auto";     // --solver gpu|ref|auto (default: prefer gpu, fall back to ref)
     std::string config_path, json_profile;  // --config PATH, --profile NAME (with --json)
     bool use_json_config = false;    // --json
     bool version_requested = false, help_requested = false;
@@ -39,6 +40,7 @@ struct Options {
     struct Seen {
         bool pools = false, user = false, pass = false, tls = false, nocolor = false;
         bool apiport = false, shortstats = false, longstats = false, devices = false;
+        bool solver = false;
     } seen;
 };
 

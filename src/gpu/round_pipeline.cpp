@@ -243,7 +243,7 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
 }
 
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
-                             const std::atomic<bool>* abort) {
+                             const std::atomic<bool>* abort, bool verbose) {
     PipelineResult result;
     mix_seeds(rt, pb, b, pp);
 
@@ -259,8 +259,10 @@ PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, c
         } else {
             prevN = run_single_round(rt, pb, b, r, prevN, st);
         }
-        std::printf("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n",
-                    r, st.in, st.out, st.bucket_drops, st.pair_drops);
+        if (verbose) {
+            std::printf("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n",
+                        r, st.in, st.out, st.bucket_drops, st.pair_drops);
+        }
 
         // Abort check: after every round (so, for r==5, also strictly
         // before survivor_scan below). An honest empty result -- no

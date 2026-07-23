@@ -9,6 +9,8 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
+#include <memory>
 #include <string>
 
 #include "api/http_summary.h"
@@ -23,13 +25,15 @@
 #include "stratum/messages.h"
 #include "miner/engine.h"
 #include "version.h"
+#ifdef MXBM_HAVE_OPENCL
+#include "gpu/gpu_solver.h"
+#endif
 #ifdef MXBM_HAVE_BEAM_ORACLE
 #include "miner/solver_ref.h"
 #endif
 
 using namespace mxbm;
 
-#ifdef MXBM_HAVE_BEAM_ORACLE
 namespace {
 
 // Strict hex decode: `hex` must be exactly out_len*2 lowercase-hex-digit
@@ -39,9 +43,12 @@ namespace {
 // own copy); used below to recover the 104-byte solution bytes from a
 // stratum::Solution's hex `output` field so its achieved difficulty can be
 // computed for the "Found a share" console line and the Stats best-share/
-// share-found bookkeeping. Guarded by MXBM_HAVE_BEAM_ORACLE like its only
-// call site below, since without the oracle nothing ever solves/submits a
-// share to decode in the first place.
+// share-found bookkeeping. Solver-agnostic (plain hex decoding, no
+// GPU/oracle dependency) and so, unlike the includes above, unconditional:
+// its only call site is the submit_fn lambda below, which is itself
+// runtime-guarded on `if (solver)` rather than compile-time-guarded, since
+// which solver backend (if any) compiled in is now a build-time question
+// separate from whether one was actually selected/available at runtime.
 bool from_hex_strict(const std::string& hex, uint8_t* out, size_t out_len) {
     if (hex.size() != out_len * 2) return false;
     for (size_t i = 0; i < out_len; ++i) {
@@ -59,7 +66,6 @@ bool from_hex_strict(const std::string& hex, uint8_t* out, size_t out_len) {
 }
 
 } // namespace
-#endif
 
 int main(int argc, char** argv) {
     cli::Options opts;
@@ -126,15 +132,17 @@ int main(int argc, char** argv) {
 
     // Out-of-scope-for-this-phase flags still get a console acknowledgment
     // rather than silently doing nothing: failover past pool 1, GPU device
-    // selection, and the watchdog all arrive in a later phase.
+    // SELECTION (which specific device -- the GPU solver itself now exists
+    // and always uses the runtime's default device), and the watchdog are
+    // none of them implemented yet.
     if (opts.pools.size() > 1) {
-        ui::console::info("Failover pools configured - failover logic arrives in Phase C; using pool 1");
+        ui::console::info("Failover pools configured - failover across pools is not implemented yet; using pool 1");
     }
     if (!opts.devices.empty()) {
-        ui::console::info("--devices noted - no GPU backend until M3");
+        ui::console::info("--devices noted - device selection arrives in Phase D; currently ignored");
     }
     if (opts.watchdog_requested) {
-        ui::console::info("--watchdog arrives in Phase C");
+        ui::console::info("--watchdog noted - watchdog monitoring is not implemented yet");
     }
 
     // A config file's own POOLS/POOL entries carry their own USER/PASS/TLS.
@@ -170,34 +178,101 @@ int main(int argc, char** argv) {
     }
     client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
 
-#ifdef MXBM_HAVE_BEAM_ORACLE
-    static miner::SolverRef solver;
-    miner::Engine engine(client, solver);
-    engine.submit_fn = [&client, &stats](const stratum::Solution& s) {
-        // Achieved difficulty for the "Found a share" line and the best-share
-        // stat: decode the 104-byte solution back out of its hex `output`
-        // field, SHA-256 it (same predicate Engine's own clears_difficulty()
-        // used to decide this was worth submitting), and convert to display
-        // units. A decode failure "can't happen" (output is always Engine's
-        // own to_hex() of a fresh 104-byte candidate) but is handled
-        // defensively: skip the console line and the best-share update, still
-        // record the submit and still send it -- the actual submission must
-        // never be gated on cosmetic/stat reporting.
-        uint8_t soln[104];
-        if (from_hex_strict(s.output, soln, sizeof soln)) {
-            uint8_t hash[32];
-            sha256(soln, sizeof soln, hash);
-            double units = pow::achieved_units(hash);
-            ui::console::share_found("CPU 0", units);
-            stats.record_share_found(units);
+    // Solver selection (Phase C Task 4): pick a backend for opts.solver
+    // ("gpu" | "ref" | "auto" -- validated by cli::parse_args, so no other
+    // value can reach here) into a std::unique_ptr<miner::Solver>. Declared
+    // BEFORE `engine` below so `engine` (which only ever borrows a
+    // `Solver&` into *solver) is torn down first at scope exit -- C++
+    // destroys locals in reverse declaration order, so this ordering alone
+    // guarantees the reference never dangles.
+    //
+    // Selection order, matching the brief exactly:
+    //   1. "gpu" (explicit) or "auto": gpu::GpuSolver, but ONLY when built
+    //      with OpenCL AND a device is actually present
+    //      (GpuSolver::available()) -- its constructor throws ClError with
+    //      no device, so availability is checked first and never relied on
+    //      to fail safely by itself. A construction failure that slips
+    //      through anyway (e.g. alloc_pipeline exceeding a memory-starved
+    //      device's headroom even though a device is present) is caught
+    //      and reported rather than crashing the whole binary.
+    //   2. "ref" (explicit) or "auto" falling back because step 1 didn't
+    //      claim it: miner::SolverRef, only when built with the Beam oracle.
+    //   3. Neither claimed it: `solver` stays null -- monitor-only, exactly
+    //      like today's no-oracle build, with a reason printed below.
+    std::unique_ptr<miner::Solver> solver;
+    // Set only if a GPU construction attempt was actually made and threw
+    // (available() said yes, alloc_pipeline said no -- e.g. a memory-
+    // starved device) -- distinguishes that case below from "never even
+    // attempted", so the fallback message doesn't claim "no GPU is
+    // available" right under a console line that just said otherwise.
+    bool gpu_attempt_failed = false;
+
+#ifdef MXBM_HAVE_OPENCL
+    if ((opts.solver == "gpu" || opts.solver == "auto") && gpu::GpuSolver::available()) {
+        try {
+            auto gs = std::make_unique<gpu::GpuSolver>();
+            char line[160];
+            std::snprintf(line, sizeof line, "GPU solver ready: %s (%.1f GiB, %u compute units)",
+                          gs->device().name.c_str(),
+                          gs->device().global_mem / 1073741824.0,
+                          gs->device().compute_units);
+            ui::console::info(line);
+            solver = std::move(gs);
+        } catch (const std::exception& e) {
+            ui::console::error(std::string("GPU solver initialization failed: ") + e.what());
+            gpu_attempt_failed = true;
         }
-        stats.record_submit(s.id);
-        client.submit(s);
-    };
-    engine.on_attempt = [&stats](uint32_t candidates) { stats.record_attempt(candidates); };
-#else
-    ui::console::info("Built without the Beam oracle — monitoring jobs only (no solving)");
+    }
 #endif
+#ifdef MXBM_HAVE_BEAM_ORACLE
+    if (!solver && (opts.solver == "ref" || opts.solver == "auto")) {
+        solver = std::make_unique<miner::SolverRef>();
+    }
+#endif
+    if (!solver && gpu_attempt_failed) {
+        ui::console::info("Falling back to monitoring jobs only (no solving)");
+    } else if (!solver) {
+        if (opts.solver == "gpu") {
+            ui::console::error("--solver gpu requested but no GPU is available (no OpenCL device, or built without OpenCL support) - monitoring jobs only (no solving)");
+        } else if (opts.solver == "ref") {
+            ui::console::error("--solver ref requested but this build has no Beam reference oracle - monitoring jobs only (no solving)");
+        } else {
+            ui::console::info("No solver backend available (no OpenCL device and no Beam oracle build) - monitoring jobs only (no solving)");
+        }
+    }
+
+    // Engine, submit_fn, and on_attempt are all solver-agnostic (Engine
+    // takes any miner::Solver&) and so, like from_hex_strict above, are
+    // compiled unconditionally and simply skipped at runtime when no
+    // backend claimed a solver -- rather than compile-time-guarded, since
+    // "was a solver built in" and "was one actually selected/available"
+    // are now two separate questions.
+    std::unique_ptr<miner::Engine> engine;
+    if (solver) {
+        engine = std::make_unique<miner::Engine>(client, *solver);
+        engine->submit_fn = [&client, &stats](const stratum::Solution& s) {
+            // Achieved difficulty for the "Found a share" line and the best-share
+            // stat: decode the 104-byte solution back out of its hex `output`
+            // field, SHA-256 it (same predicate Engine's own clears_difficulty()
+            // used to decide this was worth submitting), and convert to display
+            // units. A decode failure "can't happen" (output is always Engine's
+            // own to_hex() of a fresh 104-byte candidate) but is handled
+            // defensively: skip the console line and the best-share update, still
+            // record the submit and still send it -- the actual submission must
+            // never be gated on cosmetic/stat reporting.
+            uint8_t soln[104];
+            if (from_hex_strict(s.output, soln, sizeof soln)) {
+                uint8_t hash[32];
+                sha256(soln, sizeof soln, hash);
+                double units = pow::achieved_units(hash);
+                ui::console::share_found("CPU 0", units);
+                stats.record_share_found(units);
+            }
+            stats.record_submit(s.id);
+            client.submit(s);
+        };
+        engine->on_attempt = [&stats](uint32_t candidates) { stats.record_attempt(candidates); };
+    }
 
     client.on_result = [&opts, &stats](const stratum::Result& r) {
         if (r.id == "login") {
@@ -216,9 +291,7 @@ int main(int argc, char** argv) {
     client.on_job = [&](const stratum::Job& j) {
         stats.record_job(j.id, pow::to_display_units(j.difficulty));
         ui::console::job(j.id, j.difficulty, j.height);
-#ifdef MXBM_HAVE_BEAM_ORACLE
-        engine.on_job(j);
-#endif
+        if (engine) engine->on_job(j);
     };
 
     client.on_disconnect = [&stats]() {
@@ -238,9 +311,7 @@ int main(int argc, char** argv) {
         // never a mining precondition.
     }
 
-#ifdef MXBM_HAVE_BEAM_ORACLE
-    engine.start();
-#endif
+    if (engine) engine->start();
 
     client.run();   // blocks forever, reconnecting on drop; Ctrl+C exits
     return 0;

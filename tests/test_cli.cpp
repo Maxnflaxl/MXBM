@@ -10,11 +10,12 @@ int main() {
     check(o.pools[0].user=="addr.rig1" && o.pools[0].tls==true, "user + tls default on");
     check(o.shortstats==15 && o.longstats==60, "shortstats/longstats defaults");
     check(o.apiport==0 && !o.use_json_config && o.config_path.empty() &&
-          o.json_profile.empty() && !o.watchdog_requested && o.devices.empty(),
+          o.json_profile.empty() && !o.watchdog_requested && o.devices.empty() &&
+          o.solver=="auto",
           "new fields default correctly");
     check(o.seen.pools && o.seen.user && !o.seen.tls && !o.seen.pass &&
           !o.seen.apiport && !o.seen.shortstats && !o.seen.longstats &&
-          !o.seen.devices && !o.seen.nocolor,
+          !o.seen.devices && !o.seen.nocolor && !o.seen.solver,
           "seen flags reflect exactly what was passed");
 
     // missing --pool no longer fails parse_args itself -- a config file
@@ -184,6 +185,33 @@ int main() {
         check(o.watchdog_requested, "--watchdog sets watchdog_requested");
         check(!o.seen.apiport && !o.seen.devices, "unrelated seen flags stay false");
     }
+    // --solver gpu/ref/auto accepted (value stored, seen set); --solver bogus rejected
+    {
+        const char* avG[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
+                              "--solver","gpu"};
+        Options oG; std::string eG;
+        check(parse_args((int)(sizeof(avG)/sizeof(avG[0])),(char**)avG,oG,eG), "--solver gpu parses");
+        check(oG.solver=="gpu" && oG.seen.solver, "--solver gpu stores value + sets seen.solver");
+
+        const char* avR[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
+                              "--solver","ref"};
+        Options oR; std::string eR;
+        check(parse_args((int)(sizeof(avR)/sizeof(avR[0])),(char**)avR,oR,eR), "--solver ref parses");
+        check(oR.solver=="ref" && oR.seen.solver, "--solver ref stores value + sets seen.solver");
+
+        const char* avA[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
+                              "--solver","auto"};
+        Options oA; std::string eA;
+        check(parse_args((int)(sizeof(avA)/sizeof(avA[0])),(char**)avA,oA,eA), "--solver auto parses");
+        check(oA.solver=="auto" && oA.seen.solver, "--solver auto stores value + sets seen.solver");
+
+        const char* avB[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
+                              "--solver","bogus"};
+        Options oB; std::string eB;
+        check(!parse_args((int)(sizeof(avB)/sizeof(avB[0])),(char**)avB,oB,eB), "--solver bogus rejected");
+        check(!eB.empty(), "--solver bogus error message non-empty");
+    }
+
     // bare --json immediately followed by another flag must not swallow it
     {
         const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",

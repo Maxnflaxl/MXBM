@@ -31,7 +31,10 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
     // The full 5-round search, reusing this solver's PERSISTENT pb_/budget_
     // (allocated once in the constructor, never reallocated here) -- and
     // abortable via &abort_, polled by run_pipeline between rounds.
-    PipelineResult res = run_pipeline(rt_, pb_, budget_, prePow, &abort_);
+    // verbose=false: continuous production mining calls solve() once per
+    // nonce attempt, so the per-round printf (default-on for the direct
+    // pipeline tests) would spam stdout every round of every attempt.
+    PipelineResult res = run_pipeline(rt_, pb_, budget_, prePow, &abort_, /*verbose=*/false);
     if (res.survivors == 0) return {};
 
     // Raw candidates: on-device back-ref recovery + host-side pack_indices

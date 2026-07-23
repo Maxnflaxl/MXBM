@@ -107,13 +107,22 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
 // honest "found nothing" rather than a partial/truncated candidate set.
 // Default nullptr, so every pre-existing caller (Phase B, C-T1) is
 // unaffected -- this is purely additive.
+//
+// `verbose` (default true, so every pre-existing caller is unaffected)
+// gates the per-round "  r%d: in=... out=... bucketDrops=... pairDrops=...\n"
+// printf above: continuous production mining (GpuSolver::solve(), called
+// once per attempted nonce) passes false to avoid spamming stdout every
+// round of every solve() call; the test callers driving this directly
+// (test_gpu_rounds.cpp, test_gpu_recover.cpp, test_round_pipeline.cpp) keep
+// the default and still print, since their asserts are on the returned
+// PipelineResult, not on stdout.
 struct PipelineResult {
     uint32_t survivors = 0;
     std::vector<uint32_t> survivor_slots;
     RoundStats rounds[5];
 };
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
-                             const std::atomic<bool>* abort = nullptr);
+                             const std::atomic<bool>* abort = nullptr, bool verbose = true);
 
 // Recover: for each survivor (a work[0] slot index from run_pipeline's
 // survivor_scan), walk its consolidated back-ref ancestry on-device (the

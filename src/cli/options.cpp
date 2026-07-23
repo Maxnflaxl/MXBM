@@ -26,8 +26,9 @@ std::string usage_text() {
         "  --apiport N            enable the /summary API on port N, 0 disables it (default: 0)\n"
         "  --shortstats N         short-stats interval in seconds, >=1 (default: 15)\n"
         "  --longstats N          long-stats interval in seconds, >=1 (default: 60)\n"
-        "  --devices LIST         device selector (accepted, stored; no GPU backend yet)\n"
+        "  --devices LIST         device selector (accepted, stored; device selection is a later phase)\n"
         "  --watchdog             enable the watchdog (accepted; arrives in a later phase)\n"
+        "  --solver gpu|ref|auto  solver backend: GPU, CPU reference, or auto-pick (default: auto)\n"
         "  --json [PATH]          load a JSON config file (default: user_config.json)\n"
         "  --profile NAME         select a profile from the --json config\n"
         "  --config PATH          load a flat KEY = VALUE config file\n"
@@ -171,6 +172,17 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             if (i + 1 >= argc) { err = "missing value for --devices\n\n" + usage_text(); return false; }
             out.devices = argv[++i];
             out.seen.devices = true;
+            continue;
+        }
+        if (arg == "--solver") {
+            if (i + 1 >= argc) { err = "missing value for --solver\n\n" + usage_text(); return false; }
+            std::string v = argv[++i];
+            if (v != "gpu" && v != "ref" && v != "auto") {
+                err = "invalid --solver (must be gpu, ref, or auto)\n\n" + usage_text();
+                return false;
+            }
+            out.solver = v;
+            out.seen.solver = true;
             continue;
         }
         if (arg == "--json") {
