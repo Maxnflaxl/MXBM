@@ -24,6 +24,6 @@ static bool shape_ok(const char* v) {
 int main() {
     check(version() != nullptr && *version(), "version non-empty");
     check(shape_ok(version()), "version shape N.N.N [hex7|nogit]");
-    check(strncmp(version(), "0.2.", 4) == 0, "major.minor from project()");
+    check(strncmp(version(), "0.3.", 4) == 0, "major.minor from project()");
     return summary("version");
 }
