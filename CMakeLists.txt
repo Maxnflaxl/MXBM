@@ -174,8 +174,10 @@ if(OpenCL_FOUND)
   target_include_directories(mxbm_gpu PUBLIC src)
   target_include_directories(mxbm_gpu PRIVATE ${CMAKE_BINARY_DIR})
   target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
+  target_link_libraries(mxbm_gpu PUBLIC mxbm_beamhash)   # gpu_solver.cpp: is_valid_solution/pack_indices/compute_prepow
   target_sources(mxbm_gpu PRIVATE src/gpu/budget.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
+  target_sources(mxbm_gpu PRIVATE src/gpu/gpu_solver.cpp)
 
   add_executable(test_cl_smoke tests/test_cl_smoke.cpp)
   target_include_directories(test_cl_smoke PRIVATE tests src)
@@ -263,6 +265,17 @@ if(OpenCL_FOUND)
   # (~2-3s on an M3 Max) plus a cheap on-device recovery pass; same generous
   # timeout as gpu_rounds for the same reason (slow-but-correct hardware).
   set_tests_properties(gpu_recover PROPERTIES TIMEOUT 1800)
+
+  add_executable(test_gpu_solver tests/test_gpu_solver.cpp)
+  add_dependencies(test_gpu_solver mxbm_kernels_gen)
+  target_include_directories(test_gpu_solver PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_gpu_solver PRIVATE mxbm_gpu)
+  add_test(NAME gpu_solver COMMAND test_gpu_solver)
+  # Phase-C Task 2 -- THE MILESTONE: GpuSolver::solve() runs the same full
+  # 2^25 GPU Wagner search as gpu_rounds/gpu_recover (~2-3s on an M3 Max)
+  # plus recovery plus the CPU verify gate; same generous timeout for the
+  # same reason (slow-but-correct hardware).
+  set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()

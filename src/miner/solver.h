@@ -14,6 +14,11 @@ namespace mxbm { namespace miner {
 // exhausted, and Engine checks each candidate against difficulty itself.
 struct Solver {
     virtual std::vector<std::array<uint8_t, 104>> solve(const uint8_t input[32], const uint8_t nonce[8]) = 0;
+    // Ask an in-flight (or future) solve() to return early. Default no-op:
+    // SolverRef's CPU search cannot be interrupted mid-call and inherits
+    // this as-is. GpuSolver (src/gpu/gpu_solver.h) overrides it to flip an
+    // std::atomic<bool> that run_pipeline polls between rounds.
+    virtual void request_abort() {}
     virtual ~Solver() = default;
 };
 

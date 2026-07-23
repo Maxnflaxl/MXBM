@@ -2,6 +2,7 @@
 #include "gpu/cl_runtime.h"
 #include "gpu/budget.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <vector>
 
@@ -98,12 +99,21 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
 // not themselves guard against it. Logs one line per round
 // ("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n") -- honest drop
 // reporting, not just success counts.
+//
+// Abortable: `abort`, if non-null, is polled (relaxed load) after each
+// round -- and so, since survivor_scan runs only once the loop finishes,
+// also before survivor_scan. The instant it reads true, run_pipeline
+// returns a default-constructed (empty) PipelineResult immediately --
+// honest "found nothing" rather than a partial/truncated candidate set.
+// Default nullptr, so every pre-existing caller (Phase B, C-T1) is
+// unaffected -- this is purely additive.
 struct PipelineResult {
     uint32_t survivors = 0;
     std::vector<uint32_t> survivor_slots;
     RoundStats rounds[5];
 };
-PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4]);
+PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
+                             const std::atomic<bool>* abort = nullptr);
 
 // Recover: for each survivor (a work[0] slot index from run_pipeline's
 // survivor_scan), walk its consolidated back-ref ancestry on-device (the
