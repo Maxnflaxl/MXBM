@@ -178,6 +178,23 @@ if(OpenCL_FOUND)
   target_include_directories(test_cl_smoke PRIVATE tests src)
   target_link_libraries(test_cl_smoke PRIVATE mxbm_gpu)
   add_test(NAME cl_smoke COMMAND test_cl_smoke)
+
+  set(MXBM_KERNELS_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_kernels.h)
+  set(MXBM_KERNEL_FILES ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl)
+  add_custom_command(
+    OUTPUT ${MXBM_KERNELS_HEADER}
+    COMMAND ${CMAKE_COMMAND} -DKERNEL_FILES="${MXBM_KERNEL_FILES}"
+            -DOUT_FILE=${MXBM_KERNELS_HEADER}
+            -P ${CMAKE_SOURCE_DIR}/cmake/EmbedKernels.cmake
+    DEPENDS ${MXBM_KERNEL_FILES} ${CMAKE_SOURCE_DIR}/cmake/EmbedKernels.cmake
+    COMMENT "Embedding OpenCL kernels -> mxbm_kernels.h")
+  add_custom_target(mxbm_kernels_gen DEPENDS ${MXBM_KERNELS_HEADER})
+
+  add_executable(test_cl_primitives tests/test_cl_primitives.cpp)
+  add_dependencies(test_cl_primitives mxbm_kernels_gen)
+  target_include_directories(test_cl_primitives PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_cl_primitives PRIVATE mxbm_gpu)
+  add_test(NAME cl_primitives COMMAND test_cl_primitives)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()
