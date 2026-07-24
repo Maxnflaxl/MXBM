@@ -68,6 +68,16 @@ struct PipelineBuffers {
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
 };
 
+// Per-round constants for the fused row-bucket kernels. These are BAKED IN at
+// compile time in each FUSED_LDS instantiation in kernels/opencl/lds.cl -- making
+// them compile-time (so apply_mix's tree loop unrolls and its t[8] stays in
+// registers instead of local memory) is worth ~26 ms, but it means the kernels
+// IGNORE the matching runtime arguments. tests/test_gpu_rounds.cpp pins this table
+// against the literals in lds.cl so the two cannot drift apart silently.
+// Note Lout(r) == Lmix(r+1) for every round, so one constant serves both roles.
+struct FusedConsts { uint32_t Lout, padNext, sIn, sOut, sBuild; };
+FusedConsts fused_consts_for(int r);
+
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b);
 
 // Round 1: seed + mix in one pass (round1_mix_seeds kernel), writing

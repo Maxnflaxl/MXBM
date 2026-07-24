@@ -68,6 +68,17 @@ const char* rowbucket_cl_opts() {
 }
 } // namespace
 
+// Mirrors the literals baked into the FUSED_LDS instantiations in lds.cl; pinned by
+// tests/test_gpu_rounds.cpp (test_fused_consts_match_kernels).
+FusedConsts fused_consts_for(int r) {
+    switch (r) {
+        case 1:  return {424u, 2u, 1u, 2u, 2u};
+        case 2:  return {400u, 4u, 2u, 4u, 4u};
+        case 3:  return {376u, 6u, 4u, 2u, 8u};   // builds 8 leaves, stores the contrib
+        default: return {288u, 9u, 2u, 0u, 0u};   // r4: contrib in, nothing out
+    }
+}
+
 bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
@@ -831,13 +842,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         //                BUILDS 8 (sBuild) but STORES 2. Emit 88 -> 64 B/child.
         //   r4    USE  : stages that 2-uint contrib (sIn=2) and stores nothing
         //                (L5-thin: round 5 is terminal; recover walks back-refs).
-        uint32_t sIn, sOut, sBuild;
-        switch (r) {
-            case 1:  sIn = 1; sOut = 2; sBuild = 2; break;
-            case 2:  sIn = 2; sOut = 4; sBuild = 4; break;
-            case 3:  sIn = 4; sOut = 2; sBuild = 8; break;   // builds 8 leaves, stores contrib
-            default: sIn = 2; sOut = 0; sBuild = 0; break;   // r4: contrib in, nothing out
-        }
+        const FusedConsts fc = fused_consts_for(r);
+        const uint32_t sIn = fc.sIn, sOut = fc.sOut, sBuild = fc.sBuild;
         uint32_t outOff = (uint32_t)(r - 1) * capacity;
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
         const char* fusedName = "round_fused_lds";

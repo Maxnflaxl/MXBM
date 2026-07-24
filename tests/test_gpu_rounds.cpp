@@ -37,6 +37,7 @@
 #include "gpu/cl_runtime.h"
 #include "gpu/round_pipeline.h"
 #include "kat_vectors.h"
+#include "round_ref.h"
 #include "check.h"
 #include <cstdint>
 #include <cstdio>
@@ -91,6 +92,30 @@ int main() {
                     (double)actual / 1073741824.0, perElem, kBytesPerElement);
         check(perElem <= (double)kBytesPerElement,
               "compute_budget's per-element estimate covers the real allocation (no OOM risk)");
+    }
+    // The fused kernels BAKE their per-round constants in at compile time (see the
+    // FUSED_LDS instantiations in kernels/opencl/lds.cl) and therefore IGNORE the
+    // matching runtime arguments the host still sets. Pin the two together: these
+    // literals must stay identical to the ones in lds.cl, and must agree with the
+    // round table the rest of the pipeline derives everything else from.
+    {
+        struct { int r; uint32_t Lout, padNext, sIn, sOut, sBuild; } kKernelLiterals[4] = {
+            {1, 424u, 2u, 1u, 2u, 2u},   // round_fused_seed
+            {2, 400u, 4u, 2u, 4u, 4u},   // round_fused_rd2
+            {3, 376u, 6u, 4u, 2u, 8u},   // round_fused_rd3
+            {4, 288u, 9u, 2u, 0u, 0u},   // round_fused_6_5
+        };
+        for (const auto& k : kKernelLiterals) {
+            const FusedConsts fc = fused_consts_for(k.r);
+            check(fc.Lout == k.Lout && fc.padNext == k.padNext && fc.sIn == k.sIn &&
+                  fc.sOut == k.sOut && fc.sBuild == k.sBuild,
+                  "fused_consts_for matches the literals compiled into lds.cl");
+            // Checked against the independent reference table, not the pipeline's
+            // own copy. Lout(r) == Lmix(r+1) is what lets one constant serve both.
+            check(k.Lout == ref::Lout(k.r) && k.Lout == ref::Lmix(k.r + 1) &&
+                  k.padNext == ref::padNum(k.r + 1),
+                  "baked-in constants agree with the reference round table");
+        }
     }
     check(b.capacity > b.elems_per_round, "budget reserves collision headroom (capacity > 2^25 seed count) on this card");
 

@@ -49,8 +49,9 @@ since re-opened as the pipeline got faster — see the note under the table.
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
 **Current: 22.8 sol/s** (83.2 ms/solve; 90 ms end-to-end).
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~2.3×**.
+
 Started at **1.8 sol/s** when the solver first worked → **12.6× faster**.
-**Target: 53 sol/s** (lolMiner, stock) — remaining gap **~2.3×**.
 
 VRAM for a full search fell with it: **8.36 → 6.95 GiB** (268 → 222 B/element), because
 re-derivable records replaced stored work state and retired the widest bucket stride.
