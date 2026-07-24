@@ -585,21 +585,47 @@ found, and the variant was reverted rather than debugged into the tree.
 
 **Second attempt, also inconclusive.** Rebuilt with instrumentation instead of
 inspection. Round 3 was made to rebuild its work state from its stored leaves and compare
-against the stored work words: **0 mismatches**, so the record survives round 2's emit and
-round 3's stage intact. Counting further: both variants stage **exactly** the same
+against the stored work words: **0 mismatches**. Both variants stage **exactly** the same
 33,561,297 elements, and matches equal the emitted child count 1:1 — but the variant finds
-a *different number of equal-key pairs*, varying run to run in both directions around the
-correct 33,566,378. Same elements and same work words should force the same key multiset
-and therefore the same pair count, so one of those measurements must be false. Confidence
-in the instrumentation itself then failed (a key-checksum counter read back as 0 for 33 M
-non-zero keys while two neighbouring counters in the same guard worked), and the
-investigation was stopped there rather than continue on untrustworthy numbers.
+a *different number of equal-key pairs*, varying run to run. Confidence in the
+instrumentation then failed (a key-checksum counter read back as 0 for 33 M non-zero keys)
+and the attempt was stopped.
 
-Recorded as an **open lead, not a dead end**. What is established: the shipped quad-record
-path is deterministic (33,566,378 every run, survivors 3/3, 37/37) so nothing shipped is
-affected; and the ~3.8 ms signal is worth another attempt. Two traps for whoever picks it
-up — the faster variant was the broken one, so a timing-only comparison would have
-accepted it; and verify the diagnostic counters themselves before trusting a null result.
+**Third attempt — much sharper, still unexplained.** Instrumented again, this time with a
+**positive control** on every counter (a plain "count everything staged" that must equal
+33,561,297 — it did, in every configuration). Three things are now settled:
+
+1. **It is not the compile-time constants.** A second pair of kernels was instantiated
+   with *runtime* arguments, which reproduces byte-for-byte what commit `27078c1` shipped
+   as the default and which was deterministic there. It fails identically
+   (`MXBM_R3_FULL=2`). So the fault predates or is independent of
+   [that change](#compile-time-round-constants).
+2. **It is not memory corruption.** Fingerprinting the key multiset on both sides of the
+   round-2 → round-3 hand-off (count of odd keys at round 2's *emit*, and again at round
+   3's *stage*) gives **identical values in every run** — `r2emit == r3staged`, always.
+   The 80 B record survives the write/read round-trip perfectly. Every earlier hypothesis
+   about strides, buffer sizing and out-of-bounds writes is dead.
+3. **The nondeterminism originates inside round 2's own emit.** Round 2's emitted keys
+   already vary (16,778,135 / 16,785,124 / 16,776,801 odd keys across runs) where the
+   shipped variant is exactly stable (16,786,169 every run) — on *identical input*, with
+   *identical* staging, expand and collide code. The two kernels differ only in which
+   emit branch they take, and the emit runs **after** the key is computed.
+
+Point 3 is self-contradictory as stated, which means one more assumption is still wrong —
+most likely something shared that is not actually shared (the `(lead, gi)` tie-break reads
+`gi` values that round 1 assigns via a non-deterministic `atomic_inc`, so it is the one
+input that genuinely differs run to run; a `LEADTIE_PROBE` counted only 17 equal-lead
+pairs per solve on the shipped path, which does not account for ~9,000 differing keys, but
+that probe was never run against the failing variant). **That is the thread to pull next.**
+
+Still an **open lead, not a dead end**. The shipped quad-record path is deterministic
+(33,566,378 every run, survivors 3/3, 37/37) so nothing shipped is implicated, and the
+prize is now sized more honestly at **~2-4 ms**, not the 3.8 ms first measured.
+
+Traps recorded for the next attempt: the faster variant was the broken one, so a
+timing-only comparison would have accepted it; put a **positive control** on every
+diagnostic counter before believing a null result from it; and run
+`LEADTIE_PROBE` against the *failing* variant, which was never done.
 
 
 ### Eliminating the dense `gi`
