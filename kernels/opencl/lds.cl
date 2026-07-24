@@ -352,9 +352,14 @@ __kernel void round_fused_lds(
                 ulong a[7], b[7], c[7];
                 for (uint w = 0; w < LDS_PW; ++w) { a[w] = lwork[leftPos*LDS_PW+w]; b[w] = lwork[rightPos*LDS_PW+w]; }
                 bh3_combine(a, b, Lout, c);
-                // Child leaf prefix = concat(left leaves, right leaves), capped sOut.
+                // Child leaf prefix = concat(left leaves, right leaves). BUILD enough
+                // for BOTH the mix (padnum_next leaves) and the next round's carry
+                // (sOut leaves); STORE only sOut. L5-thin: round 4 passes sOut=0 (round
+                // 5 is terminal -- no mix, recover walks back-refs), so it builds 9
+                // leaves for the child's own mix but writes none.
                 uint ctree[9];
-                for (uint i = 0; i < sOut; ++i)
+                uint nbuild = padnum_next > sOut ? padnum_next : sOut;
+                for (uint i = 0; i < nbuild; ++i)
                     ctree[i] = (i < sIn) ? lleaf[leftPos*LDS_FLEAF + i]
                                          : lleaf[rightPos*LDS_FLEAF + (i - sIn)];
                 // Fold round-(r+1) mix into the child -> sets its next collision key.

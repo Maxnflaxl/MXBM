@@ -758,7 +758,10 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.fill_u32(pb.fb_counts[outSet].get(), 0u, nb);
         rt.fill_u32(pb.fb_gictr.get(), 0u, 1);
         uint32_t Lout = lout_for(r), LmixNext = lmix_for(r + 1), padNext = padnum_for(r + 1);
-        uint32_t sIn = sleaves_for(r), sOut = sleaves_for(r + 1), outOff = (uint32_t)(r - 1) * capacity;
+        // L5-thin: round 4 emits round-5 children with NO leaf payload (round 5 is
+        // terminal -- no mix, recover uses back-refs). r4 was the fattest round.
+        uint32_t sIn = sleaves_for(r), sOut = (r < 4) ? sleaves_for(r + 1) : 0u;
+        uint32_t outOff = (uint32_t)(r - 1) * capacity;
         Kernel k = rt.kernel(prog, "round_fused_lds");
         cl_mem ic = pb.fb_counts[inSet].get(), iw = pb.fb_work[inSet].get(), ig = pb.fb_gi[inSet].get(),
                il = pb.fb_lead[inSet].get(), ilv = pb.fb_leaves[inSet].get();
