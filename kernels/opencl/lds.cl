@@ -259,6 +259,124 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 }
 
 // ===========================================================================
+// P2 STEP B: FUSED row-bucket round kernel. ONE kernel does round r's match +
+// round (r+1)'s mix + round (r+1)'s scatter, so the coalesced-gather win (crux
+// 30bc4fe) is NOT eaten by a separate fat scatter pass (the un-fused LDS path's
+// downfall @ 244 ms). Per workgroup (one (bucket, sub-mask) group):
+//   1. coalesced-load round-r FAT bucket into LDS (work[7] + gi + lead + leaves[sIn])
+//   2. chain by middle key bits (atomic_xchg), same as round_collide_lds
+//   3. per equal-full-key collision: order by (lead, gi); bh3_combine at Lout(r);
+//      materialize the child's leaf prefix = concat(parents' leaves); fold
+//      bh3_apply_mix(Lmix_next, padnum_next) to set the child's NEXT-round key;
+//      emit the child FAT into round-(r+1) buckets (bucketed by that key), record
+//      all_left/all_right[child_gi] = parent gi's.
+// FAT bucket per STEP A (9ba5e80): leaves travel inline (coalesced leaf read).
+// gi is a stable dense per-level id: array index for this level's back-ref row
+// AND the (lead,gi) tiebreak. Validated vs ref::cpu_round in test_lds_collide.
+// Full-width (7 u64) first for correctness; per-round compaction layers on later.
+// ===========================================================================
+#ifndef LDS_FCAP
+#define LDS_FCAP 384u        // fat-element group cap (work+leaves in LDS -> smaller than LDS_ECAP)
+#endif
+#define LDS_FLEAF 8u         // max parent leaf prefix staged (sleaves_for(<=4) = 8)
+
+__kernel void round_fused_lds(
+    uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,
+    uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut,
+    __global const uint*  in_counts,
+    __global const ulong* in_bwork,    // [nb*in_cap*7]
+    __global const uint*  in_bgi,      // [nb*in_cap]      stable per-level id (tiebreak + backref)
+    __global const uint*  in_blead,    // [nb*in_cap]      first leaf (pair ordering)
+    __global const uint*  in_bleaves,  // [nb*in_cap*sIn]  leaf prefix (fat)
+    __global uint*  out_counts,        // [nb], pre-zeroed
+    __global ulong* out_bwork,         // [nb*out_cap*7]
+    __global uint*  out_bgi,           // [nb*out_cap]
+    __global uint*  out_blead,         // [nb*out_cap]
+    __global uint*  out_bleaves,       // [nb*out_cap*sOut]
+    __global uint*  all_left, __global uint* all_right,  // indexed by child gi
+    __global uint*  gi_counter,        // global atomic -> dense child gi
+    __global uint*  drops) {           // [1]=group ovf, [2]=out-bucket ovf, [3]=chain cap
+    __local ulong lwork[LDS_PW * LDS_FCAP];
+    __local uint  lgi[LDS_FCAP];
+    __local uint  llead[LDS_FCAP];
+    __local uint  lleaf[LDS_FLEAF * LDS_FCAP];
+    __local uint  lkey[LDS_FCAP];
+    __local uint  lchain[LDS_FCAP];
+    __local uint  tab[LDS_TABSIZE];
+    __local uint  gcount;
+
+    uint lId = get_local_id(0);
+    uint submaskCount = 1u << submask_bits;
+    uint bucket = get_group_id(0) / submaskCount;
+    uint mask   = get_group_id(0) % submaskCount;
+
+    if (lId == 0) gcount = 0;
+    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    uint cnt = in_counts[bucket];
+    if (cnt > in_bucket_cap) cnt = in_bucket_cap;
+    size_t base = (size_t)bucket * in_bucket_cap;
+    for (uint p = lId; p < cnt; p += LDS_WG) {
+        size_t d = base + p;
+        uint key = (uint)(in_bwork[d*LDS_PW] & 0xFFFFFFu);
+        if ((key & (submaskCount - 1u)) != mask) continue;
+        uint pos = atomic_inc(&gcount);
+        if (pos < LDS_FCAP) {
+            for (uint w = 0; w < LDS_PW; ++w) lwork[pos*LDS_PW + w] = in_bwork[d*LDS_PW + w];
+            lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;
+            for (uint i = 0; i < sIn; ++i) lleaf[pos*LDS_FLEAF + i] = in_bleaves[d*sIn + i];
+        } else atomic_inc(&drops[1]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;
+
+    for (uint pos = lId; pos < total; pos += LDS_WG) {
+        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);
+        lchain[pos] = atomic_xchg(&tab[hk], pos);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (uint pos = lId; pos < total; pos += LDS_WG) {
+        uint key = lkey[pos];
+        uint oth = lchain[pos], walk = 0;
+        while (oth != LDS_EMPTY) {
+            if (++walk > 64u) { atomic_inc(&drops[3]); break; }
+            if (lkey[oth] == key) {
+                // (lead, gi) canonical order -- lead primary, gi tiebreak. Distinct
+                // leads (every valid solution) are decided by lead alone; equal-lead
+                // pairs are overlapping-tree cases the CPU verify gate drops anyway.
+                uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];
+                uint leftPos = pos, rightPos = oth;
+                if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
+                ulong a[7], b[7], c[7];
+                for (uint w = 0; w < LDS_PW; ++w) { a[w] = lwork[leftPos*LDS_PW+w]; b[w] = lwork[rightPos*LDS_PW+w]; }
+                bh3_combine(a, b, Lout, c);
+                // Child leaf prefix = concat(left leaves, right leaves), capped sOut.
+                uint ctree[9];
+                for (uint i = 0; i < sOut; ++i)
+                    ctree[i] = (i < sIn) ? lleaf[leftPos*LDS_FLEAF + i]
+                                         : lleaf[rightPos*LDS_FLEAF + (i - sIn)];
+                // Fold round-(r+1) mix into the child -> sets its next collision key.
+                c[0] = bh3_apply_mix(c, ctree, padnum_next, Lmix_next);
+                uint ckey = (uint)(c[0] & 0xFFFFFFu);
+                uint cb = ckey >> (24u - bucket_bits);
+                uint cpos = atomic_inc(&out_counts[cb]);
+                if (cpos < out_bucket_cap) {
+                    uint cgi = atomic_inc(gi_counter);
+                    size_t od = (size_t)cb * out_bucket_cap + cpos;
+                    for (uint w = 0; w < LDS_PW; ++w) out_bwork[od*LDS_PW + w] = c[w];
+                    out_bgi[od] = cgi; out_blead[od] = ctree[0];
+                    for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i];
+                    all_left[cgi] = lgi[leftPos]; all_right[cgi] = lgi[rightPos];
+                } else atomic_inc(&drops[2]);
+            }
+            oth = lchain[oth];
+        }
+    }
+}
+
+// ===========================================================================
 // ROW-BUCKET REWRITE, crux measurement: parent-gather LOCALITY. The sort path's
 // match cost is dominated by reading 2 parents (7 u64) by ARBITRARY slot -- a
 // scattered gather. A bucket-local layout would instead read parents from
