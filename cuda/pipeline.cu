@@ -10,6 +10,11 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include "beamhash/bh3_verify.h"
+#include "beamhash/bh3_blake2b.h"
+#include <algorithm>
+#include <chrono>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 using namespace mxbm;
@@ -133,53 +138,37 @@ __global__ void recover(uint32_t nSurv, const uint32_t* __restrict__ surv_slots,
     }
 }
 
-// ---- host driver -------------------------------------------------------------------
+// ---- solver: persistent buffers, one solve() per (input, nonce) ---------------------
+// Mirrors src/gpu/gpu_solver.cpp so the timing is like-for-like: buffers are allocated
+// ONCE and reused, and solve() returns only CPU-VERIFIED solutions. Comparing a
+// kernel-time figure against the OpenCL solver's end-to-end number would flatter this
+// side, which is the whole reason for building this.
 template<class T> static T* dalloc(size_t n) { void* p=nullptr; cudaMalloc(&p, n*sizeof(T)); return (T*)p; }
 
-int main() {
-    const uint32_t elems    = 1u << 25;
-    const uint32_t capacity = elems + elems/32;              // 34,603,008
-    const uint32_t bb = 16, sm = 1, nb = 1u << bb;
-    const uint32_t mean = capacity / nb;
-    const uint32_t cap  = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
-    const size_t   nslots = (size_t)nb * cap;
-    // set0 carries r2's record. Padded 9 -> 10 u64 so slot*stride*8 is always 16 B
-    // aligned, which is what lets the compiler emit 128-bit loads/stores: 5 instructions
-    // per record instead of 9. Costs 4% more traffic, which is the cheap currency here --
-    // r2 runs at 38% of DRAM peak but shows 12% MIO-queue stall, i.e. it is limited by
-    // memory INSTRUCTION issue, not bandwidth.
-    const uint32_t setStride[2] = { 10u, 8u };               // set0: r2/r4 out; set1: r1/r3 out
-    const uint32_t survCap = 1024;
+struct CudaSolver {
+    static constexpr uint32_t elems    = 1u << 25;
+    static constexpr uint32_t capacity = elems + elems/32;    // 34,603,008
+    static constexpr uint32_t bb = 16, sm = 1, nb = 1u << bb;
+    static constexpr uint32_t survCap = 1024;
+    uint32_t cap = 0; size_t nslots = 0;
+    uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
+    uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
+    uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
 
-    printf("geometry : bb=%u sm=%u nb=%u cap=%u nslots=%zu\n", bb, sm, nb, cap, nslots);
-    printf("footprint: sets %.2f GiB + backrefs %.2f GiB\n",
-           (double)nslots*(setStride[0]+setStride[1])*8/(double)(1u<<30),
-           (double)5*capacity*4*2/(double)(1u<<30));
-
-    uint64_t *elem[2] = { dalloc<uint64_t>(nslots*setStride[0]), dalloc<uint64_t>(nslots*setStride[1]) };
-    uint32_t *counts[2] = { dalloc<uint32_t>(nb), dalloc<uint32_t>(nb) };
-    uint32_t *gictr = dalloc<uint32_t>(1), *drops = dalloc<uint32_t>(4);
-    uint32_t *left = dalloc<uint32_t>((size_t)5*capacity), *right = dalloc<uint32_t>((size_t)5*capacity);
-    uint32_t *survSlots = dalloc<uint32_t>(survCap), *survCount = dalloc<uint32_t>(1);
-    uint64_t *dpp = dalloc<uint64_t>(4);
-    if (!elem[0] || !elem[1] || !dpp || !left) { printf("FAIL: allocation\n"); return 1; }
-    CK(cudaMemcpy(dpp, kat::prePow, 32, cudaMemcpyHostToDevice));
-
-    // MXBM_CUDA_ITERS=1 for profiling: Nsight replays every launch several times to
-    // collect counters, so three solves is three times the wait for no extra signal.
-    const int iters = getenv("MXBM_CUDA_ITERS") ? atoi(getenv("MXBM_CUDA_ITERS")) : 3;
-    // Report the real occupancy limit per kernel. cudaOccupancyMaxActiveBlocksPerMultiprocessor
-    // needs no profiler, and Ada gives 100 KB of shared memory per SM where OpenCL only
-    // ever exposed 48 -- so the occupancy arithmetic done on the OpenCL side was against
-    // the wrong budget.
-    {
-        int shPerSM=0, shPerBlock=0;
-        cudaDeviceGetAttribute(&shPerSM, cudaDevAttrMaxSharedMemoryPerMultiprocessor, 0);
-        cudaDeviceGetAttribute(&shPerBlock, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0);
-        printf("device   : shared %d B/SM, %d B/block (opt-in)\n", shPerSM, shPerBlock);
-        // Ada splits 128 KB of L1/shared per SM by a CARVEOUT that defaults to favouring
-        // L1. Asking for the max-shared carveout is what actually makes the ~100 KB/SM
-        // available, and it is the difference between 2 and 3 blocks for round 3.
+    bool init() {
+        const uint32_t mean = capacity / nb;
+        cap    = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
+        nslots = (size_t)nb * cap;
+        const uint32_t setStride[2] = { 10u, 8u };
+        elem[0] = dalloc<uint64_t>(nslots*setStride[0]);
+        elem[1] = dalloc<uint64_t>(nslots*setStride[1]);
+        counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
+        gictr = dalloc<uint32_t>(1); drops = dalloc<uint32_t>(4);
+        left  = dalloc<uint32_t>((size_t)5*capacity);
+        right = dalloc<uint32_t>((size_t)5*capacity);
+        survSlots = dalloc<uint32_t>(survCap); survCount = dalloc<uint32_t>(1);
+        dleaves = dalloc<uint32_t>((size_t)survCap*32);
+        dpp = dalloc<uint64_t>(4);
         #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
                                               cudaSharedmemCarveoutMaxShared)
         CARVE((fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>));
@@ -188,80 +177,94 @@ int main() {
         CARVE((fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>));
         CARVE(terminal_round);
         #undef CARVE
-        int b1=0,b2=0,b3=0,b4=0,bt=0;
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b1,
-            fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>, kWG, 0);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b2,
-            fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,10u>, kWG, 0);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b3,
-            fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,10u,8u>, kWG, 0);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b4,
-            fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>, kWG, 0);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bt, terminal_round, kWG, 0);
-        printf("occupancy: r1=%d r2=%d r3=%d r4=%d terminal=%d blocks/SM (%d warps/SM max)\n",
-               b1,b2,b3,b4,bt, b3*(int)(kWG/32));
+        return elem[0] && elem[1] && left && right && dpp;
     }
 
-    cudaEvent_t t0, t1; cudaEventCreate(&t0); cudaEventCreate(&t1);
-    for (int iter = 0; iter < iters; ++iter) {
-        CK(cudaMemset(drops, 0, 16)); CK(cudaMemset(survCount, 0, 4));
-        CK(cudaMemset(counts[0], 0, (size_t)nb*4));
-        cudaEventRecord(t0);
+    // Full solve: prePow -> pipeline -> recover -> CPU verify. Returns verified solutions.
+    std::vector<std::array<uint8_t,104>> solve(const uint8_t input[32], const uint8_t nonce[8],
+                                               uint32_t* survOut = nullptr, uint32_t* dropOut = nullptr) {
+        std::vector<std::array<uint8_t,104>> out;
+        uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};
+        bh3::compute_prepow(input, 32, nonce, extra0, pp);
+        cudaMemcpy(dpp, pp, 32, cudaMemcpyHostToDevice);
+        cudaMemset(drops, 0, 16); cudaMemset(survCount, 0, 4);
+        cudaMemset(counts[0], 0, (size_t)nb*4);
 
         entry_scatter<<<(elems+255)/256,256>>>(dpp, 0, elems, bb, cap, counts[0], elem[0], drops);
-
         int inSet = 0;
-        #define ROUND(R, INW,OUTW,LEAFW,MODE, LOUT,PADN,SIN,SOUT,SBUILD, INSTR,OUTSTR)      \
-            { const int outSet = inSet ^ 1;                                                 \
-              CK(cudaMemset(counts[outSet], 0, (size_t)nb*4)); CK(cudaMemset(gictr, 0, 4)); \
-              fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>       \
-                <<<nb << sm, kWG>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,           \
-                    counts[inSet], elem[inSet], counts[outSet], elem[outSet],               \
-                    left, right, gictr, drops, dpp);                                        \
-              inSet = outSet; }
+        #define ROUND(R, INW,OUTW,LEAFW,MODE, LOUT,PADN,SIN,SOUT,SBUILD, INSTR,OUTSTR)   \
+            { const int o = inSet ^ 1;                                                   \
+              cudaMemset(counts[o], 0, (size_t)nb*4); cudaMemset(gictr, 0, 4);           \
+              fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>    \
+                <<<nb << sm, kWG>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,        \
+                    counts[inSet], elem[inSet], counts[o], elem[o],                      \
+                    left, right, gictr, drops, dpp);                                     \
+              inSet = o; }
         ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
         ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,10u)
         ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u)
         ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
         #undef ROUND
-
         terminal_round<<<nb << sm, kWG>>>(bb, sm, cap, 4u*capacity, counts[inSet],
                                           elem[inSet], left, right, survSlots, survCount,
                                           survCap, drops);
-        cudaEventRecord(t1); CK(cudaEventSynchronize(t1));
-        CK(cudaGetLastError());
 
         uint32_t hs = 0, hd[4] = {0,0,0,0};
-        CK(cudaMemcpy(&hs, survCount, 4, cudaMemcpyDeviceToHost));
-        CK(cudaMemcpy(hd, drops, 16, cudaMemcpyDeviceToHost));
-        float ms = 0; cudaEventElapsedTime(&ms, t0, t1);
-        printf("solve %d : %6.1f ms  survivors=%u  drops{group=%u out=%u chain=%u}\n",
-               iter, ms, hs, hd[1], hd[2], hd[3]);
-        if (iter == iters - 1) {
-            bool ok = (hs == 3) && (hd[1] == 0) && (hd[2] == 0) && (hd[3] == 0);
-            // Full gate, matching the OpenCL path: recover each survivor's 32 indices,
-            // pack them, and byte-compare against the KAT goldens. Survivor COUNT alone
-            // would not catch a wrong tree order or a mis-packed index.
-            if (ok && hs > 0) {
-                uint32_t* dleaves = dalloc<uint32_t>((size_t)hs*32);
-                recover<<<(hs+63)/64, 64>>>(hs, survSlots, capacity, left, right, dleaves);
-                CK(cudaDeviceSynchronize());
-                std::vector<uint32_t> hl((size_t)hs*32);
-                CK(cudaMemcpy(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost));
-                int matched = 0;
-                for (uint32_t sidx = 0; sidx < hs; ++sidx) {
-                    uint8_t sol[104] = {0};
-                    bh3::pack_indices(&hl[(size_t)sidx*32], sol);
-                    for (int g = 0; g < 3; ++g)
-                        if (memcmp(sol, kat::golden[g], 104) == 0) { ++matched; break; }
-                }
-                printf("goldens  : %d of 3 recovered solutions match byte-for-byte\n", matched);
-                ok = ok && (matched == 3);
-            }
-            printf("%s: cuda pipeline -- 3 KAT survivors, drop-free, goldens byte-identical\n",
-                   ok ? "PASS" : "FAIL");
-            return ok ? 0 : 1;
+        cudaMemcpy(&hs, survCount, 4, cudaMemcpyDeviceToHost);
+        cudaMemcpy(hd, drops, 16, cudaMemcpyDeviceToHost);
+        if (hs > survCap) hs = survCap;
+        if (survOut) *survOut = hs;
+        if (dropOut) *dropOut = hd[1] | hd[2] | hd[3];
+        if (hs == 0) return out;
+
+        recover<<<(hs+63)/64, 64>>>(hs, survSlots, capacity, left, right, dleaves);
+        std::vector<uint32_t> hl((size_t)hs*32);
+        cudaMemcpy(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost);
+        for (uint32_t i = 0; i < hs; ++i) {
+            std::array<uint8_t,104> sol{};
+            bh3::pack_indices(&hl[(size_t)i*32], sol.data());
+            if (bh3::is_valid_solution(input, 32, nonce, sol.data())) out.push_back(sol);
         }
+        return out;
     }
-    return 1;
+};
+
+int main(int argc, char** argv) {
+    CudaSolver s;
+    if (!s.init()) { printf("FAIL: allocation\n"); return 1; }
+    printf("geometry : bb=%u sm=%u nb=%u cap=%u\n", s.bb, s.sm, s.nb, s.cap);
+    printf("footprint: %.2f GiB\n",
+           ((double)s.nslots*18*8 + (double)5*s.capacity*4*2)/(double)(1u<<30));
+
+    // --- correctness gate: the KAT input has exactly 3 known goldens ---
+    uint32_t surv=0, drop=0;
+    auto sols = s.solve(kat::input32, kat::nonce0, &surv, &drop);
+    int matched = 0;
+    for (auto& sol : sols)
+        for (int g = 0; g < 3; ++g)
+            if (memcmp(sol.data(), kat::golden[g], 104) == 0) { ++matched; break; }
+    const bool gate = (surv == 3) && (drop == 0) && (sols.size() == 3) && (matched == 3);
+    printf("KAT      : survivors=%u verified=%zu goldens=%d/3 drops=%u -> %s\n",
+           surv, sols.size(), matched, drop, gate ? "PASS" : "FAIL");
+    if (!gate) return 1;
+
+    // --- like-for-like timing: distinct nonces, end-to-end, verified solutions ---
+    const int n = (argc > 1) ? atoi(argv[1]) : 20;
+    uint8_t nonce[8]; memcpy(nonce, kat::nonce0, 8);
+    std::vector<double> ms; size_t verified = 0;
+    for (int i = 0; i < n; ++i) {
+        nonce[7] = (uint8_t)(kat::nonce0[7] + i + 1);
+        auto t0 = std::chrono::steady_clock::now();
+        auto v = s.solve(kat::input32, nonce);
+        cudaDeviceSynchronize();
+        ms.push_back(std::chrono::duration<double,std::milli>(
+                         std::chrono::steady_clock::now() - t0).count());
+        verified += v.size();
+    }
+    std::sort(ms.begin(), ms.end());
+    const double med = ms[ms.size()/2];
+    const double spersolve = (double)verified / n;
+    printf("end-to-end: %.1f ms median over %d distinct nonces (incl. recover + CPU verify)\n", med, n);
+    printf("solutions : %.2f verified/solve  =>  %.1f sol/s\n", spersolve, spersolve*1000.0/med);
+    return 0;
 }

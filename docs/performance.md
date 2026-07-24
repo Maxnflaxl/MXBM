@@ -65,9 +65,13 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | √-scaled bucket capacity → geometry (16, 1) | 42.7 | 40.4 | **47.0** | −2.3 | −5.4 % | [Capacity](#bucket-capacity), [Geometry](#row-bucket-geometry) | [Occupancy, again](#occupancy-again) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 47.5 sol/s** — 40.0 ms end-to-end (median of 5), 40.3 ms pipeline bench.
+**Shipping (OpenCL): 47.5 sol/s** — 40.0 ms end-to-end, 40.3 ms pipeline bench.
+**CUDA backend: 55.2 sol/s** — 35.3 ms end-to-end, same methodology
+([details](#the-cuda-backend)). Not yet wired into the miner.
 
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) = 35.8 ms — remaining gap **~1.12×**.
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) = 35.8 ms — **the CUDA backend is ~4 % past it**;
+the shipping OpenCL path is 1.12× short. Read the caveats before treating the target as
+beaten.
 
 Started at **1.8 sol/s** when the solver first worked → **26× faster**.
 
@@ -913,7 +917,7 @@ dropping a field something reads, and every record is already `ceil(bits/64)`.
 scatter for any Wagner implementation — and
 [bucket count, occupancy, atomics and reorder schemes](#what-didnt-work) are all measured
 irrelevant to that rate here. A CUDA backend is the plausible remainder; it is on the
-roadmap and [scoped below](#what-a-cuda-backend-would-and-would-not-buy).
+roadmap and [the CUDA backend](#the-cuda-backend).
 
 **3. The two figures are not counting the same thing.** This one deserves weight, because
 we just caught it in our own metric: this solver produces **2.29 survivors per solve** but
@@ -944,7 +948,73 @@ element below the `[7,7,6,5,1]` schedule.
 
 ---
 
-## What a CUDA backend would (and would not) buy
+## The CUDA backend
+
+Built, gated, and measured. It is **not wired into the miner** — it lives under `cuda/`,
+builds with `nvcc` directly, and the shipping solver is still OpenCL.
+
+| | end-to-end | verified/solve | sol/s |
+|---|---|---|---|
+| OpenCL (shipping) | 40.0 ms | 1.95 | 47.5 |
+| **CUDA backend** | **35.3 ms** | **1.95** | **55.2** |
+| lolMiner (user-measured, stock) | — | — | 53.0 |
+
+Same methodology on both sides: median over 20 **distinct nonces**, persistent buffers,
+including survivor readback, back-reference recovery and CPU verification, counting only
+solutions that pass `bh3::is_valid_solution`. The verified rate coming out at **1.95 on
+both** is a useful cross-check that the two implementations agree.
+
+**Why it is faster, and it is not the language.** The port initially measured 41.6 ms —
+*slower* than OpenCL — because it reproduced the OpenCL algorithm exactly. The gain came
+from one thing the profiler found: rounds 2 and 3 were stalling 12 % and 22 % of
+warp-active cycles on **MIO-queue throttle**, the load/store *instruction* queue backing
+up. That is an issue-rate limit, not a bandwidth one — and round 2 was simultaneously at
+only 38 % of DRAM peak, so **bytes were cheap and memory instructions were expensive**,
+the exact inverse of the direction every previous optimization here took.
+
+Padding the round-3 record 9 → 10 u64 (4 % more traffic) made every record stride an even
+number of u64, so `slot*stride*8` is 16 B aligned and 128-bit accesses became legal:
+
+```
+r2 emit  11 x ST.64 -> 4 x ST.128 + 3      r3 load  10 x LD.64 -> 4 x LD.128 + 3
+r3 emit  10 x ST.64 -> 4 x ST.128 + 2      r4 load   9 x LD.64 -> 4 x LD.128 + 2
+```
+
+41.5 → 38.4 → 35.3 ms. **The compiler does not do this for you** — it cannot prove the
+base pointer's alignment and emitted zero 128-bit accesses even after the padding made
+them legal. `cuobjdump -sass | grep LDG.E.128` is the check.
+
+**Caveats, because "target beaten" is a claim worth being careful with:**
+
+- The 53 sol/s figure is user-measured from lolMiner's own display. The
+  [counting question](#on-the-remaining-4-ms) is still open — this solver produces 2.29
+  survivors per solve but only 1.95 that verify, a 17 % gap between "solutions found" and
+  "solutions that are solutions". If lolMiner reports the former, our margin is larger; if
+  the latter, it is the ~4 % measured here.
+- MXBM counts **verified** solutions, the conservative definition of the two.
+- Accepted pool shares over a fixed interval remain the only comparison that does not
+  depend on either miner's counters. See `docs-internal/MINER_COMP.md`.
+- The backend is standalone. Wiring it into the stratum path, and keeping OpenCL as the
+  portable fallback, is remaining work.
+
+### What CUDA offered that OpenCL could not
+
+Ranked by what actually paid, now that it has been measured rather than guessed:
+
+1. **A profiler.** Nsight cannot profile OpenCL at all. Every optimization in this
+   document before this point came from ablation and arithmetic; the MIO-throttle finding
+   was invisible to that method and was worth 6 ms.
+2. **128-bit memory access** — 6 ms, above.
+3. **Real shared-memory limits.** Ada has 100 KB/SM; OpenCL only ever exposes 48 KB. This
+   is why [occupancy](#occupancy-again) was recorded as structurally blocked — the
+   arithmetic was against the wrong budget. In CUDA it is reachable (2 → 3 blocks/SM) and,
+   measured properly, **still does not help**.
+4. `cp.async`, `__match_any_sync` — untried; the profile suggests neither addresses the
+   current limiters.
+
+---
+
+## What a CUDA backend was predicted to buy (retained for calibration)
 
 Scoped because it is the largest remaining roadmap item, and the temptation is to assume it
 closes the gap. It probably does not.
@@ -983,6 +1053,14 @@ move the floor, by an unknown amount. A realistic range is **3–8 % (1.2–3.2 
 
 **Recommendation: settle the counting question first.** A CUDA rewrite is two weeks against
 a target that may be 11 % away or may be zero. The share-rate comparison costs an evening.
+
+> **How this estimate held up.** The range (3–8 %, landing 49–51 sol/s) was too
+> conservative: the measured result is **13 % over OpenCL, at 55.2 sol/s**. The ranking was
+> also wrong. Streaming stores were called the only item that could move achieved
+> bandwidth, and they were never needed; the win came from **instruction issue**, which
+> this section did not consider at all — because without a profiler there was no way to
+> see MIO-queue throttle. The two-week figure was human-calibrated and wrong too. What the
+> section got right is that occupancy and `cp.async` would not matter.
 
 ---
 

@@ -13,10 +13,13 @@ implementation.
 > and runs the full job → solve → difficulty → submit pipeline on an **OpenCL GPU
 > solver**. On an RTX 4070 Ti SUPER it does **47.5 sol/s** (40.0 ms per solve, end-to-end) — up
 > from 1.8 sol/s when the solver first found a share — verified against the BeamHash III
-> known-answer vectors. That is
-> roughly 1.12× off the fastest closed-source miner, and closing that gap is the
-> current focus — see [docs/performance.md](docs/performance.md) for the full
-> measured optimization history.
+> known-answer vectors.
+>
+> A **CUDA backend** measures **55.2 sol/s** on the same card and the same gate, which is
+> past the ~53 sol/s the fastest closed-source miner reaches at stock clocks. It is not
+> yet wired into the miner — the shipping solver is still OpenCL. See
+> [docs/performance.md](docs/performance.md) for the full measured history and the caveats
+> on that comparison.
 >
 > A CPU reference solver remains available (`--solver ref`) for validating the
 > pipeline. **Note the VRAM requirement is currently high** (~16 GB for a search

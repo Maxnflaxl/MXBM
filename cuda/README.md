@@ -4,9 +4,11 @@ Standalone for now: built with `nvcc` directly, not wired into CMake, so it cann
 destabilise the shipping OpenCL path while it is incomplete.
 
 ```sh
-# full pipeline, gated on the KAT exactly as the OpenCL path is
-nvcc -O3 -arch=sm_89 -diag-suppress 186 -I src -I kernels/cuda -I tests \
-     cuda/pipeline.cu -o cuda/pipeline && ./cuda/pipeline
+# full solver: KAT gate, then N distinct nonces end-to-end
+nvcc -O3 -arch=sm_89 -std=c++17 -diag-suppress 186 -I src -I kernels/cuda -I tests \
+     -I third_party/blake2b cuda/pipeline.cu src/beamhash/bh3_blake2b.cpp \
+     src/beamhash/bh3_verify.cpp third_party/blake2b/blake2b-ref.c -o cuda/pipeline
+./cuda/pipeline 20
 
 nvcc -O3 -arch=sm_89 -I src cuda/test_primitives.cu -o cuda/test_primitives && ./cuda/test_primitives
 nvcc -O3 -arch=sm_89       cuda/emit_shape_probe.cu -o cuda/emit_shape_probe && ./cuda/emit_shape_probe
@@ -38,7 +40,7 @@ echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modp
 | emit-shape probe | **done** — see `emit_shape_probe.cu` for results and caveats |
 | fused round kernel | **done** — `kernels/cuda/fused_round.cuh`, templated |
 | entry / terminal kernels | **done** — in `pipeline.cu` |
-| host layer (buffers, launches) | **done** — enough to run and gate a full solve |
+| host layer (persistent buffers, solve loop, verify) | **done** — mirrors `GpuSolver` |
 | **full KAT solve** | **PASS** — 3/3 survivors, drop-free, 41.5–43.1 ms |
 | recover + golden byte-compare | **PASS** — 3/3 goldens byte-identical |
 | profile under Nsight | `sudo ./cuda/profile.sh` → `cuda/ncu_report.txt` |
@@ -50,13 +52,12 @@ echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modp
 |---|---|---|
 | OpenCL (shipping) | 40.3 | 47.1 |
 | CUDA, first working port | 41.6 | 45.7 |
-| **CUDA + 128-bit record access** | **35.3–35.8** | **~53** |
+| **CUDA + 128-bit record access** | **35.3** | **55.2** |
 
-**Caveat before reading anything into that.** These are pipeline (kernel) times. OpenCL's
-end-to-end tracked its bench closely (40.0 vs 40.3), but the CUDA side has no host wrapper
-yet — no persistent-buffer solve loop, no per-solve readback path. Until that exists this
-is not a like-for-like comparison with either OpenCL's 40.0 or the reference miner's 53 sol/s, and
-should not be quoted as one.
+Now measured **like-for-like**: median over 20 distinct nonces, persistent buffers,
+including survivor readback, recovery and CPU verification, counting only solutions that
+pass `bh3::is_valid_solution`. Both paths report **1.95 verified solutions/solve**, which
+cross-checks that the two implementations agree.
 
 ## What the profiler actually bought
 
