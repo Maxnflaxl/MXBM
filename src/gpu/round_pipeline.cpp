@@ -60,9 +60,10 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     for (int i = 0; i < 2; ++i)
         p.work[i] = rt.alloc(CL_MEM_READ_WRITE, elemBytes);
 
-    // E3a leaf prefixes: ping-pong SoA, sized to the max prefix (9 leaves/elem at
-    // work[5]). ~9*capacity*4 = 1.25 GB each; the 6->2 work-buffer reclaim leaves
-    // ample room. leaves[r&1] holds work[r]'s prefix (mirrors the work ping-pong).
+    // E3a leaf prefixes: ping-pong AoS (leaf i of elem g at g*BH3_MAX_LEAVES+i),
+    // sized to the max prefix (9 leaves/elem at work[5]). ~9*capacity*4 = 1.25 GB
+    // each; the 6->2 work-buffer reclaim leaves ample room. leaves[r&1] holds
+    // work[r]'s prefix (mirrors the work ping-pong).
     const size_t leavesBytes = (size_t)9 * p.capacity * sizeof(uint32_t);
     for (int i = 0; i < 2; ++i)
         p.leaves[i] = rt.alloc(CL_MEM_READ_WRITE, leavesBytes);

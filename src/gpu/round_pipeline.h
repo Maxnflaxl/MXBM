@@ -13,7 +13,7 @@ struct PipelineBuffers {
     Mem work[2];                // ping-pong: round r reads work[r&1], writes work[(r+1)&1] (each
                                 // capacity*7*8 B). Only 2 of the logical 6 round-slots are ever live
                                 // at once, so 2 physical buffers suffice -- frees ~7.7 GB vs the old 6.
-    Mem leaves[2];              // E3a: ping-pong SoA leaf prefixes (leaf i at i*capacity+slot),
+    Mem leaves[2];              // E3a: ping-pong AoS leaf prefixes (leaf i at slot*BH3_MAX_LEAVES+i),
                                 // sized 9*capacity uint (max S). leaves[r&1] holds work[r]'s prefix.
     Mem left, right, lead;      // consolidated: uint[5*capacity] each; round k at (k-1)*capacity
     Mem bucket_count;           // uint[num_buckets]

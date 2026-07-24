@@ -13,7 +13,7 @@
 // consolidated work buffer.
 __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count,
                                __global ulong* work /* seed-work buffer, absolute */,
-                               __global uint* leaves_out /* SoA leaves for work[1]: leaf i at i*capacity+g */,
+                               __global uint* leaves_out /* AoS leaves for work[1]: leaf i at g*BH3_MAX_LEAVES+i */,
                                uint capacity,
                                __global ulong* pairs_out /* D3: (key,index) pairs for the sort, fused */) {
     uint g = (uint)get_global_id(0);
@@ -34,8 +34,8 @@ __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count
 }
 // r>=2: mix in place using the element's pre-order leaf prefix. E3a: the prefix
 // was materialized by the previous round's match (concat of the two parents'
-// prefixes), stored SoA as leaves_in[i*capacity + g], so this reads padNum leaves
-// directly (coalesced across g) instead of the old latency-bound back-ref DFS.
+// prefixes), stored AoS as leaves_in[g*BH3_MAX_LEAVES + i], so this reads padNum
+// leaves directly instead of the old latency-bound back-ref DFS.
 __kernel void round_mix(uint N, uint capacity, uint padNum, uint Lmix,
                         __global ulong* work,               // level's work buffer
                         __global const uint* leaves_in,     // AoS leaf prefix (g*9+i) for these elems
