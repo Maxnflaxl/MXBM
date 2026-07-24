@@ -4,8 +4,14 @@ Standalone for now: built with `nvcc` directly, not wired into CMake, so it cann
 destabilise the shipping OpenCL path while it is incomplete.
 
 ```sh
+# full pipeline, gated on the KAT exactly as the OpenCL path is
+nvcc -O3 -arch=sm_89 -diag-suppress 186 -I src -I kernels/cuda -I tests \
+     cuda/pipeline.cu -o cuda/pipeline && ./cuda/pipeline
+
 nvcc -O3 -arch=sm_89 -I src cuda/test_primitives.cu -o cuda/test_primitives && ./cuda/test_primitives
 nvcc -O3 -arch=sm_89       cuda/emit_shape_probe.cu -o cuda/emit_shape_probe && ./cuda/emit_shape_probe
+
+sudo ./cuda/profile.sh          # -> cuda/ncu_report.txt
 ```
 
 ## Why CUDA at all
@@ -33,9 +39,9 @@ echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modp
 | fused round kernel | **done** — `kernels/cuda/fused_round.cuh`, templated |
 | entry / terminal kernels | **done** — in `pipeline.cu` |
 | host layer (buffers, launches) | **done** — enough to run and gate a full solve |
-| **full KAT solve** | **PASS** — 3/3 survivors, drop-free, 41.6–42.4 ms |
-| recover + golden byte-compare | not started (survivor count is the gate for now) |
-| profile under Nsight | blocked on counter permission (reboot) |
+| **full KAT solve** | **PASS** — 3/3 survivors, drop-free, 41.5–43.1 ms |
+| recover + golden byte-compare | **PASS** — 3/3 goldens byte-identical |
+| profile under Nsight | `sudo ./cuda/profile.sh` → `cuda/ncu_report.txt` |
 | wire into CMake behind a flag | not started |
 
 ## Current standing vs OpenCL
@@ -78,4 +84,7 @@ Corollary: **do not write CUDA copies of these primitives.** Include the header.
 ## Gate for the port
 
 Same as the OpenCL path, and non-negotiable: 3 KAT goldens byte-identical,
-`bucketDrops == 0`, `pairDrops == 0`, and survivors == 3 on the KAT input.
+`bucketDrops == 0`, `pairDrops == 0`, and survivors == 3 on the KAT input. **All four are
+met.** Survivor count alone is not enough — it would not catch a wrong DFS order in
+`recover` or a mis-packed index, both of which produce a valid-looking permutation that
+fails verification, so the golden byte-compare is the real gate.

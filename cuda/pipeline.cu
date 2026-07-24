@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
+#include <cstdlib>
+#include <cstring>
 using namespace mxbm;
 using namespace mxbm::cuda;
 
@@ -104,6 +106,33 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
     }
 }
 
+// ---- recover: walk a survivor's back-ref ancestry to its 32 leaf indices -----------
+// Explicit-stack pre-order DFS from level 5 down to level 1, whose left/right entries ARE
+// leaf indices. Right is pushed first so left pops first, which is what makes the leaves
+// come out in tree order -- get that backwards and the indices are a valid-looking
+// permutation that fails verification.
+__global__ void recover(uint32_t nSurv, const uint32_t* __restrict__ surv_slots,
+                        uint32_t capacity, const uint32_t* __restrict__ all_left,
+                        const uint32_t* __restrict__ all_right, uint32_t* __restrict__ out) {
+    const uint32_t i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= nSurv) return;
+    uint32_t got = 0, lvl[8], slt[8]; int sp = 0;
+    lvl[0] = 5u; slt[0] = surv_slots[i]; sp = 1;
+    while (sp > 0 && got < 32u) {
+        --sp;
+        const uint32_t lv = lvl[sp], sl = slt[sp];
+        const uint32_t off = (lv - 1u) * capacity;
+        const uint32_t L = all_left[off + sl], R = all_right[off + sl];
+        if (lv == 1u) {
+            out[(size_t)i*32u + got] = L; ++got;
+            if (got < 32u) { out[(size_t)i*32u + got] = R; ++got; }
+        } else {
+            lvl[sp] = lv - 1u; slt[sp] = R; ++sp;
+            lvl[sp] = lv - 1u; slt[sp] = L; ++sp;
+        }
+    }
+}
+
 // ---- host driver -------------------------------------------------------------------
 template<class T> static T* dalloc(size_t n) { void* p=nullptr; cudaMalloc(&p, n*sizeof(T)); return (T*)p; }
 
@@ -131,8 +160,11 @@ int main() {
     if (!elem[0] || !elem[1] || !dpp || !left) { printf("FAIL: allocation\n"); return 1; }
     CK(cudaMemcpy(dpp, kat::prePow, 32, cudaMemcpyHostToDevice));
 
+    // MXBM_CUDA_ITERS=1 for profiling: Nsight replays every launch several times to
+    // collect counters, so three solves is three times the wait for no extra signal.
+    const int iters = getenv("MXBM_CUDA_ITERS") ? atoi(getenv("MXBM_CUDA_ITERS")) : 3;
     cudaEvent_t t0, t1; cudaEventCreate(&t0); cudaEventCreate(&t1);
-    for (int iter = 0; iter < 3; ++iter) {
+    for (int iter = 0; iter < iters; ++iter) {
         CK(cudaMemset(drops, 0, 16)); CK(cudaMemset(survCount, 0, 4));
         CK(cudaMemset(counts[0], 0, (size_t)nb*4));
         cudaEventRecord(t0);
@@ -166,9 +198,29 @@ int main() {
         float ms = 0; cudaEventElapsedTime(&ms, t0, t1);
         printf("solve %d : %6.1f ms  survivors=%u  drops{group=%u out=%u chain=%u}\n",
                iter, ms, hs, hd[1], hd[2], hd[3]);
-        if (iter == 2) {
-            const bool ok = (hs == 3) && (hd[1] == 0) && (hd[2] == 0) && (hd[3] == 0);
-            printf("%s: cuda pipeline finds the 3 KAT survivors, drop-free\n", ok ? "PASS" : "FAIL");
+        if (iter == iters - 1) {
+            bool ok = (hs == 3) && (hd[1] == 0) && (hd[2] == 0) && (hd[3] == 0);
+            // Full gate, matching the OpenCL path: recover each survivor's 32 indices,
+            // pack them, and byte-compare against the KAT goldens. Survivor COUNT alone
+            // would not catch a wrong tree order or a mis-packed index.
+            if (ok && hs > 0) {
+                uint32_t* dleaves = dalloc<uint32_t>((size_t)hs*32);
+                recover<<<(hs+63)/64, 64>>>(hs, survSlots, capacity, left, right, dleaves);
+                CK(cudaDeviceSynchronize());
+                std::vector<uint32_t> hl((size_t)hs*32);
+                CK(cudaMemcpy(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost));
+                int matched = 0;
+                for (uint32_t sidx = 0; sidx < hs; ++sidx) {
+                    uint8_t sol[104] = {0};
+                    bh3::pack_indices(&hl[(size_t)sidx*32], sol);
+                    for (int g = 0; g < 3; ++g)
+                        if (memcmp(sol, kat::golden[g], 104) == 0) { ++matched; break; }
+                }
+                printf("goldens  : %d of 3 recovered solutions match byte-for-byte\n", matched);
+                ok = ok && (matched == 3);
+            }
+            printf("%s: cuda pipeline -- 3 KAT survivors, drop-free, goldens byte-identical\n",
+                   ok ? "PASS" : "FAIL");
             return ok ? 0 : 1;
         }
     }
