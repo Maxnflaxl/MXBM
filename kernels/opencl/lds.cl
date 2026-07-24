@@ -281,6 +281,53 @@ __kernel void gather_combine_bench(uint M, uint Lout, uint ew,
     for (uint w = 0; w < ew; ++w) out[(size_t)g*ew + w] = c[w];
 }
 
+// ===========================================================================
+// ROW-BUCKET STEP A: fat-vs-thin bucket layout. The fused round kernel must
+// materialize each child's leaf prefix (concat of its two parents' prefixes) to
+// feed apply_mix and the NEXT round's combine. Two layouts:
+//   FAT  = leaves travel INSIDE the bucket element -> parents' leaves arrive in
+//          the same coalesced bucket load (cheap read) but the emit write is
+//          wider by ceil(sleaves/2) u64.
+//   THIN = leaves live in a gi-indexed global array read by arbitrary parent
+//          index (the scattered 48 ms/solve we measured in match today) but the
+//          emit stays narrow.
+// gather_leaves_bench races the READ side (coalesced vs scattered leaf gather at
+// the real per-round leaf widths); bucket_emit_bench measures the WRITE side
+// (emit cost vs element width, so fat_ew - thin_ew is the fat penalty). Netting
+// the two per round decides the bucket layout for STEP B (round_fused_lds).
+// ===========================================================================
+
+// READ side: build a child leaf prefix = concat(leftParent[sIn], rightParent[sIn])
+// capped at sOut, reading parents' leaves by index. Feed a SCATTERED index list
+// (thin, gi-indexed) vs a COALESCED one (fat, bucket-local) to race the two.
+__kernel void gather_leaves_bench(uint M, uint sIn, uint sOut,
+                                  __global const uint* leaves,   // [N*sIn]
+                                  __global const uint* idxL, __global const uint* idxR,
+                                  __global uint* out) {          // [M*sOut]
+    uint g = get_global_id(0);
+    if (g >= M) return;
+    uint l = idxL[g], r = idxR[g];
+    uint tree[9];
+    for (uint i = 0; i < sIn; ++i)                 tree[i]      = leaves[(size_t)l*sIn + i];
+    for (uint i = 0; i < sIn && sIn + i < sOut; ++i) tree[sIn + i] = leaves[(size_t)r*sIn + i];
+    for (uint i = 0; i < sOut; ++i) out[(size_t)g*sOut + i] = tree[i];
+}
+
+// WRITE side: pure bucketed-emit cost vs element width `ew` (u64), payload
+// synthesized on the fly so ew is unbounded by any source buffer (fat elements
+// exceed 7 u64). Same atomic-bucket scatter shape as the real emit.
+__kernel void bucket_emit_bench(uint N, uint bucket_bits, uint bucket_cap, uint ew,
+                                __global uint* counts, __global ulong* bwork, __global uint* drops) {
+    uint g = get_global_id(0);
+    if (g >= N) return;
+    uint key = (uint)(((ulong)g * 2654435761ul) & 0xFFFFFFul);   // cheap uniform key
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos >= bucket_cap) { atomic_inc(&drops[0]); return; }
+    size_t d = (size_t)b*bucket_cap + pos;
+    for (uint w = 0; w < ew; ++w) bwork[d*ew + w] = (ulong)(g + w);
+}
+
 // Measurement: scatter with a variable element width `ew` (u64 words, stride ew)
 // to characterize the emit-to-bucket cost vs element size -- i.e. how much
 // compaction to the significant-word schedule [7,7,6,5,1] actually saves.

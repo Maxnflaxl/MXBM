@@ -421,6 +421,79 @@ static void test_gather_locality(Runtime& rt, cl_program prog) {
     check(true,"gather locality characterized");
 }
 
+// ROW-BUCKET STEP A: fat-vs-thin bucket layout decision. A fused round kernel must
+// materialize each child's leaf prefix. FAT carries leaves inside the bucket
+// element (coalesced leaf read, wider emit); THIN keeps leaves in a gi-indexed
+// global array (scattered read = the 48 ms/solve match leaf gather, narrow emit).
+// Net per level = (scattered_leafread - coalesced_leafread) [fat's READ win]
+//               - (fat_emit - thin_emit)                     [fat's WRITE penalty].
+// Positive net => fat wins. Levels 2..5 carry leaves of width sleaves_for(L).
+static void test_leaf_locality(Runtime& rt, cl_program prog) {
+    section("row-bucket STEP A: fat vs thin bucket (leaf read locality vs emit width)");
+    const uint32_t N=1u<<25, M=1u<<25;
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m; } return b; };
+
+    // Index lists shared across levels: scattered (random) vs coalesced (adjacent).
+    std::vector<uint32_t> sL(M), sR(M), cL(M), cR(M);
+    uint64_t s=0xBADF00D;
+    for (uint32_t g=0; g<M; ++g){ sL[g]=(uint32_t)(sm(s)%N); sR[g]=(uint32_t)(sm(s)%N); cL[g]=(2u*g)%N; cR[g]=(2u*g+1u)%N; }
+    Mem mIsL=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,sL.data());
+    Mem mIsR=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,sR.data());
+    Mem mIcL=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,cL.data());
+    Mem mIcR=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,cR.data());
+    // Leaf source (uint), max stride 9; and a wide bucket sink for emit (up to 12 u64).
+    std::vector<uint32_t> lf((size_t)N*9); for(size_t i=0;i<lf.size();++i) lf[i]=(uint32_t)i;
+    Mem mLf=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*9*4,lf.data());
+    Mem mLOut=rt.alloc(CL_MEM_READ_WRITE,(size_t)M*9*4);
+    // Sink kept under the ~4 GB single-alloc limit: 11-word max fat elem, lean cap
+    // (uniform keys -> max bucket occupancy ~avg+5sigma, well under this).
+    const uint32_t bb=14, numBuckets=1u<<bb, bucketCap=(N>>bb)+(N>>(bb+4))+256;
+    Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
+    Mem mBW=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*11*8);   // 11-word max fat elem
+    Mem mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+
+    auto readSide=[&](uint32_t sIn, uint32_t sOut, cl_mem iL, cl_mem iR){ return best([&]{
+        Kernel k=rt.kernel(prog,"gather_leaves_bench"); cl_mem lfp=mLf.get(), o=mLOut.get();
+        rt.set_arg(k.get(),0,M); rt.set_arg(k.get(),1,sIn); rt.set_arg(k.get(),2,sOut);
+        rt.set_arg(k.get(),3,sizeof(cl_mem),&lfp);
+        rt.set_arg(k.get(),4,sizeof(cl_mem),&iL); rt.set_arg(k.get(),5,sizeof(cl_mem),&iR);
+        rt.set_arg(k.get(),6,sizeof(cl_mem),&o);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),M);
+        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); }); };
+    auto emit=[&](uint32_t ew){ return best([&]{
+        rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4);
+        Kernel k=rt.kernel(prog,"bucket_emit_bench"); cl_mem c=mC.get(),bw=mBW.get(),d=mD.get();
+        rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,bb); rt.set_arg(k.get(),2,bucketCap); rt.set_arg(k.get(),3,ew);
+        rt.set_arg(k.get(),4,sizeof(cl_mem),&c); rt.set_arg(k.get(),5,sizeof(cl_mem),&bw); rt.set_arg(k.get(),6,sizeof(cl_mem),&d);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); }); };
+
+    // Per level L (=2..5, output of round L-1). sleaves=[_,2,4,8,9], work width
+    // = outwords_for(L-1) = [7,7,6,5]. control (gi+lead) = 1 u64.
+    const uint32_t levels[4]={2,3,4,5};
+    const uint32_t sleaves[6]={0,1,2,4,8,9};   // sleaves_for(1..5)
+    const uint32_t owords[6] ={0,7,7,6,5,1};   // outwords_for(1..5)
+    double totRead=0, totWrite=0;
+    for (int li=0; li<4; ++li) {
+        uint32_t L=levels[li];
+        uint32_t sIn=sleaves[L];
+        uint32_t sOut = (L<5) ? sleaves[L+1] : sleaves[L];   // L=5: self-read (no child build)
+        double scat=readSide(sIn,sOut,mIsL.get(),mIsR.get());
+        double coal=readSide(sIn,sOut,mIcL.get(),mIcR.get());
+        uint32_t control=1, leafU64=(sIn+1)/2;               // ceil(sIn/2)
+        uint32_t thin_ew=owords[L-1]+control, fat_ew=thin_ew+leafU64;
+        double eThin=emit(thin_ew), eFat=emit(fat_ew);
+        double readWin=scat-coal, writePen=eFat-eThin, net=readWin-writePen;
+        std::printf("  L%u (leaves=%u u32): read scat=%.2f coal=%.2f (win %.2f) | emit thin=%.2f(ew%u) fat=%.2f(ew%u) (pen %.2f) | NET %+.2f ms\n",
+            L, sIn, scat, coal, readWin, eThin, thin_ew, eFat, fat_ew, writePen, net);
+        totRead+=readWin; totWrite+=writePen;
+    }
+    std::printf("  --> per-solve: fat READ win=%.1f ms | fat WRITE penalty=%.1f ms | NET fat %+.1f ms  => %s bucket\n",
+        totRead, totWrite, totRead-totWrite, (totRead-totWrite>0)?"FAT":"THIN");
+    check(true,"fat-vs-thin bucket layout characterized");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
@@ -436,6 +509,7 @@ int main() {
     test_scatter_cost(rt, prog.get());
     test_compaction_arch(rt, prog.get());
     test_gather_locality(rt, prog.get());
+    test_leaf_locality(rt, prog.get());
 
     // Compaction prototype: how much does shrinking the element to its
     // significant-word schedule actually save on the dominant emit-to-bucket cost?
