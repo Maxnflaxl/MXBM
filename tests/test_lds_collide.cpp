@@ -374,6 +374,53 @@ static void test_compaction_arch(Runtime& rt, cl_program prog) {
     check(true,"compaction architecture characterized");
 }
 
+// ROW-BUCKET crux: does a COALESCED (bucket-local) parent gather beat the sort
+// path's SCATTERED-by-slot gather, and by how much? M combines, each reads 2
+// parents by index + bh3_combine. Scattered index list = random slots (today's
+// match); coalesced = adjacent slots (bucket-local pairs). The delta is the
+// ceiling of the whole rewrite. Swept over element width [7,6,5] (compaction).
+static void test_gather_locality(Runtime& rt, cl_program prog) {
+    section("row-bucket crux: scattered vs coalesced parent gather @ M=2^25");
+    const uint32_t N=1u<<25, M=1u<<25;
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m; } return b; };
+
+    // Index lists: scattered (random) and coalesced (adjacent pairs 2g,2g+1).
+    std::vector<uint32_t> sL(M), sR(M), cL(M), cR(M);
+    uint64_t s=0xC0FFEE;
+    for (uint32_t g=0; g<M; ++g) {
+        sL[g]=(uint32_t)(sm(s)%N); sR[g]=(uint32_t)(sm(s)%N);
+        cL[g]=(2u*g)%N; cR[g]=(2u*g+1u)%N;
+    }
+    Mem mIsL=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,sL.data());
+    Mem mIsR=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,sR.data());
+    Mem mIcL=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,cL.data());
+    Mem mIcR=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)M*4,cR.data());
+    auto w=gen_elem(N,24,0x9);
+    Mem mP=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,w.data());
+    Mem mOut=rt.alloc(CL_MEM_READ_WRITE,(size_t)M*7*8);
+
+    const uint32_t Lout[3]={424,376,288};   // r1/r3/r4-ish, widths 7/6/5
+    const uint32_t ews[3]={7,6,5};
+    for (int wi=0; wi<3; ++wi) {
+        uint32_t ew=ews[wi], lo=Lout[wi];
+        auto run=[&](cl_mem iL, cl_mem iR){ return best([&]{
+            Kernel k=rt.kernel(prog,"gather_combine_bench");
+            cl_mem p=mP.get(), o=mOut.get();
+            rt.set_arg(k.get(),0,M); rt.set_arg(k.get(),1,lo); rt.set_arg(k.get(),2,ew);
+            rt.set_arg(k.get(),3,sizeof(cl_mem),&p);
+            rt.set_arg(k.get(),4,sizeof(cl_mem),&iL); rt.set_arg(k.get(),5,sizeof(cl_mem),&iR);
+            rt.set_arg(k.get(),6,sizeof(cl_mem),&o);
+            auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),M);
+            return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); }); };
+        double scat=run(mIsL.get(),mIsR.get());
+        double coal=run(mIcL.get(),mIcR.get());
+        std::printf("  ew=%u (%uB): scattered gather=%.2f ms | coalesced=%.2f ms  (%.0f%% faster, %.1fx)\n",
+            ew, ew*8, scat, coal, 100.0*(scat-coal)/scat, scat/coal);
+    }
+    check(true,"gather locality characterized");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
@@ -388,6 +435,7 @@ int main() {
     test_combine(rt, prog.get());
     test_scatter_cost(rt, prog.get());
     test_compaction_arch(rt, prog.get());
+    test_gather_locality(rt, prog.get());
 
     // Compaction prototype: how much does shrinking the element to its
     // significant-word schedule actually save on the dominant emit-to-bucket cost?

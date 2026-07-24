@@ -258,6 +258,29 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
     }
 }
 
+// ===========================================================================
+// ROW-BUCKET REWRITE, crux measurement: parent-gather LOCALITY. The sort path's
+// match cost is dominated by reading 2 parents (7 u64) by ARBITRARY slot -- a
+// scattered gather. A bucket-local layout would instead read parents from
+// bucket-contiguous storage (coalesced). gather_combine_bench does M combines,
+// each reading 2 parents by index + bh3_combine; feeding it a SCATTERED vs a
+// COALESCED index list quantifies the ceiling of the whole rewrite. `ew` = element
+// width so we can also see the win at the compacted widths [7,6,5].
+// ===========================================================================
+__kernel void gather_combine_bench(uint M, uint Lout, uint ew,
+                                   __global const ulong* parents,   // [N*ew]
+                                   __global const uint* idxL, __global const uint* idxR,
+                                   __global ulong* out) {           // [M*ew]
+    uint g = get_global_id(0);
+    if (g >= M) return;
+    uint l = idxL[g], r = idxR[g];
+    ulong a[7], b[7], c[7];
+    for (int w = 0; w < 7; ++w) { a[w] = 0ul; b[w] = 0ul; }
+    for (uint w = 0; w < ew; ++w) { a[w] = parents[(size_t)l*ew + w]; b[w] = parents[(size_t)r*ew + w]; }
+    bh3_combine(a, b, Lout, c);
+    for (uint w = 0; w < ew; ++w) out[(size_t)g*ew + w] = c[w];
+}
+
 // Measurement: scatter with a variable element width `ew` (u64 words, stride ew)
 // to characterize the emit-to-bucket cost vs element size -- i.e. how much
 // compaction to the significant-word schedule [7,7,6,5,1] actually saves.
