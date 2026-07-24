@@ -505,18 +505,13 @@ __kernel void NAME(                                                             
         if (pos < LDS_FCAP) {                                                         \
             if ((LMODE) == LMODE_SEED) {                                              \
                 /* Round-1 elements are SEEDS: the record is just (index,key) and the \
-                   56 B work state is RE-DERIVED here. Recompute measured 2.5 ms vs   \
-                   18.2 ms to store and re-read the full record (test_seed_rederivation). \
-                   Only the ~1/8 of the bucket this sub-mask owns is expanded, so each \
-                   element is derived exactly once across the 8 passes. */            \
-                uint idx = (uint)(rec0 >> 32);                                        \
-                ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                     \
-                ulong se[7]; bh3_seed_element(pp, idx, se);                           \
-                uint t1[1] = { idx };                                                 \
-                se[0] = bh3_apply_mix(se, t1, 1u, 448u);                              \
-                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = se[w];        \
-                lgi[pos] = idx; llead[pos] = idx; lkey[pos] = key;                    \
-                lleaf[pos*(LEAFW) + 0] = idx;                                         \
+                   56 B work state is RE-DERIVED. Recompute measured 2.5 ms vs 18.2 ms \
+                   to store and re-read the full record (test_seed_rederivation).     \
+                   Only the INDEX is captured here -- the expensive derivation happens \
+                   in the DEFERRED EXPAND below, where every lane is active. This      \
+                   staging loop runs 8 sub-mask passes at ~4/32 lanes; the expand loop \
+                   runs once at 32/32. See "non-divergent expand" in docs/performance.md. */ \
+                lgi[pos] = (uint)(rec0 >> 32); lkey[pos] = key;                       \
             } else {                                                                  \
                 for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
                 ulong meta = in_belem[d + (INW)];                                     \
@@ -530,6 +525,19 @@ __kernel void NAME(                                                             
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
     uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;                               \
     for (uint pos = lId; pos < total; pos += LDS_WG) {                               \
+        if ((LMODE) == LMODE_SEED) {                                                  \
+            /* DEFERRED EXPAND -- the whole point of splitting the stage. Every lane  \
+               here is active (total ~= 256 == LDS_WG, one iteration), whereas the    \
+               staging loop above is sub-mask filtered to ~1/8 of its lanes. Same     \
+               number of seeds derived, 8x the SIMD utilization. */                   \
+            uint idx = lgi[pos];                                                      \
+            ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
+            ulong se[7]; bh3_seed_element(pp, idx, se);                               \
+            uint t1[1] = { idx };                                                     \
+            se[0] = bh3_apply_mix(se, t1, 1u, 448u);                                  \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = se[w];            \
+            llead[pos] = idx; lleaf[pos*(LEAFW) + 0] = idx;                           \
+        }                                                                             \
         uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);                   \
         lchain[pos] = atomic_xchg(&tab[hk], pos);                                     \
     }                                                                                \
