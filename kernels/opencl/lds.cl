@@ -310,6 +310,40 @@ SCATTER_PROBE(scatter_probe_hi, 4u)        // ~tiny LDS -> max occupancy
 SCATTER_PROBE(scatter_probe_mid, 6144u)    // 24 KB -> ~2 wg/SM
 SCATTER_PROBE(scatter_probe_lo, 10240u)    // 40 KB -> ~1 wg/SM (fused-kernel occupancy)
 
+// RUN-LENGTH SWEEP: the coalescing benefit curve for a key-random fat scatter.
+// Any local-reorder / two-level / magazine scheme's ONLY payoff is making writes to
+// the same destination CONTIGUOUS. This measures that payoff directly, without
+// building the machinery: elements are written in runs of `runLen` consecutive slots
+// within one bucket, while consecutive runs land in different (far-apart) buckets.
+//   runLen=1  == today's per-lane scatter (each lane a different bucket)
+//   runLen=32 == a fully coalesced burst per warp
+// Deterministic slot mapping (no atomics, no collisions): run r -> bucket r%nb,
+// wave r/nb -> slot base wave*runLen. Read side is sequential so this isolates writes.
+__kernel void scatter_runs(uint N, uint ew, uint runLen, uint num_buckets, uint bucket_cap,
+                           __global const ulong* src, __global ulong* dst) {
+    uint g = get_global_id(0); if (g >= N) return;
+    uint runId = g / runLen;
+    uint rank  = g - runId * runLen;
+    uint b     = runId % num_buckets;
+    uint wave  = runId / num_buckets;
+    size_t d = (size_t)b * bucket_cap + (size_t)wave * runLen + rank;
+    for (uint w = 0; w < ew; ++w) dst[d*ew + w] = src[(size_t)g*ew + w];
+}
+
+// ATOMIC-COST ISOLATION: same TRUE-RANDOM bucket destination as the real emit, but
+// the slot comes from a deterministic formula instead of atomic_inc on a per-bucket
+// counter. (Slots may collide -- irrelevant, this measures write bandwidth only.)
+// Compared against scatter_probe_hi (same randomness, WITH the atomic) this isolates
+// exactly what the 16384 contended per-bucket counters cost us.
+__kernel void scatter_noatomic(uint N, uint bucket_bits, uint bucket_cap, uint ew,
+                               __global const ulong* src, __global const uint* keys,
+                               __global ulong* buckets) {
+    uint g = get_global_id(0); if (g >= N) return;
+    uint b = keys[g] >> (24u - bucket_bits);
+    size_t d = (size_t)b*bucket_cap + (g % bucket_cap);
+    for (uint w = 0; w < ew; ++w) buckets[d*ew + w] = src[(size_t)g*ew + w];
+}
+
 // Coalesced copy: peak-ish sequential write reference (each thread writes ew
 // contiguous words; threads tile the array -> fully coalesced overall).
 __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong* dst) {

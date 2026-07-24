@@ -666,6 +666,18 @@ static void test_scatter_occupancy(Runtime& rt, cl_program prog) {
         double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
         rt.read(mDrops.get(),4,&md); return m; });
         std::printf("  %-24s: %.2f ms  (%.0f GB/s)  drops=%u\n", name, t, GB/t*1000.0, md); return t; };
+    // Isolate the per-bucket atomic: same true-random destinations, no atomic_inc.
+    {
+        double t=best([&]{ Kernel k=rt.kernel(prog,"scatter_noatomic");
+            cl_mem sr=mSrc.get(),ky=mKeys.get(),bk=mBuckets.get();
+            rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,bb); rt.set_arg(k.get(),2,cap); rt.set_arg(k.get(),3,ew);
+            rt.set_arg(k.get(),4,sizeof(cl_mem),&sr); rt.set_arg(k.get(),5,sizeof(cl_mem),&ky);
+            rt.set_arg(k.get(),6,sizeof(cl_mem),&bk);
+            auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+            return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
+        std::printf("  %-24s: %.2f ms  (%.0f GB/s)   <- random dest, NO per-bucket atomic\n",
+                    "scatter_noatomic", t, GB/t*1000.0);
+    }
     double thi =runScatter("scatter_probe_hi");
     double tmid=runScatter("scatter_probe_mid");
     double tlo =runScatter("scatter_probe_lo");
@@ -690,6 +702,63 @@ static void test_scatter_occupancy(Runtime& rt, cl_program prog) {
         std::printf("    bb=%2u (%7u buckets): %.2f ms  (%.0f GB/s)  drops=%u\n", bbv, nbv, t, GB/t*1000.0, md);
     }
     check(true,"scatter occupancy characterized");
+}
+
+// COALESCING BENEFIT CURVE -- the decisive test for every reorder scheme (two-level
+// bucketing, magazine, local-reorder-then-flush). Their ONLY effect is making
+// same-destination writes contiguous, so measure that payoff directly instead of
+// building the machinery: runLen=1 is today's per-lane scatter, runLen=32 a fully
+// coalesced warp burst. Swept at the real per-round emit widths (r1/r2=7, r3=6,
+// r4=5 u64), which also answers whether a late-round ("thinner element") hybrid
+// could flip the math.
+static void test_coalescing_curve(Runtime& rt, cl_program prog) {
+    section("coalescing benefit curve: scatter throughput vs run length @ 2^25");
+    const uint32_t N=1u<<25, nb=1u<<14, cap=(N/nb)+64;
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m;} return b; };
+    std::vector<uint64_t> src((size_t)N*7); uint64_t s=0xC0A1E5CEULL;
+    for(size_t i=0;i<src.size();++i) src[i]=sm(s);
+    Mem mSrc=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,src.size()*8,src.data());
+    Mem mDst=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*cap*7*8);
+    std::vector<uint32_t> keys(N); for(uint32_t i=0;i<N;++i) keys[i]=(uint32_t)(sm(s)&0xFFFFFFu);
+    Mem mKeys=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,keys.size()*4,keys.data());
+    Mem mCnt=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*4);
+    Mem mDr=rt.alloc(CL_MEM_READ_WRITE,4*4);
+    const uint32_t RUNS[6]={1,2,4,8,16,32};
+    for (uint32_t ew : {7u,6u,5u}) {
+        const double GB=(double)(2.0*(double)N*ew*8)/1e9;
+        double t1=0, t32=0;
+        std::printf("  ew=%u (%2uB):", ew, ew*8);
+        for (int i=0;i<6;++i) { uint32_t R=RUNS[i];
+            double t=best([&]{ Kernel k=rt.kernel(prog,"scatter_runs");
+                cl_mem a=mSrc.get(), b2=mDst.get();
+                rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,ew); rt.set_arg(k.get(),2,R);
+                rt.set_arg(k.get(),3,nb); rt.set_arg(k.get(),4,cap);
+                rt.set_arg(k.get(),5,sizeof(cl_mem),&a); rt.set_arg(k.get(),6,sizeof(cl_mem),&b2);
+                auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+                return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
+            if (R==1) t1=t; if (R==32) t32=t;
+            std::printf("  R%u=%.1f(%.0f)", R, t, GB/t*1000.0);
+        }
+        std::printf("   [ms(GB/s)]\n");
+        // TRUE-RANDOM destination baseline at this width (what the real emit does),
+        // vs R=32 (perfect reordering). Two-level bucketing needs TWO passes, so it
+        // can only pay if this ratio exceeds 2.0x.
+        uint32_t md=0; double trand=best([&]{
+            rt.fill_u32(mCnt.get(),0u,nb);
+            Kernel k=rt.kernel(prog,"scatter_probe_hi"); cl_mem sr=mSrc.get(),ky=mKeys.get(),c=mCnt.get(),bk=mDst.get(),dr=mDr.get();
+            rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,14u); rt.set_arg(k.get(),2,cap); rt.set_arg(k.get(),3,ew);
+            rt.set_arg(k.get(),4,sizeof(cl_mem),&sr); rt.set_arg(k.get(),5,sizeof(cl_mem),&ky);
+            rt.set_arg(k.get(),6,sizeof(cl_mem),&c); rt.set_arg(k.get(),7,sizeof(cl_mem),&bk); rt.set_arg(k.get(),8,sizeof(cl_mem),&dr);
+            auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+            double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+            rt.read(mDr.get(),4,&md); return m; });
+        std::printf("    -> REAL(random dest)=%.1f ms (%.0f GB/s) | perfect(R=32)=%.1f ms (%.0f GB/s)"
+                    " | max reorder gain %.2fx  %s 2.0x two-pass breakeven\n",
+                    trand, GB/trand*1000.0, t32, GB/t32*1000.0, trand/t32,
+                    (trand/t32 > 2.0) ? "CLEARS" : "below");
+    }
+    check(true,"coalescing curve characterized");
 }
 
 // Pins the algebra the round-3/round-4 compact leftContrib rests on (CPU-only, no
@@ -745,6 +814,7 @@ int main() {
     test_gather_locality(rt, prog.get());
     test_leaf_locality(rt, prog.get());
     test_scatter_occupancy(rt, prog.get());
+    test_coalescing_curve(rt, prog.get());
 
     // STEP B: fused round kernel correctness (exact vs oracle) + scale/drop-free.
     // Only r=1,2 use the RAW leaf variant (round_fused_lds, LEAFW=2); r3 emits the
