@@ -60,7 +60,42 @@ bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr)
 } // namespace
 
 bool compact_active();   // defined below; gates the compacted sort path
-bool use_rowbucket();    // defined below; MXBM_ROWBUCKET fused row-bucket path
+
+// Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
+// lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
+static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single) {
+    const uint32_t nb = 1u << 14;
+    uint32_t mean = capacity / nb;
+    uint32_t cap  = mean + (mean >> 1) + 512;
+    const size_t nslots = (size_t)nb * cap;
+    single = nslots * 7 * 8;                                    // fb_work[i] -- largest
+    const size_t perSet = single + nslots*4 + nslots*4 + nslots*9*4 + (size_t)nb*4;
+    total = 2*perSet + (size_t)5*capacity*4*2 + 64;             // +left/right/counters
+}
+
+// Device-memory-aware default: MXBM_ROWBUCKET forces the fused path on (even if it
+// might not fit -- the user's explicit choice), MXBM_NO_ROWBUCKET forces it off, and
+// otherwise auto-select when BOTH the largest single alloc clears max_alloc AND the
+// total leaves ~1 GB headroom under global_mem. Falls back to the sort path on any
+// device that can't hold the ~12 GB working set (8-12 GB cards). capacity==0 (some
+// synthetic Budgets) only honors an explicit force.
+static bool want_rowbucket(Runtime& rt, const Budget& b) {
+    if (std::getenv("MXBM_NO_ROWBUCKET")) return false;
+    const bool forced = (std::getenv("MXBM_ROWBUCKET") != nullptr);
+    if (forced) return true;
+    // An explicit alternate collision path (legacy / LDS) opts out of the auto
+    // default -- those paths read the flat work[] layout the row-bucket alloc omits.
+    if (std::getenv("MXBM_LEGACY_MATCH") || std::getenv("MXBM_LDS_MATCH")) return false;
+    uint32_t capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
+    if (capacity == 0) return false;
+    size_t total = 0, single = 0;
+    rowbucket_footprint(capacity, total, single);
+    const DeviceInfo& d = rt.device();
+    if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
+    if (single > (size_t)d.max_alloc) return false;
+    if (total + (size_t)(1ull << 30) > (size_t)d.global_mem) return false;
+    return true;
+}
 
 // Fused row-bucket allocation: FAT bucket ping-pong + left/right for recover. No
 // flat work[]/leaves[]/sort scratch (the buckets ARE the resident storage). Sized
@@ -87,8 +122,9 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     PipelineBuffers p;
-    if (use_rowbucket()) {
+    if (want_rowbucket(rt, b)) {
         p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
+        p.rowbucket = true;
         alloc_rowbucket(rt, b, p);
         return p;
     }
@@ -544,7 +580,6 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
 // One source of truth, read once, shared by alloc_pipeline and run_single_round.
 bool use_sort_match() { static bool v = (std::getenv("MXBM_LEGACY_MATCH") == nullptr); return v; }
 bool use_lds_match()  { static bool v = (std::getenv("MXBM_LDS_MATCH") != nullptr); return v; }
-bool use_rowbucket()  { static bool v = (std::getenv("MXBM_ROWBUCKET") != nullptr); return v; }
 
 // P2c: LDS-local match. round_scatter_lds buckets work[r] (+slot+lead) into
 // bucket-contiguous storage; round_collide_lds finds collisions in LDS and emits
@@ -836,7 +871,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
 
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
                              const std::atomic<bool>* abort, bool verbose) {
-    if (use_rowbucket()) return run_pipeline_rowbucket(rt, pb, b, pp, abort, verbose);
+    if (pb.rowbucket) return run_pipeline_rowbucket(rt, pb, b, pp, abort, verbose);
     PipelineResult result;
     auto tPipeline = clk::now();
 

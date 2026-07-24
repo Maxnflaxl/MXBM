@@ -256,12 +256,16 @@ if(OpenCL_FOUND)
   target_include_directories(test_round_mix PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_round_mix PRIVATE mxbm_gpu)
   add_test(NAME round_mix COMMAND test_round_mix)
+  # White-box tests hand-drive the flat-work[] sort-path kernels via alloc_pipeline;
+  # pin them off the device-mem-auto row-bucket default (which omits work[]/leaves[]).
+  set_tests_properties(round_mix PROPERTIES ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_round_scatter tests/test_round_scatter.cpp)
   add_dependencies(test_round_scatter mxbm_kernels_gen)
   target_include_directories(test_round_scatter PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_round_scatter PRIVATE mxbm_gpu)
   add_test(NAME round_scatter COMMAND test_round_scatter)
+  set_tests_properties(round_scatter PROPERTIES ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_round_match tests/test_round_match.cpp)
   add_dependencies(test_round_match mxbm_kernels_gen)
@@ -278,6 +282,7 @@ if(OpenCL_FOUND)
   target_include_directories(test_round_pipeline PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_round_pipeline PRIVATE mxbm_gpu)
   add_test(NAME round_pipeline COMMAND test_round_pipeline)
+  set_tests_properties(round_pipeline PROPERTIES ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_gpu_rounds tests/test_gpu_rounds.cpp)
   add_dependencies(test_gpu_rounds mxbm_kernels_gen)
@@ -287,7 +292,10 @@ if(OpenCL_FOUND)
   # Phase-B exit milestone: a real full 2^25 GPU Wagner search (5 rounds,
   # ~2^30 key-compares/round) -- compute-heavy but observed ~3s on an M3 Max;
   # generous timeout so a slow-but-correct run on lesser hardware isn't killed.
-  set_tests_properties(gpu_rounds PROPERTIES TIMEOUT 1800)
+  # Pin the bare gate to the sort path (deterministic across hardware); the fused
+  # row-bucket default is auto-selected by device memory and covered by the
+  # gpu_*_rowbucket gates below.
+  set_tests_properties(gpu_rounds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_gpu_recover tests/test_gpu_recover.cpp)
   add_dependencies(test_gpu_recover mxbm_kernels_gen)
@@ -297,7 +305,7 @@ if(OpenCL_FOUND)
   # Phase-C Task 1: runs the same full 2^25 GPU Wagner search as gpu_rounds
   # (~2-3s on an M3 Max) plus a cheap on-device recovery pass; same generous
   # timeout as gpu_rounds for the same reason (slow-but-correct hardware).
-  set_tests_properties(gpu_recover PROPERTIES TIMEOUT 1800)
+  set_tests_properties(gpu_recover PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_gpu_solver tests/test_gpu_solver.cpp)
   add_dependencies(test_gpu_solver mxbm_kernels_gen)
@@ -308,7 +316,7 @@ if(OpenCL_FOUND)
   # 2^25 GPU Wagner search as gpu_rounds/gpu_recover (~2-3s on an M3 Max)
   # plus recovery plus the CPU verify gate; same generous timeout for the
   # same reason (slow-but-correct hardware).
-  set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800)
+  set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   # Phase-D3: the sort-based collision finder (key_extract -> radix sort ->
   # run-scan emit) is now the DEFAULT, so the plain gpu_rounds/gpu_solver gates

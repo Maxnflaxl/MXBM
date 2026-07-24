@@ -16,6 +16,11 @@ struct PipelineBuffers {
     // alloc_pipeline from the active path so every kernel agrees on the stride;
     // white-box tests that hand-drive the legacy stride-7 kernels clear it.
     bool compact = false;
+    // Fused row-bucket path selected for this allocation (see want_rowbucket in
+    // round_pipeline.cpp: MXBM_ROWBUCKET forces on, MXBM_NO_ROWBUCKET forces off,
+    // else auto-select when device memory clears the ~12 GB / 3.3 GB single-alloc
+    // need). Recorded here so run_pipeline routes exactly as alloc_pipeline built.
+    bool rowbucket = false;
     Mem work[2];                // ping-pong: round r reads work[r&1], writes work[(r+1)&1] (each
                                 // capacity*7*8 B). Only 2 of the logical 6 round-slots are ever live
                                 // at once, so 2 physical buffers suffice -- frees ~7.7 GB vs the old 6.
