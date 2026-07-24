@@ -309,7 +309,10 @@ int main() {
     Runtime rt;
     std::printf("  device: %s | local_mem=%llu KB\n", rt.device().name.c_str(),
         (unsigned long long)(rt.device().local_mem/1024));
-    Program prog = rt.build({std::string(kBh3ClSource), std::string(kLdsClSource)}, "");
+    // lds.cl's pipeline kernels reference BH3_MAX_LEAVES (round.cl) + bh3_combine
+    // (bh3.cl); compile {bh3, round, lds} as the pipeline does.
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource),
+                             std::string(kLdsClSource)}, "");
 
     test_correctness(rt, prog.get());
     test_combine(rt, prog.get());

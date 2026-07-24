@@ -91,6 +91,21 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
         p.sort_hist = rt.alloc(CL_MEM_READ_WRITE, (size_t)256 * ngroups * 4);
     }
 
+    // P2c LDS-match bucket storage (only under MXBM_LDS_MATCH). bucket_bits=14 ->
+    // 16384 buckets; cap ~1.5x mean so bucketDrops==0; each holds 7-word work +
+    // slot + lead. ~2.8 GB at 2^25; a sub-mask of 3 keeps per-group survivors
+    // (~256) well inside LDS_ECAP.
+    if (std::getenv("MXBM_LDS_MATCH")) {
+        p.lds_num_buckets = 1u << 14;
+        uint32_t mean = p.capacity / p.lds_num_buckets;
+        p.lds_bucket_cap = mean + (mean >> 1) + 512;
+        const size_t nslots = (size_t)p.lds_num_buckets * p.lds_bucket_cap;
+        p.lds_bwork  = rt.alloc(CL_MEM_READ_WRITE, nslots * 7 * 8);
+        p.lds_bslot  = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
+        p.lds_blead  = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
+        p.lds_counts = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.lds_num_buckets * 4);
+    }
+
     return p;
 }
 
@@ -457,8 +472,75 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
 // set MXBM_LEGACY_MATCH to fall back to the old atomic-bucket scatter+match.
 // One source of truth, read once, shared by alloc_pipeline and run_single_round.
 bool use_sort_match() { static bool v = (std::getenv("MXBM_LEGACY_MATCH") == nullptr); return v; }
+bool use_lds_match()  { static bool v = (std::getenv("MXBM_LDS_MATCH") != nullptr); return v; }
+
+// P2c: LDS-local match. round_scatter_lds buckets work[r] (+slot+lead) into
+// bucket-contiguous storage; round_collide_lds finds collisions in LDS and emits
+// the SAME children as match_sorted (byte-identical goldens), combining parents
+// from LDS instead of a global gather. Keeps mix separate (run before this).
+uint32_t match_lds(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
+                   uint32_t N, uint32_t& bucket_drops, uint32_t& pair_drops) {
+    (void)b;
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
+                                         std::string(kLdsClSource)}, "");
+    const uint32_t bucketBits = 14, submaskBits = 3, cap = pb.lds_bucket_cap;
+    uint32_t outCapacity = pb.capacity;
+    rt.fill_u32(pb.lds_counts.get(), 0u, pb.lds_num_buckets);
+    rt.fill_u32(pb.counters.get(), 0u, 4);
+
+    {   // scatter work[r] (+slot+lead) into buckets
+        Kernel k = rt.kernel(prog, "round_scatter_lds");
+        uint32_t leadIdentity = (r == 1) ? 1u : 0u;
+        cl_mem work = pb.work[r & 1].get(), leavesIn = pb.leaves[r & 1].get();
+        cl_mem counts = pb.lds_counts.get(), bwork = pb.lds_bwork.get();
+        cl_mem bslot = pb.lds_bslot.get(), blead = pb.lds_blead.get(), cnt = pb.counters.get();
+        rt.set_arg(k.get(), 0, N); rt.set_arg(k.get(), 1, bucketBits); rt.set_arg(k.get(), 2, cap);
+        rt.set_arg(k.get(), 3, leadIdentity);
+        rt.set_arg(k.get(), 4, sizeof(cl_mem), &work); rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesIn);
+        rt.set_arg(k.get(), 6, sizeof(cl_mem), &counts); rt.set_arg(k.get(), 7, sizeof(cl_mem), &bwork);
+        rt.set_arg(k.get(), 8, sizeof(cl_mem), &bslot); rt.set_arg(k.get(), 9, sizeof(cl_mem), &blead);
+        rt.set_arg(k.get(), 10, sizeof(cl_mem), &cnt);
+        rt.run1d(k.get(), N);
+    }
+    {   // LDS collide + combine + emit
+        Kernel k = rt.kernel(prog, "round_collide_lds");
+        uint32_t Lout = lout_for(r), outOff = (uint32_t)(r - 1) * pb.capacity;
+        cl_mem counts = pb.lds_counts.get(), bwork = pb.lds_bwork.get();
+        cl_mem bslot = pb.lds_bslot.get(), blead = pb.lds_blead.get();
+        cl_mem outWork = pb.work[((r < (int)kNumRounds) ? r + 1 : 0) & 1].get();
+        cl_mem leftMem = pb.left.get(), rightMem = pb.right.get();
+        cl_mem leavesIn = pb.leaves[r & 1].get(), leavesOut = pb.leaves[(r + 1) & 1].get(), cnt = pb.counters.get();
+        uint32_t sIn = sleaves_for(r), sOut = (r < (int)kNumRounds) ? sleaves_for(r + 1) : 0u;
+        rt.set_arg(k.get(), 0, bucketBits); rt.set_arg(k.get(), 1, submaskBits); rt.set_arg(k.get(), 2, cap);
+        rt.set_arg(k.get(), 3, Lout); rt.set_arg(k.get(), 4, outOff); rt.set_arg(k.get(), 5, outCapacity);
+        rt.set_arg(k.get(), 6, sizeof(cl_mem), &counts); rt.set_arg(k.get(), 7, sizeof(cl_mem), &bwork);
+        rt.set_arg(k.get(), 8, sizeof(cl_mem), &bslot); rt.set_arg(k.get(), 9, sizeof(cl_mem), &blead);
+        rt.set_arg(k.get(), 10, sizeof(cl_mem), &outWork); rt.set_arg(k.get(), 11, sizeof(cl_mem), &leftMem);
+        rt.set_arg(k.get(), 12, sizeof(cl_mem), &rightMem); rt.set_arg(k.get(), 13, sizeof(cl_mem), &leavesIn);
+        rt.set_arg(k.get(), 14, sizeof(cl_mem), &leavesOut); rt.set_arg(k.get(), 15, sIn); rt.set_arg(k.get(), 16, sOut);
+        rt.set_arg(k.get(), 17, sizeof(cl_mem), &cnt);
+        uint32_t groups = pb.lds_num_buckets << submaskBits;
+        rt.run1d(k.get(), (size_t)groups * 256u, 256u);
+    }
+    uint32_t counters[4];
+    rt.read(pb.counters.get(), sizeof counters, counters);
+    bucket_drops = counters[1]; pair_drops = counters[2];
+    return (counters[0] < outCapacity) ? counters[0] : outCapacity;
+}
 
 uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats) {
+    if (use_lds_match()) {   // P2c LDS-local match (mix stays separate)
+        auto tMix = clk::now();
+        if (r >= 2) mix_level(rt, pb, r, inN);
+        stats.t_mix_ms = (r >= 2) ? ms_since(tMix) : 0.0;
+        auto tM = clk::now();
+        uint32_t bd = 0, pd = 0;
+        uint32_t outN = match_lds(rt, pb, b, r, inN, bd, pd);
+        stats.t_match_ms = ms_since(tM);
+        stats.t_scatter_ms = 0.0;
+        stats.in = inN; stats.out = outN; stats.bucket_drops = bd; stats.pair_drops = pd;
+        return outN;
+    }
     // Phase-D3: route to the sort-based collision finder by default. Mix is
     // unchanged (still E3a leaf-prefix mix); only scatter+match is replaced.
     const bool useSort = use_sort_match();

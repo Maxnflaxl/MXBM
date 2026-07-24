@@ -27,6 +27,14 @@ struct PipelineBuffers {
     Mem sort_pairs[2];          // ulong[capacity] ping-pong (key,index) pairs
     Mem sort_scan;              // uint[capacity] collision counts -> prefix-sum offsets
     Mem sort_hist;             // uint[256 * ceil(capacity/256)] radix bin-major histogram
+
+    // P2c LDS-match scratch (allocated only under MXBM_LDS_MATCH): bucket-contiguous
+    // storage for round_scatter_lds -> round_collide_lds (kernels/opencl/lds.cl).
+    uint32_t lds_num_buckets = 0, lds_bucket_cap = 0;
+    Mem lds_bwork;              // ulong[num_buckets*bucket_cap*7] bucketed work
+    Mem lds_bslot;             // uint[num_buckets*bucket_cap] original slot
+    Mem lds_blead;             // uint[num_buckets*bucket_cap] lead (first leaf)
+    Mem lds_counts;            // uint[num_buckets] arrival counters
 };
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b);

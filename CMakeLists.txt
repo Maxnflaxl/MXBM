@@ -320,6 +320,12 @@ if(OpenCL_FOUND)
   set_tests_properties(gpu_rounds_legacy PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LEGACY_MATCH=1")
   add_test(NAME gpu_solver_legacy COMMAND test_gpu_solver)
   set_tests_properties(gpu_solver_legacy PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LEGACY_MATCH=1")
+  # P2c: the SAME goldens through the LDS-local match (round_scatter_lds ->
+  # round_collide_lds). Byte-identical is the equivalence gate for the rewrite.
+  add_test(NAME gpu_rounds_lds COMMAND test_gpu_rounds)
+  set_tests_properties(gpu_rounds_lds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LDS_MATCH=1")
+  add_test(NAME gpu_solver_lds COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_lds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LDS_MATCH=1")
 
   # Phase-D benchmark harness (manual-run, NOT registered as a ctest gate):
   # repeats the full 2^25 solve N times, enforces the D0 correctness gate,
