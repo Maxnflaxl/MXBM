@@ -48,18 +48,19 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | Bake per-round constants into the fused kernels | 83.2 | 56.2 | **33.8** | −27.0 | −32.5 % | [Compile-time constants](#compile-time-round-constants) | [`gi` elimination](#eliminating-the-dense-gi) |
 | 2026-07-24 | **Retire** the round-3 quad record + per-set stride sizing | 56.2 | 54.0 | **35.2** | −2.2 | −3.9 % | [Quad record retired](#retiring-the-round-3-quad-record) | — |
 | 2026-07-24 | Drop the redundant `lead` from the round-3 record | 54.0 | 52.7 | **36.1** | −1.3 | −2.4 % | [Redundant lead](#the-redundant-lead-field) | — |
+| 2026-07-24 | Round 5 stores **1** work word, not 5 | 52.7 | 47.5 | **40.0** | −5.2 | −9.9 % | [Terminal work words](#the-terminal-rounds-dead-work-words) | — |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 36.1 sol/s** (52.7 ms/solve; 53 ms end-to-end).
+**Current: 40.0 sol/s** (47.5 ms/solve).
 
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.5×**.
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.3×**.
 
-Started at **1.8 sol/s** when the solver first worked → **20× faster**.
+Started at **1.8 sol/s** when the solver first worked → **22× faster**.
 
 VRAM for a full search: **8.36 → 7.30 GiB** (268 → 234 B/element).
 
-*Bench and end-to-end agree (52.7 vs ~53 ms); the ~7 ms of non-pipeline overhead seen at
-83 ms did not scale with the rounds.*
+*Bench and end-to-end agree; the ~7 ms of non-pipeline overhead seen at 83 ms did not
+scale with the rounds.*
 
 *Solutions per second (sol/s) is the number miners and pools report. BeamHash III
 yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
@@ -120,7 +121,7 @@ was later [measured to be a loss](#retiring-the-round-3-quad-record).
 | Round 2 | pair | 2 | 16 | `key \| i0<<24`, `i1 \| gi<<25` |
 | Round 3 | packed | 9 | 72 | 7 work words, then 4 leaves + `gi` bit-packed into 2 u64 |
 | Round 4 | packed | 8 | 64 | 6 work words, meta, `leftContrib` |
-| Round 5 | packed | 6 | 48 | 5 work words, meta |
+| Round 5 | thin | 2 | 16 | **1** work word, meta — see [why](#the-terminal-rounds-dead-work-words) |
 
 Seed indices are 25-bit (2^25 seeds) and `gi` is 26-bit, so the pair and quad records
 pack exactly with bits to spare.
@@ -430,6 +431,56 @@ pipeline 54.0 → 52.7 ms and VRAM 7.65 → 7.30 GiB.
 *The same redundancy does not exist at the other boundaries: round 4's payload is the
 `leftContrib` rather than leaves, so its `lead` is not duplicated anywhere.*
 
+### The terminal round's dead work words
+
+Round 4 was emitting all five significant work words of its children; round 5 reads four
+of them and uses none.
+
+The terminal test is `z = OR(c[0..6])` after `bh3_combine` at `Lout(5) = 24`. That `Lout`
+forces `c[1..6]` to zero and masks `c[0]` to 24 bits, and
+
+```
+c[0] = ((x[0] >> 24) | (x[1] << 40)) & 0xFFFFFF
+```
+
+where the `x[1]` term shifts zeros into bits 0..23. So the whole test reduces to **"bits
+24..47 of `a[0]^b[0]` are zero"**, and the collision key is word 0's low 24 bits — from
+the same word. Words 1..4 are dead weight. Checked over 200 000 random pairs before
+changing anything, then gated on the survivor count staying at exactly 3.
+
+Round 4's record: 48 → **16 B**. Round 4 10.9 → 8.4 ms (emit), survivor pass 4.1 → 2.0 ms
+(stage read), pipeline 52.7 → 47.5 ms.
+
+This is the work-word analogue of [L5-thin](#l5-thin-emit), which did the same for round
+5's *leaf* payload. **And the generalisation says it was the only instance:** every round
+except the terminal one feeds its combine result through `apply_mix`, which sums rotations
+of all seven words, so no earlier round can drop any. Round 5 is the only round with no
+mix.
+
+### The record-redundancy audit
+
+Prompted by [the redundant `lead`](#the-redundant-lead-field) hiding in plain sight for the
+whole project. Every stored field, against what actually reads it. Besides the terminal
+round above, it came up **empty** — the records are at their information floors:
+
+| Record | Bits needed | u64 | Slack |
+|---|---|---|---|
+| round-1 seed | 25 idx + 24 key = 49 | 1 | 15 |
+| round-2 pair | 25+25 idx + 24 key + 26 gi = 100 | 2 | 28 |
+| round-3 packed | 400 work + 100 leaves + 26 gi = 526 | 9 | 50 |
+| round-4 packed | 376 work + 64 contrib + 25 lead + 26 gi = 491 | 8 | 21 |
+| round-5 thin | 64 work + 25 lead + 26 gi = 115 | 2 | 13 |
+
+Every one of these is `ceil(bits/64)` — no record can lose a u64 without losing a field.
+Two fields were checked specifically and are **not** removable: `gi` is needed for the
+back-reference rows even where the `(lead, gi)` tie-break never fires (and replacing it
+with the bucket slot [costs 4.5 ms](#eliminating-the-dense-gi)); and round 3 needs *all*
+eight of its leaves, six for the mix and all eight for `contribOut`, so the
+[leftContrib](#compact-leftcontrib) fold cannot be applied a level earlier.
+
+The sort fallback path was **not** audited — it is not selected on cards that can run
+row-bucket, so it has no bearing on the measured figures.
+
 ---
 
 ## What didn't work
@@ -673,41 +724,56 @@ existing arithmetic compile down properly, not from moving fewer bytes.
 
 ## Current focus and open leads
 
-**Where the time goes** (52.7 ms): r1 7.5, r2 14.0, r3 14.5, r4 10.9, plus a 2.8 ms entry
-and a 4.1 ms terminal. No round is an outlier any more — the pipeline is flat.
+**Where the time goes** (47.5 ms): r1 7.5, r2 14.9, r3 14.5, r4 8.2, plus a 2.7 ms entry
+and a 2.0 ms terminal.
 
-**Against the roofline.** Total traffic is ~11 GB/solve, which at the measured rates
-(~260 GB/s scattered writes, ~500 GB/s coalesced reads) is **~34 ms**. At 52.7 ms the
-pipeline is within ~1.55× of its own byte roofline, and lolMiner's 36 ms sits *at* it.
-That is the useful frame for what is left: shaving bytes moves the roofline down, and
-everything else is closing the gap to it.
+**Against the roofline.** With the records at their
+[information floors](#the-record-redundancy-audit) the pipeline moves 168 B/element of
+scattered record writes, 176 B of coalesced reads and 32 B of back-refs:
+
+| | GiB/solve | at | ms |
+|---|---|---|---|
+| scattered record writes | 5.25 | 260 GB/s | 21.7 |
+| coalesced stage reads | 5.50 | 500 GB/s | 11.8 |
+| back-ref writes | 1.00 | 500 GB/s | 2.1 |
+| | | | **35.6** |
+
+At 47.5 ms the solver is **1.33× off its own byte roofline**, and lolMiner's 36 ms sits
+essentially *at* it. Two consequences worth being explicit about:
+
+- **Shaving bytes is nearly exhausted** — not by assertion this time, but because every
+  record is `ceil(bits/64)` with no removable field.
+- **The remaining ~12 ms is not bytes.** Ablation puts `apply_mix` at ~3.3 ms across all
+  rounds (it was 17 ms in round 4 alone before the constants fix) and back-refs at ~2 ms,
+  which is their roofline. The rest is bandwidth not achieved — the 260 GB/s scatter
+  figure comes from an isolated probe with no compute interleaved, and the real kernels
+  may simply not reach it.
 
 **Leads, most promising first:**
 
-1. **Round 2's 72 B emit is the largest single term.** Round 3 needs 7 work words, 4
-   leaves and `gi`; the leaves are already bit-packed and the work words are at the
-   `[7,7,6,5,1]` floor. The only remaining idea is the round-4 `leftContrib` trick one
-   level up — but round 3 needs *six* of its eight leaves for the mix and *all eight* for
-   `contribOut`, so neither parent's set can be folded. Wants a fresh idea rather than a
-   known one.
-2. **Audit the rest of the pipeline for the record redundancy just found.** `lead`
-   duplicating leaf 0 survived unnoticed for the whole project. The entry kernel, the
-   terminal round and the sort fallback have not been re-read with that question in mind.
-3. **Tighter bucket capacity.** `mean + mean/4 + 256` is ~17σ of headroom against a
-   distribution whose max sits near mean + 4.5σ. Cutting it shrinks every bucket array
-   *and* the back-ref rows proportionally. Needs a measured occupancy distribution across
-   nonces rather than a guess, and must stay drop-free.
+1. **Find out whether the real emit achieves 260 GB/s.** Everything above rests on that
+   number, measured in isolation. If the fused kernels only reach, say, 200 GB/s, the gap
+   is an occupancy/latency problem in a *specific* round and is addressable; if they hit
+   260, the roofline is real and only fewer bytes or a different algorithm helps. This is
+   a measurement, not a change, and it decides which of the remaining leads is worth
+   anything.
+2. **Round 2 and round 3 are 62 % of the pipeline** (29.4 of 47.5 ms) and both are
+   dominated by the 72 B round-2→3 record. It is at its floor *given the schedule*, but
+   400 significant work bits in 7 words wastes 48 bits in word 6, and the payload needs
+   126 — a layout that spilled the payload into word 6's slack would need only 8 u64
+   (512 ≥ 526? no — 526 > 512, so this does **not** work). Recorded because the
+   arithmetic is worth re-checking if `Lout(2)` or the payload ever shrinks.
+3. **Tighter bucket capacity.** `mean + mean/4 + 256` is ~17σ against a distribution
+   whose max sits near mean + 4.5σ. Shrinks every bucket array and the back-ref rows.
+   Needs a measured occupancy distribution across nonces, and must stay drop-free.
 4. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
-   row-bucket path now needs 234. A single constant covers both, which is what forces the
-   ≥ 14.6 GiB threshold in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md). Splitting it is the
-   remaining work to make 12 GB cards viable.
+   row-bucket path needs 234. That single constant is what forces the ≥ 14.6 GiB
+   threshold in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md).
 
-**Re-measure trades after any speed-up.** Two of this session's changes flipped the sign
-of an earlier one: the round-3 quad record went from −3.6 ms to +2.2 ms once
-[compile-time constants](#compile-time-round-constants) removed the stalls it was hiding
-in. The round-2 pair record was re-tested for the same reason and survived. Anything in
-[what worked](#what-worked) that trades compute for bytes is a candidate for re-testing
-after the next large win.
+**Re-measure trades after any speed-up.** The round-3 quad record went from −3.6 ms to
++2.2 ms once [compile-time constants](#compile-time-round-constants) removed the stalls it
+was hiding in. Anything in [what worked](#what-worked) that trades compute for bytes is a
+candidate for re-testing after the next large win.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the

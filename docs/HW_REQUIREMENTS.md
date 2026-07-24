@@ -86,9 +86,9 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | |
 |---|---|
-| Throughput | **36.1 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
-| End-to-end solve | ~53 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
-| Solve time | 52.7 ms median (`./build/bench_rounds 20`) |
+| Throughput | **40.0 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
+| End-to-end solve | ~48 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
+| Solve time | 47.5 ms median (`./build/bench_rounds 20`) |
 
 See [performance.md](performance.md) for the full optimization history.
 
@@ -155,7 +155,7 @@ structurally different, such as:
 > **Caveat added later:** the round-3 part of that was subsequently *reverted* — once
 > compile-time round constants sped the kernel up, its 4-seed rebuild no longer hid in
 > memory stalls and cost more than the bytes it saved. Rounds 1–2 keep index-only
-> storage; round 3 stores work state again. Solve time is now 52.7 ms and the footprint
+> storage; round 3 stores work state again. Solve time is now 47.5 ms and the footprint
 > 7.30 GiB. See "retiring the round-3 quad record" in [performance.md](performance.md).
 >
 > It does **not** extend to rounds 4–5. Rebuild cost doubles per round while the record
