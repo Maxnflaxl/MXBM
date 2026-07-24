@@ -779,6 +779,32 @@ everything else — `lgi`, `llead`, `lkey`, `lchain`, `lleaf` — would have to 
 Not staging `lwork` is the [un-fused path](#un-fused-lds-path), which doubles the work
 traffic and measured far worse. **Occupancy is structurally blocked by the element width.**
 
+### Overlapping the entry pass
+The last structural lead, and the reasoning behind it was sound: the entry is ~2.7 ms of
+which only ~1.0 is its own writes, the rest being 235 M siphashes. It is the one
+compute-bound phase in an otherwise bandwidth-bound pipeline, so it is the one phase that
+*should* hide behind the rounds. The fused kernels also use only 34 KB of the SM's 48 KB
+LDS, leaving room for a low-LDS kernel to co-reside.
+
+**Refuted by a one-hour experiment instead of a six-file refactor.** A *redundant* entry
+pass was enqueued on a second command queue, concurrent with the rounds, writing to
+scratch — results unaffected, so the only question was what it cost:
+
+| | ms |
+|---|---|
+| baseline | 40.2 – 40.7 |
+| + a redundant 2.7 ms entry pass, concurrent on queue 2 | **42.8 – 43.2** |
+
+It adds **~2.6 ms — its entire serial cost.** There is no overlap to be had. The round
+kernels launch **131 072 workgroups**; the scheduler keeps every SM full for their whole
+duration, so a second-queue kernel simply queues behind them. Spare *LDS* is not spare
+*capacity* when the launch backlog is that deep.
+
+The full change would have needed a second seed buffer (~390 MB), dedicated seed counters,
+speculative next-nonce prefetch in `GpuSolver`, an addition to the `Solver` interface, and
+cross-queue event synchronisation — for zero. **Test the premise before building the
+mechanism**: the cost here was one throwaway `MXBM_CONC_TEST` block.
+
 ---
 
 ## Established limits
@@ -851,28 +877,37 @@ ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.
 | the two atomics | both load-bearing; removing either is slower |
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined — nothing left to win |
 
-**Leads, most promising first:**
+**Leads.** The structural list is now empty, and that is a measured statement rather than
+a shrug — every lever below was closed by an experiment, not by argument:
 
-1. **Overlap the entry pass with the previous solve's rounds.** The entry is ~2.7 ms of
-   which only ~1.0 is its own writes (268 MB) — the rest is 235 M siphashes. It is the one
-   phase that is compute-bound while everything around it is bandwidth-bound, so it is the
-   one phase that can genuinely hide. Needs a second command queue and a second seed
-   buffer (~390 MB, because that record is 8 B/element). **Estimated −1.7 ms**; it is the
-   last structural lever and it does not close the gap on its own.
-2. **Overclocking.** Deliberately deferred until parity was in sight, and it now is.
-   BeamHash III is bandwidth-bound at 312 GB/s aggregate, so a memory offset scales this
-   workload almost linearly — and it applies to lolMiner equally, so it is a fair
-   comparison only against an overclocked reference.
-3. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
+| lever | closed by |
+|---|---|
+| fewer bytes | every record is `ceil(bits/64)` ([audit](#the-record-redundancy-audit)) |
+| redundant rescan | removing it entirely buys nothing over halving it ([geometry](#row-bucket-geometry)) |
+| occupancy | `lwork` alone exceeds the per-element LDS budget ([details](#occupancy-again)) |
+| coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](#two-level-bucketing)) |
+| the two atomics | both load-bearing; removing either is slower |
+| overlapping the entry | no spare capacity — the rounds fill every SM ([details](#overlapping-the-entry-pass)) |
+| `apply_mix`, back-refs, rebuild | 2.2 ms combined; nothing left to take |
+
+What remains is not solver work:
+
+1. **Overclocking.** Deliberately deferred until parity was in sight, and it now is.
+   BeamHash III is bandwidth-bound (312 GB/s aggregate), so a memory offset scales this
+   workload close to linearly. It applies to lolMiner equally, so the honest comparison is
+   overclocked-against-overclocked.
+2. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
    row-bucket path needs 239. That constant is what keeps 12 GB cards on the 5× slower
-   fallback. Correctness/reach, not speed.
+   fallback. Reach, not speed.
 
-**On the remaining ~4 ms to lolMiner.** With bytes at their floor and the pattern at its
-ceiling, closing it at stock clocks would need lolMiner to be moving *fewer* bytes than the
-record contents require, or using a collision structure not derivable from the public
-references. That is a real possibility and not one this document can resolve by
-measurement — what it can say is that every lever visible from here has been measured, and
-the ones that remain are worth ~2 ms.
+**On the remaining ~4 ms.** The pipeline sits within ~5 % of its own memory floor, moving
+11.75 GiB per solve at 312 GB/s against a ~260 GB/s pure-scatter rate. For lolMiner to do
+35.8 ms on the same hardware it must either move **fewer bytes than this record set
+requires** — which the [audit](#the-record-redundancy-audit) says is impossible without
+dropping a field something reads — or use a collision structure that is not derivable from
+the public references. Both are live possibilities; neither is resolvable by measuring
+*this* implementation harder. Anyone picking this up should start by questioning the
+Wagner variant, not the kernels.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
