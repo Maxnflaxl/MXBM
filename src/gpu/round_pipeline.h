@@ -61,8 +61,8 @@ struct PipelineBuffers {
     // write sector (measured 1.20x, test_emit_packing). Stride varies per round; the
     // buffer is sized for the widest round (fb_stride, = kFbMaxStride).
     uint32_t fb_num_buckets = 0, fb_bucket_cap = 0;
-    uint32_t fb_stride = 0;    // u64/element actually allocated -- read this rather
-                               // than re-deriving the width (it has drifted before)
+    uint32_t fb_stride[2] = {0, 0};  // u64/element actually allocated PER SET (the two
+                               // differ) -- read this rather than re-deriving the width
     Mem fb_elem[2];            // ulong[nb*cap*fb_stride]
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter

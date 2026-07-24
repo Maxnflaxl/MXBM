@@ -83,16 +83,24 @@ bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
 // READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
-//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 QUAD = 3   r4 6+1+1=8   r5 5+1=6
+//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
 // Round r's OUTPUT stride is round r+1's input stride. Rounds 1 and 2 both read
 // RE-DERIVABLE records rather than stored work state:
 //   r1 reads a bare 8 B (index,key)      -- seed re-derived in-kernel (2.5 vs 18.2 ms)
 //   r2 reads a 16 B (key,left,right,gi)  -- rebuilt from its two parent seeds
-//   r3 reads a 24 B (key,i0..i3,gi)      -- rebuilt from its four parent seeds
 // Both derivations live in the kernel's non-divergent expand loop; done in the
 // sub-mask-filtered staging loop instead, round 2's cost 23.5 ms rather than 0.4.
-constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 3u, 8u, 6u };
-constexpr uint32_t kFbMaxStride = 8u;   // = max(kFbStride): round 4's input
+constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 10u, 8u, 6u };
+// The two ping-pong sets do NOT need the same width. Round r writes set (r&1), and
+// the entry writes set 0, so set 0 holds the round-2 and round-4 outputs (max 10 u64)
+// while set 1 holds the round-1 and round-3 outputs (max 8). Sizing them separately
+// frees ~0.7 GiB. Derived from kFbStride rather than written out, so it cannot drift.
+constexpr uint32_t fb_set_stride(int set) {
+    uint32_t m = (set == 0) ? kFbStride[1] : 0u;          // entry writes set 0
+    for (int r = 1; r <= 4; ++r)
+        if ((r & 1) == set && kFbStride[r + 1] > m) m = kFbStride[r + 1];
+    return m;
+}
 // Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
 // occupancy is ~Binomial(capacity, 1/nb): mean = capacity/nb, sigma ~ sqrt(mean), and
 // the max over nb buckets sits near mean + 4.5 sigma. mean/4 + 256 is ~17 sigma at
@@ -106,9 +114,9 @@ static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single
     const uint32_t nb = 1u << 14;
     const uint32_t cap = fb_cap_for(capacity / nb);
     const size_t nslots = (size_t)nb * cap;
-    single = nslots * kFbMaxStride * 8;                         // fb_elem[i] -- largest
-    const size_t perSet = single + (size_t)nb*4;                // packed record + counts
-    total = 2*perSet + (size_t)5*capacity*4*2 + 64;             // +left/right/counters
+    single = nslots * fb_set_stride(0) * 8;                     // fb_elem[0] -- largest
+    total = nslots * (fb_set_stride(0) + fb_set_stride(1)) * 8  // both packed record sets
+          + 2*(size_t)nb*4 + (size_t)5*capacity*4*2 + 64;       // +counts/left/right/counters
 }
 
 // Device-memory-aware default: MXBM_ROWBUCKET forces the fused path on (even if it
@@ -143,8 +151,8 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     for (int i = 0; i < 2; ++i) {
-        p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * kFbMaxStride * 8);
-        p.fb_stride    = kFbMaxStride;
+        p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * fb_set_stride((int)i) * 8);
+        p.fb_stride[i] = fb_set_stride((int)i);
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
@@ -849,7 +857,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         const char* fusedName = "round_fused_lds";
         if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
         else if (r == 2) fusedName = "round_fused_rd2";    // re-derives from the pair record
-        else if (r == 3) fusedName = "round_fused_rd3";    // re-derives from the quad record
+        else if (r == 3) fusedName = "round_fused_7_6";
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
         cl_mem ic = pb.fb_counts[inSet].get(),  ie = pb.fb_elem[inSet].get();
