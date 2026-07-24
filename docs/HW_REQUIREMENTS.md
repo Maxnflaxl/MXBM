@@ -86,9 +86,9 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | |
 |---|---|
-| Throughput | **22.8 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
-| End-to-end solve | 90 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
-| Solve time | 83.2 ms median (`./build/bench_rounds 20`) |
+| Throughput | **33.6 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
+| End-to-end solve | 56–62 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
+| Solve time | 56.6 ms median (`./build/bench_rounds 20`) |
 
 See [performance.md](performance.md) for the full optimization history.
 
@@ -151,7 +151,8 @@ structurally different, such as:
 > seed indices that it already had to carry as leaves, so the records are 8 B / 16 B /
 > 24 B instead of 8 / 72 / 80. Footprint fell **8.36 → 6.95 GiB** and solve time fell
 > **103.6 → 83.2 ms** *in the same changes*, which is the "same problem" hypothesis
-> confirming itself.
+> confirming itself. (Solve time has since fallen further, to 56.6 ms, for an unrelated
+> reason — see "compile-time round constants" in [performance.md](performance.md).)
 >
 > It does **not** extend to rounds 4–5. Rebuild cost doubles per round while the record
 > it replaces shrinks, and round 3 already sits at the point where the recompute stops

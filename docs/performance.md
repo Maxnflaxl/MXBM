@@ -27,8 +27,7 @@ the GPU solver found its first share. Later rows are `bench_rounds` pipeline med
 the controlled measurement used to make optimization decisions. Early on these disagreed
 sharply — the pipeline benched at 245 ms (≈ 7.9 sol/s equivalent) while the miner
 actually delivered ~1.8 sol/s, i.e. most of a solve was spent *outside* the measured
-pipeline. That overhead converged (103 ms end-to-end against a 102.7 ms bench) and has
-since re-opened as the pipeline got faster — see the note under the table.
+pipeline. That overhead is gone; bench and end-to-end now track each other.
 
 | Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
 |---|---|---|---|---|---|---|---|---|
@@ -46,19 +45,19 @@ since re-opened as the pipeline got faster — see the note under the table.
 | 2026-07-24 | Defer round-1's seed expand to a non-divergent loop | 103.6 | 95.3 | **19.9** | −8.3 | −8.0 % | [Non-divergent expand](#the-non-divergent-expand) | [Deferring the stage read](#deferring-the-stage-read) |
 | 2026-07-24 | Round 2 re-derives from a 16 B pair record | 95.3 | 86.8 | **21.9** | −8.5 | −8.9 % | [Re-derivation chain](#the-re-derivation-chain) | — |
 | 2026-07-24 | Round 3 re-derives from a 24 B quad record | 86.8 | 83.2 | **22.8** | −3.6 | −4.1 % | [Re-derivation chain](#the-re-derivation-chain) | [Register cap](#register-cap-tuning) |
+| 2026-07-24 | Bake per-round constants into the fused kernels | 83.2 | 56.6 | **33.6** | −26.6 | −32.0 % | [Compile-time constants](#compile-time-round-constants) | [Round-3 record A/B](#the-round-3-record-ab-withdrawn) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 22.8 sol/s** (83.2 ms/solve; 90 ms end-to-end).
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~2.3×**.
+**Current: 33.6 sol/s** (56.6 ms/solve; 56–62 ms end-to-end).
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.6×**.
 
-Started at **1.8 sol/s** when the solver first worked → **12.6× faster**.
+Started at **1.8 sol/s** when the solver first worked → **18.6× faster**.
 
 VRAM for a full search fell with it: **8.36 → 6.95 GiB** (268 → 222 B/element), because
 re-derivable records replaced stored work state and retired the widest bucket stride.
 
-*The bench and the end-to-end solve have drifted apart again (83.2 vs 90 ms). That ~7 ms
-sits outside the measured pipeline and is now 8 % of a solve — see
-[open leads](#current-focus-and-open-leads).*
+*Bench and end-to-end now agree again (56.6 vs 56–62 ms); the ~7 ms of non-pipeline
+overhead seen at 83 ms did not scale with the rounds.*
 
 *Solutions per second (sol/s) is the number miners and pools report. BeamHash III
 yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
@@ -336,6 +335,50 @@ shrank 20 % and a full search now fits in **6.95 GiB** (222 B/element), down fro
 "index-only storage with re-derivation" as a route to the 3 GB target and argued memory
 efficiency and throughput were probably the same problem. Both moved together.
 
+### Compile-time round constants
+
+The largest single win of the session, and a **third recurrence** of the failure mode
+already recorded twice under [runtime loop bounds](#runtime-loop-bounds).
+
+`Lout`, `Lmix`, `padNum` and the leaf counts `sIn`/`sOut`/`sBuild` were **runtime kernel
+arguments**. Every one is a per-round constant. Passing them at runtime reached into
+`bh3_apply_mix`, which runs once per emitted child:
+
+```c
+padNum = ((512 - Lmix) + 24) / 25;      // runtime
+for (uint i = 0; i < padNum; ++i) {     // runtime bound -> no unroll
+    pos = Lmix + i*25; word = pos >> 6; // runtime
+    t[word] |= v << sh;                 // DYNAMIC INDEX into t[8]
+```
+
+A dynamically indexed private array cannot live in registers; it goes to **local memory**,
+which on NVIDIA is global-memory-backed. So every child was paying a spill round-trip,
+~33.5 M times per round. Making the constants compile-time macro parameters of
+`FUSED_LDS` unrolls the tree loop, constant-folds `word`/`sh`, and keeps `t[8]` in
+registers:
+
+| | r1 | r2 | r3 | r4 | pipeline |
+|---|---|---|---|---|---|
+| runtime args | 11.9 | 15.0 | 26.5 | 24.9 | 83.2 |
+| compile-time | **7.5** | **10.9** | **21.5** | **10.9** | **56.6** |
+
+Round 4 more than halved — it has `padNum(5) = 9`, the longest tree loop.
+
+`bh3.cl` is **not modified**: the primitives are simply called with constants. The cost
+is that the shipped kernels now *ignore* the matching runtime arguments, which is a
+silent-drift hazard, so `fused_consts_for()` centralises the table and
+`test_gpu_rounds` pins it against both the `lds.cl` literals and the independent `ref::`
+round table (verified to fail when perturbed). `round_fused_lds` keeps runtime
+parameters so `test_fused_round` still validates the mechanism generically for r=1..4.
+
+**The generalised lesson:** "compile-time widths in the hot path" had been read as being
+about the *word* loops. It is about **every loop bound the hot path can reach, including
+through a callee**. This one hid inside a primitive that looked untouchable.
+
+Found with the `ABL` phase ablation (below), which attributed round 4 as: emit payload
+5.0 ms, per-bucket atomic 1.9, `gi` atomic 0.8, back-refs 0.5 — and **17.3 ms in
+`apply_mix` alone**, against the "~10–15 % mix" this document had previously assumed.
+
 ---
 
 ## What didn't work
@@ -512,6 +555,33 @@ computing any round's contribution requires the raw leaves anyway. Serving all f
 rounds would cost more than the leaves it replaces. Round 4 is the sole exception because
 it needs *all* of one parent's leaves and only *one* of the other's.
 
+### The round-3 record A/B (withdrawn)
+Baking in the constants changed the economics of
+[the re-derivation chain](#the-re-derivation-chain), because a faster kernel has fewer
+memory stalls to hide recompute in. Re-measured with `ABL`:
+
+| Rebuild cost | before constants | after |
+|---|---|---|
+| Round 2 (2 seeds) | +0.4 ms | **+4.3 ms** |
+| Round 3 (4 seeds) | ~+9 ms | **+9.7 ms** (45 % of the round) |
+
+Round 3's rebuild now costs more than the ~56 B/element it saves looks worth, so the quad
+record may no longer pay. An A/B variant was built to settle it — round 2 emitting a full
+packed record, round 3 reading it and skipping the rebuild — and it measured **3.8 ms
+faster** on r2+r3 (29.4 vs 33.2 ms).
+
+**That result is not claimed, because the variant was incorrect.** It produced a
+different round-3 child count on every run (33.558 M / 33.563 M / 33.568 M) with **zero
+drop counters**, and survivors varied 3 / 2 / 0 — i.e. it silently lost golden solutions.
+Round 2's output count was stable, so round 3 was reading data that round 2 appeared to
+have written correctly; all stride sites were checked and matched. The cause was not
+found, and the variant was reverted rather than debugged into the tree.
+
+Recorded as an **open lead, not a dead end**: the timing signal is plausible and worth
+re-testing with a correct implementation. Note the trap — the faster variant was the
+broken one, so a timing-only comparison would have "won".
+
+
 ---
 
 ## Established limits
@@ -536,57 +606,54 @@ optimization can achieve.
    *loads* the ordering reverses — the staging loop's 8 iterations overlap their loads,
    the all-lanes loop's single iteration cannot
    ([measured](#deferring-the-stage-read)).
-6. **The compute-hiding budget is finite, and round 3 is where it runs out.** The fused
-   kernel stalls on memory, and arithmetic issued into those stalls is free until it
-   exceeds them. Round 2's rebuild (14 siphashes/element) cost +0.4 ms — essentially all
-   hidden. Round 3's (28) cost ~9 ms — essentially all exposed. This is not register
-   spilling ([register cap](#register-cap-tuning) is a wash); it is the stall budget
-   being used up. Any future compute-for-memory trade should be sized against this
-   boundary, not assumed to scale.
+6. **The compute-hiding budget is finite — and it SHRINKS as the kernel gets faster.**
+   The fused kernel stalls on memory, and arithmetic issued into those stalls is free
+   until it exceeds them. This is not register spilling
+   ([register cap](#register-cap-tuning) is a wash); it is the stall budget being used
+   up. Crucially the budget is not a constant of the algorithm: removing the local-memory
+   spill in [compile-time constants](#compile-time-round-constants) cut the stalls, and
+   the *same* round-2 rebuild went from +0.4 ms to +4.3 ms without changing a line of it.
+   **Any compute-for-memory trade must be re-measured after any change that speeds up the
+   round it lives in** — see [the round-3 record A/B](#the-round-3-record-ab-withdrawn).
 
-Consequence: element size, coalescing, occupancy and atomics are all settled — but the
-gap is no longer as unexplained as it looked. Two of the four rounds now store no work
-state at all, and both memory and time fell together, which is what
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md) predicted would happen if the two were the same
-problem. lolMiner's remaining ~2.3× may be more of the same rather than an unknown
-technique — but rounds 4 and 5, which still store full work state, are past the
-compute-hiding boundary, so it cannot be more of *literally* the same.
+Consequence: element size, coalescing, occupancy and atomics are all settled. The gap is
+down to ~1.6×, and the single largest step toward it was not an algorithmic idea at all —
+it was a compiler-visibility bug in code that had been read many times. Worth weighing
+before assuming lolMiner holds an unknown technique: the last 26.6 ms came from making
+existing arithmetic compile down properly, not from moving fewer bytes.
 
 ---
 
 ## Current focus and open leads
 
-**Where the time goes** (83.2 ms): r1 12.1, r2 15.1, r3 26.5, r4 25.6, plus a 2.8 ms entry
-and a 4.4 ms terminal. The shape has changed — rounds 1–2 have roughly halved, and
-**rounds 3–4 are now 63 % of the solve**.
+**Where the time goes** (56.6 ms): r1 7.5, r2 10.9, r3 21.5, r4 10.9, plus a 2.8 ms entry
+and a 4.4 ms terminal. **Round 3 is now the outlier** — it is the only round carrying a
+re-derivation rebuild (9.7 ms, 45 % of it).
 
-**The governing constraint.** Every win so far came from *moving fewer bytes*, and the
-[established limits](#established-limits) show the scattered emit is already at the
-hardware's random-access ceiling (~260 GB/s, ~51 % of peak) and cannot be coalesced.
-Reducing *what* is stored is therefore the only lever with real headroom — which is also
-what the algorithm's 3 GB design target implies
-(see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)). What is new is that this lever is now
-bounded on the other side too, by the
-[compute-hiding budget](#established-limits): rounds 4–5 cannot pay for their storage in
-arithmetic the way rounds 1–3 did.
+**The governing constraint has changed.** Moving fewer bytes is still the structural
+lever, but the last and largest win came from a different place entirely: per-round
+constants were runtime arguments, which spilled `apply_mix`'s working array to local
+memory. That suggests the remaining gap may hold more *implementation* faults of this
+kind rather than only algorithmic ones, and that the two should be looked for separately.
 
 **Leads, most promising first:**
 
-1. **Attack rounds 3–4 as the new majority.** They are 52 of 83 ms. Round 4 still stores
-   full work state (64 B in, 48 B out) and full re-derivation is ruled out, so the
-   question is whether anything *cheaper than a full rebuild* shrinks its record — a
-   partial rebuild, or storing an intermediate that costs fewer than 56 siphashes to
-   expand. Unexplored, and the only lead sized to the remaining gap.
-2. **Eliminate the stored `gi`.** An element's identity could be its bucket slot
+1. **Redo the round-3 record A/B correctly.** The withdrawn experiment measured 3.8 ms
+   faster but was incorrect
+   ([details](#the-round-3-record-ab-withdrawn)). Round 3's rebuild costs 9.7 ms against
+   ~56 B/element saved, so the quad record is genuinely in question now. This is the
+   largest identified lead. Any re-test must gate on the child count and survivor count,
+   not just the timing — the broken variant was the *faster* one.
+2. **Look for more compiler-visibility faults.** `apply_mix` was spilling `t[8]` for the
+   entire life of the project. Worth auditing every private array reachable from the hot
+   path for dynamic indexing, and every loop bound for runtime-ness — `bh3_combine`'s
+   `Lout` masking loop and `ctree[9]` are the obvious next candidates.
+3. **Eliminate the stored `gi`.** An element's identity could be its bucket slot
    (`bucket × cap + pos`) rather than a stored 4 B counter value, removing 4 B from every
-   emit and every stage read. Requires back-reference rows indexed by slot (larger, but
-   `fb_gi` disappears) and changes the `(lead, gi)` tie-break to `(lead, slot)` — valid,
-   since ties only occur between equal-lead pairs, which the CPU gate rejects anyway.
-   Now worth more at rounds 4–5 than at 1–3, where the record is already tiny.
-3. **The ~7 ms outside the pipeline.** `bench_rounds` medians 83.2 ms while
-   `GpuSolver::solve()` measures 90 ms. That gap was ~0 at 102.7 ms and is now 8 % of a
-   solve; it is pure overhead (setup, readback, recovery, verification) and has never been
-   profiled because it never mattered.
+   emit and every stage read, and letting round 4's emit pack `lead` into the spare 32
+   bits of its last work word (6 → 5 u64). The `(lead, gi)` tie-break becomes
+   `(lead, slot)` — valid, since ties only occur between equal-lead pairs, which the CPU
+   gate rejects anyway. Costs ~0.5 GB (back-ref rows become slot-indexed).
 4. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
    row-bucket path now needs 222. A single constant covers both, so row-bucket cards are
    still assessed against the sort path's appetite — which is what forces the ≥ 14.6 GiB
@@ -597,9 +664,10 @@ arithmetic the way rounds 1–3 did.
    proportionally, but must stay drop-free across nonces, so it needs a measured
    occupancy distribution rather than a guess.
 
-**Done since this list was last written:** re-derivation in a non-divergent context (lead
-1, −20.4 ms across rounds 1–3) and per-set stride sizing (old lead 3, folded into the
-quad-record change — the 10 u64 stride retired entirely).
+**Done since this list was last written:** re-derivation in a non-divergent context
+(−20.4 ms across rounds 1–3), per-set stride sizing (folded into the quad-record change),
+and compile-time round constants (−26.6 ms). The "~7 ms outside the pipeline" lead
+closed itself — that overhead did not scale with the rounds.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
@@ -628,3 +696,20 @@ Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
 `MXBM_ABLATE` (bit 0 skips `apply_mix`, bit 1 skips the fat emit — for phase attribution),
 `MXBM_CL_OPTS` (extra OpenCL build options for the fused program, e.g.
 `-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)).
+
+**Phase ablation (`ABL`).** Built through `MXBM_CL_OPTS`, e.g.
+`MXBM_CL_OPTS="-DABL=1 -DABL_MODE=2"`. Results are *intentionally wrong* when enabled —
+it attributes time, it does not compute. Bits: 1 = skip the emit payload write (counters
+and back-refs kept, so element counts stay representative), 2 = skip the re-derivation
+rebuild, 4 = skip the whole match body, 8 = skip back-refs, 16 = skip the mix, 32/64 =
+skip the per-bucket / `gi` atomic, 128 = skip the combine.
+
+`ABL_MODE` selects **one round** by its `LMODE` (1 = r1 seed, 4 = r2, 5 = r3, 2 = r4).
+This matters: ablating a round corrupts the bucket distribution of every round *after*
+it, so only the ablated round's own number is meaningful. Two further traps found in
+use — ablating the match body also makes the rebuild dead code (so it under-reads), and
+ablating the combine leaves `c[0] = a[0]`, which sends every child of a group to one
+bucket and measures pathological contention rather than the removed work.
+
+This replaces the `MXBM_ABLATE` that the row-bucket rewrite removed while this document
+still listed it.
