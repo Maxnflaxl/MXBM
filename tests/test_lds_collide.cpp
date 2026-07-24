@@ -761,6 +761,53 @@ static void test_coalescing_curve(Runtime& rt, cl_program prog) {
     check(true,"coalescing curve characterized");
 }
 
+// SPLIT vs PACKED emit: the real fused emit scatters each child across FOUR arrays
+// (work, gi, lead, leaves) at the same random index. Global writes are serviced in
+// 32 B sectors, so each 4 B field burns a whole sector. Same useful bytes (72 B),
+// three layouts: split / packed 72 B / packed+padded to 96 B (sector-aligned).
+static void test_emit_packing(Runtime& rt, cl_program prog) {
+    section("emit layout: 4 split arrays vs 1 packed record @ 2^25");
+    // Tight cap: uniform keys give mean 2048/bucket with sigma ~45, so +256 is ~5.7
+    // sigma and stays drop-free. Needed to keep the 96 B padded array under the
+    // device's 3.9 GB single-allocation limit.
+    const uint32_t N=1u<<25, bb=14, nb=1u<<bb, cap=(N>>bb)+256;
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m;} return b; };
+    uint64_t s=0xE311770ULL;
+    std::vector<uint32_t> keys(N); for(uint32_t i=0;i<N;++i) keys[i]=(uint32_t)(sm(s)&0xFFFFFFu);
+    Mem mKeys=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,keys.size()*4,keys.data());
+    Mem mCnt=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*4);
+    Mem mDr=rt.alloc(CL_MEM_READ_WRITE,4*4);
+    const size_t nslots=(size_t)nb*cap;
+    Mem mW=rt.alloc(CL_MEM_READ_WRITE,nslots*7*8);
+    Mem mG=rt.alloc(CL_MEM_READ_WRITE,nslots*4);
+    Mem mL=rt.alloc(CL_MEM_READ_WRITE,nslots*4);
+    Mem mLv=rt.alloc(CL_MEM_READ_WRITE,nslots*2*4);
+    Mem mP=rt.alloc(CL_MEM_READ_WRITE,nslots*9*8);
+    Mem mPP=rt.alloc(CL_MEM_READ_WRITE,nslots*12*8);
+    const double USEFUL=(double)((double)N*72.0)/1e9;   // 72 B of real payload per child
+    auto run=[&](const char* name, bool split, cl_mem packed){ double t=best([&]{
+        rt.fill_u32(mCnt.get(),0u,nb); rt.fill_u32(mDr.get(),0u,4);
+        Kernel k=rt.kernel(prog,name);
+        cl_mem ky=mKeys.get(),c=mCnt.get(),dr=mDr.get();
+        rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,bb); rt.set_arg(k.get(),2,cap);
+        rt.set_arg(k.get(),3,sizeof(cl_mem),&ky); rt.set_arg(k.get(),4,sizeof(cl_mem),&c);
+        if (split) { cl_mem w=mW.get(),g2=mG.get(),l=mL.get(),lv=mLv.get();
+            rt.set_arg(k.get(),5,sizeof(cl_mem),&w); rt.set_arg(k.get(),6,sizeof(cl_mem),&g2);
+            rt.set_arg(k.get(),7,sizeof(cl_mem),&l); rt.set_arg(k.get(),8,sizeof(cl_mem),&lv);
+            rt.set_arg(k.get(),9,sizeof(cl_mem),&dr); }
+        else { rt.set_arg(k.get(),5,sizeof(cl_mem),&packed); rt.set_arg(k.get(),6,sizeof(cl_mem),&dr); }
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
+        std::printf("  %-16s: %.2f ms  (%.0f GB/s of useful payload)\n", name, t, USEFUL/t*1000.0);
+        return t; };
+    double tS=run("emit_split",true,nullptr);
+    double tP=run("emit_packed",false,mP.get());
+    double tPP=run("emit_packed_pad",false,mPP.get());
+    std::printf("  --> packed %.2fx faster than split | padded-96B %.2fx faster than split\n", tS/tP, tS/tPP);
+    check(true,"emit packing characterized");
+}
+
 // Pins the algebra the round-3/round-4 compact leftContrib rests on (CPU-only, no
 // GPU): apply_mix decomposes as rotl24(workPart + indexPart) with indexPart additive
 // over leaves, so the LEFT parent's 8 leaves can be pre-folded into ONE u64 by round 3
@@ -815,6 +862,7 @@ int main() {
     test_leaf_locality(rt, prog.get());
     test_scatter_occupancy(rt, prog.get());
     test_coalescing_curve(rt, prog.get());
+    test_emit_packing(rt, prog.get());
 
     // STEP B: fused round kernel correctness (exact vs oracle) + scale/drop-free.
     // Only r=1,2 use the RAW leaf variant (round_fused_lds, LEAFW=2); r3 emits the

@@ -344,6 +344,57 @@ __kernel void scatter_noatomic(uint N, uint bucket_bits, uint bucket_cap, uint e
     for (uint w = 0; w < ew; ++w) buckets[d*ew + w] = src[(size_t)g*ew + w];
 }
 
+// SPLIT-vs-PACKED EMIT. The fused emit writes each child to FOUR separate arrays at
+// the same random index (work, gi, lead, leaves). Global writes are serviced in 32 B
+// sectors, so each 4 B field costs a whole sector: ~5 sectors (160 B of traffic) for
+// 72 B of useful data. These two kernels write the SAME useful bytes -- split across
+// four arrays vs packed into one contiguous record -- to measure that waste.
+__kernel void emit_split(uint N, uint bucket_bits, uint bucket_cap,
+                         __global const uint* keys, __global uint* counts,
+                         __global ulong* bwork, __global uint* bgi,
+                         __global uint* blead, __global uint* bleaves,
+                         __global uint* drops) {
+    uint g = get_global_id(0); if (g >= N) return;
+    uint key = keys[g];
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos >= bucket_cap) { atomic_inc(&drops[0]); return; }
+    size_t d = (size_t)b*bucket_cap + pos;
+    for (uint w = 0; w < 7u; ++w) bwork[d*7 + w] = (ulong)(g + w);   // 56 B
+    bgi[d]   = g;                                                     // 4 B
+    blead[d] = key;                                                   // 4 B
+    bleaves[d*2 + 0] = g; bleaves[d*2 + 1] = key;                     // 8 B
+}
+// Same 72 B, one contiguous 9-ulong record: work[0..6], (gi|lead), leaves.
+__kernel void emit_packed(uint N, uint bucket_bits, uint bucket_cap,
+                          __global const uint* keys, __global uint* counts,
+                          __global ulong* belem, __global uint* drops) {
+    uint g = get_global_id(0); if (g >= N) return;
+    uint key = keys[g];
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos >= bucket_cap) { atomic_inc(&drops[0]); return; }
+    size_t d = (size_t)b*bucket_cap + pos;
+    for (uint w = 0; w < 7u; ++w) belem[d*9 + w] = (ulong)(g + w);   // 56 B
+    belem[d*9 + 7] = ((ulong)g << 32) | (ulong)key;                   // gi|lead
+    belem[d*9 + 8] = ((ulong)g << 32) | (ulong)key;                   // leaves
+}
+// Packed AND padded to 96 B (12 ulong = exactly 3 x 32 B sectors) so each record is
+// sector-aligned: trades 24 B of padding for zero straddle.
+__kernel void emit_packed_pad(uint N, uint bucket_bits, uint bucket_cap,
+                              __global const uint* keys, __global uint* counts,
+                              __global ulong* belem, __global uint* drops) {
+    uint g = get_global_id(0); if (g >= N) return;
+    uint key = keys[g];
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos >= bucket_cap) { atomic_inc(&drops[0]); return; }
+    size_t d = (size_t)b*bucket_cap + pos;
+    for (uint w = 0; w < 7u; ++w) belem[d*12 + w] = (ulong)(g + w);
+    belem[d*12 + 7] = ((ulong)g << 32) | (ulong)key;
+    belem[d*12 + 8] = ((ulong)g << 32) | (ulong)key;
+}
+
 // Coalesced copy: peak-ish sequential write reference (each thread writes ew
 // contiguous words; threads tile the array -> fully coalesced overall).
 __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong* dst) {
