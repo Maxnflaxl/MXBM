@@ -58,6 +58,25 @@ uint32_t inwords_for(int r) {
 // byte-identical goldens. Set MXBM_NO_COMPACT to fall back to full-width stride-7.
 bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr); return v; }
 
+// Row-bucket geometry. bucketBits sets the bucket count; submaskBits sets how many
+// times each bucket is rescanned by the staging loop (2^submaskBits) and hence the
+// group size (mean bucket / 2^submaskBits), which LDS_FCAP must cover *including its
+// tail*. Halving the bucket and the sub-mask together keeps the group size -- and so
+// the LDS footprint -- fixed while halving the rescan.
+// The staging loop must land ~256 elements per group so LDS_FCAP=384 covers the tail
+// drop-free, which pins bucketBits + submaskBits = 17 (2^25 / 2^17 = 256). Of the three
+// options that satisfy it, (15,2) wins because it rescans each bucket 4x instead of 8x
+// for the same group size and the same LDS:
+//     (14,3) 47.5 ms   (15,2) 42.5 ms   (16,1) needs a 4.3 GB single alloc -> rejected
+uint32_t rb_bucket_bits() {
+    static uint32_t v = std::getenv("MXBM_BB") ? (uint32_t)atoi(std::getenv("MXBM_BB")) : 15u;
+    return v;
+}
+uint32_t rb_submask_bits() {
+    static uint32_t v = std::getenv("MXBM_SM") ? (uint32_t)atoi(std::getenv("MXBM_SM")) : 2u;
+    return v;
+}
+
 // Extra OpenCL build options for the fused row-bucket program (MXBM_CL_OPTS).
 // The fused kernels are LDS-bound to 1 workgroup/SM, so the compiler's default
 // register budget -- chosen for an occupancy this kernel can never reach -- is
@@ -111,7 +130,7 @@ static uint32_t fb_cap_for(uint32_t mean) { return mean + (mean >> 2) + 256u; }
 // Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
 // lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
 static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single) {
-    const uint32_t nb = 1u << 14;
+    const uint32_t nb = 1u << rb_bucket_bits();
     const uint32_t cap = fb_cap_for(capacity / nb);
     const size_t nslots = (size_t)nb * cap;
     single = nslots * fb_set_stride(0) * 8;                     // fb_elem[0] -- largest
@@ -147,7 +166,7 @@ static bool want_rowbucket(Runtime& rt, const Budget& b) {
 // flat work[]/leaves[]/sort scratch (the buckets ARE the resident storage). Sized
 // so bucketDrops==0 at 2^25 (cap ~1.75x mean) -- ~12 GB, fits 16 GB.
 static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
-    p.fb_num_buckets = 1u << 14;
+    p.fb_num_buckets = 1u << rb_bucket_bits();
     p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     for (int i = 0; i < 2; ++i) {
@@ -800,7 +819,11 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
                                          std::string(kLdsClSource)}, rowbucket_cl_opts());
     const uint32_t nb = pb.fb_num_buckets, cap = pb.fb_bucket_cap, capacity = pb.capacity;
-    const uint32_t bucketBits = 14, submaskBits = 3, survCap = 1024;
+    // Sweepable for tuning: the sub-mask split sets how many times each bucket is
+    // rescanned (2^submaskBits) against the LDS a group needs. See MXBM_BB/MXBM_SM.
+    const uint32_t bucketBits = rb_bucket_bits();
+    const uint32_t submaskBits = rb_submask_bits();
+    const uint32_t survCap = 1024;
     const uint32_t total = (b.elems_per_round != 0) ? b.elems_per_round : capacity;
     const uint32_t batch = (b.seed_batch != 0) ? b.seed_batch : total;
 

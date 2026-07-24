@@ -478,8 +478,24 @@ with the bucket slot [costs 4.5 ms](#eliminating-the-dense-gi)); and round 3 nee
 eight of its leaves, six for the mix and all eight for `contribOut`, so the
 [leftContrib](#compact-leftcontrib) fold cannot be applied a level earlier.
 
-The sort fallback path was **not** audited — it is not selected on cards that can run
-row-bucket, so it has no bearing on the measured figures.
+**The sort fallback was audited too**, and had one real finding: a **692 MB back-ref
+array that nothing read or wrote**. An element's lead is leaf 0 of its own prefix, so
+`round_match` stopped writing `all_lead` some time ago — `round.cl` says so in two places
+— but the `5 × capacity` array outlived the write by several rounds of cleanup. Still
+allocated, still bound, never touched; only tests wrote it, as a fixture feeding an input
+the kernel had stopped reading. Sort path **285 → 264 B/element (8.89 → 8.25 GiB)**. The
+row-bucket path never allocated it.
+
+That is the *same redundancy class* as [the round-3 `lead` field](#the-redundant-lead-field)
+— an element's lead duplicating its own leaf 0 — which is what prompted looking there at
+all. Two independent instances of one mistake suggests the pattern, not the instances, is
+the thing to remember: **a field derived from another field in the same record will not
+announce itself; it has to be looked for deliberately.**
+
+The rest of the sort path is clean, with one deliberate exception: `leaves[2]` is a fixed
+9 uints where per-buffer sizing would save 4 B/element (~138 MB), because `leaves[1]`
+holds round 5's 9-leaf prefix and `leaves[0]` round 4's 8. Left alone — it complicates the
+ping-pong for little gain on a path that measures 214.6 ms against row-bucket's 47.5.
 
 ---
 
@@ -743,11 +759,23 @@ essentially *at* it. Two consequences worth being explicit about:
 
 - **Shaving bytes is nearly exhausted** — not by assertion this time, but because every
   record is `ceil(bits/64)` with no removable field.
-- **The remaining ~12 ms is not bytes.** Ablation puts `apply_mix` at ~3.3 ms across all
-  rounds (it was 17 ms in round 4 alone before the constants fix) and back-refs at ~2 ms,
-  which is their roofline. The rest is bandwidth not achieved — the 260 GB/s scatter
-  figure comes from an isolated probe with no compute interleaved, and the real kernels
-  may simply not reach it.
+- **The real emit *does* hit the 260 GB/s ceiling — measured, not assumed.** The whole
+  roofline rested on a figure from an isolated probe with no compute interleaved, so it
+  was checked in situ: the pipeline moves **11.75 GiB per solve in 47.5 ms = 266 GB/s
+  aggregate**, against the probe's 260. The scattered writes set the pace for everything
+  else, and the pipeline is at that pace.
+- **So the remaining ~12 ms is not addressable by tuning.** Ablation puts `apply_mix` at
+  ~3.3 ms across all rounds (it was 17 ms in round 4 alone before the constants fix) and
+  back-refs at ~2 ms, which is their roofline. With bytes at their floor and the access
+  pattern at its measured ceiling, the next real gain has to come from **moving different
+  bytes, not fewer** — see the leads below.
+
+> **A caution on per-phase ablation at this point.** Ablating a single round's emit now
+> yields implied rates of 383–767 GB/s, i.e. above the card's peak. That is not a
+> measurement of the write; it is the *marginal* cost, and it is small because the memory
+> system is already saturated — removing one stream lets the others fill in. Per-phase
+> ablation was the right tool for finding `apply_mix`; it is the wrong tool for pricing
+> bytes once the pipeline is bandwidth-saturated. Use the aggregate.
 
 **Leads, most promising first:**
 

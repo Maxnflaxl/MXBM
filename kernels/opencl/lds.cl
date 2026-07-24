@@ -276,7 +276,9 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 // Full-width (7 u64) first for correctness; per-round compaction layers on later.
 // ===========================================================================
 #ifndef LDS_FCAP
+#ifndef LDS_FCAP
 #define LDS_FCAP 384u        // fat-element group cap (work+leaves in LDS -> smaller than LDS_ECAP)
+#endif
 #endif
 #define LDS_FLEAF 8u         // max parent leaf prefix staged (sleaves_for(<=4) = 8)
 
