@@ -144,6 +144,21 @@ __kernel void p2_scatter_elem(uint N, uint bucket_bits, uint bucket_cap,
     } else atomic_inc(&drops[0]);
 }
 
+// Measurement: scatter with a variable element width `ew` (u64 words, stride ew)
+// to characterize the emit-to-bucket cost vs element size -- i.e. how much
+// compaction to the significant-word schedule [7,7,6,5,1] actually saves.
+__kernel void p2_scatter_w(uint N, uint bucket_bits, uint bucket_cap, uint ew,
+                           __global const ulong* work,   // [N*7], only ew words used
+                           __global uint* counts, __global ulong* bwork, __global uint* drops) {
+    uint g = get_global_id(0);
+    if (g >= N) return;
+    uint key = (uint)(work[(size_t)g*7] & 0xFFFFFFu);
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos < bucket_cap) { size_t d=(size_t)b*bucket_cap+pos; for (uint w=0;w<ew;++w) bwork[d*ew+w]=work[(size_t)g*7+w]; }
+    else atomic_inc(&drops[0]);
+}
+
 // Collide + combine: one workgroup per (bucket, sub-mask). Stage full elements
 // into LDS, chain by middle key bits, and for each equal-full-key pair emit the
 // bh3_combine child work (7 u64) + the two parent indices. Parents read from LDS.

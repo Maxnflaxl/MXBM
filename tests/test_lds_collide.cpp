@@ -315,6 +315,43 @@ int main() {
     test_combine(rt, prog.get());
     test_scatter_cost(rt, prog.get());
 
+    // Compaction prototype: how much does shrinking the element to its
+    // significant-word schedule actually save on the dominant emit-to-bucket cost?
+    {
+        section("compaction: emit-to-bucket cost vs element width (u64 words)");
+        // BeamHash III Lout schedule -> significant words = ceil(Lout/64) for the
+        // OUTPUT of each round (= what that round emits).
+        const uint32_t Lout[5]={424,400,376,288,24};
+        uint32_t emitWords[5];
+        std::printf("  sig-word schedule (emit width per round): ");
+        for(int r=0;r<5;++r){ emitWords[r]=(Lout[r]+63)/64; std::printf("r%d=%u(%ub) ",r+1,emitWords[r],Lout[r]); }
+        std::printf("\n");
+        const uint32_t N=1u<<25; auto w=gen_elem(N,24,0x3);
+        const uint32_t bb=14, numBuckets=1u<<bb, bucketCap=(N>>bb)+(N>>(bb+2))+512;
+        Mem mW=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,(void*)w.data());
+        Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
+        Mem mBW=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*7*8);  // 7-word max
+        Mem mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+        double emit[8]={0}; for(int i=0;i<8;++i) emit[i]=1e9;
+        for(uint32_t ew=1; ew<=7; ++ew){
+            for(int it=0;it<4;++it){ rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4);
+                Kernel k=rt.kernel(prog.get(),"p2_scatter_w"); cl_mem a=mW.get(),c=mC.get(),bw=mBW.get(),d=mD.get();
+                rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bb);rt.set_arg(k.get(),2,bucketCap);rt.set_arg(k.get(),3,ew);
+                rt.set_arg(k.get(),4,sizeof(cl_mem),&a);rt.set_arg(k.get(),5,sizeof(cl_mem),&c);
+                rt.set_arg(k.get(),6,sizeof(cl_mem),&bw);rt.set_arg(k.get(),7,sizeof(cl_mem),&d);
+                auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+                double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+                if(it&&m<emit[ew])emit[ew]=m; }
+            std::printf("  emit-to-bucket ew=%u words (%u B): %.2f ms\n", ew, ew*8, emit[ew]);
+        }
+        double uncompacted=5*emit[7];
+        double compacted=emit[emitWords[0]]+emit[emitWords[1]]+emit[emitWords[2]]+emit[emitWords[3]]+emit[emitWords[4]];
+        std::printf("  --> emit total/solve: uncompacted(5x7w)=%.1f ms  vs  compacted[%u,%u,%u,%u,%u]=%.1f ms  (%.0f%% saved)\n",
+            uncompacted, emitWords[0],emitWords[1],emitWords[2],emitWords[3],emitWords[4], compacted,
+            100.0*(uncompacted-compacted)/uncompacted);
+        check(true,"compaction emit curve measured");
+    }
+
     // Empirical fork sweep at pipeline scale: which (bucketBits, submaskBits)
     // split is fastest while drops==0? Realistic uniform 24-bit keys, N=2^25.
     {
