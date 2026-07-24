@@ -900,14 +900,44 @@ What remains is not solver work:
    row-bucket path needs 239. That constant is what keeps 12 GB cards on the 5× slower
    fallback. Reach, not speed.
 
-**On the remaining ~4 ms.** The pipeline sits within ~5 % of its own memory floor, moving
-11.75 GiB per solve at 312 GB/s against a ~260 GB/s pure-scatter rate. For lolMiner to do
-35.8 ms on the same hardware it must either move **fewer bytes than this record set
-requires** — which the [audit](#the-record-redundancy-audit) says is impossible without
-dropping a field something reads — or use a collision structure that is not derivable from
-the public references. Both are live possibilities; neither is resolvable by measuring
-*this* implementation harder. Anyone picking this up should start by questioning the
-Wagner variant, not the kernels.
+### On the remaining ~4 ms
+
+The pipeline sits within ~3 % of its own memory floor: 39.1 ms of traffic at the measured
+312 GB/s against 40.3 ms achieved. For lolMiner to do 35.8 ms on the same bytes it would
+need ~350 GB/s. So exactly one of three things is true.
+
+**1. It moves fewer bytes.** The [audit](#the-record-redundancy-audit) says that requires
+dropping a field something reads, and every record is already `ceil(bits/64)`.
+
+**2. It achieves a better rate.** Its writes are scattered too — the emit is a key-random
+scatter for any Wagner implementation — and
+[bucket count, occupancy, atomics and reorder schemes](#what-didnt-work) are all measured
+irrelevant to that rate here. A CUDA backend is the plausible remainder (`cp.async` for
+the staging loop, better register allocation than the OpenCL compiler), and it is already
+on the roadmap — but with only ~1.2 ms between us and the floor, it cannot be worth 4 ms
+by itself.
+
+**3. The two figures are not counting the same thing.** This one deserves weight, because
+we just caught it in our own metric: this solver produces **2.29 survivors per solve** but
+only **1.95 that pass CPU verification** — a 17 % gap between "solutions found" and
+"solutions that are actually solutions". A miner reporting the former would show ~17 %
+higher sol/s for identical work.
+
+**The 3 GB figure is not the clue it looks like.** It is tempting to read Beam's "minimum
+3 GB" as evidence of a leaner algorithm we have missed. It is the opposite: at 2^25
+elements 3 GB is **89 B/element**, and two live layers of work words alone are 112 B, so a
+conforming 3 GB implementation *cannot* hold two layers — it must process each round in
+slices and re-read the previous layer once per slice, costing **+176 B/element/round**.
+The 3 GB design is necessarily *slower*. It is the algorithm's minimum viable spec, not a
+speed technique, and on a 16 GB card any fast miner will spend memory the way this one
+does. **Questioning the Wagner variant is the wrong place to look** — that is a
+retraction of what an earlier revision of this section suggested.
+
+**The cheapest way to settle it is not a code change.** Reported sol/s is
+implementation-defined; **accepted pool shares over a fixed interval are not**. Running
+both miners against the same pool for the same wall-clock time and comparing accepted
+shares removes the counting question entirely, and tells us whether the remaining gap is
+4 ms of engineering or a measurement artefact.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
