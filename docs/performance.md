@@ -22,8 +22,17 @@ fallback sort path.
 Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
 "Didn't work" link to the sections explaining each result.
 
+The first row is the **real-world** starting point: the miner's own reported speed when
+the GPU solver found its first share. Later rows are `bench_rounds` pipeline medians,
+the controlled measurement used to make optimization decisions. Early on these disagreed
+sharply — the pipeline benched at 245 ms (≈ 7.9 sol/s equivalent) while the miner
+actually delivered ~1.8 sol/s, i.e. most of a solve was spent *outside* the measured
+pipeline. That overhead is gone: end-to-end `GpuSolver::solve()` now measures 103 ms
+against the 102.7 ms pipeline bench, so the two agree.
+
 | Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
 |---|---|---|---|---|---|---|---|---|
+| 2026-07-23 | **First working GPU solver** (first share found) | — | ~1050 | **1.8** | — | — | — | — |
 | 2026-07-23 | Sort-based collision finder (P1–P3) | 245.0 | 239.0 | **7.95** | −6.0 | −2.4 % | [Sort path](#sort-based-collision-finder) | — |
 | 2026-07-23 | Tiled 4-bit × 6-pass radix sort (P4) | 239.0 | 225.0 | **8.44** | −14.0 | −5.9 % | [Tiled radix](#tiled-radix-sort) | — |
 | 2026-07-24 | Fixed-width AoS compaction `[7,7,6,5,1]` | 224.4 | 214.5 | **8.86** | −9.9 | −4.4 % | [Compaction](#fixed-width-compaction) | [SoA planes](#soa-word-planes), [runtime widths](#runtime-loop-bounds) |
@@ -36,7 +45,8 @@ Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
 | 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | **18.5** | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | [Round-2 re-derivation](#round-2-re-derivation) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 18.5 sol/s** (102.7 ms/solve). Started at 7.8 sol/s → **+139 %**.
+**Current: 18.5 sol/s** (102.7 ms/solve, and 103 ms end-to-end).
+Started at **1.8 sol/s** when the solver first worked → **10.3× faster**.
 **Target: 53 sol/s** (lolMiner, stock) — remaining gap **~2.9×**.
 
 *Solutions per second (sol/s) is the number miners and pools report. BeamHash III
