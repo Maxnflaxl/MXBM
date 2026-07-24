@@ -31,10 +31,11 @@ Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
 | 2026-07-24 | Per-round work compaction on row-bucket | 139.1 | 136.0 | −3.1 | −2.2 % | [Row-bucket compaction](#per-round-compaction-on-the-row-bucket-path) | — |
 | 2026-07-24 | Async enqueue (de-bubble) | 135.0 | 133.0 | −2.0 | −1.5 % | [De-bubble](#async-de-bubble) | [Magazine](#shared-memory-magazine), [gi atomic](#global-gi-atomic) |
 | 2026-07-24 | Compact `leftContrib` (fold 8 leaves → 1 u64) | 131.1 | 124.8 | −6.3 | −4.8 % | [leftContrib](#compact-leftcontrib) | [General mix-state](#general-compact-mix-state) |
+| 2026-07-24 | Packed element record (1 block, not 4 arrays) | 124.8 | 115.7 | −9.1 | −7.3 % | [Packed record](#packed-element-record) | [SoA LDS staging](#soa-lds-staging) |
 | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 124.8 ms/solve (8.01 solve/s).** Started at 245 ms → **−49 %**.
-Remaining gap to lolMiner: **~3.5×**.
+**Current: 115.7 ms/solve (8.64 solve/s).** Started at 245 ms → **−53 %**.
+Remaining gap to lolMiner: **~3.2×**.
 
 ---
 
@@ -158,6 +159,32 @@ Both sides use the pinned `bh3_apply_mix`, so no rotation constants are duplicat
 shrinks 9 → 4 uints/slot (~1.1 GB). **131.1 → 124.8 ms.** The algebra is pinned by
 `test_contrib_identity` (200 000 random trials) so a regression fails loudly.
 
+### Packed element record
+Elements were stored across **four parallel arrays** (work, gi, lead, leaves) indexed by
+the same random slot. Global memory is serviced in **32 B sectors**, so a 4 B `gi` and a
+4 B `lead` each burned a whole sector — roughly **5 sectors of traffic for a 72 B child**,
+on both the scattered emit and the staging read. An isolated probe writing the same 72 B
+three ways measured the cost directly:
+
+| Layout | ms | useful GB/s |
+|---|---|---|
+| 4 split arrays | 21.78 | 111 |
+| 1 packed record | **18.20** | **133** |
+| packed, padded to 96 B (3 aligned sectors) | 18.25 | 132 |
+
+Padding to sector alignment buys nothing beyond contiguity, so the record wastes no
+bytes. The element is now one contiguous block:
+
+```
+[work: inwords u64][meta: (gi << 32) | lead][leaf payload: two u32 per u64]
+```
+
+Strides are per-round runtime arguments while every **loop bound stays compile-time**, so
+the word loops still fully unroll. Bucket capacity was retuned to `mean + mean/4 + 256`
+to keep the widest packed array under the 3.9 GB single-allocation limit — still ~17σ of
+headroom against a distribution whose max sits near mean + 4.5σ, and drop counters gate
+every run. **124.8 → 115.7 ms**, every round faster, and ~4 GB less memory.
+
 ---
 
 ## What didn't work
@@ -230,6 +257,16 @@ Staging children in LDS per destination bucket and flushing coalesced. Infeasibl
 fan-out: a workgroup produces ~256 children spread over 16384 buckets, so magazines hold
 ~1 element and never fill. Confirmed by the literature (local-reorder needs ≤256 bins) and
 by Wilke Trei's own FishHashMiner, which contains no magazine.
+
+### SoA LDS staging
+The LDS staging array used AoS indexing `lwork[pos*7 + w]` — a stride of 7 ulongs = 14
+uints, and `gcd(14, 32 banks) = 2`, so every access was nominally a 2-way bank conflict.
+Switching to plane-major SoA (`lwork[w*CAP + pos]`) measured **125.7–125.9 vs 124.8 ms —
+reproducibly ~1 ms slower**. The dominant LDS accesses are in the collision-walk, where
+`leftPos`/`rightPos` come from hash-chain traversal and are scattered under either
+layout; only the staging loop has consecutive indices, and it is the minority of
+accesses. (Note this is LDS layout only — the *global* packing win above is a separate,
+real effect.)
 
 ### Two-level bucketing
 The last structural idea: partition coarsely (256 bins, long runs, coalesced flush) then
