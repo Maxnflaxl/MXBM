@@ -280,106 +280,95 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 #endif
 #define LDS_FLEAF 8u         // max parent leaf prefix staged (sleaves_for(<=4) = 8)
 
-__kernel void round_fused_lds(
-    uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,
-    uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut, uint out_off,
-    __global const uint*  in_counts,
-    __global const ulong* in_bwork,    // [nb*in_cap*7]
-    __global const uint*  in_bgi,      // [nb*in_cap]      stable per-level id (tiebreak + backref)
-    __global const uint*  in_blead,    // [nb*in_cap]      first leaf (pair ordering)
-    __global const uint*  in_bleaves,  // [nb*in_cap*sIn]  leaf prefix (fat)
-    __global uint*  out_counts,        // [nb], pre-zeroed
-    __global ulong* out_bwork,         // [nb*out_cap*7]
-    __global uint*  out_bgi,           // [nb*out_cap]
-    __global uint*  out_blead,         // [nb*out_cap]
-    __global uint*  out_bleaves,       // [nb*out_cap*sOut]
-    __global uint*  all_left, __global uint* all_right,  // indexed by child gi
-    __global uint*  gi_counter,        // global atomic -> dense child gi
-    __global uint*  drops) {           // [1]=group ovf, [2]=out-bucket ovf, [3]=chain cap
-    __local ulong lwork[LDS_PW * LDS_FCAP];
-    __local uint  lgi[LDS_FCAP];
-    __local uint  llead[LDS_FCAP];
-    __local uint  lleaf[LDS_FLEAF * LDS_FCAP];
-    __local uint  lkey[LDS_FCAP];
-    __local uint  lchain[LDS_FCAP];
-    __local uint  tab[LDS_TABSIZE];
-    __local uint  gcount;
-
-    uint lId = get_local_id(0);
-    uint submaskCount = 1u << submask_bits;
-    uint bucket = get_group_id(0) / submaskCount;
-    uint mask   = get_group_id(0) % submaskCount;
-
-    if (lId == 0) gcount = 0;
-    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    uint cnt = in_counts[bucket];
-    if (cnt > in_bucket_cap) cnt = in_bucket_cap;
-    size_t base = (size_t)bucket * in_bucket_cap;
-    for (uint p = lId; p < cnt; p += LDS_WG) {
-        size_t d = base + p;
-        uint key = (uint)(in_bwork[d*LDS_PW] & 0xFFFFFFu);
-        if ((key & (submaskCount - 1u)) != mask) continue;
-        uint pos = atomic_inc(&gcount);
-        if (pos < LDS_FCAP) {
-            for (uint w = 0; w < LDS_PW; ++w) lwork[pos*LDS_PW + w] = in_bwork[d*LDS_PW + w];
-            lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;
-            for (uint i = 0; i < sIn; ++i) lleaf[pos*LDS_FLEAF + i] = in_bleaves[d*sIn + i];
-        } else atomic_inc(&drops[1]);
-    }
-    barrier(CLK_LOCAL_MEM_FENCE);
-    uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;
-
-    for (uint pos = lId; pos < total; pos += LDS_WG) {
-        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);
-        lchain[pos] = atomic_xchg(&tab[hk], pos);
-    }
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    for (uint pos = lId; pos < total; pos += LDS_WG) {
-        uint key = lkey[pos];
-        uint oth = lchain[pos], walk = 0;
-        while (oth != LDS_EMPTY) {
-            if (++walk > 64u) { atomic_inc(&drops[3]); break; }
-            if (lkey[oth] == key) {
-                // (lead, gi) canonical order -- lead primary, gi tiebreak. Distinct
-                // leads (every valid solution) are decided by lead alone; equal-lead
-                // pairs are overlapping-tree cases the CPU verify gate drops anyway.
-                uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];
-                uint leftPos = pos, rightPos = oth;
-                if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
-                ulong a[7], b[7], c[7];
-                for (uint w = 0; w < LDS_PW; ++w) { a[w] = lwork[leftPos*LDS_PW+w]; b[w] = lwork[rightPos*LDS_PW+w]; }
-                bh3_combine(a, b, Lout, c);
-                // Child leaf prefix = concat(left leaves, right leaves). BUILD enough
-                // for BOTH the mix (padnum_next leaves) and the next round's carry
-                // (sOut leaves); STORE only sOut. L5-thin: round 4 passes sOut=0 (round
-                // 5 is terminal -- no mix, recover walks back-refs), so it builds 9
-                // leaves for the child's own mix but writes none.
-                uint ctree[9];
-                uint nbuild = padnum_next > sOut ? padnum_next : sOut;
-                for (uint i = 0; i < nbuild; ++i)
-                    ctree[i] = (i < sIn) ? lleaf[leftPos*LDS_FLEAF + i]
-                                         : lleaf[rightPos*LDS_FLEAF + (i - sIn)];
-                // Fold round-(r+1) mix into the child -> sets its next collision key.
-                c[0] = bh3_apply_mix(c, ctree, padnum_next, Lmix_next);
-                uint ckey = (uint)(c[0] & 0xFFFFFFu);
-                uint cb = ckey >> (24u - bucket_bits);
-                uint cpos = atomic_inc(&out_counts[cb]);
-                if (cpos < out_bucket_cap) {
-                    uint cgi = atomic_inc(gi_counter);
-                    size_t od = (size_t)cb * out_bucket_cap + cpos;
-                    for (uint w = 0; w < LDS_PW; ++w) out_bwork[od*LDS_PW + w] = c[w];
-                    out_bgi[od] = cgi; out_blead[od] = ctree[0];
-                    for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i];
-                    all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos];
-                } else atomic_inc(&drops[2]);
-            }
-            oth = lchain[oth];
-        }
-    }
+// COMPACTION variants: work carried at per-round significant widths. INW = input
+// parent words (inwords_for(r)), OUTW = emitted child words (outwords_for(r)). Both
+// are COMPILE-TIME so the stage/combine/emit loops fully unroll (a runtime width cost
+// +24 ms on the sort path -- the unrolling killer). LDS lwork stride = INW (also
+// shrinks LDS for late rounds). Upper words are 0 in the compacted layout (the prior
+// bh3_combine masked to Lout, and apply_mix touches only e[0]), so zero-filling
+// a/b[INW..7) before bh3_combine is bit-exact. Widths: r1,r2=(7,7); r3=(7,6); r4=(6,5).
+#define FUSED_LDS(NAME, INW, OUTW)                                                    \
+__kernel void NAME(                                                                   \
+    uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
+    uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut, uint out_off,   \
+    __global const uint* in_counts, __global const ulong* in_bwork,                   \
+    __global const uint* in_bgi, __global const uint* in_blead,                       \
+    __global const uint* in_bleaves,                                                  \
+    __global uint* out_counts, __global ulong* out_bwork, __global uint* out_bgi,     \
+    __global uint* out_blead, __global uint* out_bleaves,                             \
+    __global uint* all_left, __global uint* all_right,                                \
+    __global uint* gi_counter, __global uint* drops) {                               \
+    __local ulong lwork[(INW) * LDS_FCAP];                                            \
+    __local uint  lgi[LDS_FCAP]; __local uint llead[LDS_FCAP];                        \
+    __local uint  lleaf[LDS_FLEAF * LDS_FCAP];                                        \
+    __local uint  lkey[LDS_FCAP]; __local uint lchain[LDS_FCAP];                      \
+    __local uint  tab[LDS_TABSIZE]; __local uint gcount;                              \
+    uint lId = get_local_id(0);                                                       \
+    uint submaskCount = 1u << submask_bits;                                           \
+    uint bucket = get_group_id(0) / submaskCount;                                     \
+    uint mask   = get_group_id(0) % submaskCount;                                     \
+    if (lId == 0) gcount = 0;                                                         \
+    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;              \
+    barrier(CLK_LOCAL_MEM_FENCE);                                                     \
+    uint cnt = in_counts[bucket];                                                     \
+    if (cnt > in_bucket_cap) cnt = in_bucket_cap;                                     \
+    size_t base = (size_t)bucket * in_bucket_cap;                                     \
+    for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
+        size_t d = base + p;                                                          \
+        uint key = (uint)(in_bwork[d*(INW)] & 0xFFFFFFu);                             \
+        if ((key & (submaskCount - 1u)) != mask) continue;                            \
+        uint pos = atomic_inc(&gcount);                                               \
+        if (pos < LDS_FCAP) {                                                         \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_bwork[d*(INW) + w]; \
+            lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;          \
+            for (uint i = 0; i < sIn; ++i) lleaf[pos*LDS_FLEAF + i] = in_bleaves[d*sIn + i]; \
+        } else atomic_inc(&drops[1]);                                                \
+    }                                                                                \
+    barrier(CLK_LOCAL_MEM_FENCE);                                                     \
+    uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;                               \
+    for (uint pos = lId; pos < total; pos += LDS_WG) {                               \
+        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);                   \
+        lchain[pos] = atomic_xchg(&tab[hk], pos);                                     \
+    }                                                                                \
+    barrier(CLK_LOCAL_MEM_FENCE);                                                     \
+    for (uint pos = lId; pos < total; pos += LDS_WG) {                               \
+        uint key = lkey[pos];                                                         \
+        uint oth = lchain[pos], walk = 0;                                             \
+        while (oth != LDS_EMPTY) {                                                    \
+            if (++walk > 64u) { atomic_inc(&drops[3]); break; }                      \
+            if (lkey[oth] == key) {                                                   \
+                uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];  \
+                uint leftPos = pos, rightPos = oth;                                   \
+                if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; } \
+                ulong a[7], b[7], c[7];                                               \
+                for (uint w = 0; w < 7; ++w) { a[w] = 0ul; b[w] = 0ul; }              \
+                for (uint w = 0; w < (INW); ++w) { a[w] = lwork[leftPos*(INW)+w]; b[w] = lwork[rightPos*(INW)+w]; } \
+                bh3_combine(a, b, Lout, c);                                           \
+                uint ctree[9];                                                        \
+                uint nbuild = padnum_next > sOut ? padnum_next : sOut;                \
+                for (uint i = 0; i < nbuild; ++i)                                     \
+                    ctree[i] = (i < sIn) ? lleaf[leftPos*LDS_FLEAF + i]               \
+                                         : lleaf[rightPos*LDS_FLEAF + (i - sIn)];      \
+                c[0] = bh3_apply_mix(c, ctree, padnum_next, Lmix_next);               \
+                uint ckey = (uint)(c[0] & 0xFFFFFFu);                                 \
+                uint cb = ckey >> (24u - bucket_bits);                                \
+                uint cpos = atomic_inc(&out_counts[cb]);                              \
+                if (cpos < out_bucket_cap) {                                          \
+                    uint cgi = atomic_inc(gi_counter);                                \
+                    size_t od = (size_t)cb * out_bucket_cap + cpos;                   \
+                    for (uint w = 0; w < (OUTW); ++w) out_bwork[od*(OUTW) + w] = c[w]; \
+                    out_bgi[od] = cgi; out_blead[od] = ctree[0];                      \
+                    for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i]; \
+                    all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos]; \
+                } else atomic_inc(&drops[2]);                                         \
+            }                                                                        \
+            oth = lchain[oth];                                                        \
+        }                                                                            \
+    }                                                                                \
 }
+FUSED_LDS(round_fused_lds, 7, 7)   // r1, r2
+FUSED_LDS(round_fused_7_6, 7, 6)   // r3
+FUSED_LDS(round_fused_6_5, 6, 5)   // r4
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
@@ -422,7 +411,9 @@ __kernel void round5_fused_lds(
     __global uint*  all_left, __global uint* all_right,   // indexed by survivor slot (row out_off)
     __global uint*  surv_slots, __global uint* surv_count, uint surv_cap,
     __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
-    __local ulong lwork[LDS_PW * LDS_FCAP];
+    // Round-5 input = round-4 output = inwords_for(5) = 5 significant words.
+    #define LDS_R5W 5u
+    __local ulong lwork[LDS_R5W * LDS_FCAP];
     __local uint  lgi[LDS_FCAP];
     __local uint  llead[LDS_FCAP];
     __local uint  lkey[LDS_FCAP];
@@ -444,11 +435,11 @@ __kernel void round5_fused_lds(
     size_t base = (size_t)bucket * in_bucket_cap;
     for (uint p = lId; p < cnt; p += LDS_WG) {
         size_t d = base + p;
-        uint key = (uint)(in_bwork[d*LDS_PW] & 0xFFFFFFu);
+        uint key = (uint)(in_bwork[d*LDS_R5W] & 0xFFFFFFu);
         if ((key & (submaskCount - 1u)) != mask) continue;
         uint pos = atomic_inc(&gcount);
         if (pos < LDS_FCAP) {
-            for (uint w = 0; w < LDS_PW; ++w) lwork[pos*LDS_PW + w] = in_bwork[d*LDS_PW + w];
+            for (uint w = 0; w < LDS_R5W; ++w) lwork[pos*LDS_R5W + w] = in_bwork[d*LDS_R5W + w];
             lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;
         } else atomic_inc(&drops[1]);
     }
@@ -471,9 +462,10 @@ __kernel void round5_fused_lds(
                 uint leftPos = pos, rightPos = oth;
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
                 ulong a[7], b[7], c[7];
-                for (uint w = 0; w < LDS_PW; ++w) { a[w] = lwork[leftPos*LDS_PW+w]; b[w] = lwork[rightPos*LDS_PW+w]; }
+                for (uint w = 0; w < 7; ++w) { a[w] = 0ul; b[w] = 0ul; }
+                for (uint w = 0; w < LDS_R5W; ++w) { a[w] = lwork[leftPos*LDS_R5W+w]; b[w] = lwork[rightPos*LDS_R5W+w]; }
                 bh3_combine(a, b, Lout, c);
-                ulong z = 0ul; for (uint w = 0; w < LDS_PW; ++w) z |= c[w];
+                ulong z = 0ul; for (uint w = 0; w < 7; ++w) z |= c[w];
                 if (z == 0ul) {   // survivor: byte-identical round-5 elements
                     uint si = atomic_inc(surv_count);
                     if (si < surv_cap) {

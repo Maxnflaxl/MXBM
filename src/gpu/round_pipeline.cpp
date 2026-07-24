@@ -762,7 +762,11 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         // terminal -- no mix, recover uses back-refs). r4 was the fattest round.
         uint32_t sIn = sleaves_for(r), sOut = (r < 4) ? sleaves_for(r + 1) : 0u;
         uint32_t outOff = (uint32_t)(r - 1) * capacity;
-        Kernel k = rt.kernel(prog, "round_fused_lds");
+        // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
+        const char* fusedName = "round_fused_lds";
+        if      (r == 3) fusedName = "round_fused_7_6";
+        else if (r == 4) fusedName = "round_fused_6_5";
+        Kernel k = rt.kernel(prog, fusedName);
         cl_mem ic = pb.fb_counts[inSet].get(), iw = pb.fb_work[inSet].get(), ig = pb.fb_gi[inSet].get(),
                il = pb.fb_lead[inSet].get(), ilv = pb.fb_leaves[inSet].get();
         cl_mem oc = pb.fb_counts[outSet].get(), ow = pb.fb_work[outSet].get(), og = pb.fb_gi[outSet].get(),
