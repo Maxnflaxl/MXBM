@@ -32,10 +32,11 @@ Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
 | 2026-07-24 | Async enqueue (de-bubble) | 135.0 | 133.0 | −2.0 | −1.5 % | [De-bubble](#async-de-bubble) | [Magazine](#shared-memory-magazine), [gi atomic](#global-gi-atomic) |
 | 2026-07-24 | Compact `leftContrib` (fold 8 leaves → 1 u64) | 131.1 | 124.8 | −6.3 | −4.8 % | [leftContrib](#compact-leftcontrib) | [General mix-state](#general-compact-mix-state) |
 | 2026-07-24 | Packed element record (1 block, not 4 arrays) | 124.8 | 115.7 | −9.1 | −7.3 % | [Packed record](#packed-element-record) | [SoA LDS staging](#soa-lds-staging) |
+| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | — |
 | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 115.7 ms/solve (8.64 solve/s).** Started at 245 ms → **−53 %**.
-Remaining gap to lolMiner: **~3.2×**.
+**Current: 102.7 ms/solve (9.74 solve/s).** Started at 245 ms → **−58 %**.
+Remaining gap to lolMiner: **~2.9×**.
 
 ---
 
@@ -184,6 +185,33 @@ the word loops still fully unroll. Bucket capacity was retuned to `mean + mean/4
 to keep the widest packed array under the 3.9 GB single-allocation limit — still ~17σ of
 headroom against a distribution whose max sits near mean + 4.5σ, and drop counters gate
 every run. **124.8 → 115.7 ms**, every round faster, and ~4 GB less memory.
+
+### Seed re-derivation
+Round-1 elements are **seeds**: each is fully determined by its 25-bit index via
+7 × `siphash24` + `apply_mix`. We were storing the resulting 72 B record and reading it
+straight back. GPUs are compute-rich and memory-poor, and the isolated measurement is
+lopsided:
+
+| | ms |
+|---|---|
+| Recompute only (7 × siphash24 + apply_mix) | 2.47 |
+| Entry storing 8 B `(index, key)` | 2.50 |
+| Entry storing the 72 B packed record | 18.16 |
+
+Recompute costs **14 %** of what storing the record costs. The round-1 bucket record is
+now a bare 8 B `(index << 32) | key`, and a fused variant (`LMODE_SEED`) re-derives the
+56 B work state while staging into LDS. The key is still stored so the sub-mask scan
+stays cheap; only the ~1/8 of a bucket each pass owns is expanded, so every element is
+derived exactly once across the 8 passes.
+
+**114.8 → 102.7 ms.** The entry pass drops 19.2 → 2.7 ms, and round 1 pays +3.6 ms of
+recompute for a 15.7 ms saving.
+
+This is the first confirmation of the compute-for-memory trade that BeamHash III's 3 GB
+design target implies (see [HW_REQUIREMENTS.md](../HW_REQUIREMENTS.md)): the solver is
+bandwidth-bound, so paying arithmetic to avoid moving bytes wins. Rounds 2–4 hold
+*combinations* rather than seeds, so extending the idea there needs a different
+mechanism — re-deriving them means walking the back-reference tree.
 
 ---
 
