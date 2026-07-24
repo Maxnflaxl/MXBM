@@ -131,14 +131,111 @@ static void test_correctness(Runtime& rt, cl_program prog) {
     }
 }
 
+// ---- P2b: real 7-u64 element staging + bh3_combine in LDS ----
+// CPU combine matching kernels/opencl/bh3.cl bh3_combine (XOR, >>24 restitch, mask to Lout).
+static void cpu_combine(const uint64_t a[7], const uint64_t b[7], uint32_t Lout, uint64_t c[7]) {
+    uint64_t x[7]; for (int i=0;i<7;++i) x[i]=a[i]^b[i];
+    for (int i=0;i<7;++i) c[i] = (x[i]>>24) | (i<6 ? (x[i+1]<<40) : 0);
+    for (int i=0;i<7;++i) { uint32_t base=64u*i;
+        if (base>=Lout) c[i]=0; else if (Lout-base<64u) c[i] &= (((uint64_t)1<<(Lout-base))-1); }
+}
+// Order-independent digest of a child-work multiset: per-word XOR fold + count.
+struct Digest { uint64_t x[7]; uint64_t n; bool operator==(const Digest&o)const{
+    if(n!=o.n)return false; for(int i=0;i<7;++i) if(x[i]!=o.x[i]) return false; return true; } };
+
+static std::vector<uint64_t> gen_elem(uint32_t N, uint32_t distinctBits, uint64_t seed) {
+    std::vector<uint64_t> w((size_t)N*7);
+    uint64_t s = seed;
+    uint32_t mask = (distinctBits>=24)?0xFFFFFFu:((1u<<distinctBits)-1u);
+    for (uint32_t g=0; g<N; ++g) {
+        uint32_t base=(uint32_t)(sm(s)&mask);
+        uint32_t key=(uint32_t)(((uint64_t)base*2654435761u)&0xFFFFFFu);
+        w[(size_t)g*7] = ((sm(s) & 0xFFFFFFFFFFull) << 24) | key;   // low 24 = key
+        for (int i=1;i<7;++i) w[(size_t)g*7+i]=sm(s);
+    }
+    return w;
+}
+static Digest oracle_combine(const std::vector<uint64_t>& w, uint32_t Lout) {
+    uint32_t N=(uint32_t)(w.size()/7);
+    std::vector<std::pair<uint32_t,uint32_t>> ki(N);  // (key, slot)
+    for (uint32_t g=0;g<N;++g) ki[g]={(uint32_t)(w[(size_t)g*7]&0xFFFFFFu),g};
+    std::sort(ki.begin(),ki.end());
+    Digest d{}; d.n=0;
+    for (uint32_t i=0;i<N;){ uint32_t j=i; while(j<N&&ki[j].first==ki[i].first)++j;
+        for(uint32_t a=i;a<j;++a)for(uint32_t b=a+1;b<j;++b){
+            uint64_t c[7]; cpu_combine(&w[(size_t)ki[a].second*7],&w[(size_t)ki[b].second*7],Lout,c);
+            for(int k=0;k<7;++k) d.x[k]^=c[k]; ++d.n; }
+        i=j; }
+    return d;
+}
+static Digest run_combine(Runtime& rt, cl_program prog, const std::vector<uint64_t>& w,
+        uint32_t bucketBits, uint32_t submaskBits, uint32_t bucketCap, uint32_t Lout,
+        uint32_t outCap, uint32_t drops[4], double* ms) {
+    uint32_t N=(uint32_t)(w.size()/7), numBuckets=1u<<bucketBits;
+    Mem mW=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,(void*)w.data());
+    Mem mCounts=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
+    Mem mBW=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*7*8);
+    Mem mBI=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*4);
+    Mem mDrops=rt.alloc(CL_MEM_READ_WRITE,4*4);
+    Mem mOW=rt.alloc(CL_MEM_READ_WRITE,(size_t)outCap*7*8);
+    Mem mOL=rt.alloc(CL_MEM_READ_WRITE,(size_t)outCap*4), mOR=rt.alloc(CL_MEM_READ_WRITE,(size_t)outCap*4);
+    Mem mOC=rt.alloc(CL_MEM_READ_WRITE,4);
+    rt.fill_u32(mCounts.get(),0u,numBuckets); rt.fill_u32(mDrops.get(),0u,4); rt.fill_u32(mOC.get(),0u,1);
+    { Kernel k=rt.kernel(prog,"p2_scatter_elem"); cl_mem a=mW.get(),c=mCounts.get(),bw=mBW.get(),bi=mBI.get(),d=mDrops.get();
+      rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bucketBits);rt.set_arg(k.get(),2,bucketCap);
+      rt.set_arg(k.get(),3,sizeof(cl_mem),&a);rt.set_arg(k.get(),4,sizeof(cl_mem),&c);rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);
+      rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);rt.set_arg(k.get(),7,sizeof(cl_mem),&d); rt.run1d(k.get(),N); }
+    uint32_t groups=numBuckets<<submaskBits;
+    { Kernel k=rt.kernel(prog,"p2_collide_combine");
+      cl_mem c=mCounts.get(),bw=mBW.get(),bi=mBI.get(),ow=mOW.get(),ol=mOL.get(),orr=mOR.get(),oc=mOC.get(),d=mDrops.get();
+      rt.set_arg(k.get(),0,bucketBits);rt.set_arg(k.get(),1,submaskBits);rt.set_arg(k.get(),2,bucketCap);rt.set_arg(k.get(),3,Lout);
+      rt.set_arg(k.get(),4,sizeof(cl_mem),&c);rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);
+      rt.set_arg(k.get(),7,sizeof(cl_mem),&ow);rt.set_arg(k.get(),8,sizeof(cl_mem),&ol);rt.set_arg(k.get(),9,sizeof(cl_mem),&orr);
+      rt.set_arg(k.get(),10,sizeof(cl_mem),&oc);rt.set_arg(k.get(),11,outCap);rt.set_arg(k.get(),12,sizeof(cl_mem),&d);
+      auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),(size_t)groups*WG,WG);
+      if(ms)*ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); }
+    rt.read(mDrops.get(),4*4,drops);
+    uint32_t outN=0; rt.read(mOC.get(),4,&outN); uint32_t clamped=outN<outCap?outN:outCap;
+    std::vector<uint64_t> ow((size_t)clamped*7); if(clamped) rt.read(mOW.get(),(size_t)clamped*7*8,ow.data());
+    Digest d{}; d.n=clamped; for(uint32_t i=0;i<clamped;++i) for(int k=0;k<7;++k) d.x[k]^=ow[(size_t)i*7+k];
+    return d;
+}
+static void test_combine(Runtime& rt, cl_program prog) {
+    section("p2 LDS collide+combine child-work digest == CPU combine oracle (drops==0)");
+    const uint32_t Lout=424;  // round-1 Lout; the mechanism is Lout-agnostic
+    struct Cfg{uint32_t N,distinctBits,bucketBits,submaskBits;};
+    Cfg cfgs[]={ {1u<<18,20,11,3}, {1u<<20,20,12,3}, {1u<<20,16,12,4} };
+    for(auto c:cfgs){
+        auto w=gen_elem(c.N,c.distinctBits,0x1234^c.N);
+        Digest orc=oracle_combine(w,Lout);
+        uint32_t meanBucket=c.N>>c.bucketBits, bucketCap=meanBucket*4+256;
+        uint32_t outCap=(uint32_t)orc.n+4096u, drops[4];
+        Digest got=run_combine(rt,prog,w,c.bucketBits,c.submaskBits,bucketCap,Lout,outCap,drops,nullptr);
+        char msg[160]; std::snprintf(msg,sizeof msg,"N=2^%d db=%u b=%u s=%u: %llu children, drops={%u,%u,%u,%u}",
+            (int)__builtin_ctz(c.N),c.distinctBits,c.bucketBits,c.submaskBits,(unsigned long long)orc.n,drops[0],drops[1],drops[2],drops[3]);
+        check((drops[0]|drops[1]|drops[2]|drops[3])==0,(std::string("no drops -- ")+msg).c_str());
+        check(got==orc,(std::string("child digest == oracle -- ")+msg).c_str());
+    }
+    // Timing at pipeline scale (real 56B element in LDS).
+    const uint32_t N=1u<<25; auto w=gen_elem(N,24,0x99);
+    Digest orc=oracle_combine(w,Lout);
+    uint32_t bucketCap=(N>>14)+(N>>16)+512, outCap=N+(N>>2), drops[4]; double ms=0;
+    Digest got=run_combine(rt,prog,w,14,3,bucketCap,Lout,outCap,drops,&ms);
+    std::printf("  N=2^25 b=14 s=3: collide+combine=%.2f ms, %llu children, drops={%u,%u,%u,%u}\n",
+        ms,(unsigned long long)got.n,drops[0],drops[1],drops[2],drops[3]);
+    check((drops[0]|drops[1]|drops[2]|drops[3])==0,"2^25 combine drop-free");
+    check(got==orc,"2^25 child digest == oracle");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
     std::printf("  device: %s | local_mem=%llu KB\n", rt.device().name.c_str(),
         (unsigned long long)(rt.device().local_mem/1024));
-    Program prog = rt.build({std::string(kLdsClSource)}, "");
+    Program prog = rt.build({std::string(kBh3ClSource), std::string(kLdsClSource)}, "");
 
     test_correctness(rt, prog.get());
+    test_combine(rt, prog.get());
 
     // Empirical fork sweep at pipeline scale: which (bucketBits, submaskBits)
     // split is fastest while drops==0? Realistic uniform 24-bit keys, N=2^25.

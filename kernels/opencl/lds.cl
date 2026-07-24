@@ -113,3 +113,102 @@ __kernel void p2_collide(uint bucket_bits, uint submask_bits, uint bucket_cap,
         }
     }
 }
+
+// ===========================================================================
+// P2b: stage the REAL 7-u64 element into LDS and bh3_combine colliding parents
+// locally -- no per-collision global gather. Needs bh3.cl (bh3_combine); compile
+// {bh3, lds}. Strategy A (full element in LDS): forces smaller groups (LDS holds
+// 7 u64/elem), so use a finer sub-mask. Validated vs a CPU combine oracle.
+// ===========================================================================
+#define LDS_EW 7u                 // element work words (u64)
+#ifndef LDS_ECAP
+#define LDS_ECAP 576u             // group cap for full-element staging (LDS-bound)
+#endif
+
+// Scatter full elements (work[g*7..]) + index into bucket-contiguous storage.
+__kernel void p2_scatter_elem(uint N, uint bucket_bits, uint bucket_cap,
+                              __global const ulong* work,   // [N*7]
+                              __global uint* counts,         // [numBuckets], pre-zeroed
+                              __global ulong* bwork,          // [numBuckets*bucket_cap*7]
+                              __global uint* bidx,            // [numBuckets*bucket_cap]
+                              __global uint* drops) {         // [0]=bucket overflow
+    uint g = get_global_id(0);
+    if (g >= N) return;
+    uint key = (uint)(work[(size_t)g*7] & 0xFFFFFFu);
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos < bucket_cap) {
+        size_t d = (size_t)b*bucket_cap + pos;
+        for (uint w = 0; w < LDS_EW; ++w) bwork[d*LDS_EW + w] = work[(size_t)g*LDS_EW + w];
+        bidx[d] = g;
+    } else atomic_inc(&drops[0]);
+}
+
+// Collide + combine: one workgroup per (bucket, sub-mask). Stage full elements
+// into LDS, chain by middle key bits, and for each equal-full-key pair emit the
+// bh3_combine child work (7 u64) + the two parent indices. Parents read from LDS.
+__kernel void p2_collide_combine(uint bucket_bits, uint submask_bits, uint bucket_cap, uint Lout,
+                                 __global const uint* counts,
+                                 __global const ulong* bwork,
+                                 __global const uint* bidx,
+                                 __global ulong* out_work,    // [out_cap*7] child work
+                                 __global uint* out_left, __global uint* out_right,
+                                 __global uint* out_count, uint out_cap,
+                                 __global uint* drops) {       // [1]=grp ovf,[2]=out ovf,[3]=chain cap
+    __local ulong lwork[LDS_EW * LDS_ECAP];
+    __local uint lkey[LDS_ECAP];
+    __local uint lidx[LDS_ECAP];
+    __local uint lchain[LDS_ECAP];
+    __local uint tab[LDS_TABSIZE];
+    __local uint gcount;
+
+    uint lId = get_local_id(0);
+    uint submaskCount = 1u << submask_bits;
+    uint bucket = get_group_id(0) / submaskCount;
+    uint mask   = get_group_id(0) % submaskCount;
+
+    if (lId == 0) gcount = 0;
+    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    uint cnt = counts[bucket];
+    if (cnt > bucket_cap) cnt = bucket_cap;
+    size_t base = (size_t)bucket * bucket_cap;
+    for (uint p = lId; p < cnt; p += LDS_WG) {
+        size_t d = base + p;
+        uint key = (uint)(bwork[d*LDS_EW] & 0xFFFFFFu);
+        if ((key & (submaskCount - 1u)) != mask) continue;
+        uint pos = atomic_inc(&gcount);
+        if (pos < LDS_ECAP) {
+            for (uint w = 0; w < LDS_EW; ++w) lwork[pos*LDS_EW + w] = bwork[d*LDS_EW + w];
+            lkey[pos] = key; lidx[pos] = bidx[d];
+        } else atomic_inc(&drops[1]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    uint total = gcount < LDS_ECAP ? gcount : LDS_ECAP;
+
+    for (uint pos = lId; pos < total; pos += LDS_WG) {
+        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);
+        lchain[pos] = atomic_xchg(&tab[hk], pos);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (uint pos = lId; pos < total; pos += LDS_WG) {
+        uint key = lkey[pos];
+        uint oth = lchain[pos], walk = 0;
+        while (oth != LDS_EMPTY) {
+            if (++walk > 64u) { atomic_inc(&drops[3]); break; }
+            if (lkey[oth] == key) {
+                ulong a[7], b[7], c[7];
+                for (uint w = 0; w < LDS_EW; ++w) { a[w] = lwork[pos*LDS_EW+w]; b[w] = lwork[oth*LDS_EW+w]; }
+                bh3_combine(a, b, Lout, c);
+                uint oi = atomic_inc(out_count);
+                if (oi < out_cap) {
+                    for (uint w = 0; w < LDS_EW; ++w) out_work[(size_t)oi*LDS_EW + w] = c[w];
+                    out_left[oi] = lidx[pos]; out_right[oi] = lidx[oth];
+                } else atomic_inc(&drops[2]);
+            }
+            oth = lchain[oth];
+        }
+    }
+}
