@@ -495,6 +495,23 @@ inline uint  rd2_gi   (ulong w1) { return (uint)(w1 >> 25); }
 inline ulong rd2_w0(uint key, uint li) { return (ulong)key | ((ulong)li << 24); }
 inline ulong rd2_w1(uint ri, uint gi)  { return (ulong)ri  | ((ulong)gi << 25); }
 
+// ROUND-2 -> ROUND-3 record, 72 B (9 u64) rather than 80. The `lead` field the generic
+// packed layout puts in `meta` is REDUNDANT here: lead is ctree[0], which is already
+// leaf 0 of the payload. Dropping it leaves 4 leaves (25 bits each) + gi (26) = 126
+// bits, which fits two u64 with the meta word deleted entirely:
+//   p0 = l0 | l1<<25 | (l2 low 14)<<50        p1 = l2>>14 | l3<<11 | gi<<36
+inline ulong r3_p0(uint l0, uint l1, uint l2) {
+    return (ulong)l0 | ((ulong)l1 << 25) | (((ulong)l2 & 0x3FFFul) << 50);
+}
+inline ulong r3_p1(uint l2, uint l3, uint gi) {
+    return ((ulong)l2 >> 14) | ((ulong)l3 << 11) | ((ulong)gi << 36);
+}
+inline uint r3_l0(ulong p0)           { return (uint)(p0 & RD2_IDXMASK); }
+inline uint r3_l1(ulong p0)           { return (uint)((p0 >> 25) & RD2_IDXMASK); }
+inline uint r3_l2(ulong p0, ulong p1) { return (uint)(((p0 >> 50) & 0x3FFFul) | ((p1 & 0x7FFul) << 14)); }
+inline uint r3_l3(ulong p1)           { return (uint)((p1 >> 11) & RD2_IDXMASK); }
+inline uint r3_gi(ulong p1)           { return (uint)((p1 >> 36) & 0x3FFFFFFul); }
+
 // QUAD RECORD (round 2 -> round 3), 24 B instead of the 80 B packed element. Same
 // argument one level up: a round-3 element is a combine of two round-2 elements, so
 // four seed indices determine it -- and those four ARE its leaves (sIn = 4).
@@ -576,6 +593,16 @@ __kernel void NAME(                                                             
                 uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
                 lgi[pos] = rd2_gi(rec1); llead[pos] = li; lkey[pos] = key;            \
                 lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
+            } else if ((LMODE) == LMODE_EMIT) {                                       \
+                /* 72 B round-3 record: 7 work words then the packed leaves+gi. */     \
+                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
+                ulong p0 = in_belem[d + (INW)], p1 = in_belem[d + (INW) + 1u];        \
+                uint l0 = r3_l0(p0);                                                  \
+                lgi[pos] = r3_gi(p1); llead[pos] = l0; lkey[pos] = key;               \
+                lleaf[pos*(LEAFW) + 0] = l0;                                          \
+                lleaf[pos*(LEAFW) + 1] = r3_l1(p0);                                   \
+                lleaf[pos*(LEAFW) + 2] = r3_l2(p0, p1);                               \
+                lleaf[pos*(LEAFW) + 3] = r3_l3(p1);                                   \
             } else {                                                                  \
                 /* NOT deferred, unlike the seed expand: this is a LOAD, not compute.
                    Tried parking p and reading the record in the all-lanes loop --
@@ -679,6 +706,12 @@ __kernel void NAME(                                                             
                            ctree[0]/ctree[1] are the two parent seed indices. */       \
                         out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
                         out_belem[od + 1u] = rd2_w1(ctree[1], cgi);                   \
+                    } else if ((LMODE) == LMODE_RD2) {                                \
+                        /* 72 B: 7 work words + 4 leaves + gi, no separate meta word.  \
+                           lead == ctree[0] == leaf 0, so storing it again was waste. */ \
+                        for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
+                        out_belem[od + (OUTW)]      = r3_p0(ctree[0], ctree[1], ctree[2]); \
+                        out_belem[od + (OUTW) + 1u] = r3_p1(ctree[2], ctree[3], cgi); \
                     } else {                                                          \
                         for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
                         out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0]; \

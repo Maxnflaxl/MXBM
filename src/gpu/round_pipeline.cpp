@@ -83,14 +83,14 @@ bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
 // READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
-//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
+//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 7+2=9 (no meta)   r4 6+1+1=8   r5 5+1=6
 // Round r's OUTPUT stride is round r+1's input stride. Rounds 1 and 2 both read
 // RE-DERIVABLE records rather than stored work state:
 //   r1 reads a bare 8 B (index,key)      -- seed re-derived in-kernel (2.5 vs 18.2 ms)
 //   r2 reads a 16 B (key,left,right,gi)  -- rebuilt from its two parent seeds
 // Both derivations live in the kernel's non-divergent expand loop; done in the
 // sub-mask-filtered staging loop instead, round 2's cost 23.5 ms rather than 0.4.
-constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 10u, 8u, 6u };
+constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 6u };
 // The two ping-pong sets do NOT need the same width. Round r writes set (r&1), and
 // the entry writes set 0, so set 0 holds the round-2 and round-4 outputs (max 10 u64)
 // while set 1 holds the round-1 and round-3 outputs (max 8). Sizing them separately
