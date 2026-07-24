@@ -758,10 +758,11 @@ FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u)   
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
 // element DIRECTLY into round-1 FAT buckets (no flat work[1]/leaves[1]). gi = seed
 // index (recover reads it as a leaf at row 0); lead = leaves[0] = idx.
-__kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint count,
+__kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint begin, uint count,
                                      uint bucket_bits, uint bucket_cap, uint stride,
-                                     __global uint* counts, __global ulong* belem,
-                                     __global uint* drops) {
+                                     __global uint* restrict counts,
+                                     __global ulong* restrict belem,
+                                     __global uint* restrict drops) {
     uint g = (uint)get_global_id(0);
     if (g >= count) return;
     uint idx = begin + g;
