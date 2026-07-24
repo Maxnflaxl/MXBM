@@ -46,15 +46,48 @@ echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modp
 
 ## Current standing vs OpenCL
 
-| | ms | note |
+| | ms | sol/s |
 |---|---|---|
-| OpenCL (shipping) | **40.2** | after this session's tuning |
-| CUDA (first working port) | **41.6** | untuned; no CUDA-specific feature used yet |
+| OpenCL (shipping) | 40.3 | 47.1 |
+| CUDA, first working port | 41.6 | 45.7 |
+| **CUDA + 128-bit record access** | **35.3–35.8** | **~53** |
 
-Within ~4 % on the first run, which is the expected starting point — the port reproduces
-the OpenCL algorithm exactly, including every tuning decision baked into it (compile-time
-per-round constants, the (16,1) geometry, `restrict`, the non-divergent expand). Nothing
-CUDA-only has been applied yet; that is the next phase, and the profiler is the point.
+**Caveat before reading anything into that.** These are pipeline (kernel) times. OpenCL's
+end-to-end tracked its bench closely (40.0 vs 40.3), but the CUDA side has no host wrapper
+yet — no persistent-buffer solve loop, no per-solve readback path. Until that exists this
+is not a like-for-like comparison with either OpenCL's 40.0 or the reference miner's 53 sol/s, and
+should not be quoted as one.
+
+## What the profiler actually bought
+
+The 6 ms did not come from a guess. Nsight's stall breakdown named the limiter:
+
+| kernel | ms | global | shared | **MIO queue** | barrier | math |
+|---|---|---|---|---|---|---|
+| entry | 2.58 | 2.4% | 0.1% | 0.0% | 0.0% | **43.1%** |
+| r2 | 13.29 | 16.3% | 11.3% | **12.0%** | 16.4% | 11.2% |
+| r3 | 12.23 | 31.2% | 15.1% | **22.0%** | 11.2% | 0.8% |
+| r4 | 6.39 | **61.6%** | 8.2% | 3.0% | 10.3% | 0.5% |
+
+MIO-queue throttle is the load/store **instruction** queue backing up — an issue-rate
+limit, not a bandwidth one. With r2 at only 38 % of DRAM peak, bytes were the cheap
+currency and instructions were not. Padding the round-3 record 9 → 10 u64 (costing 4 %
+more traffic) made every record stride an even number of u64, so `slot*stride*8` is 16 B
+aligned and 128-bit accesses became legal:
+
+```
+r2 emit :  11 x ST.64  ->  4 x ST.128 + 3      r3 load : 10 x LD.64 -> 4 x LD.128 + 3
+r3 emit :  10 x ST.64  ->  4 x ST.128 + 2      r4 load :  9 x LD.64 -> 4 x LD.128 + 2
+```
+
+41.5 → 38.4 → 35.3 ms. **The compiler will not do this for you**: it cannot prove the base
+pointer's alignment, and emitted zero 128-bit accesses even after the padding made them
+valid. Check with `cuobjdump -sass | grep LDG.E.128` rather than assuming.
+
+Two traps met on the way: a plain `if (LMODE == ...)` still *compiles* discarded branches,
+so the alignment `static_assert`s fired in unrelated instantiations until the dispatch
+became `if constexpr`; and the `cudaOccupancy` calls instantiate the templates too, so a
+stale stride there fails the build in a way that looks like a kernel bug.
 
 ## The one thing that made this cheap
 

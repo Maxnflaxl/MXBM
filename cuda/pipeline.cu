@@ -143,7 +143,12 @@ int main() {
     const uint32_t mean = capacity / nb;
     const uint32_t cap  = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
     const size_t   nslots = (size_t)nb * cap;
-    const uint32_t setStride[2] = { 9u, 8u };                // set0: r2/r4 out; set1: r1/r3 out
+    // set0 carries r2's record. Padded 9 -> 10 u64 so slot*stride*8 is always 16 B
+    // aligned, which is what lets the compiler emit 128-bit loads/stores: 5 instructions
+    // per record instead of 9. Costs 4% more traffic, which is the cheap currency here --
+    // r2 runs at 38% of DRAM peak but shows 12% MIO-queue stall, i.e. it is limited by
+    // memory INSTRUCTION issue, not bandwidth.
+    const uint32_t setStride[2] = { 10u, 8u };               // set0: r2/r4 out; set1: r1/r3 out
     const uint32_t survCap = 1024;
 
     printf("geometry : bb=%u sm=%u nb=%u cap=%u nslots=%zu\n", bb, sm, nb, cap, nslots);
@@ -178,8 +183,8 @@ int main() {
         #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
                                               cudaSharedmemCarveoutMaxShared)
         CARVE((fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>));
-        CARVE((fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,9u>));
-        CARVE((fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,9u,8u>));
+        CARVE((fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,10u>));
+        CARVE((fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,10u,8u>));
         CARVE((fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>));
         CARVE(terminal_round);
         #undef CARVE
@@ -187,9 +192,9 @@ int main() {
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b1,
             fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>, kWG, 0);
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b2,
-            fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,9u>, kWG, 0);
+            fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,10u>, kWG, 0);
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b3,
-            fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,9u,8u>, kWG, 0);
+            fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,10u,8u>, kWG, 0);
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b4,
             fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>, kWG, 0);
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bt, terminal_round, kWG, 0);
@@ -215,8 +220,8 @@ int main() {
                     left, right, gictr, drops, dpp);                                        \
               inSet = outSet; }
         ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
-        ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,9u)
-        ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 9u,8u)
+        ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,10u)
+        ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u)
         ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
         #undef ROUND
 

@@ -78,22 +78,39 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         if ((key & (submaskCount - 1u)) != mask) continue;
         const uint32_t pos = atomicAdd(&gcount, 1u);
         if (pos >= kFCap) { atomicAdd(&drops[1], 1u); continue; }
-        if (LMODE == LM_SEED) {
+        if constexpr (LMODE == LM_SEED) {
             lgi[pos] = (uint32_t)(rec0 >> 32); lkey[pos] = key;      // derive later
-        } else if (LMODE == LM_RD2) {
+        } else if constexpr (LMODE == LM_RD2) {
             const uint64_t rec1 = in_belem[d + 1];
             const uint32_t li = pair_left(rec0), ri = pair_right(rec1);
             lgi[pos] = pair_gi(rec1); lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;   // leaf 0 IS the lead
-        } else if (LMODE == LM_EMIT) {
-            for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = in_belem[d + w];
-            const uint64_t p0 = in_belem[d + INW], p1 = in_belem[d + INW + 1];
+        } else if constexpr (LMODE == LM_EMIT) {
+            // 128-bit loads. The record stride is padded to an even number of u64, so
+            // d*8 is 16 B aligned and cudaMalloc's base is 256 B aligned -- but the
+            // compiler cannot prove either, and emitted 9 x LD.64 where 5 x LD.128 do.
+            // Round 3 stalls 22% of its warp-active cycles on the MIO queue, which is
+            // memory-INSTRUCTION issue rather than bandwidth, so instruction count is
+            // the thing to cut here.
+            static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
+            const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
+            ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
+            lwork[pos*INW + 0] = q0.x; lwork[pos*INW + 1] = q0.y;
+            lwork[pos*INW + 2] = q1.x; lwork[pos*INW + 3] = q1.y;
+            lwork[pos*INW + 4] = q2.x; lwork[pos*INW + 5] = q2.y;
+            lwork[pos*INW + 6] = q3.x;
+            const uint64_t p0 = q3.y, p1 = in_belem[d + INW + 1];
             const uint32_t l0 = r3_l0(p0);
             lgi[pos] = r3_gi(p1); lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = l0;          lleaf[pos*LEAFW + 1] = r3_l1(p0);
             lleaf[pos*LEAFW + 2] = r3_l2(p0,p1); lleaf[pos*LEAFW + 3] = r3_l3(p1);
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
-            for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = in_belem[d + w];
+            static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
+            const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
+            ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2];
+            lwork[pos*INW + 0] = q0.x; lwork[pos*INW + 1] = q0.y;
+            lwork[pos*INW + 2] = q1.x; lwork[pos*INW + 3] = q1.y;
+            lwork[pos*INW + 4] = q2.x; lwork[pos*INW + 5] = q2.y;
             const uint64_t meta = in_belem[d + INW];
             lgi[pos] = (uint32_t)(meta >> 32); llead[pos] = (uint32_t)meta; lkey[pos] = key;
             for (uint32_t i = 0; i < SIN; ++i)
@@ -107,7 +124,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     // EXPAND + CHAIN. Every lane is active here, which is why the re-derivations live in
     // this loop and not the staging one (worth 8x their SIMD utilisation).
     for (uint32_t pos = lId; pos < total; pos += kWG) {
-        if (LMODE == LM_SEED) {
+        if constexpr (LMODE == LM_SEED) {
             const uint32_t idx = lgi[pos];
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
             bh3::Elem e; bh3::seed_element(pp, idx, e);
@@ -115,7 +132,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             bh3::apply_mix(e, t1, 1u, 448u);
             for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = e.w[w];
             lleaf[pos*LEAFW + 0] = idx;
-        } else if (LMODE == LM_RD2) {
+        } else if constexpr (LMODE == LM_RD2) {
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
             bh3::Elem e;
             rebuild_r2(pp, lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], e);
@@ -145,7 +162,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 bh3::combine(a, b, LOUT, c);
 
                 uint32_t ctree[9]; uint64_t contribOut = 0;
-                if (LMODE == LM_USE) {
+                if constexpr (LMODE == LM_USE) {
                     for (int i = 0; i < 8; ++i) ctree[i] = 0u;
                     ctree[8] = lead_of(rightPos);
                     const uint64_t lc = ((uint64_t)lleaf[leftPos*LEAFW+1] << 32)
@@ -158,7 +175,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         ctree[i] = (i < SIN) ? lleaf[leftPos*LEAFW + i]
                                              : lleaf[rightPos*LEAFW + (i - SIN)];
                     bh3::apply_mix(c, ctree, PADN, LOUT);
-                    if (LMODE == LM_EMIT) {
+                    if constexpr (LMODE == LM_EMIT) {
                         bh3::Elem z{};
                         bh3::apply_mix(z, ctree, 8u, 288u);
                         contribOut = bh3::rotl64(z.w[0], 40);
@@ -171,22 +188,33 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 if (cpos < out_bucket_cap) {
                     const uint32_t cgi = atomicAdd(gi_counter, 1u);
                     const size_t od = ((size_t)cb * out_bucket_cap + cpos) * OUTSTR;
-                    if (LMODE == LM_SEED) {
-                        out_belem[od + 0] = pair_w0(ckey, ctree[0]);
-                        out_belem[od + 1] = pair_w1(ctree[1], cgi);
-                    } else if (LMODE == LM_RD2) {
-                        for (int w = 0; w < OUTW; ++w) out_belem[od + w] = c.w[w];
-                        out_belem[od + OUTW]     = r3_p0(ctree[0], ctree[1], ctree[2]);
+                    if constexpr (LMODE == LM_SEED) {
+                        static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+                        *reinterpret_cast<ulonglong2*>(out_belem + od) =
+                            make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi));
+                    } else if constexpr (LMODE == LM_RD2) {
+                        // Matching 128-bit stores; the padded stride makes od*8 16 B
+                        // aligned. 5 x ST.128 instead of 9 x ST.64.
+                        static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+                        ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
+                        v[0] = make_ulonglong2(c.w[0], c.w[1]);
+                        v[1] = make_ulonglong2(c.w[2], c.w[3]);
+                        v[2] = make_ulonglong2(c.w[4], c.w[5]);
+                        v[3] = make_ulonglong2(c.w[6], r3_p0(ctree[0], ctree[1], ctree[2]));
                         out_belem[od + OUTW + 1] = r3_p1(ctree[2], ctree[3], cgi);
+                    } else if constexpr (LMODE == LM_EMIT) {
+                        static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+                        ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
+                        v[0] = make_ulonglong2(c.w[0], c.w[1]);
+                        v[1] = make_ulonglong2(c.w[2], c.w[3]);
+                        v[2] = make_ulonglong2(c.w[4], c.w[5]);
+                        v[3] = make_ulonglong2(((uint64_t)cgi << 32) | (uint64_t)ctree[0],
+                                               contribOut);
                     } else {
-                        for (int w = 0; w < OUTW; ++w) out_belem[od + w] = c.w[w];
-                        out_belem[od + OUTW] = ((uint64_t)cgi << 32) | (uint64_t)ctree[0];
-                        if (LMODE == LM_EMIT) out_belem[od + OUTW + 1] = contribOut;
-                        else for (uint32_t j = 0; j*2u < SOUT; ++j) {
-                            const uint32_t lo = ctree[j*2u];
-                            const uint32_t hi = (j*2u+1u < SOUT) ? ctree[j*2u+1u] : 0u;
-                            out_belem[od + OUTW + 1 + j] = ((uint64_t)hi << 32) | (uint64_t)lo;
-                        }
+                        static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+                        *reinterpret_cast<ulonglong2*>(out_belem + od) =
+                            make_ulonglong2(c.w[0],
+                                            ((uint64_t)cgi << 32) | (uint64_t)ctree[0]);
                     }
                     all_left [out_off + cgi] = lgi[leftPos];
                     all_right[out_off + cgi] = lgi[rightPos];
