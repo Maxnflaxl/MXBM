@@ -29,10 +29,14 @@ sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
 
 ## Progress log
 
-Times are median ms per solve from `bench_rounds` (the pipeline measurement), lower is
-better. "Worked" and "Didn't work" link to the sections explaining each result. The
-end-to-end figure tracks it closely — 40.0 vs 40.3 ms at the current tip — so the table's
-trend is not distorted by measuring the pipeline rather than the whole solve.
+Times are median ms per solve, lower is better. "Worked" and "Didn't work" link to the
+sections explaining each result.
+
+Rows above the backend switch are `bench_rounds` **pipeline** medians; rows below are
+**end-to-end** `solve()` medians including recovery and CPU verification. The two tracked
+each other closely on OpenCL where both were measured (40.3 vs 41.0 ms), so the trend is
+continuous across the switch — but the CUDA rows are the stricter measurement, not the
+looser one.
 
 The first row is the **real-world** starting point: the miner's own reported speed when
 the GPU solver found its first share. Later rows are `bench_rounds` pipeline medians,
@@ -64,22 +68,27 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | Retune row-bucket geometry to (15, 2) | 47.5 | 42.7 | **44.5** | −4.8 | −10.1 % | [Geometry](#row-bucket-geometry) | — |
 | 2026-07-24 | √-scaled bucket capacity → geometry (16, 1) | 42.7 | 40.4 | **47.0** | −2.3 | −5.4 % | [Capacity](#bucket-capacity), [Geometry](#row-bucket-geometry) | [Occupancy, again](#occupancy-again) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
+| | ↓ *backend switches to CUDA; rows below are **end-to-end**, incl. recover + CPU verify* | | | | | | | |
+| 2026-07-25 | CUDA port, algorithm unchanged | 41.0 | 41.6 | **47.6** | +0.6 | +1.5 % | [CUDA backend](#the-cuda-backend) | — |
+| 2026-07-25 | 128-bit access on the round-2/3 records | 41.6 | 38.4 | **51.6** | −3.2 | −7.7 % | [CUDA backend](#the-cuda-backend) | — |
+| 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](#levers-tried-after-the-mio-fix--all-null) |
 
-**Shipping (OpenCL): 48.2 sol/s** — 41.0 ms end-to-end.
-**CUDA backend: 56.1 sol/s** — 35.2 ms end-to-end, same methodology
-([details](#the-cuda-backend)). Not yet wired into the miner.
-Both measured over **300 distinct nonces**, ±4.1 % (1σ) on the rate.
+| | sol/s | ms/solve | |
+|---|---|---|---|
+| **OpenCL** | 48.2 | 41.0 | shipping |
+| **CUDA** | **56.1** | **35.2** | [not yet wired into the miner](#the-cuda-backend) |
+| **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) = 35.8 ms — **the CUDA backend is ~6 % past it**;
-the shipping OpenCL path is 1.12× short. Read the caveats before treating the target as
-beaten.
+Both backends measured end-to-end over **300 distinct nonces**, ±4.1 % (1σ). The CUDA
+backend is **~6 % past the target** and the OpenCL path 1.12× short — read
+[the caveats](#the-cuda-backend) before treating the target as beaten.
 
-Started at **1.8 sol/s** when the solver first worked → **26× faster**.
+Started at **1.8 sol/s** when the solver first worked → **31× faster**.
 
 VRAM for a full search: **8.36 → 7.46 GiB** (268 → 239 B/element).
 
-*Bench and end-to-end agree; the ~7 ms of non-pipeline overhead seen at 83 ms did not
-scale with the rounds.*
+*The ~7 ms of non-pipeline overhead seen at 83 ms did not scale with the rounds: OpenCL's
+pipeline bench and end-to-end solve now agree to within a millisecond (40.3 vs 41.0).*
 
 *Solutions per second (sol/s) is the number miners and pools report. BeamHash III
 yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
