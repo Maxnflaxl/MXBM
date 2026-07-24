@@ -12,7 +12,8 @@ so 53 sol/s ÷ 1.9 ≈ **28 solve/s ≈ 36 ms/solve**. That is the bar.
 66 CUs, 16 GB, 48 KB LDS/workgroup, ~510 GB/s achievable copy bandwidth).
 
 **How to reproduce:** `./build/bench_rounds 20` reports the median over 20 full solves
-plus a correctness gate. `MXBM_NO_ROWBUCKET=1` forces the fallback sort path.
+plus a correctness gate; multiply by 1.9 for sol/s. `MXBM_NO_ROWBUCKET=1` forces the
+fallback sort path.
 
 ---
 
@@ -21,22 +22,25 @@ plus a correctness gate. `MXBM_NO_ROWBUCKET=1` forces the fallback sort path.
 Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
 "Didn't work" link to the sections explaining each result.
 
-| Date | Change | Before | After | Δ ms | Δ % | Worked | Didn't work |
-|---|---|---|---|---|---|---|---|
-| 2026-07-23 | Sort-based collision finder (P1–P3) | 245.0 | 239.0 | −6.0 | −2.4 % | [Sort path](#sort-based-collision-finder) | — |
-| 2026-07-23 | Tiled 4-bit × 6-pass radix sort (P4) | 239.0 | 225.0 | −14.0 | −5.9 % | [Tiled radix](#tiled-radix-sort) | — |
-| 2026-07-24 | Fixed-width AoS compaction `[7,7,6,5,1]` | 224.4 | 214.5 | −9.9 | −4.4 % | [Compaction](#fixed-width-compaction) | [SoA planes](#soa-word-planes), [runtime widths](#runtime-loop-bounds) |
-| 2026-07-24 | Fused row-bucket pipeline (STEP A–C) | 215.0 | 148.0 | −67.0 | −31.2 % | [Row-bucket](#fused-row-bucket-pipeline) | [Un-fused LDS](#un-fused-lds-path), [lead array](#stride-1-lead-array) |
-| 2026-07-24 | L5-thin: drop round-5 leaf payload | 151.9 | 139.1 | −12.8 | −8.4 % | [L5-thin](#l5-thin-emit) | — |
-| 2026-07-24 | Per-round work compaction on row-bucket | 139.1 | 136.0 | −3.1 | −2.2 % | [Row-bucket compaction](#per-round-compaction-on-the-row-bucket-path) | — |
-| 2026-07-24 | Async enqueue (de-bubble) | 135.0 | 133.0 | −2.0 | −1.5 % | [De-bubble](#async-de-bubble) | [Magazine](#shared-memory-magazine), [gi atomic](#global-gi-atomic) |
-| 2026-07-24 | Compact `leftContrib` (fold 8 leaves → 1 u64) | 131.1 | 124.8 | −6.3 | −4.8 % | [leftContrib](#compact-leftcontrib) | [General mix-state](#general-compact-mix-state) |
-| 2026-07-24 | Packed element record (1 block, not 4 arrays) | 124.8 | 115.7 | −9.1 | −7.3 % | [Packed record](#packed-element-record) | [SoA LDS staging](#soa-lds-staging) |
-| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | [Round-2 re-derivation](#round-2-re-derivation) |
-| | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
+| Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
+|---|---|---|---|---|---|---|---|---|
+| 2026-07-23 | Sort-based collision finder (P1–P3) | 245.0 | 239.0 | **7.95** | −6.0 | −2.4 % | [Sort path](#sort-based-collision-finder) | — |
+| 2026-07-23 | Tiled 4-bit × 6-pass radix sort (P4) | 239.0 | 225.0 | **8.44** | −14.0 | −5.9 % | [Tiled radix](#tiled-radix-sort) | — |
+| 2026-07-24 | Fixed-width AoS compaction `[7,7,6,5,1]` | 224.4 | 214.5 | **8.86** | −9.9 | −4.4 % | [Compaction](#fixed-width-compaction) | [SoA planes](#soa-word-planes), [runtime widths](#runtime-loop-bounds) |
+| 2026-07-24 | Fused row-bucket pipeline (STEP A–C) | 215.0 | 148.0 | **12.8** | −67.0 | −31.2 % | [Row-bucket](#fused-row-bucket-pipeline) | [Un-fused LDS](#un-fused-lds-path), [lead array](#stride-1-lead-array) |
+| 2026-07-24 | L5-thin: drop round-5 leaf payload | 151.9 | 139.1 | **13.7** | −12.8 | −8.4 % | [L5-thin](#l5-thin-emit) | — |
+| 2026-07-24 | Per-round work compaction on row-bucket | 139.1 | 136.0 | **14.0** | −3.1 | −2.2 % | [Row-bucket compaction](#per-round-compaction-on-the-row-bucket-path) | — |
+| 2026-07-24 | Async enqueue (de-bubble) | 135.0 | 133.0 | **14.3** | −2.0 | −1.5 % | [De-bubble](#async-de-bubble) | [Magazine](#shared-memory-magazine), [gi atomic](#global-gi-atomic) |
+| 2026-07-24 | Compact `leftContrib` (fold 8 leaves → 1 u64) | 131.1 | 124.8 | **15.2** | −6.3 | −4.8 % | [leftContrib](#compact-leftcontrib) | [General mix-state](#general-compact-mix-state) |
+| 2026-07-24 | Packed element record (1 block, not 4 arrays) | 124.8 | 115.7 | **16.4** | −9.1 | −7.3 % | [Packed record](#packed-element-record) | [SoA LDS staging](#soa-lds-staging) |
+| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | **18.5** | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | [Round-2 re-derivation](#round-2-re-derivation) |
+| | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 102.7 ms/solve (9.74 solve/s).** Started at 245 ms → **−58 %**.
-Remaining gap to lolMiner: **~2.9×**.
+**Current: 18.5 sol/s** (102.7 ms/solve). Started at 7.8 sol/s → **+139 %**.
+**Target: 53 sol/s** (lolMiner, stock) — remaining gap **~2.9×**.
+
+*Solutions per second (sol/s) is the number miners and pools report. BeamHash III
+yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
 
 ---
 
@@ -208,7 +212,7 @@ derived exactly once across the 8 passes.
 recompute for a 15.7 ms saving.
 
 This is the first confirmation of the compute-for-memory trade that BeamHash III's 3 GB
-design target implies (see [HW_REQUIREMENTS.md](../HW_REQUIREMENTS.md)): the solver is
+design target implies (see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)): the solver is
 bandwidth-bound, so paying arithmetic to avoid moving bytes wins. Rounds 2–4 hold
 *combinations* rather than seeds, so extending the idea there needs a different
 mechanism — re-deriving them means walking the back-reference tree.
@@ -375,6 +379,46 @@ Consequence: lolMiner carries the same ~56 B element and hits the same scatter c
 so its remaining ~3.5× advantage is not explained by element size, coalescing, occupancy,
 or atomics. It is most likely a technique in its collision-finding or overall pipeline
 structure that is not derivable from the public references.
+
+---
+
+## Current focus and open leads
+
+**Where the time goes** (102.7 ms, from the `MXBM_ABLATE` phase ablation): four fused
+rounds ≈ 24 ms each, plus a 2.7 ms entry and a 4.3 ms terminal. Within a round, roughly
+**40 % emit, 50 % stage + collision-find, 10 % mix**.
+
+**The governing constraint.** Every win so far came from *moving fewer bytes*, and the
+[established limits](#established-limits) show the scattered emit is already at the
+hardware's random-access ceiling (~260 GB/s, ~51 % of peak) and cannot be coalesced.
+Reducing *what* is stored is therefore the only lever with real headroom — which is also
+what the algorithm's 3 GB design target implies
+(see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)).
+
+**Leads, most promising first:**
+
+1. **Re-derivation in a non-divergent context.** [Seed re-derivation](#seed-re-derivation)
+   proved compute-for-memory wins (−12.1 ms), but
+   [round-2 re-derivation](#round-2-re-derivation) failed because the recompute sits in
+   the sub-mask staging loop where only ~1/8 of a warp's lanes are active. A separate
+   *expand* pass, where every lane works, would avoid that divergence — the open question
+   is whether it can expand into LDS without writing full records back to global memory.
+2. **Eliminate the stored `gi`.** An element's identity could be its bucket slot
+   (`bucket × cap + pos`) rather than a stored 4 B counter value, removing 4 B from every
+   emit and every stage read. Requires back-reference rows indexed by slot (larger, but
+   `fb_gi` disappears) and changes the `(lead, gi)` tie-break to `(lead, slot)` — valid,
+   since ties only occur between equal-lead pairs, which the CPU gate rejects anyway.
+3. **Per-set bucket-array sizing.** Both ping-pong sets are allocated at the widest
+   stride (10 u64) though one set only ever holds ≤ 8. Frees ~0.7 GB; no speed effect.
+4. **Tighter bucket capacity.** `mean + mean/4 + 256` is ~17σ of headroom against a
+   distribution whose max sits near mean + 4.5σ. Cutting it shrinks every bucket array
+   proportionally, but must stay drop-free across nonces, so it needs a measured
+   occupancy distribution rather than a guess.
+
+**Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
+two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
+scatter for occupancy, SoA layouts in either global or local memory, and shrinking the
+element below the `[7,7,6,5,1]` schedule.
 
 ---
 

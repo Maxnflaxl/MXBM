@@ -5,6 +5,8 @@ needed, why, and where the current implementation falls short.
 
 All figures are computed from the allocator in `src/gpu/round_pipeline.cpp` and
 `src/gpu/budget.cpp`, and cross-checked against measurements on the reference card.
+Throughput is quoted in **sol/s** (solutions per second), the figure miners and pools
+report; BeamHash III yields ~1.9 solutions per solve.
 
 ---
 
@@ -84,8 +86,8 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | |
 |---|---|
-| Solve time | 115.7 ms median (`./build/bench_rounds 20`) |
-| Throughput | 8.64 solve/s ≈ 16.4 sol/s (BeamHash III yields ~1.9 solutions/solve) |
+| Throughput | **18.5 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
+| Solve time | 102.7 ms median (`./build/bench_rounds 20`) |
 
 See [docs/performance.md](docs/performance.md) for the full optimization history.
 

@@ -11,15 +11,15 @@ implementation.
 > **Status: GPU solver working, optimization ongoing.** MXBM connects to a real
 > Beam pool over TLS, authenticates with your wallet address, receives live jobs,
 > and runs the full job → solve → difficulty → submit pipeline on an **OpenCL GPU
-> solver**. On an RTX 4070 Ti SUPER it solves in **115.7 ms** (≈ 8.6 solve/s,
-> ≈ 16 sol/s), verified against the BeamHash III known-answer vectors. That is
+> solver**. On an RTX 4070 Ti SUPER it does **18.5 sol/s** (102.7 ms per solve),
+> verified against the BeamHash III known-answer vectors. That is
 > roughly 3× off the fastest closed-source miner, and closing that gap is the
 > current focus — see [docs/performance.md](docs/performance.md) for the full
 > measured optimization history.
 >
 > A CPU reference solver remains available (`--solver ref`) for validating the
 > pipeline. **Note the VRAM requirement is currently high** (~16 GB for a search
-> that finds solutions) — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md), which also
+> that finds solutions) — see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md), which also
 > documents the known limitations behind that number. Builds and runs on Linux and
 > macOS.
 
@@ -72,7 +72,7 @@ files, and API.
 | Miner shell | lolMiner-style console, CLI, config files, `/summary` API | ✅ done |
 | GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
 | **Solver performance** | **Close the gap to the fastest closed-source miners** | **in progress** |
-| Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)) | next |
+| Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
 | Optimized backends | Tuned CUDA (NVIDIA) and HIP (AMD) kernels | planned |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline first (runs on
@@ -92,7 +92,7 @@ The GPU solver's optimization history — every change, its measured effect, and
 experiments that failed — is tracked in **[docs/performance.md](docs/performance.md)**,
 along with the measured hardware limits that bound further work. Hardware
 requirements, including the current VRAM limitations, are in
-**[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)**.
+**[HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)**.
 
 ## Contributing
 
