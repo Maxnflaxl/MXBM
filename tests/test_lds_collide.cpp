@@ -670,6 +670,24 @@ static void test_scatter_occupancy(Runtime& rt, cl_program prog) {
     double tlo =runScatter("scatter_probe_lo");
     std::printf("  --> SAME scatter vs occupancy: hi(tiny)=%.2f  mid(24KB)=%.2f  lo(40KB=fused)=%.2f ms  (lo/hi=%.2fx)\n",
         thi,tmid,tlo, tlo/thi);
+
+    // Does scatter BW depend on the number of output buckets (DRAM row-buffer locality)?
+    // Coarser buckets = fewer open rows = more sequential writes. mBuckets is sized for
+    // bb=14; coarser bb has a smaller footprint so it fits the same buffer.
+    std::printf("  scatter BW vs #output buckets (scatter_probe_hi):\n");
+    for (uint32_t bbv : {8u,10u,12u,14u}) {
+        uint32_t nbv=1u<<bbv, capv=(N>>bbv)+(N>>(bbv+1))+512;
+        uint32_t md=0; double t=best([&]{
+            rt.fill_u32(mCounts.get(),0u,nbv); rt.fill_u32(mDrops.get(),0u,4);
+            Kernel k=rt.kernel(prog,"scatter_probe_hi"); cl_mem sr=mSrc.get(),ky=mKeys.get(),c=mCounts.get(),bk=mBuckets.get(),dr=mDrops.get();
+            rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,bbv); rt.set_arg(k.get(),2,capv); rt.set_arg(k.get(),3,ew);
+            rt.set_arg(k.get(),4,sizeof(cl_mem),&sr); rt.set_arg(k.get(),5,sizeof(cl_mem),&ky);
+            rt.set_arg(k.get(),6,sizeof(cl_mem),&c); rt.set_arg(k.get(),7,sizeof(cl_mem),&bk); rt.set_arg(k.get(),8,sizeof(cl_mem),&dr);
+            auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+            double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+            rt.read(mDrops.get(),4,&md); return m; });
+        std::printf("    bb=%2u (%7u buckets): %.2f ms  (%.0f GB/s)  drops=%u\n", bbv, nbv, t, GB/t*1000.0, md);
+    }
     check(true,"scatter occupancy characterized");
 }
 
