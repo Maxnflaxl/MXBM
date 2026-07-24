@@ -762,9 +762,16 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     Mem mdrops = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
     rt.fill_u32(mdrops.get(), 0u, 4);
 
+    // DE-BUBBLE (#23): in production (verbose=false) enqueue fills+kernels ASYNC on
+    // the in-order queue and let the final survivor/drops readbacks drain once,
+    // instead of a clFinish after every kernel. In verbose mode keep the blocking
+    // calls so the per-round steady_clock timers stay accurate GPU time.
+    auto RUN  = [&](cl_kernel k, size_t g, size_t l) { if (verbose) rt.run1d(k, g, l); else rt.run1d_async(k, g, l); };
+    auto FILL = [&](cl_mem bm, uint32_t v, size_t c) { if (verbose) rt.fill_u32(bm, v, c); else rt.fill_u32_async(bm, v, c); };
+
     // ENTRY: mix seeds + scatter into round-1 FAT buckets (set 0).
     auto tSeed = clk::now();
-    rt.fill_u32(pb.fb_counts[0].get(), 0u, nb);
+    FILL(pb.fb_counts[0].get(), 0u, nb);
     {
         uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
         Mem mp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
@@ -778,9 +785,10 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
             rt.set_arg(k.get(), 5, sizeof(cl_mem), &cnt); rt.set_arg(k.get(), 6, sizeof(cl_mem), &bw);
             rt.set_arg(k.get(), 7, sizeof(cl_mem), &bg); rt.set_arg(k.get(), 8, sizeof(cl_mem), &bl);
             rt.set_arg(k.get(), 9, sizeof(cl_mem), &blv); rt.set_arg(k.get(), 10, sizeof(cl_mem), &dr);
-            rt.run1d(k.get(), count);
+            RUN(k.get(), count, 0);
         }
     }
+    if (verbose) rt.finish();
     result.t_seed_ms = ms_since(tSeed);
 
     // MIDDLE r=1..4: fused match + child-mix + child-scatter, ping-ponging FAT sets.
@@ -790,8 +798,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         RoundStats& st = result.rounds[r - 1];
         int outSet = inSet ^ 1;
         auto tM = clk::now();
-        rt.fill_u32(pb.fb_counts[outSet].get(), 0u, nb);
-        rt.fill_u32(pb.fb_gictr.get(), 0u, 1);
+        FILL(pb.fb_counts[outSet].get(), 0u, nb);
+        FILL(pb.fb_gictr.get(), 0u, 1);
         uint32_t Lout = lout_for(r), LmixNext = lmix_for(r + 1), padNext = padnum_for(r + 1);
         // L5-thin: round 4 emits round-5 children with NO leaf payload (round 5 is
         // terminal -- no mix, recover uses back-refs). r4 was the fattest round.
@@ -820,11 +828,13 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &olv);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
-        rt.run1d(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
-        uint32_t childCount = 0; rt.read(pb.fb_gictr.get(), 4, &childCount);
+        RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
+        // childCount is stats-only; read it (draining the queue) only in verbose mode.
+        uint32_t childCount = prevOut;
+        if (verbose) { rt.read(pb.fb_gictr.get(), 4, &childCount);
+                       std::printf("  r%d: in=%u out=%u | fused=%.1f ms\n", r, prevOut, childCount, ms_since(tM)); }
         st.in = prevOut; st.out = childCount; st.bucket_drops = 0; st.pair_drops = 0;
         st.t_match_ms = ms_since(tM);
-        if (verbose) std::printf("  r%d: in=%u out=%u | fused=%.1f ms\n", r, st.in, st.out, st.t_match_ms);
         prevOut = childCount; inSet = outSet;
         if (abort && abort->load(std::memory_order_relaxed)) return PipelineResult{};
     }
@@ -833,7 +843,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     auto tSurv = clk::now();
     Mem mSurvSlots = rt.alloc(CL_MEM_READ_WRITE, (size_t)survCap * 4);
     Mem mSurvCount = rt.alloc(CL_MEM_READ_WRITE, 4);
-    rt.fill_u32(mSurvCount.get(), 0u, 1);
+    FILL(mSurvCount.get(), 0u, 1);
     {
         Kernel k = rt.kernel(prog, "round5_fused_lds");
         uint32_t outOff5 = (uint32_t)(5 - 1) * capacity, Lout5 = lout_for(5);
@@ -848,8 +858,9 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ss); rt.set_arg(k.get(), a++, sizeof(cl_mem), &sc);
         rt.set_arg(k.get(), a++, survCap); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
-        rt.run1d(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
+        RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
     }
+    // Blocking read drains the whole async chain (entry -> r1..4 -> terminal).
     uint32_t survCount = 0; rt.read(mSurvCount.get(), 4, &survCount);
     uint32_t clamped = survCount < survCap ? survCount : survCap;
     result.survivor_slots.resize(clamped);

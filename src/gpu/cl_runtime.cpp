@@ -165,6 +165,17 @@ void Runtime::fill_u32(cl_mem buf, uint32_t value, size_t count) {
 void Runtime::set_arg(cl_kernel k, cl_uint i, size_t size, const void* val) {
     check_cl(clSetKernelArg(k, i, size, val), "clSetKernelArg");
 }
+void Runtime::finish() { check_cl(clFinish(q_), "clFinish"); }
+// Enqueue-only fill: no event wait / clFinish. Ordering is guaranteed by the
+// in-order queue -- a later dependent kernel (or an explicit finish()) sees it.
+void Runtime::fill_u32_async(cl_mem buf, uint32_t value, size_t count) {
+    check_cl(clEnqueueFillBuffer(q_, buf, &value, sizeof(value), 0, count * sizeof(value), 0, nullptr, nullptr),
+             "clEnqueueFillBuffer(async)");
+}
+void Runtime::run1d_async(cl_kernel k, size_t global, size_t local) {
+    const size_t* lp = (local != 0) ? &local : nullptr;
+    check_cl(clEnqueueNDRangeKernel(q_, k, 1, nullptr, &global, lp, 0, nullptr, nullptr), "clEnqueueNDRangeKernel(async)");
+}
 void Runtime::run1d(cl_kernel k, size_t global, size_t local) {
     const size_t* lp = (local != 0) ? &local : nullptr;
     check_cl(clEnqueueNDRangeKernel(q_, k, 1, nullptr, &global, lp, 0, nullptr, nullptr), "clEnqueueNDRangeKernel");

@@ -87,6 +87,13 @@ public:
     void    set_arg(cl_kernel k, cl_uint i, size_t size, const void* val);
     template <class T> void set_arg(cl_kernel k, cl_uint i, const T& v) { set_arg(k, i, sizeof(T), &v); }
     void    run1d(cl_kernel k, size_t global, size_t local = 0);
+    // ASYNC variants: enqueue WITHOUT the trailing clFinish. Valid only on the
+    // single in-order command queue, where a later dependent op (or an explicit
+    // finish()) observes the result -- used by the production row-bucket pipeline to
+    // fuse ~15 per-kernel GPU drains into one clFinish before the survivor readback.
+    void    fill_u32_async(cl_mem buf, uint32_t value, size_t count);
+    void    run1d_async(cl_kernel k, size_t global, size_t local = 0);
+    void    finish();
 
     cl_context context() const { return ctx_; }
     cl_command_queue queue() const { return q_; }
