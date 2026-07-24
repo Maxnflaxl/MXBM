@@ -547,16 +547,20 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
 //   [W+1 ..]    leaf payload, two u32 packed per u64 (or the u64 leftContrib)
 // Strides are runtime args; every LOOP BOUND stays compile-time so the word loops
 // still fully unroll (a runtime loop bound cost +24 ms here before).
-#define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD)      \
-__kernel void NAME(                                                                   \
+#define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR) \
+__kernel __attribute__((reqd_work_group_size(LDS_WG, 1, 1)))                          \
+void NAME(                                                                            \
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
     uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut, uint out_off,   \
     uint sBuild, uint in_stride, uint out_stride,                                     \
-    __global const uint* in_counts, __global const ulong* in_belem,                   \
-    __global uint* out_counts, __global ulong* out_belem,                             \
-    __global uint* all_left, __global uint* all_right,                                \
-    __global uint* gi_counter, __global uint* drops,                                  \
-    __global const ulong* pp4) {                                                     \
+    /* restrict: the ping-pong sets are distinct buffers and every output array is    \
+       disjoint from every input, so the compiler may reorder loads across stores.    \
+       Without it each store barriers the loads that follow. */                       \
+    __global const uint* restrict in_counts, __global const ulong* restrict in_belem, \
+    __global uint* restrict out_counts, __global ulong* restrict out_belem,           \
+    __global uint* restrict all_left, __global uint* restrict all_right,              \
+    __global uint* restrict gi_counter, __global uint* restrict drops,                \
+    __global const ulong* restrict pp4) {                                            \
     __local ulong lwork[(INW) * LDS_FCAP];                                            \
     __local uint  lgi[LDS_FCAP]; __local uint llead[LDS_FCAP];                        \
     __local uint  lleaf[(LEAFW) * LDS_FCAP];                                          \
@@ -573,7 +577,7 @@ __kernel void NAME(                                                             
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;                                     \
     size_t base = (size_t)bucket * in_bucket_cap;                                     \
     for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
-        size_t d = (base + p) * in_stride;                                            \
+        size_t d = (base + p) * (INSTR);                                              \
         ulong rec0 = in_belem[d];                                                     \
         uint key = (uint)(rec0 & 0xFFFFFFu);                                          \
         if ((key & (submaskCount - 1u)) != mask) continue;                            \
@@ -699,7 +703,7 @@ __kernel void NAME(                                                             
                        scatter them over a 190 MB row. Same reason the per-bucket      \
                        atomic_inc beats a computed slot. Do not retry. */              \
                     uint cgi = ABL_HIT(64, LMODE) ? pos : atomic_inc(gi_counter);     \
-                    size_t od = ((size_t)cb * out_bucket_cap + cpos) * out_stride;    \
+                    size_t od = ((size_t)cb * out_bucket_cap + cpos) * (OUTSTR);      \
                     if (ABL_HIT(1, LMODE)) { /* payload write ablated */ }                      \
                     else if ((LMODE) == LMODE_SEED) {                                 \
                         /* 16 B PAIR RECORD instead of the 72 B element: round 2       \
@@ -739,16 +743,16 @@ __kernel void NAME(                                                             
 // (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is per-round rather
 // than a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4, r4 the
 // 2-uint contrib.
-FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED, 424u, 2u, 1u, 2u, 2u)  // r1: seeds in, 16 B pair record out
-FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u)    // r2: re-derives from the pair record
+FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED, 424u, 2u, 1u, 2u, 2u, 1u, 2u)  // r1: seeds in, 16 B pair record out
+FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 9u)    // r2: re-derives from the pair record
 // RUNTIME-PARAMETERISED variant: the constants are the kernel's own runtime args, so
 // this one kernel still validates the fused mechanism generically across r=1..4
 // (tests/test_lds_collide.cpp, test_fused_round). Not on the pipeline path -- the four
 // shipped kernels above bake their per-round constants in, which is worth ~26 ms.
 // Lout(r) == Lmix(r+1) for every round, so `Lout` serves both roles.
-FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild)
-FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u)   // r3 fallback (full packed record)
-FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u)    // r4: stages contrib, no leaf emit
+FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild, in_stride, out_stride)
+FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 9u, 8u)   // r3 fallback (full packed record)
+FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u)    // r4: stages contrib, no leaf emit
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
@@ -784,7 +788,8 @@ __kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint
 // all-zero survivor (two byte-identical round-5 elements XOR to 0). No leaves needed
 // (recover walks back-refs). Survivor slot = a dense atomic index; its back-ref row
 // (out_off = 4*capacity) holds the two round-5 parent gi's so recover can descend.
-__kernel void round5_fused_lds(
+__kernel __attribute__((reqd_work_group_size(LDS_WG, 1, 1)))
+void round5_fused_lds(
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint Lout, uint out_off,
     uint in_stride,
     __global const uint*  in_counts,
@@ -802,6 +807,7 @@ __kernel void round5_fused_lds(
     // word + meta = 16 B instead of 48 B. Checked over 200k random pairs and gated by
     // the survivor count (must stay 3 on the KAT) plus the goldens.
     #define LDS_R5W 1u
+    #define LDS_R5STR 2u     // kFbStride[5]: 1 work word + meta
     #define LDS_R5LOUT 24u   // Lout(5); see the note at the combine below
     __local ulong lwork[LDS_R5W * LDS_FCAP];
     __local uint  lgi[LDS_FCAP];
@@ -824,7 +830,7 @@ __kernel void round5_fused_lds(
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
     size_t base = (size_t)bucket * in_bucket_cap;
     for (uint p = lId; p < cnt; p += LDS_WG) {
-        size_t d = (base + p) * in_stride;
+        size_t d = (base + p) * LDS_R5STR;
         uint key = (uint)(in_belem[d] & 0xFFFFFFu);
         if ((key & (submaskCount - 1u)) != mask) continue;
         uint pos = atomic_inc(&gcount);
