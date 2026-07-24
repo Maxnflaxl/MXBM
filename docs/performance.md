@@ -11,16 +11,28 @@ so 53 sol/s ÷ 1.9 ≈ **28 solve/s ≈ 36 ms/solve**. That is the bar.
 **Reference hardware** for every measurement below: RTX 4070 Ti SUPER (Ada, sm_89,
 66 CUs, 16 GB, 48 KB LDS/workgroup, ~510 GB/s achievable copy bandwidth).
 
-**How to reproduce:** `./build/bench_rounds 20` reports the median over 20 full solves
-plus a correctness gate; multiply by 1.9 for sol/s. `MXBM_NO_ROWBUCKET=1` forces the
-fallback sort path.
+**How to reproduce.** Two figures are quoted throughout, and they measure different things:
+
+- `./build/bench_rounds 20` — median over 20 runs of the **solver pipeline** (entry through
+  terminal). This is the controlled number used to make optimization decisions.
+- `./build/test_gpu_solver` — **end-to-end `GpuSolver::solve()`**, including survivor
+  readback, back-reference recovery and CPU verification. Take `solve #2` (steady state,
+  persistent buffers); `solve #1` pays one-off allocation. This is what a miner reports,
+  so it is the headline.
+
+Both are noisy at the ~1 ms level, so single samples are not meaningful — quote a median
+of at least 5. `MXBM_NO_ROWBUCKET=1` forces the fallback sort path.
+
+sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
 
 ---
 
 ## Progress log
 
-Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
-"Didn't work" link to the sections explaining each result.
+Times are median ms per solve from `bench_rounds` (the pipeline measurement), lower is
+better. "Worked" and "Didn't work" link to the sections explaining each result. The
+end-to-end figure tracks it closely — 40.0 vs 40.3 ms at the current tip — so the table's
+trend is not distorted by measuring the pipeline rather than the whole solve.
 
 The first row is the **real-world** starting point: the miner's own reported speed when
 the GPU solver found its first share. Later rows are `bench_rounds` pipeline medians,
@@ -53,9 +65,9 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | √-scaled bucket capacity → geometry (16, 1) | 42.7 | 40.4 | **47.0** | −2.3 | −5.4 % | [Capacity](#bucket-capacity), [Geometry](#row-bucket-geometry) | [Occupancy, again](#occupancy-again) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 47.0 sol/s** (40.4 ms/solve; ~43 ms end-to-end).
+**Current: 47.5 sol/s** — 40.0 ms end-to-end (median of 5), 40.3 ms pipeline bench.
 
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.13×**.
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) = 35.8 ms — remaining gap **~1.12×**.
 
 Started at **1.8 sol/s** when the solver first worked → **26× faster**.
 
@@ -811,48 +823,56 @@ existing arithmetic compile down properly, not from moving fewer bytes.
 
 ## Current focus and open leads
 
-**Where the time goes** (40.4 ms bench, ~43 ms end-to-end): r1 6.4, r2 13.0, r3 12.3,
-r4 6.5, plus a ~2.7 ms entry and a ~2.0 ms terminal.
+**Where the time goes** (40.3 ms bench / 40.0 ms end-to-end): entry 2.7, r1 6.3, r2 13.0,
+r3 12.3, r4 6.4, terminal 1.1.
 
-**Against the roofline.** The pipeline moves **11.75 GiB per solve** (168 B/element of
-scattered record writes, 176 B of coalesced reads, 32 B of back-refs) in 40.4 ms =
-**312 GB/s aggregate**, against 260 GB/s for an isolated pure scatter and ~510 GB/s of
-coalesced peak. The geometry work pushed it *above* the pure-scatter rate by removing
-redundant scan traffic rather than by moving fewer bytes.
+**The pipeline is within ~5 % of its own memory floor.** Each round's traffic, priced at
+the measured 312 GB/s aggregate:
 
-**Three levers are now closed by measurement, not assertion:**
+| | read + write | GiB | floor |
+|---|---|---|---|
+| r1 | 8 + 16 B | 0.75 | 2.6 ms |
+| r2 | 16 + 72 B | 2.75 | 9.5 ms |
+| r3 | 72 + 64 B | 4.25 | 14.6 ms |
+| r4 | 64 + 16 B | 2.50 | 8.6 ms |
+| | | | **35.3 ms** + entry 2.7 + terminal 1.1 = **39.1** |
 
-- **Bytes** — every record is `ceil(bits/64)` with no removable field
-  ([audit](#the-record-redundancy-audit)).
-- **The redundant rescan** — eliminating it entirely buys nothing over halving it
-  ([geometry](#row-bucket-geometry)).
-- **Occupancy** — it now helps, but `lwork` alone exceeds the per-element LDS budget for
-  2 wg/SM ([occupancy, again](#occupancy-again)).
+Measured 41.2 under ablation instrumentation, 40.3 clean. Everything not memory has been
+ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.2.
+
+**All the large levers are now closed by measurement:**
+
+| lever | status |
+|---|---|
+| fewer bytes | every record is `ceil(bits/64)` ([audit](#the-record-redundancy-audit)) |
+| redundant rescan | removing it entirely buys nothing over halving it ([geometry](#row-bucket-geometry)) |
+| occupancy | `lwork` alone exceeds the per-element LDS budget ([details](#occupancy-again)) |
+| coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](#two-level-bucketing)) |
+| the two atomics | both load-bearing; removing either is slower |
+| `apply_mix`, back-refs, rebuild | 2.2 ms combined — nothing left to win |
 
 **Leads, most promising first:**
 
-1. **Nonce-level pipelining.** End-to-end is ~43 ms against a 40.4 ms bench, and the
-   entry/terminal passes (~4.7 ms) plus readback, recovery and CPU verification do not
-   saturate memory the way the rounds do. Overlapping one nonce's tail with the next
-   nonce's head is the only remaining *structural* idea that does not need a better
-   algorithm. It needs a second set of the small buffers, not a full second pipeline —
-   round 4's output is 16 B/element now, so the tail's working set is far smaller than it
-   was when this was last considered.
-2. **Drop the redundant back-ref rows.** Rounds 1–2's back-refs duplicate information the
-   round-2 record already carries (its four seed indices), but that record is overwritten
-   by round 4's output in the ping-pong. Round 4's output is now only 16 B/element, so
-   giving it a small dedicated buffer would leave round 2's records intact for recovery
-   and save 16 B/element of writes (~1 ms, 0.5 GiB) at the cost of ~0.8 GiB and a recover
-   rewrite. Net memory is roughly a wash; the win is the traffic.
+1. **Overlap the entry pass with the previous solve's rounds.** The entry is ~2.7 ms of
+   which only ~1.0 is its own writes (268 MB) — the rest is 235 M siphashes. It is the one
+   phase that is compute-bound while everything around it is bandwidth-bound, so it is the
+   one phase that can genuinely hide. Needs a second command queue and a second seed
+   buffer (~390 MB, because that record is 8 B/element). **Estimated −1.7 ms**; it is the
+   last structural lever and it does not close the gap on its own.
+2. **Overclocking.** Deliberately deferred until parity was in sight, and it now is.
+   BeamHash III is bandwidth-bound at 312 GB/s aggregate, so a memory offset scales this
+   workload almost linearly — and it applies to lolMiner equally, so it is a fair
+   comparison only against an overclocked reference.
 3. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
-   row-bucket path needs 239. That single constant forces the ≥ 14.6 GiB threshold in
-   [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md), and is what keeps 12 GB cards on the 5×
-   slower fallback.
+   row-bucket path needs 239. That constant is what keeps 12 GB cards on the 5× slower
+   fallback. Correctness/reach, not speed.
 
-**Re-measure trades after any speed-up.** This is now three-for-three: the round-3 quad
-record flipped sign, the geometry had been stale since the fused path was built, and
-occupancy went from irrelevant to helpful. Anything in [what worked](#what-worked) that
-balances two costs is a candidate for re-testing after the next win.
+**On the remaining ~4 ms to lolMiner.** With bytes at their floor and the pattern at its
+ceiling, closing it at stock clocks would need lolMiner to be moving *fewer* bytes than the
+record contents require, or using a collision structure not derivable from the public
+references. That is a real possibility and not one this document can resolve by
+measurement — what it can say is that every lever visible from here has been measured, and
+the ones that remain are worth ~2 ms.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
