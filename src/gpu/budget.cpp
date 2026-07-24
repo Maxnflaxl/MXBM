@@ -10,14 +10,13 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom) 
     b.usable     = (uint64_t)((double)global_mem * headroom);
     b.target_elems = 1u << kTargetElemsLog2;
 
-    // Per-element resident divisor. The CURRENT layout (post 6->2 work reclaim +
-    // D3 sort path) is far smaller than this 396 B/elem: 2 work (112) + 2 leaves
-    // (72) + left/right/lead (60) + sort scratch (~24) ~= 268 B/elem. We keep the
-    // OLD, LARGER 396 divisor deliberately: it over-estimates cost, so it only ever
-    // UNDER-provisions elems_per_round (safe -- never OOMs) and it never binds on
-    // the 16 GB target card (target_elems=2^25 wins). The P2 hot-path rewrite
-    // changes the buffer set entirely, so a precise divisor is deferred to it.
-    uint64_t rounds_cap = b.usable / ((uint64_t)kNumRounds * kResidentElemBytes + kSeedElemBytes);
+    // Per-element resident divisor (kBytesPerElement, see budget.h). This used to be
+    // 5*68+56 = 396 B/elem, a leftover from the pre-reclaim six-buffer layout. That
+    // over-estimate is not free: it only grants a full 2^25 seed layer above ~14.6 GiB
+    // of reported VRAM, so 12 GB cards were downgraded to a REDUCED layer -- which,
+    // per budget_can_find_solutions(), finds essentially no solutions at all. Sizing
+    // to what the pipeline actually allocates makes those cards usable.
+    uint64_t rounds_cap = b.usable / (uint64_t)kBytesPerElement;
     uint64_t epr = min_u64(b.target_elems, rounds_cap);
     if (epr == 0) epr = 1;
     b.elems_per_round = (uint32_t)epr;

@@ -14,6 +14,28 @@ GpuSolver::GpuSolver() {
     // callers must guard with available() first, exactly as every device
     // test in this suite guards with Runtime::any_device_available().
     budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc);
+
+    // REFUSE a partial seed layer rather than mine nothing. A BeamHash III solution
+    // is 32 indices from the full [0, 2^25) space, so a device that can only host
+    // elems_per_round < 2^25 can only find solutions whose every index happens to
+    // fall below that -- probability (epr/2^25)^32, i.e. 2e-10 at half a layer. Such
+    // a miner runs, reports a hashrate, and finds nothing; failing loudly here is the
+    // honest behaviour. MXBM_ALLOW_PARTIAL_SEARCH overrides for experiments.
+    if (!budget_can_find_solutions(budget_.elems_per_round) &&
+        std::getenv("MXBM_ALLOW_PARTIAL_SEARCH") == nullptr) {
+        char msg[320];
+        std::snprintf(msg, sizeof msg,
+            "GPU has too little memory for BeamHash III: it can host only %u of the "
+            "required %u seed elements. A partial seed layer cannot find solutions "
+            "(probability ~(%.2f)^32). Need ~%.1f GiB of usable VRAM; this device "
+            "reports %.1f GiB. Set MXBM_ALLOW_PARTIAL_SEARCH=1 to override for testing.",
+            budget_.elems_per_round, 1u << kTargetElemsLog2,
+            (double)budget_.elems_per_round / (double)(1u << kTargetElemsLog2),
+            (double)((uint64_t)(1u << kTargetElemsLog2) * kBytesPerElement) / 1073741824.0 / 0.85,
+            (double)rt_.device().global_mem / 1073741824.0);
+        throw ClError(CL_OUT_OF_RESOURCES, msg);
+    }
+
     pb_ = alloc_pipeline(rt_, budget_);
 }
 

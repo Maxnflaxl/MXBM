@@ -7,6 +7,25 @@ constexpr uint32_t kSeedElemBytes     = 56;   // 7 x u64
 constexpr uint32_t kResidentElemBytes = 68;   // 56 work + 12 back-ref
 constexpr uint32_t kTargetElemsLog2   = 25;
 
+// Per-element VRAM cost of the resident pipeline, used to decide how large a seed
+// layer a device can host. Must cover the LARGER of the two collision paths, since
+// which one alloc_pipeline picks is decided later (see want_rowbucket):
+//   row-bucket : packed record x2 sets (1.25x bucket slack) + left/right  ~= 268 B
+//   sort       : work x2 + leaves x2 + left/right/lead + sort scratch     ~= 285 B
+// 304 B adds ~7% margin over the sort path for bucket_slots and rounding.
+// tests/test_gpu_rounds.cpp pins this against the real allocation, so the two
+// cannot drift apart silently.
+constexpr uint32_t kBytesPerElement = 304;
+
+// A BeamHash III solution is 32 indices drawn from the FULL [0, 2^25) space, so a
+// solver that generates only [0, epr) can find a solution only if all 32 of its
+// indices land below epr -- probability (epr / 2^25)^32. At epr = 2^24 that is
+// 2e-10: a reduced seed layer does not mine slowly, it mines nothing. Callers must
+// treat elems_per_round < target_elems as non-functional rather than degraded.
+inline bool budget_can_find_solutions(uint32_t elems_per_round) {
+    return elems_per_round >= (1u << kTargetElemsLog2);
+}
+
 struct Budget {
     uint64_t global_mem = 0;
     uint64_t max_alloc  = 0;

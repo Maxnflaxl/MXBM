@@ -67,6 +67,31 @@ int main() {
     // capacity carries collision headroom ABOVE the 2^25 seed count so rounds 1-2
     // never clamp (see Budget::capacity / the pairDrops==0 assertion below).
     check(pb.capacity == b.capacity, "pipeline capacity == b.capacity (seed count + headroom)");
+
+    // BUDGET vs REALITY. compute_budget decides how large a seed layer fits using
+    // kBytesPerElement; alloc_pipeline then makes the real allocations. If the
+    // estimate ever drops below what is actually allocated, a device would be told
+    // it can host a full layer and then OOM. Pin them together here: sum the real
+    // per-element resident cost for the ACTIVE path and require the budget's
+    // per-element figure to cover it.
+    {
+        const uint64_t C = pb.capacity;
+        uint64_t actual;
+        if (pb.rowbucket) {
+            const uint64_t ns = (uint64_t)pb.fb_num_buckets * pb.fb_bucket_cap;
+            actual = 2*(ns*10*8 + (uint64_t)pb.fb_num_buckets*4) + 2*5*C*4;
+        } else {
+            actual = 2*C*7*8 + 2*9*C*4 + 3*5*C*4 + (uint64_t)b.num_buckets*(1 + b.slots_per_bucket)*4
+                   + 2*C*8 + C*4 + 256*((C+255)/256)*4;
+        }
+        const double perElem = (double)actual / (double)b.elems_per_round;
+        std::printf("  budget check: %s path allocates %.2f GiB = %.0f B/element; "
+                    "budget assumes %u B/element\n",
+                    pb.rowbucket ? "row-bucket" : "sort",
+                    (double)actual / 1073741824.0, perElem, kBytesPerElement);
+        check(perElem <= (double)kBytesPerElement,
+              "compute_budget's per-element estimate covers the real allocation (no OOM risk)");
+    }
     check(b.capacity > b.elems_per_round, "budget reserves collision headroom (capacity > 2^25 seed count) on this card");
 
     std::printf("  running run_pipeline() over the full 2^25 seed layer on the KAT prePow...\n");

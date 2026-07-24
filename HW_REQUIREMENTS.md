@@ -16,6 +16,7 @@ All figures are computed from the allocator in `src/gpu/round_pipeline.cpp` and
 | **VRAM — to run at all** | ~6 GB |
 | **VRAM — for a search that actually finds solutions** | **~16 GB today** (see the caveat below) |
 | **VRAM — what a full search genuinely needs** | **~8.4 GiB** (row-bucket path) |
+| **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.8× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
 
@@ -115,16 +116,33 @@ There is no warning or error when `elems_per_round < 2^25`, despite that configu
 being unable to find solutions in practice. It should refuse to start, or at minimum warn
 loudly, rather than mine nothing while appearing healthy.
 
-### 3. Memory efficiency is well short of the state of the art
+### 3. Memory efficiency is ~2.8× off the algorithm's design target
 
-For comparison, other BeamHash III miners are reported to run in far less VRAM (lolMiner
-is understood to need ~3 GB). At 2^25 elements that implies **≈ 96 B/element in total** —
-less than the 3.61 GiB that two live layers of raw work words occupy here. Achieving it
-would require a fundamentally leaner strategy than MXBM's current two-live-layer design:
-streaming or in-place layer reuse, or storing indices and re-deriving work state on
-demand.
+Beam's own mining documentation states:
 
-This is a correctness-neutral efficiency gap, but likely also a **performance** gap: the
-solver is memory-bandwidth-bound, so an implementation moving ~2.5× fewer bytes per round
-would be expected to run substantially faster. It is the leading hypothesis for the
-remaining throughput difference against lolMiner.
+> "Beam Hash III requires a graphics card with a minimum 3GB of memory."
+> — <https://beam.mw/docs/mining>
+
+That is the **algorithm's design target**, not a third-party miner's quirk: BeamHash III
+was designed by Wilke Trei, who also writes lolMiner. MXBM currently needs **8.36 GiB**,
+roughly **2.8× more** than the algorithm is meant to require.
+
+At 2^25 elements, a 3 GB budget implies **≈ 96 B/element in total** — less than the
+**3.61 GiB** that two live layers of raw 56 B work words occupy in MXBM's design. So the
+target is not reachable by trimming MXBM's current structure; it rules out holding two
+full layers of work words at once. A conforming implementation must do something
+structurally different, such as:
+
+- **streaming / in-place layer reuse** — writing round *r+1* into space freed by consumed
+  round-*r* buckets, exploiting the fact that the stored element narrows every round
+  (53 → 50 → 47 → 36 B), or
+- **index-only storage with re-derivation** — keeping 4 B indices and recomputing work
+  state on demand, trading arithmetic for memory.
+
+This is correctness-neutral, but it is very likely **also a performance gap**. MXBM's
+solver is memory-bandwidth-bound — every optimization that has worked so far won by
+moving fewer bytes (see [docs/performance.md](docs/performance.md)). An implementation
+using ~2.8× less memory would be expected to move proportionally fewer bytes per round,
+which is the leading hypothesis for the remaining throughput difference. Memory
+efficiency and throughput are therefore probably the *same* problem, and reducing the
+per-element footprint is the highest-value open work item.
