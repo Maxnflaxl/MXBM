@@ -395,6 +395,41 @@ __kernel void emit_packed_pad(uint N, uint bucket_bits, uint bucket_cap,
     belem[d*12 + 8] = ((ulong)g << 32) | (ulong)key;
 }
 
+// SEED RE-DERIVATION PROBE. Round-1 elements are SEEDS: fully determined by a 25-bit
+// index, so they need not be stored at all -- the 56 B work state can be recomputed
+// from the index (7 x siphash24 + apply_mix). This measures whether that recompute is
+// cheaper than the memory it replaces (storing + re-reading a 72 B record).
+//   seed_compute_only : the recompute cost alone (result folded to defeat DCE)
+//   seed_scatter_thin : entry pass storing only an 8 B (index,key) record
+__kernel void seed_compute_only(__global const ulong* pp4, uint begin, uint count,
+                                __global ulong* sink) {
+    uint g = get_global_id(0); if (g >= count) return;
+    uint idx = begin + g;
+    ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+    ulong e[7];
+    bh3_seed_element(pp, idx, e);
+    uint tree1[1] = { idx };
+    e[0] = bh3_apply_mix(e, tree1, 1u, 448u);
+    if ((e[0] & 0xFFFFFFFFFFFFul) == 0ul) sink[0] = e[0];   // never taken; defeats DCE
+}
+__kernel void seed_scatter_thin(__global const ulong* pp4, uint begin, uint count,
+                                uint bucket_bits, uint bucket_cap,
+                                __global uint* counts, __global ulong* belem,
+                                __global uint* drops) {
+    uint g = get_global_id(0); if (g >= count) return;
+    uint idx = begin + g;
+    ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+    ulong e[7];
+    bh3_seed_element(pp, idx, e);
+    uint tree1[1] = { idx };
+    e[0] = bh3_apply_mix(e, tree1, 1u, 448u);
+    uint key = (uint)(e[0] & 0xFFFFFFu);
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos < bucket_cap) belem[(size_t)b*bucket_cap + pos] = ((ulong)idx << 32) | (ulong)key;
+    else atomic_inc(&drops[0]);
+}
+
 // Coalesced copy: peak-ish sequential write reference (each thread writes ew
 // contiguous words; threads tile the array -> fully coalesced overall).
 __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong* dst) {
@@ -423,6 +458,7 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 #define LMODE_RAW  0   // stage raw leaves, emit raw leaves            (r1, r2)
 #define LMODE_EMIT 1   // stage raw leaves, emit the compact contrib   (r3)
 #define LMODE_USE  2   // stage the contrib, no leaf emit              (r4)
+#define LMODE_SEED 3   // RE-DERIVE the element from its index          (r1)
 #define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
 
 // PACKED ELEMENT LAYOUT. Each element is ONE contiguous record instead of four
@@ -443,7 +479,8 @@ __kernel void NAME(                                                             
     __global const uint* in_counts, __global const ulong* in_belem,                   \
     __global uint* out_counts, __global ulong* out_belem,                             \
     __global uint* all_left, __global uint* all_right,                                \
-    __global uint* gi_counter, __global uint* drops) {                               \
+    __global uint* gi_counter, __global uint* drops,                                  \
+    __global const ulong* pp4) {                                                     \
     __local ulong lwork[(INW) * LDS_FCAP];                                            \
     __local uint  lgi[LDS_FCAP]; __local uint llead[LDS_FCAP];                        \
     __local uint  lleaf[(LEAFW) * LDS_FCAP];                                          \
@@ -461,16 +498,33 @@ __kernel void NAME(                                                             
     size_t base = (size_t)bucket * in_bucket_cap;                                     \
     for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
         size_t d = (base + p) * in_stride;                                            \
-        uint key = (uint)(in_belem[d] & 0xFFFFFFu);                                   \
+        ulong rec0 = in_belem[d];                                                     \
+        uint key = (uint)(rec0 & 0xFFFFFFu);                                          \
         if ((key & (submaskCount - 1u)) != mask) continue;                            \
         uint pos = atomic_inc(&gcount);                                               \
         if (pos < LDS_FCAP) {                                                         \
-            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w];  \
-            ulong meta = in_belem[d + (INW)];                                         \
-            lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key;  \
-            for (uint i = 0; i < sIn; ++i)                                            \
-                lleaf[pos*(LEAFW) + i] =                                              \
-                    (uint)(in_belem[d + (INW) + 1u + (i >> 1)] >> ((i & 1u) * 32u));  \
+            if ((LMODE) == LMODE_SEED) {                                              \
+                /* Round-1 elements are SEEDS: the record is just (index,key) and the \
+                   56 B work state is RE-DERIVED here. Recompute measured 2.5 ms vs   \
+                   18.2 ms to store and re-read the full record (test_seed_rederivation). \
+                   Only the ~1/8 of the bucket this sub-mask owns is expanded, so each \
+                   element is derived exactly once across the 8 passes. */            \
+                uint idx = (uint)(rec0 >> 32);                                        \
+                ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                     \
+                ulong se[7]; bh3_seed_element(pp, idx, se);                           \
+                uint t1[1] = { idx };                                                 \
+                se[0] = bh3_apply_mix(se, t1, 1u, 448u);                              \
+                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = se[w];        \
+                lgi[pos] = idx; llead[pos] = idx; lkey[pos] = key;                    \
+                lleaf[pos*(LEAFW) + 0] = idx;                                         \
+            } else {                                                                  \
+                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
+                ulong meta = in_belem[d + (INW)];                                     \
+                lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key; \
+                for (uint i = 0; i < sIn; ++i)                                        \
+                    lleaf[pos*(LEAFW) + i] =                                          \
+                        (uint)(in_belem[d + (INW) + 1u + (i >> 1)] >> ((i & 1u) * 32u)); \
+            }                                                                         \
         } else atomic_inc(&drops[1]);                                                \
     }                                                                                \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
@@ -541,7 +595,8 @@ __kernel void NAME(                                                             
 // (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is per-round rather
 // than a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4, r4 the
 // 2-uint contrib.
-FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r1 (sIn=1), r2 (sIn=2)
+FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED)  // r1: re-derives seeds from indices
+FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r2 (sIn=2)
 FUSED_LDS(round_fused_7_6, 7, 6, 4, LMODE_EMIT)   // r3: stages 4 leaves, emits contrib
 FUSED_LDS(round_fused_6_5, 6, 5, 2, LMODE_USE)    // r4: stages contrib, no leaf emit
 
@@ -565,12 +620,12 @@ __kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint
     uint b = key >> (24u - bucket_bits);
     uint pos = atomic_inc(&counts[b]);
     if (pos < bucket_cap) {
-        // Packed round-1 record: work[0..6], meta=(gi<<32)|lead, leafword{leaf0}.
-        // gi, lead and leaf0 are all the seed index for a round-1 element.
+        // THIN round-1 record: (index << 32) | key, 8 B total. The 56 B work state is
+        // NOT stored -- round 1 re-derives it from the index while staging into LDS
+        // (LMODE_SEED). gi, lead and leaf0 are all the index for a seed element, so
+        // nothing else needs carrying. Measured 2.5 ms vs 18.2 ms for the 72 B record.
         size_t d = ((size_t)b*bucket_cap + pos) * stride;
-        for (int k = 0; k < 7; ++k) belem[d + k] = e[k];
-        belem[d + 7] = ((ulong)idx << 32) | (ulong)idx;
-        belem[d + 8] = (ulong)idx;
+        belem[d] = ((ulong)idx << 32) | (ulong)key;
     } else atomic_inc(&drops[1]);
 }
 

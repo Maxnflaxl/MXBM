@@ -582,6 +582,7 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&oc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&oe);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&aL); rt.set_arg(k.get(),a++,sizeof(cl_mem),&aR);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&gc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&dr);
+      cl_mem ppm=mInElem.get(); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ppm); /*unused by RAW*/
       rt.run1d(k.get(), ((size_t)numBuckets << submaskBits)*WG, WG); }
 
     uint32_t drops[4]; rt.read(mDrops.get(),16,drops);
@@ -801,6 +802,59 @@ static void test_emit_packing(Runtime& rt, cl_program prog) {
     check(true,"emit packing characterized");
 }
 
+// SEED RE-DERIVATION: is recomputing a round-1 element from its index cheaper than
+// storing and re-reading it? Round-1 elements are seeds (7 x siphash24 + apply_mix
+// from a 25-bit index), so the fat 72 B record could be replaced by an 8 B
+// (index,key) pair that the collide kernel expands on staging.
+static void test_seed_rederivation(Runtime& rt, cl_program prog) {
+    section("seed re-derivation: recompute cost vs the 72 B record it replaces");
+    const uint32_t N=1u<<25, bb=14, nb=1u<<bb, cap=(N>>bb)+256;
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m;} return b; };
+    uint64_t pp[4]={0x0123456789abcdefULL,0xfedcba9876543210ULL,0x1122334455667788ULL,0x99aabbccddeeff00ULL};
+    Mem mPP=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,sizeof pp,pp);
+    Mem mSink=rt.alloc(CL_MEM_READ_WRITE,64);
+    Mem mCnt=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*4);
+    Mem mDr=rt.alloc(CL_MEM_READ_WRITE,16);
+    Mem mThin=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*cap*8);
+    Mem mFat=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*cap*9*8);
+
+    double tc=best([&]{ Kernel k=rt.kernel(prog,"seed_compute_only");
+        cl_mem p2=mPP.get(), sk=mSink.get(); uint32_t z=0;
+        rt.set_arg(k.get(),0,sizeof(cl_mem),&p2); rt.set_arg(k.get(),1,z); rt.set_arg(k.get(),2,N);
+        rt.set_arg(k.get(),3,sizeof(cl_mem),&sk);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
+    std::printf("  recompute only (7x siphash24 + apply_mix, no store) : %.2f ms\n", tc);
+
+    uint32_t md=0; double tt=best([&]{ rt.fill_u32(mCnt.get(),0u,nb); rt.fill_u32(mDr.get(),0u,4);
+        Kernel k=rt.kernel(prog,"seed_scatter_thin");
+        cl_mem p2=mPP.get(), c=mCnt.get(), be=mThin.get(), dr=mDr.get(); uint32_t z=0;
+        rt.set_arg(k.get(),0,sizeof(cl_mem),&p2); rt.set_arg(k.get(),1,z); rt.set_arg(k.get(),2,N);
+        rt.set_arg(k.get(),3,bb); rt.set_arg(k.get(),4,cap);
+        rt.set_arg(k.get(),5,sizeof(cl_mem),&c); rt.set_arg(k.get(),6,sizeof(cl_mem),&be);
+        rt.set_arg(k.get(),7,sizeof(cl_mem),&dr);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+        double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+        rt.read(mDr.get(),4,&md); return m; });
+    std::printf("  entry storing 8 B (index,key)                       : %.2f ms  drops=%u\n", tt, md);
+
+    // Reference: the current entry, which computes the same seed then stores 72 B.
+    double tf=best([&]{ rt.fill_u32(mCnt.get(),0u,nb); rt.fill_u32(mDr.get(),0u,4);
+        Kernel k=rt.kernel(prog,"round1_mix_scatter_fat");
+        cl_mem p2=mPP.get(), c=mCnt.get(), be=mFat.get(), dr=mDr.get(); uint32_t z=0, st=9;
+        rt.set_arg(k.get(),0,sizeof(cl_mem),&p2); rt.set_arg(k.get(),1,z); rt.set_arg(k.get(),2,N);
+        rt.set_arg(k.get(),3,bb); rt.set_arg(k.get(),4,cap); rt.set_arg(k.get(),5,st);
+        rt.set_arg(k.get(),6,sizeof(cl_mem),&c); rt.set_arg(k.get(),7,sizeof(cl_mem),&be);
+        rt.set_arg(k.get(),8,sizeof(cl_mem),&dr);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
+    std::printf("  entry storing 72 B packed record (today)            : %.2f ms\n", tf);
+    std::printf("  --> entry saving %.2f ms; round-1 stage read shrinks 72 B -> 8 B/elem\n", tf-tt);
+    std::printf("  --> recompute is %.0f%% of the 72 B entry cost\n", 100.0*tc/tf);
+    check(true,"seed re-derivation characterized");
+}
+
 // Pins the algebra the round-3/round-4 compact leftContrib rests on (CPU-only, no
 // GPU): apply_mix decomposes as rotl24(workPart + indexPart) with indexPart additive
 // over leaves, so the LEFT parent's 8 leaves can be pre-folded into ONE u64 by round 3
@@ -856,6 +910,7 @@ int main() {
     test_scatter_occupancy(rt, prog.get());
     test_coalescing_curve(rt, prog.get());
     test_emit_packing(rt, prog.get());
+    test_seed_rederivation(rt, prog.get());
 
     // STEP B: fused round kernel correctness (exact vs oracle) + scale/drop-free.
     // Only r=1,2 use the RAW leaf variant (round_fused_lds, LEAFW=2); r3 emits the

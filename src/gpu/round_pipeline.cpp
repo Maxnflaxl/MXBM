@@ -63,9 +63,11 @@ bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
 // READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
-//   r1 7+1+1=9   r2 7+1+1=9   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
-// Round r's OUTPUT stride is round r+1's input stride.
-constexpr uint32_t kFbStride[6] = { 0u, 9u, 9u, 10u, 8u, 6u };
+//   r1 THIN (index,key) = 1   r2 7+1+1=9   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
+// Round r's OUTPUT stride is round r+1's input stride. Round 1's input is a bare
+// 8 B (index,key) record: seeds are re-derived from the index in-kernel rather than
+// stored, which measured 2.5 ms against 18.2 ms to store and re-read them.
+constexpr uint32_t kFbStride[6] = { 0u, 1u, 9u, 10u, 8u, 6u };
 constexpr uint32_t kFbMaxStride = 10u;
 // Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
 // occupancy is ~Binomial(capacity, 1/nb): mean = capacity/nb, sigma ~ sqrt(mean), and
@@ -769,6 +771,9 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
 
     Mem mdrops = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
     rt.fill_u32(mdrops.get(), 0u, 4);
+    // prePow, needed by the entry AND by round 1 (which re-derives seeds from indices).
+    uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
+    Mem mpp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
 
     // DE-BUBBLE (#23): in production (verbose=false) enqueue fills+kernels ASYNC on
     // the in-order queue and let the final survivor/drops readbacks drain once,
@@ -781,10 +786,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     auto tSeed = clk::now();
     FILL(pb.fb_counts[0].get(), 0u, nb);
     {
-        uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
-        Mem mp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
         Kernel k = rt.kernel(prog, "round1_mix_scatter_fat");
-        cl_mem ppMem = mp.get(), cnt = pb.fb_counts[0].get(), be = pb.fb_elem[0].get(), dr = mdrops.get();
+        cl_mem ppMem = mpp.get(), cnt = pb.fb_counts[0].get(), be = pb.fb_elem[0].get(), dr = mdrops.get();
         for (uint32_t begin = 0; begin < total; begin += batch) {
             uint32_t count = (total - begin < batch) ? (total - begin) : batch;
             rt.set_arg(k.get(), 0, sizeof(cl_mem), &ppMem); rt.set_arg(k.get(), 1, begin); rt.set_arg(k.get(), 2, count);
@@ -824,7 +827,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         uint32_t outOff = (uint32_t)(r - 1) * capacity;
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
         const char* fusedName = "round_fused_lds";
-        if      (r == 3) fusedName = "round_fused_7_6";
+        if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
+        else if (r == 3) fusedName = "round_fused_7_6";
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
         cl_mem ic = pb.fb_counts[inSet].get(),  ie = pb.fb_elem[inSet].get();
@@ -841,6 +845,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &oe);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
+        cl_mem ppm = mpp.get(); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ppm);
         RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
         // childCount is stats-only; read it (draining the queue) only in verbose mode.
         uint32_t childCount = prevOut;
