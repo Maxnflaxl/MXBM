@@ -59,9 +59,11 @@ struct PipelineBuffers {
     // contiguous [work | meta=(gi<<32)|lead | leaf payload] block per element instead
     // of four parallel arrays, because a 4 B field in its own array costs a whole 32 B
     // write sector (measured 1.20x, test_emit_packing). Stride varies per round; the
-    // buffer is sized for the widest (round-3 output, 10 u64).
+    // buffer is sized for the widest round (fb_stride, = kFbMaxStride).
     uint32_t fb_num_buckets = 0, fb_bucket_cap = 0;
-    Mem fb_elem[2];            // ulong[nb*cap*kFbMaxStride]
+    uint32_t fb_stride = 0;    // u64/element actually allocated -- read this rather
+                               // than re-deriving the width (it has drifted before)
+    Mem fb_elem[2];            // ulong[nb*cap*fb_stride]
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
 };

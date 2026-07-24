@@ -63,15 +63,16 @@ bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
 // READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
-//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
+//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 QUAD = 3   r4 6+1+1=8   r5 5+1=6
 // Round r's OUTPUT stride is round r+1's input stride. Rounds 1 and 2 both read
 // RE-DERIVABLE records rather than stored work state:
 //   r1 reads a bare 8 B (index,key)      -- seed re-derived in-kernel (2.5 vs 18.2 ms)
 //   r2 reads a 16 B (key,left,right,gi)  -- rebuilt from its two parent seeds
+//   r3 reads a 24 B (key,i0..i3,gi)      -- rebuilt from its four parent seeds
 // Both derivations live in the kernel's non-divergent expand loop; done in the
 // sub-mask-filtered staging loop instead, round 2's cost 23.5 ms rather than 0.4.
-constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 10u, 8u, 6u };
-constexpr uint32_t kFbMaxStride = 10u;
+constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 3u, 8u, 6u };
+constexpr uint32_t kFbMaxStride = 8u;   // = max(kFbStride): round 4's input
 // Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
 // occupancy is ~Binomial(capacity, 1/nb): mean = capacity/nb, sigma ~ sqrt(mean), and
 // the max over nb buckets sits near mean + 4.5 sigma. mean/4 + 256 is ~17 sigma at
@@ -123,6 +124,7 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     for (int i = 0; i < 2; ++i) {
         p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * kFbMaxStride * 8);
+        p.fb_stride    = kFbMaxStride;
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
@@ -832,7 +834,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         const char* fusedName = "round_fused_lds";
         if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
         else if (r == 2) fusedName = "round_fused_rd2";    // re-derives from the pair record
-        else if (r == 3) fusedName = "round_fused_7_6";
+        else if (r == 3) fusedName = "round_fused_rd3";    // re-derives from the quad record
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
         cl_mem ic = pb.fb_counts[inSet].get(),  ie = pb.fb_elem[inSet].get();

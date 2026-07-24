@@ -460,6 +460,7 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 #define LMODE_USE  2   // stage the contrib, no leaf emit              (r4)
 #define LMODE_SEED 3   // RE-DERIVE from index; emit a 16 B PAIR record (r1)
 #define LMODE_RD2  4   // RE-DERIVE from that pair record                (r2)
+#define LMODE_RD3  5   // RE-DERIVE from a 4-index quad record          (r3)
 #define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
 
 // PAIR RECORD (round 1 -> round 2), 16 B instead of the 72 B packed element. A
@@ -476,6 +477,29 @@ inline uint  rd2_right(ulong w1) { return (uint)(w1)       & RD2_IDXMASK; }
 inline uint  rd2_gi   (ulong w1) { return (uint)(w1 >> 25); }
 inline ulong rd2_w0(uint key, uint li) { return (ulong)key | ((ulong)li << 24); }
 inline ulong rd2_w1(uint ri, uint gi)  { return (ulong)ri  | ((ulong)gi << 25); }
+
+// QUAD RECORD (round 2 -> round 3), 24 B instead of the 80 B packed element. Same
+// argument one level up: a round-3 element is a combine of two round-2 elements, so
+// four seed indices determine it -- and those four ARE its leaves (sIn = 4).
+//   word0 = key[0,24) | i0 << 24     word1 = i1 | i2 << 25     word2 = i3 | gi << 25
+inline uint  rd3_i1(ulong w1) { return (uint)(w1)       & RD2_IDXMASK; }
+inline uint  rd3_i2(ulong w1) { return (uint)(w1 >> 25) & RD2_IDXMASK; }
+inline uint  rd3_i3(ulong w2) { return (uint)(w2)       & RD2_IDXMASK; }
+inline uint  rd3_gi(ulong w2) { return (uint)(w2 >> 25); }
+inline ulong rd3_w1(uint i1, uint i2) { return (ulong)i1 | ((ulong)i2 << 25); }
+inline ulong rd3_w2(uint i3, uint gi) { return (ulong)i3 | ((ulong)gi << 25); }
+
+// Rebuild a ROUND-2 element (the round-1 child of seeds li, ri) from scratch:
+// two seeds, each mixed at Lmix(1)=448, combined at Lout(1)=424, then mixed at
+// Lmix(2)=424 over the 2-leaf tree. This is the unit of re-derivation for both
+// round 2 (one call) and round 3 (two calls).
+inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
+    ulong sa[7], sb[7]; uint t1[1]; uint t2[2];
+    bh3_seed_element(pp, li, sa); t1[0] = li; sa[0] = bh3_apply_mix(sa, t1, 1u, 448u);
+    bh3_seed_element(pp, ri, sb); t1[0] = ri; sb[0] = bh3_apply_mix(sb, t1, 1u, 448u);
+    bh3_combine(sa, sb, 424u, out);
+    t2[0] = li; t2[1] = ri; out[0] = bh3_apply_mix(out, t2, 2u, 424u);
+}
 
 // PACKED ELEMENT LAYOUT. Each element is ONE contiguous record instead of four
 // parallel arrays, because global writes are serviced in 32 B sectors: a 4 B gi and a
@@ -535,6 +559,15 @@ __kernel void NAME(                                                             
                 uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
                 lgi[pos] = rd2_gi(rec1); llead[pos] = li; lkey[pos] = key;            \
                 lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
+            } else if ((LMODE) == LMODE_RD3) {                                        \
+                /* Unpack the 24 B quad record; the four rebuilds are deferred. */     \
+                ulong rec1 = in_belem[d + 1u], rec2 = in_belem[d + 2u];               \
+                uint i0 = rd2_left(rec0);                                             \
+                lgi[pos] = rd3_gi(rec2); llead[pos] = i0; lkey[pos] = key;            \
+                lleaf[pos*(LEAFW) + 0] = i0;                                          \
+                lleaf[pos*(LEAFW) + 1] = rd3_i1(rec1);                                \
+                lleaf[pos*(LEAFW) + 2] = rd3_i2(rec1);                                \
+                lleaf[pos*(LEAFW) + 3] = rd3_i3(rec2);                                \
             } else {                                                                  \
                 /* NOT deferred, unlike the seed expand: this is a LOAD, not compute.
                    Tried parking p and reading the record in the all-lanes loop --
@@ -571,16 +604,22 @@ __kernel void NAME(                                                             
             /* DEFERRED EXPAND, round 2: rebuild the 56 B work state from the two      \
                parent seed indices. Measured +0.4 ms here versus +23.5 ms for the same \
                arithmetic in the sub-mask-filtered staging loop. */                    \
-            uint li = lleaf[pos*(LEAFW) + 0], ri = lleaf[pos*(LEAFW) + 1];            \
             ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
-            ulong sa[7], sb[7], cc[7]; uint t1[1]; uint t2[2];                        \
-            bh3_seed_element(pp, li, sa); t1[0] = li;                                 \
-            sa[0] = bh3_apply_mix(sa, t1, 1u, 448u);                                  \
-            bh3_seed_element(pp, ri, sb); t1[0] = ri;                                 \
-            sb[0] = bh3_apply_mix(sb, t1, 1u, 448u);                                  \
-            bh3_combine(sa, sb, 424u, cc);                                            \
-            t2[0] = li; t2[1] = ri;                                                   \
-            cc[0] = bh3_apply_mix(cc, t2, 2u, 424u);                                  \
+            ulong cc[7];                                                              \
+            rd_elem2(pp, lleaf[pos*(LEAFW) + 0], lleaf[pos*(LEAFW) + 1], cc);         \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
+        }                                                                             \
+        if ((LMODE) == LMODE_RD3) {                                                   \
+            /* DEFERRED EXPAND, round 3: two round-2 rebuilds, combined at Lout(2)=400 \
+               and mixed at Lmix(3)=400 over the 4-leaf tree. */                       \
+            ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
+            uint t4[4];                                                               \
+            for (uint i = 0; i < 4u; ++i) t4[i] = lleaf[pos*(LEAFW) + i];             \
+            ulong ea[7], eb[7], cc[7];                                                \
+            rd_elem2(pp, t4[0], t4[1], ea);                                           \
+            rd_elem2(pp, t4[2], t4[3], eb);                                           \
+            bh3_combine(ea, eb, 400u, cc);                                            \
+            cc[0] = bh3_apply_mix(cc, t4, 4u, 400u);                                  \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
         }                                                                             \
         uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);                   \
@@ -615,7 +654,7 @@ __kernel void NAME(                                                             
                         ctree[i] = (i < sIn) ? lleaf[leftPos*(LEAFW) + i]             \
                                              : lleaf[rightPos*(LEAFW) + (i - sIn)];    \
                     c[0] = bh3_apply_mix(c, ctree, padnum_next, Lmix_next);           \
-                    if ((LMODE) == LMODE_EMIT) {                                      \
+                    if ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3) {                                      \
                         ulong zw[7]; for (uint w = 0; w < 7u; ++w) zw[w] = 0ul;        \
                         contribOut = bh3_rotl64(                                       \
                             bh3_apply_mix(zw, ctree, 8u, BH3_LMIX5), 40);              \
@@ -634,10 +673,16 @@ __kernel void NAME(                                                             
                            ctree[0]/ctree[1] are the two parent seed indices. */       \
                         out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
                         out_belem[od + 1u] = rd2_w1(ctree[1], cgi);                   \
+                    } else if ((LMODE) == LMODE_RD2) {                                \
+                        /* 24 B QUAD RECORD: this child's four leaves are exactly the  \
+                           four seed indices round 3 needs to rebuild it. */           \
+                        out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
+                        out_belem[od + 1u] = rd3_w1(ctree[1], ctree[2]);              \
+                        out_belem[od + 2u] = rd3_w2(ctree[3], cgi);                   \
                     } else {                                                          \
                         for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
                         out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0]; \
-                        if ((LMODE) == LMODE_EMIT) {                                  \
+                        if ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3) {                                  \
                             out_belem[od + (OUTW) + 1u] = contribOut;                 \
                         } else {                                                      \
                             for (uint j = 0; j*2u < sOut; ++j) {                      \
@@ -660,7 +705,8 @@ __kernel void NAME(                                                             
 FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED)  // r1: seeds in, 16 B pair record out
 FUSED_LDS(round_fused_rd2, 7, 7, 2, LMODE_RD2)    // r2: re-derives from the pair record
 FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r2 fallback (full packed record)
-FUSED_LDS(round_fused_7_6, 7, 6, 4, LMODE_EMIT)   // r3: stages 4 leaves, emits contrib
+FUSED_LDS(round_fused_rd3, 7, 6, 4, LMODE_RD3)    // r3: re-derives from the quad record
+FUSED_LDS(round_fused_7_6, 7, 6, 4, LMODE_EMIT)   // r3 fallback (full packed record)
 FUSED_LDS(round_fused_6_5, 6, 5, 2, LMODE_USE)    // r4: stages contrib, no leaf emit
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
