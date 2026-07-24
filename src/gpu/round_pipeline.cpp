@@ -57,6 +57,15 @@ uint32_t inwords_for(int r) {
 // to the [7,7,6,5,1] significant-word schedule -- measured 224->214 ms (~4.4%),
 // byte-identical goldens. Set MXBM_NO_COMPACT to fall back to full-width stride-7.
 bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr); return v; }
+
+// Extra OpenCL build options for the fused row-bucket program (MXBM_CL_OPTS).
+// The fused kernels are LDS-bound to 1 workgroup/SM, so the compiler's default
+// register budget -- chosen for an occupancy this kernel can never reach -- is
+// far tighter than necessary and spills the re-derivation's live state.
+const char* rowbucket_cl_opts() {
+    static const char* v = std::getenv("MXBM_CL_OPTS");
+    return v ? v : "";
+}
 } // namespace
 
 bool compact_active();   // defined below; gates the compacted sort path
@@ -768,7 +777,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     PipelineResult result;
     auto tPipeline = clk::now();
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
-                                         std::string(kLdsClSource)}, "");
+                                         std::string(kLdsClSource)}, rowbucket_cl_opts());
     const uint32_t nb = pb.fb_num_buckets, cap = pb.fb_bucket_cap, capacity = pb.capacity;
     const uint32_t bucketBits = 14, submaskBits = 3, survCap = 1024;
     const uint32_t total = (b.elems_per_round != 0) ? b.elems_per_round : capacity;

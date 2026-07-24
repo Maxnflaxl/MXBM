@@ -27,8 +27,8 @@ the GPU solver found its first share. Later rows are `bench_rounds` pipeline med
 the controlled measurement used to make optimization decisions. Early on these disagreed
 sharply — the pipeline benched at 245 ms (≈ 7.9 sol/s equivalent) while the miner
 actually delivered ~1.8 sol/s, i.e. most of a solve was spent *outside* the measured
-pipeline. That overhead is gone: end-to-end `GpuSolver::solve()` now measures 103 ms
-against the 102.7 ms pipeline bench, so the two agree.
+pipeline. That overhead converged (103 ms end-to-end against a 102.7 ms bench) and has
+since re-opened as the pipeline got faster — see the note under the table.
 
 | Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
 |---|---|---|---|---|---|---|---|---|
@@ -42,12 +42,22 @@ against the 102.7 ms pipeline bench, so the two agree.
 | 2026-07-24 | Async enqueue (de-bubble) | 135.0 | 133.0 | **14.3** | −2.0 | −1.5 % | [De-bubble](#async-de-bubble) | [Magazine](#shared-memory-magazine), [gi atomic](#global-gi-atomic) |
 | 2026-07-24 | Compact `leftContrib` (fold 8 leaves → 1 u64) | 131.1 | 124.8 | **15.2** | −6.3 | −4.8 % | [leftContrib](#compact-leftcontrib) | [General mix-state](#general-compact-mix-state) |
 | 2026-07-24 | Packed element record (1 block, not 4 arrays) | 124.8 | 115.7 | **16.4** | −9.1 | −7.3 % | [Packed record](#packed-element-record) | [SoA LDS staging](#soa-lds-staging) |
-| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | **18.5** | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | [Round-2 re-derivation](#round-2-re-derivation) |
+| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | **18.5** | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | [Round-2 re-derivation (first attempt)](#round-2-re-derivation-first-attempt) |
+| 2026-07-24 | Defer round-1's seed expand to a non-divergent loop | 103.6 | 95.3 | **19.9** | −8.3 | −8.0 % | [Non-divergent expand](#the-non-divergent-expand) | [Deferring the stage read](#deferring-the-stage-read) |
+| 2026-07-24 | Round 2 re-derives from a 16 B pair record | 95.3 | 86.8 | **21.9** | −8.5 | −8.9 % | [Re-derivation chain](#the-re-derivation-chain) | — |
+| 2026-07-24 | Round 3 re-derives from a 24 B quad record | 86.8 | 83.2 | **22.8** | −3.6 | −4.1 % | [Re-derivation chain](#the-re-derivation-chain) | [Register cap](#register-cap-tuning) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 18.5 sol/s** (102.7 ms/solve, and 103 ms end-to-end).
-Started at **1.8 sol/s** when the solver first worked → **10.3× faster**.
-**Target: 53 sol/s** (lolMiner, stock) — remaining gap **~2.9×**.
+**Current: 22.8 sol/s** (83.2 ms/solve; 90 ms end-to-end).
+Started at **1.8 sol/s** when the solver first worked → **12.6× faster**.
+**Target: 53 sol/s** (lolMiner, stock) — remaining gap **~2.3×**.
+
+VRAM for a full search fell with it: **8.36 → 6.95 GiB** (268 → 222 B/element), because
+re-derivable records replaced stored work state and retired the widest bucket stride.
+
+*The bench and the end-to-end solve have drifted apart again (83.2 vs 90 ms). That ~7 ms
+sits outside the measured pipeline and is now 8 % of a solve — see
+[open leads](#current-focus-and-open-leads).*
 
 *Solutions per second (sol/s) is the number miners and pools report. BeamHash III
 yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
@@ -79,8 +89,10 @@ Fusion is the point: the coalesced-gather win is destroyed if a separate scatter
 re-reads the elements — see [Un-fused LDS path](#un-fused-lds-path).
 
 Path selection is by device memory (`want_rowbucket` in `src/gpu/round_pipeline.cpp`):
-row-bucket needs ~11 GB with a 3.3 GB largest single allocation, so 8–12 GB cards fall
+row-bucket needs 6.95 GiB with a 2.83 GiB largest single allocation, so smaller cards fall
 back to the sort path automatically. `MXBM_ROWBUCKET=1` / `MXBM_NO_ROWBUCKET=1` override.
+(The *budget* still gates on a single sort-path-sized constant, which is stricter than
+this — see [open leads](#current-focus-and-open-leads).)
 
 ### Round schedule
 
@@ -91,6 +103,24 @@ back to the sort path automatically. `MXBM_ROWBUCKET=1` / `MXBM_NO_ROWBUCKET=1` 
 | 3 | 400 | 376 | 4 | 6 | 4 raw → 1 u64 `leftContrib` |
 | 4 | 376 | 288 | 6 | 5 | `leftContrib` → none |
 | 5 | 288 | 24 | 9 | 1 | none (terminal) |
+
+### Stored record per round
+
+Rounds 1–3 do not store work state at all: their elements are re-derivable from seed
+indices, and those indices are also exactly the leaves the round needs, so the compact
+record *replaces* the payload rather than adding to it (see
+[the re-derivation chain](#the-re-derivation-chain)).
+
+| Read by | Record | u64 | Bytes | Contents |
+|---|---|---|---|---|
+| Round 1 | seed | 1 | 8 | `key \| index << 32` |
+| Round 2 | pair | 2 | 16 | `key \| i0<<24`, `i1 \| gi<<25` |
+| Round 3 | quad | 3 | 24 | `key \| i0<<24`, `i1 \| i2<<25`, `i3 \| gi<<25` |
+| Round 4 | packed | 8 | 64 | 6 work words, meta, `leftContrib` |
+| Round 5 | packed | 6 | 48 | 5 work words, meta |
+
+Seed indices are 25-bit (2^25 seeds) and `gi` is 26-bit, so the pair and quad records
+pack exactly with bits to spare.
 
 ---
 
@@ -223,9 +253,87 @@ recompute for a 15.7 ms saving.
 
 This is the first confirmation of the compute-for-memory trade that BeamHash III's 3 GB
 design target implies (see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)): the solver is
-bandwidth-bound, so paying arithmetic to avoid moving bytes wins. Rounds 2–4 hold
-*combinations* rather than seeds, so extending the idea there needs a different
-mechanism — re-deriving them means walking the back-reference tree.
+bandwidth-bound, so paying arithmetic to avoid moving bytes wins.
+
+### The non-divergent expand
+
+The single most useful structural finding so far, and the key that unlocked
+[the re-derivation chain](#the-re-derivation-chain).
+
+The fused kernel stages a bucket in a **sub-mask filtered** loop:
+
+```c
+for (uint p = lId; p < cnt; p += LDS_WG) {      // cnt ~ 2048, 8 iterations
+    uint key = ...;
+    if ((key & (submaskCount - 1u)) != mask) continue;   // ~7/8 of lanes leave
+    uint pos = atomic_inc(&gcount);
+    /* ...work here runs at ~4 of 32 lanes per warp... */
+}
+```
+
+With `submaskBits = 3` only ~1/8 of lanes survive the filter, so **anything expensive
+placed there executes at ~4/32 lane utilisation**. Immediately afterwards the kernel runs
+a second loop over the ~256 staged elements — `for (pos = lId; pos < total; pos += 256)` —
+which is a single iteration with **every lane active**.
+
+Moving the seed derivation from the first loop to the second is therefore free of any
+structural cost: same seeds, same LDS, no extra barrier (the index was already parked in
+`lgi`), 8× the SIMD utilisation.
+
+**Round 1: 26.4 → 18.5 ms; pipeline 103.6 → 95.3 ms.** Round 1 became the *fastest* round,
+which is what it should always have been — its input record is 8 B against every other
+round's 64–72 B.
+
+This also explains, retrospectively, why
+[the first round-2 attempt](#round-2-re-derivation-first-attempt) failed so badly: it was
+never an arithmetic problem, only a placement one.
+
+### The re-derivation chain
+
+With the divergence removed, "store indices, rebuild the element" extends up the pipeline.
+Each round's element is a combine of two of the previous round's, so an element at round
+*r* is determined by 2^(r-1) seed indices — **and those indices are exactly the leaves that
+round already has to carry**. The compact record therefore replaces the leaf payload and
+the work words together, rather than adding to them:
+
+| | Record | Emit (round *r*−1) | Stage read (round *r*) |
+|---|---|---|---|
+| Round 2 | 16 B pair (2 indices) | 72 → 16 B | 72 → 16 B |
+| Round 3 | 24 B quad (4 indices) | 80 → 24 B | 80 → 24 B |
+
+The rebuild cost was measured **in situ** before either was implemented, using a probe
+that re-derives the element and overwrites the staged work state *while still reading the
+old record* — so the delta is the recompute alone, and it self-verifies against the
+goldens. Round 2's rebuild measured **+0.4 ms**, against **+23.5 ms** for the identical
+arithmetic in the divergent slot.
+
+> A probe like this must be **liveness-checked**. A golden pass alone proves nothing: if
+> the compiler had eliminated the recompute, `lwork` would simply retain the correct
+> loaded value and the goldens would pass anyway. Writing garbage through the probe and
+> confirming the goldens *break* is what establishes the measurement is real. (A first
+> attempt at this control — perturbing `Lout` 424 → 425 — was a no-op, because
+> `bh3_combine` already leaves bit 424 zero.)
+
+Measured results:
+
+| | Round *r*−1 emit | Round *r* stage+rebuild | Pipeline |
+|---|---|---|---|
+| Round 2 pair record | 18.2 → 12.1 ms | 24.2 → 21.3 ms | 95.3 → 86.8 ms |
+| Round 3 quad record | 21.3 → 15.0 ms | 24.2 → 26.5 ms | 86.8 → 83.2 ms |
+
+**The chain stops at round 3.** Round 2's 14 siphashes/element hid almost entirely inside
+the kernel's existing memory stalls (+0.4 ms); round 3's 28 exceeded what is hideable and
+cost ~9 ms of exposed compute, more than the traffic it removed locally — round 3 is only
+net-positive because of what it saves on *round 2's emit*. Round 4 would need 56
+siphashes for a 64 → 32 B record: twice the compute for half the saving, on the wrong side
+of a boundary round 3 already crosses. It was not implemented. See
+[the compute-hiding budget](#established-limits).
+
+As a side effect the widest bucket stride (10 u64) retired, so both ping-pong buffers
+shrank 20 % and a full search now fits in **6.95 GiB** (222 B/element), down from 8.36 GiB.
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md) had predicted exactly this — it listed
+"index-only storage with re-derivation" as a route to the 3 GB target and argued memory
+efficiency and throughput were probably the same problem. Both moved together.
 
 ---
 
@@ -310,7 +418,18 @@ layout; only the staging loop has consecutive indices, and it is the minority of
 accesses. (Note this is LDS layout only — the *global* packing win above is a separate,
 real effect.)
 
-### Round-2 re-derivation
+### Round-2 re-derivation (first attempt)
+
+> **Superseded — this was diagnosed and is now shipping.** The conclusion below ("round 2
+> is past the threshold") was **wrong about the cause**. The arithmetic was never the
+> problem; its *placement* was. Re-measured in the
+> [non-divergent expand](#the-non-divergent-expand), the same recompute costs **+0.4 ms
+> instead of +23.5 ms**, and round 2 now ships a 16 B pair record
+> ([the re-derivation chain](#the-re-derivation-chain)). The record is kept because the
+> reasoning error is the instructive part: an in-situ measurement was taken, it was
+> genuinely reproducible, and it still supported the wrong conclusion — because the
+> kernel has *two* candidate sites and only one had been tried.
+
 The natural extension of [seed re-derivation](#seed-re-derivation): a round-2 element is
 one combine away from two seeds, so it could be stored as a 16 B
 `(leftIdx, rightIdx, key, gi)` record instead of the 72 B packed one — and its two leaves
@@ -328,12 +447,38 @@ count alone is not the explanation; the staging loop's sub-mask filter leaves on
 of a warp's lanes active during the recompute, and at round 2's working-set size that
 divergence plus the added occupancy pressure swamps the traffic saved.
 
-**The lesson generalizes:** a standalone kernel measurement of recomputation cost is *not*
-transferable into a kernel that is already register- and occupancy-constrained. Round 1
-wins the same trade (its recompute is 7 siphashes and it removes 15.7 ms of traffic);
-round 2's is roughly twice the work for less than half the saving, and that crosses the
-threshold. Any future compute-for-memory trade must be measured **in situ**, not in
-isolation.
+**The lesson that survives:** a standalone measurement of recomputation cost is not
+transferable into the fused kernel — measure **in situ**. The lesson that did *not*
+survive is the threshold claim; "in situ" turned out to mean *in the right loop*, and
+"measured in situ" is not the same as "measured in the best available placement".
+
+### Deferring the stage read
+[The non-divergent expand](#the-non-divergent-expand) won by moving compute out of the
+sub-mask-filtered loop, so the obvious next step was to move the **64–72 B record load**
+out too — park the slot index, read the record in the all-lanes loop. **Slower** (r2
+24.3 → 26.2, r3 24.5 → 25.9, r4 25.1 → 27.5 ms).
+
+The loads were never the problem. The staging loop runs **8 iterations**, so its loads
+already overlap across iterations; the all-lanes loop runs **one**, so deferring collapses
+that memory-level parallelism and adds an LDS round-trip on top. Divergence costs
+*compute*, not *bandwidth* — the two halves of the staging loop want opposite treatment,
+and that is why only the recompute moved.
+
+### Register cap tuning
+Round 3's rebuild costs ~9 ms of exposed compute where round 2's cost 0.4 ms — superlinear
+enough to suspect the compiler was spilling, since it budgets registers for an occupancy
+this LDS-bound kernel (1 workgroup/SM) can never reach. Swept
+`-cl-nv-maxrregcount` over {96, 128, 168, 200}:
+
+| Cap | r1 | r2 | r3 | r4 | Σ |
+|---|---|---|---|---|---|
+| default | 12.1 | 15.1 | 26.5 | 25.6 | 79.3 |
+| 128 | 12.2 | 17.1 | 26.1 | 24.1 | 79.5 |
+| 168 | 13.2 | 17.1 | 25.2 | 24.1 | 79.6 |
+
+A wash — r3/r4 gain what r2 loses. **Spilling is not the explanation**; the rebuild is
+genuinely more arithmetic than the kernel's memory stalls can hide. Retained as the
+`MXBM_CL_OPTS` diagnostic knob, defaulting to empty.
 
 ### Two-level bucketing
 The last structural idea: partition coarsely (256 bins, long runs, coalesced flush) then
@@ -384,46 +529,76 @@ optimization can achieve.
    occupancy, bucket count, and atomics. It is random-access-bound.
 4. **Coalescing cannot be bought back** — maximum 1.91–2.22×, against a 3× traffic cost
    for any two-pass scheme.
+5. **Divergence is only paid by compute.** Work placed in the sub-mask-filtered staging
+   loop runs at ~4/32 lanes; the same work in the following all-lanes loop runs at 32/32.
+   For *arithmetic* this is worth up to ~58× (round 2's rebuild: 23.5 → 0.4 ms). For
+   *loads* the ordering reverses — the staging loop's 8 iterations overlap their loads,
+   the all-lanes loop's single iteration cannot
+   ([measured](#deferring-the-stage-read)).
+6. **The compute-hiding budget is finite, and round 3 is where it runs out.** The fused
+   kernel stalls on memory, and arithmetic issued into those stalls is free until it
+   exceeds them. Round 2's rebuild (14 siphashes/element) cost +0.4 ms — essentially all
+   hidden. Round 3's (28) cost ~9 ms — essentially all exposed. This is not register
+   spilling ([register cap](#register-cap-tuning) is a wash); it is the stall budget
+   being used up. Any future compute-for-memory trade should be sized against this
+   boundary, not assumed to scale.
 
-Consequence: lolMiner carries the same ~56 B element and hits the same scatter ceiling,
-so its remaining ~3.5× advantage is not explained by element size, coalescing, occupancy,
-or atomics. It is most likely a technique in its collision-finding or overall pipeline
-structure that is not derivable from the public references.
+Consequence: element size, coalescing, occupancy and atomics are all settled — but the
+gap is no longer as unexplained as it looked. Two of the four rounds now store no work
+state at all, and both memory and time fell together, which is what
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md) predicted would happen if the two were the same
+problem. lolMiner's remaining ~2.3× may be more of the same rather than an unknown
+technique — but rounds 4 and 5, which still store full work state, are past the
+compute-hiding boundary, so it cannot be more of *literally* the same.
 
 ---
 
 ## Current focus and open leads
 
-**Where the time goes** (102.7 ms, from the `MXBM_ABLATE` phase ablation): four fused
-rounds ≈ 24 ms each, plus a 2.7 ms entry and a 4.3 ms terminal. Within a round, roughly
-**40 % emit, 50 % stage + collision-find, 10 % mix**.
+**Where the time goes** (83.2 ms): r1 12.1, r2 15.1, r3 26.5, r4 25.6, plus a 2.8 ms entry
+and a 4.4 ms terminal. The shape has changed — rounds 1–2 have roughly halved, and
+**rounds 3–4 are now 63 % of the solve**.
 
 **The governing constraint.** Every win so far came from *moving fewer bytes*, and the
 [established limits](#established-limits) show the scattered emit is already at the
 hardware's random-access ceiling (~260 GB/s, ~51 % of peak) and cannot be coalesced.
 Reducing *what* is stored is therefore the only lever with real headroom — which is also
 what the algorithm's 3 GB design target implies
-(see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)).
+(see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)). What is new is that this lever is now
+bounded on the other side too, by the
+[compute-hiding budget](#established-limits): rounds 4–5 cannot pay for their storage in
+arithmetic the way rounds 1–3 did.
 
 **Leads, most promising first:**
 
-1. **Re-derivation in a non-divergent context.** [Seed re-derivation](#seed-re-derivation)
-   proved compute-for-memory wins (−12.1 ms), but
-   [round-2 re-derivation](#round-2-re-derivation) failed because the recompute sits in
-   the sub-mask staging loop where only ~1/8 of a warp's lanes are active. A separate
-   *expand* pass, where every lane works, would avoid that divergence — the open question
-   is whether it can expand into LDS without writing full records back to global memory.
+1. **Attack rounds 3–4 as the new majority.** They are 52 of 83 ms. Round 4 still stores
+   full work state (64 B in, 48 B out) and full re-derivation is ruled out, so the
+   question is whether anything *cheaper than a full rebuild* shrinks its record — a
+   partial rebuild, or storing an intermediate that costs fewer than 56 siphashes to
+   expand. Unexplored, and the only lead sized to the remaining gap.
 2. **Eliminate the stored `gi`.** An element's identity could be its bucket slot
    (`bucket × cap + pos`) rather than a stored 4 B counter value, removing 4 B from every
    emit and every stage read. Requires back-reference rows indexed by slot (larger, but
    `fb_gi` disappears) and changes the `(lead, gi)` tie-break to `(lead, slot)` — valid,
    since ties only occur between equal-lead pairs, which the CPU gate rejects anyway.
-3. **Per-set bucket-array sizing.** Both ping-pong sets are allocated at the widest
-   stride (10 u64) though one set only ever holds ≤ 8. Frees ~0.7 GB; no speed effect.
-4. **Tighter bucket capacity.** `mean + mean/4 + 256` is ~17σ of headroom against a
+   Now worth more at rounds 4–5 than at 1–3, where the record is already tiny.
+3. **The ~7 ms outside the pipeline.** `bench_rounds` medians 83.2 ms while
+   `GpuSolver::solve()` measures 90 ms. That gap was ~0 at 102.7 ms and is now 8 % of a
+   solve; it is pure overhead (setup, readback, recovery, verification) and has never been
+   profiled because it never mattered.
+4. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
+   row-bucket path now needs 222. A single constant covers both, so row-bucket cards are
+   still assessed against the sort path's appetite — which is what forces the ≥ 14.6 GiB
+   threshold documented in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md). Splitting it is the
+   remaining work to make 12 GB cards viable.
+5. **Tighter bucket capacity.** `mean + mean/4 + 256` is ~17σ of headroom against a
    distribution whose max sits near mean + 4.5σ. Cutting it shrinks every bucket array
    proportionally, but must stay drop-free across nonces, so it needs a measured
    occupancy distribution rather than a guess.
+
+**Done since this list was last written:** re-derivation in a non-divergent context (lead
+1, −20.4 ms across rounds 1–3) and per-set stride sizing (old lead 3, folded into the
+quad-record change — the 10 u64 stride retired entirely).
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
@@ -449,4 +624,6 @@ suite. The goldens are checked through every collision path
 
 Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
 `MXBM_LEGACY_MATCH`, `MXBM_LDS_MATCH`, `MXBM_NO_COMPACT`, `MXBM_SORT_PROFILE`,
-`MXBM_ABLATE` (bit 0 skips `apply_mix`, bit 1 skips the fat emit — for phase attribution).
+`MXBM_ABLATE` (bit 0 skips `apply_mix`, bit 1 skips the fat emit — for phase attribution),
+`MXBM_CL_OPTS` (extra OpenCL build options for the fused program, e.g.
+`-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)).
