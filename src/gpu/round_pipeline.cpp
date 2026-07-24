@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace mxbm { namespace gpu {
@@ -63,17 +65,26 @@ bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr)
 // group size (mean bucket / 2^submaskBits), which LDS_FCAP must cover *including its
 // tail*. Halving the bucket and the sub-mask together keeps the group size -- and so
 // the LDS footprint -- fixed while halving the rescan.
-// The staging loop must land ~256 elements per group so LDS_FCAP=384 covers the tail
-// drop-free, which pins bucketBits + submaskBits = 17 (2^25 / 2^17 = 256). Of the three
-// options that satisfy it, (15,2) wins because it rescans each bucket 4x instead of 8x
-// for the same group size and the same LDS:
-//     (14,3) 47.5 ms   (15,2) 42.5 ms   (16,1) needs a 4.3 GB single alloc -> rejected
+// Two constraints. The staging loop rescans each bucket 2^submaskBits times, so
+// submaskBits should be as small as possible; but the group it stages is
+// mean_bucket / 2^submaskBits, and that wants to be ~256 -- LDS_FCAP=384 must cover its
+// tail, and a group much *below* the 256-thread workgroup leaves lanes idle. Together
+// those pin bucketBits + submaskBits ~ 17, and then the smallest submaskBits wins.
+//
+// Measured (all drop-free unless noted):
+//     (14,3) 47.5 ms 8x rescan   (15,2) 42.6 ms 4x   (16,1) 40.4 ms 2x   <- here
+//     (17,0) 40.4 ms 1x but 8.35 GiB -- the rescan has stopped mattering by then
+//     (16,2) 46.6, (17,1) 45.4 -- group falls to 132, half the workgroup idle
+//     (18,0) single allocation exceeds the device limit -> sort-path fallback
+//
+// (16,1) only became reachable once fb_cap_for stopped over-reserving: at the old
+// capacity its single allocation was 4.3 GB, past the device's 3.9 GB limit.
 uint32_t rb_bucket_bits() {
-    static uint32_t v = std::getenv("MXBM_BB") ? (uint32_t)atoi(std::getenv("MXBM_BB")) : 15u;
+    static uint32_t v = std::getenv("MXBM_BB") ? (uint32_t)atoi(std::getenv("MXBM_BB")) : 16u;
     return v;
 }
 uint32_t rb_submask_bits() {
-    static uint32_t v = std::getenv("MXBM_SM") ? (uint32_t)atoi(std::getenv("MXBM_SM")) : 2u;
+    static uint32_t v = std::getenv("MXBM_SM") ? (uint32_t)atoi(std::getenv("MXBM_SM")) : 1u;
     return v;
 }
 
@@ -121,11 +132,20 @@ constexpr uint32_t fb_set_stride(int set) {
     return m;
 }
 // Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
-// occupancy is ~Binomial(capacity, 1/nb): mean = capacity/nb, sigma ~ sqrt(mean), and
-// the max over nb buckets sits near mean + 4.5 sigma. mean/4 + 256 is ~17 sigma at
-// 2^25 -- drop-free with wide margin, and keeps the packed array under the device's
-// 3.9 GB single-allocation limit. Drops are counted and gate every run regardless.
-static uint32_t fb_cap_for(uint32_t mean) { return mean + (mean >> 2) + 256u; }
+// occupancy is ~Poisson(mean) with mean = capacity/nb and **sigma = sqrt(mean)**.
+// MEASURED (MXBM_OCC, 52 round-solve samples at nb=32768): the max over all buckets
+// sits at mean + 4.07..4.35 sigma, very tightly concentrated -- as expected, since the
+// max of n Poisson draws concentrates around mean + sigma*sqrt(2 ln n).
+//
+// The previous formula was `mean + mean/4 + 256`, whose headroom term scales with mean
+// rather than sqrt(mean). That is dimensionally wrong for a Poisson tail: it gave ~17
+// sigma at nb=32768 and would have grown *further* out of proportion as buckets coarsen.
+// 8 sigma leaves an enormous margin over the measured 4.35 (a Poisson tail at 8 sigma is
+// ~1e-15 per bucket) while cutting the array 14%. Drops are counted and gate every run.
+static uint32_t fb_cap_for(uint32_t mean) {
+    const double sd = std::sqrt((double)mean);
+    return mean + (uint32_t)(8.0 * sd) + 32u;
+}
 
 // Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
 // lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
@@ -901,6 +921,23 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
         cl_mem ppm = mpp.get(); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ppm);
         RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
+        // MXBM_OCC=1: read this round's arrival counts and report the occupancy
+        // distribution. fb_cap_for's headroom is a guess; this measures the tail it
+        // actually has to cover.
+        if (std::getenv("MXBM_OCC")) {
+            rt.finish();
+            std::vector<uint32_t> occ(nb);
+            rt.read(pb.fb_counts[outSet].get(), (size_t)nb * 4, occ.data());
+            std::vector<uint32_t> sorted(occ);
+            std::sort(sorted.begin(), sorted.end());
+            double mean = 0; for (uint32_t v : occ) mean += v; mean /= nb;
+            double var = 0; for (uint32_t v : occ) var += (v - mean) * (v - mean); var /= nb;
+            const double sd = std::sqrt(var);
+            std::printf("  [occ] r%d n=%u mean=%.1f sd=%.1f max=%u (mean+%.2f sd)  "
+                        "p99.9=%u  cap=%u (mean+%.2f sd)\n",
+                        r, nb, mean, sd, sorted.back(), (sorted.back() - mean) / sd,
+                        sorted[(size_t)(nb * 0.999)], cap, (cap - mean) / sd);
+        }
         // childCount is stats-only; read it (draining the queue) only in verbose mode.
         uint32_t childCount = prevOut;
         if (verbose) { rt.read(pb.fb_gictr.get(), 4, &childCount);
