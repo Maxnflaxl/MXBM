@@ -10,6 +10,7 @@
 #include "gpu/budget.h"
 #include "gpu/round_pipeline.h"
 #include "kat_vectors.h"
+#include <string>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -43,8 +44,17 @@ int main(int argc, char** argv) {
 
     std::vector<double> tot, mix, scat, mat;
     int failures = 0;
+    // --vary: perturb the prePow per iteration. The KAT input has exactly 3 solutions
+    // by construction, so repeating it cannot measure the solutions-per-solve rate that
+    // converts solve/s into the sol/s we compare against other miners. Under --vary the
+    // goldens no longer apply, so the correctness gate falls back to drop counters.
+    const bool vary = [&]{ for (int i=1;i<argc;++i) if (std::string(argv[i])=="--vary") return true; return false; }();
+    uint64_t survTotal = 0;
     for (int it = 0; it < iters; ++it) {
-        PipelineResult res = run_pipeline(rt, pb, b, kat::prePow, nullptr, /*verbose=*/false);
+        uint64_t pp[4] = { kat::prePow[0], kat::prePow[1], kat::prePow[2], kat::prePow[3] };
+        if (vary) pp[3] += (uint64_t)it + 1u;
+        PipelineResult res = run_pipeline(rt, pb, b, pp, nullptr, /*verbose=*/false);
+        survTotal += res.survivors;
         uint32_t bd = 0, pd = 0; double m = 0, s = 0, mt = 0;
         for (int r = 0; r < 5; ++r) {
             bd += res.rounds[r].bucket_drops; pd += res.rounds[r].pair_drops;
@@ -53,7 +63,7 @@ int main(int argc, char** argv) {
         tot.push_back(res.t_total_ms); mix.push_back(m); scat.push_back(s); mat.push_back(mt);
 
         // Correctness gate.
-        bool ok = (bd == 0) && (pd == 0) && (res.survivors == 3);
+        bool ok = (bd == 0) && (pd == 0) && (vary || res.survivors == 3);
         if (ok) {
             auto cand = recover_candidates(rt, pb, res.survivor_slots);
             bool matched[3] = {false,false,false};
@@ -69,6 +79,11 @@ int main(int argc, char** argv) {
     }
     std::printf("\n==== BENCH (%d solves) ====\n", iters);
     std::printf("median total   : %.1f ms  (%.2f solve/s)\n", median(tot), 1000.0/median(tot));
+    if (vary) {
+        const double spersolve = (double)survTotal / (double)iters;
+        std::printf("survivors/solve: %.2f  (over %d DISTINCT prePows)\n", spersolve, iters);
+        std::printf("  => %.1f sol/s at this solve rate\n", spersolve * 1000.0 / median(tot));
+    }
     std::printf("median match   : %.1f ms\n", median(mat));
     std::printf("median mix     : %.1f ms\n", median(mix));
     std::printf("median scatter : %.1f ms\n", median(scat));

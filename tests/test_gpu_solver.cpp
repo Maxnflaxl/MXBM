@@ -109,5 +109,30 @@ int main() {
     perf_line("solve#2", secs2);
     verify_goldens(sols2, "solve#2");
 
+    // MXBM_SOLRATE=N: run N solves over DISTINCT nonces and report the mean number of
+    // CPU-VERIFIED solutions per solve. This is the factor that converts solve/s into the
+    // sol/s figure quoted against other miners, and it CANNOT be measured on the KAT
+    // input, which has exactly 3 solutions by construction.
+    if (const char* e = std::getenv("MXBM_SOLRATE")) {
+        const int n = std::atoi(e) > 0 ? std::atoi(e) : 16;
+        uint8_t nonce[8];
+        std::memcpy(nonce, kat::nonce0, 8);
+        size_t total = 0, verified = 0;
+        auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < n; ++i) {
+            nonce[7] = (uint8_t)(kat::nonce0[7] + i + 1);   // distinct nonce per solve
+            auto sols = s.solve(kat::input32, nonce);
+            total += sols.size();
+            for (const auto& sol : sols)
+                if (bh3::is_valid_solution(kat::input32, 32, nonce, sol.data())) ++verified;
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - t0).count() / n;
+        std::printf("\n  [solrate] %d distinct nonces: %.2f verified solutions/solve, "
+                    "%.1f ms/solve  =>  %.1f sol/s\n",
+                    n, (double)verified / n, ms, (double)verified / n * 1000.0 / ms);
+        check(verified == total, "every solution GpuSolver::solve() returns re-verifies");
+    }
+
     return summary("gpu_solver");
 }
