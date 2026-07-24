@@ -8,13 +8,20 @@ open, auditable alternative to the closed-source miners in the ecosystem. The
 proof-of-work core is validated bit-for-bit against Beam's own reference
 implementation.
 
-> **Status: pre-GPU.** MXBM today is a complete, working stratum **client**: it
-> connects to a real Beam pool over TLS, authenticates with your wallet address,
-> receives live jobs, and runs the full job → solve → difficulty → submit
-> pipeline on a CPU reference solver. The CPU solver is far too slow to clear
-> pool difficulty — it exists to prove the pipeline end-to-end. The GPU solver
-> that makes MXBM actually competitive is the next milestone (see
-> [Roadmap](#roadmap)). It builds and runs on Linux and macOS.
+> **Status: GPU solver working, optimization ongoing.** MXBM connects to a real
+> Beam pool over TLS, authenticates with your wallet address, receives live jobs,
+> and runs the full job → solve → difficulty → submit pipeline on an **OpenCL GPU
+> solver**. On an RTX 4070 Ti SUPER it solves in **115.7 ms** (≈ 8.6 solve/s,
+> ≈ 16 sol/s), verified against the BeamHash III known-answer vectors. That is
+> roughly 3× off the fastest closed-source miner, and closing that gap is the
+> current focus — see [docs/performance.md](docs/performance.md) for the full
+> measured optimization history.
+>
+> A CPU reference solver remains available (`--solver ref`) for validating the
+> pipeline. **Note the VRAM requirement is currently high** (~16 GB for a search
+> that finds solutions) — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md), which also
+> documents the known limitations behind that number. Builds and runs on Linux and
+> macOS.
 
 Licensed under the [Apache License 2.0](LICENSE).
 
@@ -32,6 +39,10 @@ Licensed under the [Apache License 2.0](LICENSE).
   statistics block, share/accept lines), a compatible command-line surface, and
   both configuration-file formats.
 - **`/summary` HTTP API** for monitoring.
+- **OpenCL GPU solver** — a fused row-bucket Wagner pipeline that finds all five
+  rounds' collisions in local memory. Selected automatically when a suitable device
+  is present, with automatic fallback. Every optimization is gated on byte-identical
+  known-answer solutions; see [docs/performance.md](docs/performance.md).
 - **Self-contained** — no Boost, no Beam runtime. The only dependencies are a
   vendored single-header JSON library and your system OpenSSL.
 
@@ -59,11 +70,14 @@ files, and API.
 | Proof-of-work core | BeamHash III primitives + verifier, tested vs Beam | ✅ done |
 | Stratum client | Connect, authenticate, receive jobs from a real pool | ✅ done |
 | Miner shell | lolMiner-style console, CLI, config files, `/summary` API | ✅ done |
-| **GPU solver** | **OpenCL solver — the first accepted share** | **next** |
+| GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
+| **Solver performance** | **Close the gap to the fastest closed-source miners** | **in progress** |
+| Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)) | next |
 | Optimized backends | Tuned CUDA (NVIDIA) and HIP (AMD) kernels | planned |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline first (runs on
-both), then vendor-tuned CUDA and HIP backends.
+both), then vendor-tuned CUDA and HIP backends. The OpenCL solver is measured on
+NVIDIA; AMD is untested so far.
 
 ## Architecture
 
@@ -76,7 +90,9 @@ shell. See **[docs/architecture.md](docs/architecture.md)** for the full map.
 
 The GPU solver's optimization history — every change, its measured effect, and the
 experiments that failed — is tracked in **[docs/performance.md](docs/performance.md)**,
-along with the measured hardware limits that bound further work.
+along with the measured hardware limits that bound further work. Hardware
+requirements, including the current VRAM limitations, are in
+**[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)**.
 
 ## Contributing
 
