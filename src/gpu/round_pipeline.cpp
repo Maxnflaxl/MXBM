@@ -69,7 +69,7 @@ static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single
     uint32_t cap  = mean + (mean >> 1) + 512;
     const size_t nslots = (size_t)nb * cap;
     single = nslots * 7 * 8;                                    // fb_work[i] -- largest
-    const size_t perSet = single + nslots*4 + nslots*4 + nslots*9*4 + (size_t)nb*4;
+    const size_t perSet = single + nslots*4 + nslots*4 + nslots*4*4 + (size_t)nb*4;
     total = 2*perSet + (size_t)5*capacity*4*2 + 64;             // +left/right/counters
 }
 
@@ -109,7 +109,10 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
         p.fb_work[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * 7 * 8);
         p.fb_gi[i]     = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
         p.fb_lead[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
-        p.fb_leaves[i] = rt.alloc(CL_MEM_READ_WRITE, nslots * 9 * 4);
+        // Leaf payload stride: max over rounds of sOut = 4 (round 2's 4-leaf child).
+        // Round 3 stores a 2-uint contrib, round 4 stores nothing -- so the old
+        // 9-uint worst case (padNum(5)) is no longer carried. Saves ~1.1 GB.
+        p.fb_leaves[i] = rt.alloc(CL_MEM_READ_WRITE, nslots * 4 * 4);
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
@@ -801,9 +804,20 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         FILL(pb.fb_counts[outSet].get(), 0u, nb);
         FILL(pb.fb_gictr.get(), 0u, 1);
         uint32_t Lout = lout_for(r), LmixNext = lmix_for(r + 1), padNext = padnum_for(r + 1);
-        // L5-thin: round 4 emits round-5 children with NO leaf payload (round 5 is
-        // terminal -- no mix, recover uses back-refs). r4 was the fattest round.
-        uint32_t sIn = sleaves_for(r), sOut = (r < 4) ? sleaves_for(r + 1) : 0u;
+        // Leaf payload per round (see LMODE in lds.cl):
+        //   r1,r2 RAW  : carry raw leaves (sleaves_for).
+        //   r3    EMIT : the round-4 child carries ONE u64 leftContrib (2 uints), folded
+        //                from its 8 leaves, instead of the 8 raw leaves -- it still
+        //                BUILDS 8 (sBuild) but STORES 2. Emit 88 -> 64 B/child.
+        //   r4    USE  : stages that 2-uint contrib (sIn=2) and stores nothing
+        //                (L5-thin: round 5 is terminal; recover walks back-refs).
+        uint32_t sIn, sOut, sBuild;
+        switch (r) {
+            case 1:  sIn = 1; sOut = 2; sBuild = 2; break;
+            case 2:  sIn = 2; sOut = 4; sBuild = 4; break;
+            case 3:  sIn = 4; sOut = 2; sBuild = 8; break;   // builds 8 leaves, stores contrib
+            default: sIn = 2; sOut = 0; sBuild = 0; break;   // r4: contrib in, nothing out
+        }
         uint32_t outOff = (uint32_t)(r - 1) * capacity;
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
         const char* fusedName = "round_fused_lds";
@@ -820,6 +834,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, cap); rt.set_arg(k.get(), a++, cap);
         rt.set_arg(k.get(), a++, Lout); rt.set_arg(k.get(), a++, LmixNext); rt.set_arg(k.get(), a++, padNext);
         rt.set_arg(k.get(), a++, sIn); rt.set_arg(k.get(), a++, sOut); rt.set_arg(k.get(), a++, outOff);
+        rt.set_arg(k.get(), a++, sBuild);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &iw);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ig); rt.set_arg(k.get(), a++, sizeof(cl_mem), &il);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ilv);

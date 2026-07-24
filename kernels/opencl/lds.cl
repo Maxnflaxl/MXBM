@@ -324,10 +324,27 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 // shrinks LDS for late rounds). Upper words are 0 in the compacted layout (the prior
 // bh3_combine masked to Lout, and apply_mix touches only e[0]), so zero-filling
 // a/b[INW..7) before bh3_combine is bit-exact. Widths: r1,r2=(7,7); r3=(7,6); r4=(6,5).
-#define FUSED_LDS(NAME, INW, OUTW)                                                    \
+// LEAF MODE (LMODE) -- how the leaf payload travels. Round 4's mix needs padNum(5)=9
+// leaves: all 8 of the LEFT parent's, but only the RIGHT parent's FIRST (already carried
+// as `lead`). apply_mix decomposes exactly as
+//     mix = rotl24( workPart + indexPart ),  indexPart additive over leaves
+// (index bits sit at positions >= Lmix, element bits below it -- disjoint, and rotl
+// distributes over a disjoint OR). So a round-4 element can carry ONE u64
+//     leftContrib = rotl40( apply_mix(0, itsOwn8Leaves, 8, Lmix(5)) )
+// instead of its 8 raw leaves, and round 4 reconstructs the exact child key as
+//     rotl24( rotl40( apply_mix(child, [0x8, rightLead], 9, 288) ) + leftContrib ).
+// Verified bit-exact vs the full mix (500k random trials). Shrinks round 3's emit
+// 88 -> 64 B/child and round 4's stage read by the same.
+#define LMODE_RAW  0   // stage raw leaves, emit raw leaves            (r1, r2)
+#define LMODE_EMIT 1   // stage raw leaves, emit the compact contrib   (r3)
+#define LMODE_USE  2   // stage the contrib, no leaf emit              (r4)
+#define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
+
+#define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE)                                      \
 __kernel void NAME(                                                                   \
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
     uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut, uint out_off,   \
+    uint sBuild,                                                                      \
     __global const uint* in_counts, __global const ulong* in_bwork,                   \
     __global const uint* in_bgi, __global const uint* in_blead,                       \
     __global const uint* in_bleaves,                                                  \
@@ -337,7 +354,7 @@ __kernel void NAME(                                                             
     __global uint* gi_counter, __global uint* drops) {                               \
     __local ulong lwork[(INW) * LDS_FCAP];                                            \
     __local uint  lgi[LDS_FCAP]; __local uint llead[LDS_FCAP];                        \
-    __local uint  lleaf[LDS_FLEAF * LDS_FCAP];                                        \
+    __local uint  lleaf[(LEAFW) * LDS_FCAP];                                          \
     __local uint  lkey[LDS_FCAP]; __local uint lchain[LDS_FCAP];                      \
     __local uint  tab[LDS_TABSIZE]; __local uint gcount;                              \
     uint lId = get_local_id(0);                                                       \
@@ -358,7 +375,7 @@ __kernel void NAME(                                                             
         if (pos < LDS_FCAP) {                                                         \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_bwork[d*(INW) + w]; \
             lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;          \
-            for (uint i = 0; i < sIn; ++i) lleaf[pos*LDS_FLEAF + i] = in_bleaves[d*sIn + i]; \
+            for (uint i = 0; i < sIn; ++i) lleaf[pos*(LEAFW) + i] = in_bleaves[d*sIn + i]; \
         } else atomic_inc(&drops[1]);                                                \
     }                                                                                \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
@@ -381,12 +398,29 @@ __kernel void NAME(                                                             
                 for (uint w = 0; w < 7; ++w) { a[w] = 0ul; b[w] = 0ul; }              \
                 for (uint w = 0; w < (INW); ++w) { a[w] = lwork[leftPos*(INW)+w]; b[w] = lwork[rightPos*(INW)+w]; } \
                 bh3_combine(a, b, Lout, c);                                           \
-                uint ctree[9];                                                        \
-                uint nbuild = padnum_next > sOut ? padnum_next : sOut;                \
-                for (uint i = 0; i < nbuild; ++i)                                     \
-                    ctree[i] = (i < sIn) ? lleaf[leftPos*LDS_FLEAF + i]               \
-                                         : lleaf[rightPos*LDS_FLEAF + (i - sIn)];      \
-                c[0] = bh3_apply_mix(c, ctree, padnum_next, Lmix_next);               \
+                uint ctree[9]; ulong contribOut = 0ul;                                \
+                if ((LMODE) == LMODE_USE) {                                           \
+                    /* Compact path: left parent's 8 leaves are pre-folded into one    \
+                       u64; only the right parent's first leaf (its lead) is raw. */   \
+                    for (uint i = 0; i < 8u; ++i) ctree[i] = 0u;                      \
+                    ctree[8] = llead[rightPos];                                        \
+                    ulong lc = ((ulong)lleaf[leftPos*(LEAFW)+1] << 32)                 \
+                             |  (ulong)lleaf[leftPos*(LEAFW)+0];                       \
+                    c[0] = bh3_rotl64(bh3_rotl64(                                      \
+                               bh3_apply_mix(c, ctree, padnum_next, Lmix_next), 40)    \
+                             + lc, 24);                                                \
+                    ctree[0] = llead[leftPos];   /* child's lead, for out_blead */     \
+                } else {                                                              \
+                    for (uint i = 0; i < sBuild; ++i)                                 \
+                        ctree[i] = (i < sIn) ? lleaf[leftPos*(LEAFW) + i]             \
+                                             : lleaf[rightPos*(LEAFW) + (i - sIn)];    \
+                    c[0] = bh3_apply_mix(c, ctree, padnum_next, Lmix_next);           \
+                    if ((LMODE) == LMODE_EMIT) {                                      \
+                        ulong zw[7]; for (uint w = 0; w < 7u; ++w) zw[w] = 0ul;        \
+                        contribOut = bh3_rotl64(                                       \
+                            bh3_apply_mix(zw, ctree, 8u, BH3_LMIX5), 40);              \
+                    }                                                                 \
+                }                                                                     \
                 uint ckey = (uint)(c[0] & 0xFFFFFFu);                                 \
                 uint cb = ckey >> (24u - bucket_bits);                                \
                 uint cpos = atomic_inc(&out_counts[cb]);                              \
@@ -395,7 +429,12 @@ __kernel void NAME(                                                             
                     size_t od = (size_t)cb * out_bucket_cap + cpos;                   \
                     for (uint w = 0; w < (OUTW); ++w) out_bwork[od*(OUTW) + w] = c[w]; \
                     out_bgi[od] = cgi; out_blead[od] = ctree[0];                      \
-                    for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i]; \
+                    if ((LMODE) == LMODE_EMIT) {                                      \
+                        out_bleaves[od*sOut + 0] = (uint)(contribOut & 0xFFFFFFFFul); \
+                        out_bleaves[od*sOut + 1] = (uint)(contribOut >> 32);          \
+                    } else {                                                          \
+                        for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i]; \
+                    }                                                                 \
                     all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos]; \
                 } else atomic_inc(&drops[2]);                                         \
             }                                                                        \
@@ -403,9 +442,12 @@ __kernel void NAME(                                                             
         }                                                                            \
     }                                                                                \
 }
-FUSED_LDS(round_fused_lds, 7, 7)   // r1, r2
-FUSED_LDS(round_fused_7_6, 7, 6)   // r3
-FUSED_LDS(round_fused_6_5, 6, 5)   // r4
+// (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is now per-round
+// instead of a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4,
+// r4 stages the 2-uint contrib.
+FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r1 (sIn=1), r2 (sIn=2)
+FUSED_LDS(round_fused_7_6, 7, 6, 4, LMODE_EMIT)   // r3: stages 4 leaves, emits contrib
+FUSED_LDS(round_fused_6_5, 6, 5, 2, LMODE_USE)    // r4: stages contrib, no leaf emit
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed

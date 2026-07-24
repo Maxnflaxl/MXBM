@@ -580,6 +580,7 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
       rt.set_arg(k.get(),a++,inCap); rt.set_arg(k.get(),a++,outCap);
       rt.set_arg(k.get(),a++,Lout); rt.set_arg(k.get(),a++,LmixNext); rt.set_arg(k.get(),a++,padNext);
       rt.set_arg(k.get(),a++,sIn); rt.set_arg(k.get(),a++,sOut); rt.set_arg(k.get(),a++,0u/*out_off*/);
+      rt.set_arg(k.get(),a++,sOut/*sBuild: RAW variant builds exactly what it stores*/);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&ic); rt.set_arg(k.get(),a++,sizeof(cl_mem),&iw);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&ig); rt.set_arg(k.get(),a++,sizeof(cl_mem),&il);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&ilv);
@@ -691,6 +692,41 @@ static void test_scatter_occupancy(Runtime& rt, cl_program prog) {
     check(true,"scatter occupancy characterized");
 }
 
+// Pins the algebra the round-3/round-4 compact leftContrib rests on (CPU-only, no
+// GPU): apply_mix decomposes as rotl24(workPart + indexPart) with indexPart additive
+// over leaves, so the LEFT parent's 8 leaves can be pre-folded into ONE u64 by round 3
+// and round 4 reconstructs the exact round-5 key from that plus the RIGHT parent's
+// lead. If this ever fails, the compact leaf payload in lds.cl (LMODE_EMIT/LMODE_USE)
+// is invalid.
+static void test_contrib_identity() {
+    section("compact leftContrib identity (CPU algebra behind LMODE_EMIT/LMODE_USE)");
+    auto rotl=[](uint64_t x,int b){ return (uint64_t)((x<<b)|(x>>(64-b))); };
+    const int ROT[8]={29,58,23,52,17,46,11,40};
+    auto mix=[&](const uint64_t e[7], const uint32_t* tree, uint32_t treeLen, uint32_t Lmix){
+        uint64_t t[8]; for(int i=0;i<7;++i)t[i]=e[i]; t[7]=0;
+        uint32_t padNum=((512u-Lmix)+24u)/25u; if(padNum>treeLen)padNum=treeLen;
+        for(uint32_t i=0;i<padNum;++i){ uint32_t pos=Lmix+i*25u; if(pos>=512u)break; uint64_t v=tree[i];
+            uint32_t w=pos>>6,sh=pos&63u; t[w]|=v<<sh; if(sh>39u&&w<7u)t[w+1]|=v>>(64u-sh); }
+        uint64_t r=0; for(int i=0;i<8;++i)r+=rotl(t[i],ROT[i]); return rotl(r,24); };
+    const uint64_t ZERO[7]={0,0,0,0,0,0,0};
+    uint64_t s=0xC0FFEE99ULL; auto rnd=[&](){ s^=s<<13; s^=s>>7; s^=s<<17; return s; };
+    int fails=0; const int T=200000;
+    for(int trial=0;trial<T;++trial){
+        uint64_t c[7]; for(int i=0;i<7;++i)c[i]=rnd();
+        for(int i=0;i<7;++i){ uint32_t base=64u*i;                     // mask to Lout(4)=288
+            if(base>=288u)c[i]=0; else if(288u-base<64u)c[i]&=((uint64_t)1<<(288u-base))-1; }
+        uint32_t L[8],R0; for(int i=0;i<8;++i)L[i]=(uint32_t)(rnd()&0x1FFFFFF); R0=(uint32_t)(rnd()&0x1FFFFFF);
+        uint32_t tree9[9]; for(int i=0;i<8;++i)tree9[i]=L[i]; tree9[8]=R0;
+        uint64_t truth=mix(c,tree9,9,288);
+        uint64_t leftContrib=rotl(mix(ZERO,L,8,288),40);               // what round 3 emits
+        uint32_t rightOnly[9]={0,0,0,0,0,0,0,0,R0};
+        uint64_t got=rotl(rotl(mix(c,rightOnly,9,288),40)+leftContrib,24);   // what round 4 does
+        if(truth!=got)++fails;
+    }
+    std::printf("  %d/%d mismatches over random (work, 8 left leaves, right lead)\n",fails,T);
+    check(fails==0,"compact leftContrib reproduces the full mix bit-exactly");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
@@ -701,6 +737,7 @@ int main() {
     Program prog = rt.build({std::string(kBh3ClSource), std::string(kRoundClSource),
                              std::string(kLdsClSource)}, "");
 
+    test_contrib_identity();
     test_correctness(rt, prog.get());
     test_combine(rt, prog.get());
     test_scatter_cost(rt, prog.get());
@@ -709,9 +746,11 @@ int main() {
     test_leaf_locality(rt, prog.get());
     test_scatter_occupancy(rt, prog.get());
 
-    // STEP B: fused round kernel correctness (exact vs oracle, all leaf widths
-    // r=1..4) + scale/drop-free at pipeline scale.
-    for (int r=1; r<=4; ++r)
+    // STEP B: fused round kernel correctness (exact vs oracle) + scale/drop-free.
+    // Only r=1,2 use the RAW leaf variant (round_fused_lds, LEAFW=2); r3 emits the
+    // compact leftContrib and r4 consumes it (different kernels/semantics), covered
+    // by test_contrib_identity below + the byte-exact KAT goldens end-to-end.
+    for (int r=1; r<=2; ++r)
         test_fused_round(rt, prog.get(), r, 1u<<18, /*bits*/11, /*submask*/0, /*inCap*/384, /*outCap*/384, /*exact*/true);
     test_fused_round(rt, prog.get(), 1, 1u<<24, /*bits*/15, /*submask*/2, /*inCap*/768, /*outCap*/768, /*exact*/false);
 
