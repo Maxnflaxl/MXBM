@@ -32,7 +32,7 @@ Times are median ms per solve (`bench_rounds`), lower is better. "Worked" and
 | 2026-07-24 | Async enqueue (de-bubble) | 135.0 | 133.0 | −2.0 | −1.5 % | [De-bubble](#async-de-bubble) | [Magazine](#shared-memory-magazine), [gi atomic](#global-gi-atomic) |
 | 2026-07-24 | Compact `leftContrib` (fold 8 leaves → 1 u64) | 131.1 | 124.8 | −6.3 | −4.8 % | [leftContrib](#compact-leftcontrib) | [General mix-state](#general-compact-mix-state) |
 | 2026-07-24 | Packed element record (1 block, not 4 arrays) | 124.8 | 115.7 | −9.1 | −7.3 % | [Packed record](#packed-element-record) | [SoA LDS staging](#soa-lds-staging) |
-| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | — |
+| 2026-07-24 | Re-derive round-1 seeds from indices | 114.8 | 102.7 | −12.1 | −10.5 % | [Seed re-derivation](#seed-re-derivation) | [Round-2 re-derivation](#round-2-re-derivation) |
 | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
 **Current: 102.7 ms/solve (9.74 solve/s).** Started at 245 ms → **−58 %**.
@@ -295,6 +295,31 @@ reproducibly ~1 ms slower**. The dominant LDS accesses are in the collision-walk
 layout; only the staging loop has consecutive indices, and it is the minority of
 accesses. (Note this is LDS layout only — the *global* packing win above is a separate,
 real effect.)
+
+### Round-2 re-derivation
+The natural extension of [seed re-derivation](#seed-re-derivation): a round-2 element is
+one combine away from two seeds, so it could be stored as a 16 B
+`(leftIdx, rightIdx, key, gi)` record instead of the 72 B packed one — and its two leaves
+*are* those indices. Isolated, the arithmetic looked clearly profitable:
+
+| | ms |
+|---|---|
+| Re-derive a round-2 element (2 seeds + 2 mixes + combine + mix) | 5.27 |
+| Traffic it removes (emit 72→16 B, plus round 2's stage read) | ~11.4 |
+
+**Implemented and reverted: round 2 went 23.2 → 46.7 ms** (total 107 → 131). The
+re-derivation cost **4.5× its standalone measurement** once inside the fused kernel.
+Aliasing the combine output to cut 7 registers changed nothing (48.3 ms), so register
+count alone is not the explanation; the staging loop's sub-mask filter leaves only ~1/8
+of a warp's lanes active during the recompute, and at round 2's working-set size that
+divergence plus the added occupancy pressure swamps the traffic saved.
+
+**The lesson generalizes:** a standalone kernel measurement of recomputation cost is *not*
+transferable into a kernel that is already register- and occupancy-constrained. Round 1
+wins the same trade (its recompute is 7 siphashes and it removes 15.7 ms of traffic);
+round 2's is roughly twice the work for less than half the saving, and that crosses the
+threshold. Any future compute-for-memory trade must be measured **in situ**, not in
+isolation.
 
 ### Two-level bucketing
 The last structural idea: partition coarsely (256 bins, long runs, coalesced flush) then
