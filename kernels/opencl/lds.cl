@@ -463,6 +463,9 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 #ifndef ABL
 #define ABL 0
 #endif
+#ifndef LEADTIE_PROBE
+#define LEADTIE_PROBE 0
+#endif
 #ifndef ABL_MODE            // which LMODE to ablate; -1 = all rounds
 #define ABL_MODE (-1)
 #endif
@@ -650,6 +653,7 @@ __kernel void NAME(                                                             
                 uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];  \
                 uint leftPos = pos, rightPos = oth;                                   \
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; } \
+                if (LEADTIE_PROBE && lb == la) atomic_inc(&drops[3]);                 \
                 ulong a[7], b[7], c[7];                                               \
                 for (uint w = 0; w < 7; ++w) { a[w] = 0ul; b[w] = 0ul; }              \
                 for (uint w = 0; w < (INW); ++w) { a[w] = lwork[leftPos*(INW)+w]; b[w] = lwork[rightPos*(INW)+w]; } \
@@ -682,6 +686,12 @@ __kernel void NAME(                                                             
                 uint cpos = ABL_HIT(32, LMODE) ? ((pos * 7u + walk) & 1023u)          \
                                               : atomic_inc(&out_counts[cb]);          \
                 if (cpos < out_bucket_cap) {                                          \
+                    /* The dense gi is NOT just a cost. It removes a global atomic to \
+                       replace it with the bucket slot (cb*cap + cpos) -- measured     \
+                       4.5 ms SLOWER, because consecutive gi values make the two       \
+                       back-ref writes below coalesce across a warp, while slots       \
+                       scatter them over a 190 MB row. Same reason the per-bucket      \
+                       atomic_inc beats a computed slot. Do not retry. */              \
                     uint cgi = ABL_HIT(64, LMODE) ? pos : atomic_inc(gi_counter);     \
                     size_t od = ((size_t)cb * out_bucket_cap + cpos) * out_stride;    \
                     if (ABL_HIT(1, LMODE)) { /* payload write ablated */ }                      \

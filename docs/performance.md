@@ -602,6 +602,32 @@ up — the faster variant was the broken one, so a timing-only comparison would 
 accepted it; and verify the diagnostic counters themselves before trusting a null result.
 
 
+### Eliminating the dense `gi`
+Long-standing lead: give each element its **bucket slot** (`cb*cap + cpos`) as identity
+instead of a 4 B counter value from `atomic_inc(gi_counter)`, removing a global atomic per
+emitted child. Ablating that atomic (`ABL=64`) measured **−2.5 ms**, and the
+`(lead, gi)` → `(lead, slot)` tie-break change was verified safe first: a probe counted
+**17 equal-lead pairs per solve out of ~134 M**, and such a pair shares a seed index so it
+can never be part of a valid solution.
+
+**Implemented and reverted: 56.2 → 60.7 ms (+4.5 ms), every round slower.** Correct
+throughout (20/20 clean, 3/3 survivors) — just slower.
+
+The dense `gi` is **not a pure cost — it buys write locality**. `atomic_inc` hands out
+*consecutive* values across a warp, so the two back-ref writes
+(`all_left[out_off + cgi]`, `all_right[...]`) coalesce. Bucket slots scatter the same
+writes over a 190 MB row. This is the *same* effect already recorded under
+[global gi atomic](#global-gi-atomic) for the per-bucket counter — "atomic_inc hands out
+sequential in-bucket slots, which is better locality than a computed slot" — and it was
+not connected to this lead until the measurement forced it.
+
+**The ablation that suggested this was itself misleading.** `ABL=64` substitutes
+`cgi = pos`, an LDS index in 0..383, so back-ref writes land in a ~1.5 KB window — far
+*more* local than either real alternative. It therefore measured "atomic removed **and**
+locality improved", not "atomic removed". An ablation that replaces a value must
+substitute something with the same access footprint, or it prices two changes as one.
+
+
 ---
 
 ## Established limits
@@ -671,12 +697,12 @@ kind rather than only algorithmic ones, and that the two should be looked for se
    they should register-allocate; not separately verified. The sort fallback path was not
    audited and still passes `Lout` at runtime — irrelevant on cards that use row-bucket,
    but free real estate if the fallback ever matters.
-3. **Eliminate the stored `gi`.** An element's identity could be its bucket slot
-   (`bucket × cap + pos`) rather than a stored 4 B counter value, removing 4 B from every
-   emit and every stage read, and letting round 4's emit pack `lead` into the spare 32
-   bits of its last work word (6 → 5 u64). The `(lead, gi)` tie-break becomes
-   `(lead, slot)` — valid, since ties only occur between equal-lead pairs, which the CPU
-   gate rejects anyway. Costs ~0.5 GB (back-ref rows become slot-indexed).
+3. ~~**Eliminate the stored `gi`.**~~ **Tried, reverted, +4.5 ms** — see
+   [above](#eliminating-the-dense-gi). The atomic pays for itself in back-ref write
+   locality. What remains live from this idea is only the *record* saving it would have
+   enabled (round 4's emit packing `lead` into its last work word's spare 32 bits,
+   6 → 5 u64) — but that needs a dense identity from somewhere else, and there is no
+   one-pass way to produce one without the atomic.
 4. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
    row-bucket path now needs 222. A single constant covers both, so row-bucket cards are
    still assessed against the sort path's appetite — which is what forces the ≥ 14.6 GiB
@@ -717,6 +743,8 @@ suite. The goldens are checked through every collision path
 Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
 `MXBM_LEGACY_MATCH`, `MXBM_LDS_MATCH`, `MXBM_NO_COMPACT`, `MXBM_SORT_PROFILE`,
 `MXBM_ABLATE` (bit 0 skips `apply_mix`, bit 1 skips the fat emit — for phase attribution),
+`LEADTIE_PROBE` (a `-D` build flag counting equal-lead pairs into the chain-drop
+counter; 17 per solve out of ~134 M),
 `MXBM_CL_OPTS` (extra OpenCL build options for the fused program, e.g.
 `-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)).
 
