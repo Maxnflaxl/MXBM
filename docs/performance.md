@@ -45,10 +45,11 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | Defer round-1's seed expand to a non-divergent loop | 103.6 | 95.3 | **19.9** | −8.3 | −8.0 % | [Non-divergent expand](#the-non-divergent-expand) | [Deferring the stage read](#deferring-the-stage-read) |
 | 2026-07-24 | Round 2 re-derives from a 16 B pair record | 95.3 | 86.8 | **21.9** | −8.5 | −8.9 % | [Re-derivation chain](#the-re-derivation-chain) | — |
 | 2026-07-24 | Round 3 re-derives from a 24 B quad record | 86.8 | 83.2 | **22.8** | −3.6 | −4.1 % | [Re-derivation chain](#the-re-derivation-chain) | [Register cap](#register-cap-tuning) |
-| 2026-07-24 | Bake per-round constants into the fused kernels | 83.2 | 56.6 | **33.6** | −26.6 | −32.0 % | [Compile-time constants](#compile-time-round-constants) | [Round-3 record A/B](#the-round-3-record-ab-withdrawn) |
+| 2026-07-24 | Bake per-round constants into the fused kernels | 83.2 | 56.2 | **33.8** | −27.0 | −32.5 % | [Compile-time constants](#compile-time-round-constants) | [Round-3 record A/B](#the-round-3-record-ab-withdrawn) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 33.6 sol/s** (56.6 ms/solve; 56–62 ms end-to-end).
+**Current: 33.8 sol/s** (56.2 ms/solve; 56–62 ms end-to-end).
+
 **Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.6×**.
 
 Started at **1.8 sol/s** when the solver first worked → **18.6× faster**.
@@ -360,7 +361,12 @@ registers:
 | | r1 | r2 | r3 | r4 | pipeline |
 |---|---|---|---|---|---|
 | runtime args | 11.9 | 15.0 | 26.5 | 24.9 | 83.2 |
-| compile-time | **7.5** | **10.9** | **21.5** | **10.9** | **56.6** |
+| compile-time | **7.5** | **10.9** | **21.5** | **10.9** | **56.2** |
+
+The terminal round-5 kernel had the same fault and was fixed in the same way
+(`LDS_R5LOUT`): at `Lout(5) = 24`, `bh3_combine`'s masking loop folds to "mask word 0,
+zero words 1–6". Survivor pass 4.4 → 4.1 ms. The entry kernel was already passing
+literals. That is the whole default path audited.
 
 Round 4 more than halved — it has `padNum(5) = 9`, the longest tree loop.
 
@@ -577,9 +583,23 @@ Round 2's output count was stable, so round 3 was reading data that round 2 appe
 have written correctly; all stride sites were checked and matched. The cause was not
 found, and the variant was reverted rather than debugged into the tree.
 
-Recorded as an **open lead, not a dead end**: the timing signal is plausible and worth
-re-testing with a correct implementation. Note the trap — the faster variant was the
-broken one, so a timing-only comparison would have "won".
+**Second attempt, also inconclusive.** Rebuilt with instrumentation instead of
+inspection. Round 3 was made to rebuild its work state from its stored leaves and compare
+against the stored work words: **0 mismatches**, so the record survives round 2's emit and
+round 3's stage intact. Counting further: both variants stage **exactly** the same
+33,561,297 elements, and matches equal the emitted child count 1:1 — but the variant finds
+a *different number of equal-key pairs*, varying run to run in both directions around the
+correct 33,566,378. Same elements and same work words should force the same key multiset
+and therefore the same pair count, so one of those measurements must be false. Confidence
+in the instrumentation itself then failed (a key-checksum counter read back as 0 for 33 M
+non-zero keys while two neighbouring counters in the same guard worked), and the
+investigation was stopped there rather than continue on untrustworthy numbers.
+
+Recorded as an **open lead, not a dead end**. What is established: the shipped quad-record
+path is deterministic (33,566,378 every run, survivors 3/3, 37/37) so nothing shipped is
+affected; and the ~3.8 ms signal is worth another attempt. Two traps for whoever picks it
+up — the faster variant was the broken one, so a timing-only comparison would have
+accepted it; and verify the diagnostic counters themselves before trusting a null result.
 
 
 ---
@@ -644,10 +664,13 @@ kind rather than only algorithmic ones, and that the two should be looked for se
    ~56 B/element saved, so the quad record is genuinely in question now. This is the
    largest identified lead. Any re-test must gate on the child count and survivor count,
    not just the timing — the broken variant was the *faster* one.
-2. **Look for more compiler-visibility faults.** `apply_mix` was spilling `t[8]` for the
-   entire life of the project. Worth auditing every private array reachable from the hot
-   path for dynamic indexing, and every loop bound for runtime-ness — `bh3_combine`'s
-   `Lout` masking loop and `ctree[9]` are the obvious next candidates.
+2. ~~**Look for more compiler-visibility faults.**~~ **Done, mostly harvested.** The
+   default path is audited: the four fused rounds and the terminal round 5 now pass
+   constants (−27.0 ms total), and the entry kernel already did. `ctree[9]` and
+   `rd_elem2`'s temporaries are now reached only through compile-time-bounded loops, so
+   they should register-allocate; not separately verified. The sort fallback path was not
+   audited and still passes `Lout` at runtime — irrelevant on cards that use row-bucket,
+   but free real estate if the fallback ever matters.
 3. **Eliminate the stored `gi`.** An element's identity could be its bucket slot
    (`bucket × cap + pos`) rather than a stored 4 B counter value, removing 4 B from every
    emit and every stage read, and letting round 4's emit pack `lead` into the spare 32

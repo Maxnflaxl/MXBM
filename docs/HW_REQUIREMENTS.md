@@ -86,9 +86,9 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | |
 |---|---|
-| Throughput | **33.6 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
+| Throughput | **33.8 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
 | End-to-end solve | 56–62 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
-| Solve time | 56.6 ms median (`./build/bench_rounds 20`) |
+| Solve time | 56.2 ms median (`./build/bench_rounds 20`) |
 
 See [performance.md](performance.md) for the full optimization history.
 

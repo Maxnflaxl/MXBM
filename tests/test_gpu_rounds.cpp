@@ -116,6 +116,8 @@ int main() {
                   k.padNext == ref::padNum(k.r + 1),
                   "baked-in constants agree with the reference round table");
         }
+        // round5_fused_lds bakes Lout(5) in the same way (LDS_R5LOUT in lds.cl).
+        check(ref::Lout(5) == 24u, "round 5's baked-in LDS_R5LOUT (24) matches the round table");
     }
     check(b.capacity > b.elems_per_round, "budget reserves collision headroom (capacity > 2^25 seed count) on this card");
 

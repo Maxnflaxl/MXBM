@@ -779,6 +779,7 @@ __kernel void round5_fused_lds(
     __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
     // Round-5 input = round-4 output = inwords_for(5) = 5 significant words.
     #define LDS_R5W 5u
+    #define LDS_R5LOUT 24u   // Lout(5); see the note at the combine below
     __local ulong lwork[LDS_R5W * LDS_FCAP];
     __local uint  lgi[LDS_FCAP];
     __local uint  llead[LDS_FCAP];
@@ -831,7 +832,11 @@ __kernel void round5_fused_lds(
                 ulong a[7], b[7], c[7];
                 for (uint w = 0; w < 7; ++w) { a[w] = 0ul; b[w] = 0ul; }
                 for (uint w = 0; w < LDS_R5W; ++w) { a[w] = lwork[leftPos*LDS_R5W+w]; b[w] = lwork[rightPos*LDS_R5W+w]; }
-                bh3_combine(a, b, Lout, c);
+                /* LDS_R5LOUT, not the runtime `Lout` arg: a compile-time Lout folds
+                   bh3_combine's masking loop away entirely (at 24 it is "mask word 0,
+                   zero words 1..6"). Same reason the fused rounds bake theirs in --
+                   see the FUSED_LDS constants. Pinned by test_gpu_rounds. */
+                bh3_combine(a, b, LDS_R5LOUT, c);
                 ulong z = 0ul; for (uint w = 0; w < 7; ++w) z |= c[w];
                 if (z == 0ul) {   // survivor: byte-identical round-5 elements
                     uint si = atomic_inc(surv_count);
