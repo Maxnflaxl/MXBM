@@ -3,11 +3,13 @@ namespace mxbm { namespace gpu {
 
 static uint64_t min_u64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 
-Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom) {
+Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom,
+                      uint32_t bytes_per_element) {
     Budget b;
     b.global_mem = global_mem;
     b.max_alloc  = max_alloc;
     b.usable     = (uint64_t)((double)global_mem * headroom);
+    b.bytes_per_element = bytes_per_element;
     b.target_elems = 1u << kTargetElemsLog2;
 
     // Per-element resident divisor (kBytesPerElement, see budget.h). This used to be
@@ -16,7 +18,7 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom) 
     // of reported VRAM, so 12 GB cards were downgraded to a REDUCED layer -- which,
     // per budget_can_find_solutions(), finds essentially no solutions at all. Sizing
     // to what the pipeline actually allocates makes those cards usable.
-    uint64_t rounds_cap = b.usable / (uint64_t)kBytesPerElement;
+    uint64_t rounds_cap = b.usable / (uint64_t)bytes_per_element;
     uint64_t epr = min_u64(b.target_elems, rounds_cap);
     if (epr == 0) epr = 1;
     b.elems_per_round = (uint32_t)epr;

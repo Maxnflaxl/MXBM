@@ -149,8 +149,8 @@ static uint32_t fb_cap_for(uint32_t mean) {
 
 // Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
 // lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
-static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single) {
-    const uint32_t nb = 1u << rb_bucket_bits();
+static void rowbucket_footprint(uint32_t capacity, uint32_t bb, size_t& total, size_t& single) {
+    const uint32_t nb = 1u << bb;
     const uint32_t cap = fb_cap_for(capacity / nb);
     const size_t nslots = (size_t)nb * cap;
     single = nslots * fb_set_stride(0) * 8;                     // fb_elem[0] -- largest
@@ -164,7 +164,32 @@ static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single
 // total leaves ~1 GB headroom under global_mem. Falls back to the sort path on any
 // device that can't hold the ~12 GB working set (8-12 GB cards). capacity==0 (some
 // synthetic Budgets) only honors an explicit force.
-static bool want_rowbucket(Runtime& rt, const Budget& b) {
+// Row-bucket geometry, chosen to fit the DEVICE rather than fixed. The group the
+// staging loop stages is mean_bucket / 2^submaskBits and wants to be ~256, which pins
+// bucketBits + submaskBits = 17; within that, the smallest submaskBits wins because it
+// is a direct multiplier on redundant bucket rescans. But finer buckets pay the
+// per-bucket capacity slack more times, so they need a LARGER single allocation:
+//
+//     (16,1) 40.4 ms  3.27 GiB single   (15,2) 42.6 ms  2.96   (14,3) 47.5 ms  2.76
+//
+// A card that cannot host (16,1) should therefore drop one step -- 5% slower -- rather
+// than fall back to the sort path, which measures 215 ms. MXBM_BB / MXBM_SM override.
+struct RbGeom { uint32_t bb, sm; };
+static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
+    if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM"))
+        return { rb_bucket_bits(), rb_submask_bits() };
+    const DeviceInfo& d = rt.device();
+    for (uint32_t bb = 16; bb >= 14; --bb) {
+        size_t total = 0, single = 0;
+        rowbucket_footprint(capacity, bb, total, single);
+        if (d.max_alloc && single > (size_t)d.max_alloc) continue;
+        if (d.global_mem && total + (size_t)(1ull << 30) > (size_t)d.global_mem) continue;
+        return { bb, 17u - bb };
+    }
+    return { 14u, 3u };   // caller's viability check rejects if even this will not fit
+}
+
+bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (std::getenv("MXBM_NO_ROWBUCKET")) return false;
     const bool forced = (std::getenv("MXBM_ROWBUCKET") != nullptr);
     if (forced) return true;
@@ -173,10 +198,11 @@ static bool want_rowbucket(Runtime& rt, const Budget& b) {
     if (std::getenv("MXBM_LEGACY_MATCH") || std::getenv("MXBM_LDS_MATCH")) return false;
     uint32_t capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
     if (capacity == 0) return false;
-    size_t total = 0, single = 0;
-    rowbucket_footprint(capacity, total, single);
     const DeviceInfo& d = rt.device();
     if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
+    const RbGeom g = rb_pick_geometry(rt, capacity);
+    size_t total = 0, single = 0;
+    rowbucket_footprint(capacity, g.bb, total, single);
     if (single > (size_t)d.max_alloc) return false;
     if (total + (size_t)(1ull << 30) > (size_t)d.global_mem) return false;
     return true;
@@ -186,7 +212,9 @@ static bool want_rowbucket(Runtime& rt, const Budget& b) {
 // flat work[]/leaves[]/sort scratch (the buckets ARE the resident storage). Sized
 // so bucketDrops==0 at 2^25 (cap ~1.75x mean) -- ~12 GB, fits 16 GB.
 static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
-    p.fb_num_buckets = 1u << rb_bucket_bits();
+    const RbGeom g = rb_pick_geometry(rt, p.capacity);
+    p.fb_num_buckets  = 1u << g.bb;
+    p.fb_submask_bits = g.sm;
     p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     for (int i = 0; i < 2; ++i) {
@@ -204,7 +232,7 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     PipelineBuffers p;
-    if (want_rowbucket(rt, b)) {
+    if (rowbucket_viable(rt, b)) {
         p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
         p.rowbucket = true;
         alloc_rowbucket(rt, b, p);
@@ -841,8 +869,9 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     const uint32_t nb = pb.fb_num_buckets, cap = pb.fb_bucket_cap, capacity = pb.capacity;
     // Sweepable for tuning: the sub-mask split sets how many times each bucket is
     // rescanned (2^submaskBits) against the LDS a group needs. See MXBM_BB/MXBM_SM.
-    const uint32_t bucketBits = rb_bucket_bits();
-    const uint32_t submaskBits = rb_submask_bits();
+    uint32_t bbv = 0; for (uint32_t t = pb.fb_num_buckets; t > 1u; t >>= 1) ++bbv;
+    const uint32_t bucketBits = bbv;                  // as chosen by alloc_rowbucket
+    const uint32_t submaskBits = pb.fb_submask_bits;
     const uint32_t survCap = 1024;
     const uint32_t total = (b.elems_per_round != 0) ? b.elems_per_round : capacity;
     const uint32_t batch = (b.seed_batch != 0) ? b.seed_batch : total;

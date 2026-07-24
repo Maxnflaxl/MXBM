@@ -32,11 +32,17 @@ int main() {
     check(b8.elems_per_round < (1u<<25), "8GB clamps elems/round below 2^25 (honest drop)");
     check(b8.elems_per_round > 0, "8GB still positive elems/round");
     check(b8.seed_batch*56ull <= 2*GiB, "8GB seed_batch fits max_alloc");
-    // usable (8 GiB * 0.85) / kBytesPerElement (304, the real resident cost -- see
-    // budget.h) == 24,017,909. This was 396 B/elem, which under-provisioned so far
+    // usable (8 GiB * 0.85) / kBytesPerElement. DERIVED from the constant rather than
+    // pinned to a literal: the per-element cost is measured against the real allocation
+    // (test_gpu_rounds) and has been retuned several times, and a hard-coded expectation
+    // here just breaks on every retune without catching anything. What matters is that
+    // compute_budget divides by the constant it is handed. This was 396 B/elem, which
+    // under-provisioned so far
     // that 12 GB cards were denied a full seed layer; see HW_REQUIREMENTS.md.
-    check(b8.elems_per_round == 24017909u, "8GB elems_per_round == 24,017,909 (7.30GB / 304 B/elem)");
-    check(b8.bucket_bits == 19u, "8GB bucket_bits == 19 (floor(log2(24017909))=24, 24-5=19)");
+    const uint32_t expect8 = (uint32_t)(((uint64_t)((double)(8ull<<30) * 0.85)) / kBytesPerElement);
+    check(b8.elems_per_round == expect8, "8GB elems_per_round == usable / kBytesPerElement");
+    uint32_t lg8 = 0; while ((1ull << (lg8 + 1)) <= expect8) ++lg8;
+    check(b8.bucket_bits == (lg8 >= 15 ? lg8 - 5 : 10), "8GB bucket_bits tracks floor(log2(epr)) - 5");
     check(b8.num_buckets == 524288u, "8GB uses 2^19 = 524288 buckets");
     check((uint64_t)b8.slots_per_bucket*b8.num_buckets >= b8.elems_per_round, "8GB total slots cover elems");
     // Memory-constrained: the seed layer already maxes out VRAM, so there is no

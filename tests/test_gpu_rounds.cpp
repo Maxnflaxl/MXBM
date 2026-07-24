@@ -53,7 +53,11 @@ int main() {
     std::printf("  device: %s | gmem=%.2fGiB | max_alloc=%.2fGiB | CUs=%u\n",
                 d.name.c_str(), d.global_mem / 1073741824.0, d.max_alloc / 1073741824.0, d.compute_units);
 
-    Budget b = compute_budget(d.global_mem, d.max_alloc);
+    // Mirror GpuSolver's two-phase selection, so this test validates the budget the
+    // solver will actually use rather than the conservative default.
+    Budget b = compute_budget(d.global_mem, d.max_alloc, 0.85, kBytesPerElementRowbucket);
+    if (!rowbucket_viable(rt, b))
+        b = compute_budget(d.global_mem, d.max_alloc, 0.85, kBytesPerElementSort);
     std::printf("  budget: elems_per_round=%u bucket_bits=%u num_buckets=%u slots_per_bucket=%u seed_batch=%u\n",
                 b.elems_per_round, b.bucket_bits, b.num_buckets, b.slots_per_bucket, b.seed_batch);
     // BeamHash III indices are 25-bit ([0,2^25)) -- the seed layer's size is
@@ -90,8 +94,8 @@ int main() {
         std::printf("  budget check: %s path allocates %.2f GiB = %.0f B/element; "
                     "budget assumes %u B/element\n",
                     pb.rowbucket ? "row-bucket" : "sort",
-                    (double)actual / 1073741824.0, perElem, kBytesPerElement);
-        check(perElem <= (double)kBytesPerElement,
+                    (double)actual / 1073741824.0, perElem, b.bytes_per_element);
+        check(perElem <= (double)b.bytes_per_element,
               "compute_budget's per-element estimate covers the real allocation (no OOM risk)");
     }
     // The fused kernels BAKE their per-round constants in at compile time (see the

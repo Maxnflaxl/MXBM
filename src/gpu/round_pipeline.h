@@ -65,6 +65,8 @@ struct PipelineBuffers {
     // write sector (measured 1.20x, test_emit_packing). Stride varies per round; the
     // buffer is sized for the widest round (fb_stride, = kFbMaxStride).
     uint32_t fb_num_buckets = 0, fb_bucket_cap = 0;
+    uint32_t fb_submask_bits = 0;   // chosen with fb_num_buckets; see rb_pick_geometry
+
     uint32_t fb_stride[2] = {0, 0};  // u64/element actually allocated PER SET (the two
                                // differ) -- read this rather than re-deriving the width
     Mem fb_elem[2];            // ulong[nb*cap*fb_stride]
@@ -81,6 +83,13 @@ struct PipelineBuffers {
 // Note Lout(r) == Lmix(r+1) for every round, so one constant serves both roles.
 struct FusedConsts { uint32_t Lout, padNext, sIn, sOut, sBuild; };
 FusedConsts fused_consts_for(int r);
+
+// Can this device host the fused row-bucket path at the given budget's capacity?
+// Checks the real footprint against global memory AND the single-allocation limit,
+// and honours the MXBM_ROWBUCKET / MXBM_NO_ROWBUCKET overrides. Exposed because the
+// per-element budget differs per path, so the caller must know which path will run
+// before it can size the seed layer (see kBytesPerElement* in budget.h).
+bool rowbucket_viable(Runtime& rt, const Budget& b);
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b);
 

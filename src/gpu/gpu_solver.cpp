@@ -13,7 +13,17 @@ GpuSolver::GpuSolver() {
     // by the time we get here; throws ClError if no device is present, so
     // callers must guard with available() first, exactly as every device
     // test in this suite guards with Runtime::any_device_available().
-    budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc);
+    // Size the seed layer for the path that will actually run. The row-bucket path
+    // costs 239 B/element against the sort path's 264, so budgeting both at the sort
+    // figure needlessly cuts down cards that could host a full 2^25 layer on the fast
+    // path -- and a reduced layer mines nothing (budget_can_find_solutions). Try the
+    // optimistic budget first; if the device cannot host the row-bucket footprint at
+    // that capacity, fall back to the sort-path budget, which is what will run.
+    budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc,
+                             0.85, kBytesPerElementRowbucket);
+    if (!rowbucket_viable(rt_, budget_))
+        budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc,
+                                 0.85, kBytesPerElementSort);
 
     // REFUSE a partial seed layer rather than mine nothing. A BeamHash III solution
     // is 32 indices from the full [0, 2^25) space, so a device that can only host
