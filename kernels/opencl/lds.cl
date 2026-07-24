@@ -425,16 +425,23 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 #define LMODE_USE  2   // stage the contrib, no leaf emit              (r4)
 #define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
 
+// PACKED ELEMENT LAYOUT. Each element is ONE contiguous record instead of four
+// parallel arrays, because global writes are serviced in 32 B sectors: a 4 B gi and a
+// 4 B lead in separate arrays each burned a whole sector, so a 72 B child cost ~5
+// sectors of traffic. Measured 1.20x faster packed (test_emit_packing); padding to
+// sector alignment adds nothing beyond contiguity, so the record has no wasted bytes.
+//   [0 .. W-1]  work words        (W = INW reading / OUTW writing)
+//   [W]         meta = (gi << 32) | lead
+//   [W+1 ..]    leaf payload, two u32 packed per u64 (or the u64 leftContrib)
+// Strides are runtime args; every LOOP BOUND stays compile-time so the word loops
+// still fully unroll (a runtime loop bound cost +24 ms here before).
 #define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE)                                      \
 __kernel void NAME(                                                                   \
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
     uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut, uint out_off,   \
-    uint sBuild,                                                                      \
-    __global const uint* in_counts, __global const ulong* in_bwork,                   \
-    __global const uint* in_bgi, __global const uint* in_blead,                       \
-    __global const uint* in_bleaves,                                                  \
-    __global uint* out_counts, __global ulong* out_bwork, __global uint* out_bgi,     \
-    __global uint* out_blead, __global uint* out_bleaves,                             \
+    uint sBuild, uint in_stride, uint out_stride,                                     \
+    __global const uint* in_counts, __global const ulong* in_belem,                   \
+    __global uint* out_counts, __global ulong* out_belem,                             \
     __global uint* all_left, __global uint* all_right,                                \
     __global uint* gi_counter, __global uint* drops) {                               \
     __local ulong lwork[(INW) * LDS_FCAP];                                            \
@@ -453,14 +460,17 @@ __kernel void NAME(                                                             
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;                                     \
     size_t base = (size_t)bucket * in_bucket_cap;                                     \
     for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
-        size_t d = base + p;                                                          \
-        uint key = (uint)(in_bwork[d*(INW)] & 0xFFFFFFu);                             \
+        size_t d = (base + p) * in_stride;                                            \
+        uint key = (uint)(in_belem[d] & 0xFFFFFFu);                                   \
         if ((key & (submaskCount - 1u)) != mask) continue;                            \
         uint pos = atomic_inc(&gcount);                                               \
         if (pos < LDS_FCAP) {                                                         \
-            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_bwork[d*(INW) + w]; \
-            lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;          \
-            for (uint i = 0; i < sIn; ++i) lleaf[pos*(LEAFW) + i] = in_bleaves[d*sIn + i]; \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w];  \
+            ulong meta = in_belem[d + (INW)];                                         \
+            lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key;  \
+            for (uint i = 0; i < sIn; ++i)                                            \
+                lleaf[pos*(LEAFW) + i] =                                              \
+                    (uint)(in_belem[d + (INW) + 1u + (i >> 1)] >> ((i & 1u) * 32u));  \
         } else atomic_inc(&drops[1]);                                                \
     }                                                                                \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
@@ -485,8 +495,6 @@ __kernel void NAME(                                                             
                 bh3_combine(a, b, Lout, c);                                           \
                 uint ctree[9]; ulong contribOut = 0ul;                                \
                 if ((LMODE) == LMODE_USE) {                                           \
-                    /* Compact path: left parent's 8 leaves are pre-folded into one    \
-                       u64; only the right parent's first leaf (its lead) is raw. */   \
                     for (uint i = 0; i < 8u; ++i) ctree[i] = 0u;                      \
                     ctree[8] = llead[rightPos];                                        \
                     ulong lc = ((ulong)lleaf[leftPos*(LEAFW)+1] << 32)                 \
@@ -494,7 +502,7 @@ __kernel void NAME(                                                             
                     c[0] = bh3_rotl64(bh3_rotl64(                                      \
                                bh3_apply_mix(c, ctree, padnum_next, Lmix_next), 40)    \
                              + lc, 24);                                                \
-                    ctree[0] = llead[leftPos];   /* child's lead, for out_blead */     \
+                    ctree[0] = llead[leftPos];                                         \
                 } else {                                                              \
                     for (uint i = 0; i < sBuild; ++i)                                 \
                         ctree[i] = (i < sIn) ? lleaf[leftPos*(LEAFW) + i]             \
@@ -511,14 +519,17 @@ __kernel void NAME(                                                             
                 uint cpos = atomic_inc(&out_counts[cb]);                              \
                 if (cpos < out_bucket_cap) {                                          \
                     uint cgi = atomic_inc(gi_counter);                                \
-                    size_t od = (size_t)cb * out_bucket_cap + cpos;                   \
-                    for (uint w = 0; w < (OUTW); ++w) out_bwork[od*(OUTW) + w] = c[w]; \
-                    out_bgi[od] = cgi; out_blead[od] = ctree[0];                      \
+                    size_t od = ((size_t)cb * out_bucket_cap + cpos) * out_stride;    \
+                    for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];       \
+                    out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0];    \
                     if ((LMODE) == LMODE_EMIT) {                                      \
-                        out_bleaves[od*sOut + 0] = (uint)(contribOut & 0xFFFFFFFFul); \
-                        out_bleaves[od*sOut + 1] = (uint)(contribOut >> 32);          \
+                        out_belem[od + (OUTW) + 1u] = contribOut;                     \
                     } else {                                                          \
-                        for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i]; \
+                        for (uint j = 0; j*2u < sOut; ++j) {                          \
+                            uint lo = ctree[j*2u];                                     \
+                            uint hi = (j*2u + 1u < sOut) ? ctree[j*2u + 1u] : 0u;      \
+                            out_belem[od + (OUTW) + 1u + j] = ((ulong)hi << 32) | (ulong)lo; \
+                        }                                                             \
                     }                                                                 \
                     all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos]; \
                 } else atomic_inc(&drops[2]);                                         \
@@ -527,9 +538,9 @@ __kernel void NAME(                                                             
         }                                                                            \
     }                                                                                \
 }
-// (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is now per-round
-// instead of a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4,
-// r4 stages the 2-uint contrib.
+// (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is per-round rather
+// than a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4, r4 the
+// 2-uint contrib.
 FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r1 (sIn=1), r2 (sIn=2)
 FUSED_LDS(round_fused_7_6, 7, 6, 4, LMODE_EMIT)   // r3: stages 4 leaves, emits contrib
 FUSED_LDS(round_fused_6_5, 6, 5, 2, LMODE_USE)    // r4: stages contrib, no leaf emit
@@ -539,10 +550,9 @@ FUSED_LDS(round_fused_6_5, 6, 5, 2, LMODE_USE)    // r4: stages contrib, no leaf
 // element DIRECTLY into round-1 FAT buckets (no flat work[1]/leaves[1]). gi = seed
 // index (recover reads it as a leaf at row 0); lead = leaves[0] = idx.
 __kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint count,
-                                     uint bucket_bits, uint bucket_cap,
-                                     __global uint* counts, __global ulong* bwork,
-                                     __global uint* bgi, __global uint* blead,
-                                     __global uint* bleaves, __global uint* drops) {
+                                     uint bucket_bits, uint bucket_cap, uint stride,
+                                     __global uint* counts, __global ulong* belem,
+                                     __global uint* drops) {
     uint g = (uint)get_global_id(0);
     if (g >= count) return;
     uint idx = begin + g;
@@ -555,9 +565,12 @@ __kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint
     uint b = key >> (24u - bucket_bits);
     uint pos = atomic_inc(&counts[b]);
     if (pos < bucket_cap) {
-        size_t d = (size_t)b*bucket_cap + pos;
-        for (int k = 0; k < 7; ++k) bwork[d*LDS_PW + k] = e[k];
-        bgi[d] = idx; blead[d] = idx; bleaves[d*1 + 0] = idx;   // sIn=1 for round 1
+        // Packed round-1 record: work[0..6], meta=(gi<<32)|lead, leafword{leaf0}.
+        // gi, lead and leaf0 are all the seed index for a round-1 element.
+        size_t d = ((size_t)b*bucket_cap + pos) * stride;
+        for (int k = 0; k < 7; ++k) belem[d + k] = e[k];
+        belem[d + 7] = ((ulong)idx << 32) | (ulong)idx;
+        belem[d + 8] = (ulong)idx;
     } else atomic_inc(&drops[1]);
 }
 
@@ -568,10 +581,9 @@ __kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint
 // (out_off = 4*capacity) holds the two round-5 parent gi's so recover can descend.
 __kernel void round5_fused_lds(
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint Lout, uint out_off,
+    uint in_stride,
     __global const uint*  in_counts,
-    __global const ulong* in_bwork,    // [nb*in_cap*7]
-    __global const uint*  in_bgi,
-    __global const uint*  in_blead,
+    __global const ulong* in_belem,    // packed: work[0..4], meta=(gi<<32)|lead
     __global uint*  all_left, __global uint* all_right,   // indexed by survivor slot (row out_off)
     __global uint*  surv_slots, __global uint* surv_count, uint surv_cap,
     __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
@@ -598,13 +610,14 @@ __kernel void round5_fused_lds(
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
     size_t base = (size_t)bucket * in_bucket_cap;
     for (uint p = lId; p < cnt; p += LDS_WG) {
-        size_t d = base + p;
-        uint key = (uint)(in_bwork[d*LDS_R5W] & 0xFFFFFFu);
+        size_t d = (base + p) * in_stride;
+        uint key = (uint)(in_belem[d] & 0xFFFFFFu);
         if ((key & (submaskCount - 1u)) != mask) continue;
         uint pos = atomic_inc(&gcount);
         if (pos < LDS_FCAP) {
-            for (uint w = 0; w < LDS_R5W; ++w) lwork[pos*LDS_R5W + w] = in_bwork[d*LDS_R5W + w];
-            lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;
+            for (uint w = 0; w < LDS_R5W; ++w) lwork[pos*LDS_R5W + w] = in_belem[d + w];
+            ulong meta = in_belem[d + LDS_R5W];
+            lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key;
         } else atomic_inc(&drops[1]);
     }
     barrier(CLK_LOCAL_MEM_FENCE);

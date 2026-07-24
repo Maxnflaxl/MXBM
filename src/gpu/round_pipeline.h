@@ -55,11 +55,13 @@ struct PipelineBuffers {
     // coalesced -- STEP A: fat wins +17 ms/solve). No flat work[]/leaves[]/sort
     // scratch is allocated on this path. left/right stay for recover (same row
     // convention as the sort path: round r fills row (r-1)*capacity, indexed by gi).
+    // PACKED element record (see the layout note above FUSED_LDS in lds.cl): one
+    // contiguous [work | meta=(gi<<32)|lead | leaf payload] block per element instead
+    // of four parallel arrays, because a 4 B field in its own array costs a whole 32 B
+    // write sector (measured 1.20x, test_emit_packing). Stride varies per round; the
+    // buffer is sized for the widest (round-3 output, 10 u64).
     uint32_t fb_num_buckets = 0, fb_bucket_cap = 0;
-    Mem fb_work[2];            // ulong[nb*cap*7]
-    Mem fb_gi[2];              // uint[nb*cap]
-    Mem fb_lead[2];            // uint[nb*cap]
-    Mem fb_leaves[2];          // uint[nb*cap*9]
+    Mem fb_elem[2];            // ulong[nb*cap*kFbMaxStride]
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
 };

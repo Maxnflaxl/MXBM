@@ -61,15 +61,27 @@ bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr)
 
 bool compact_active();   // defined below; gates the compacted sort path
 
+// Packed row-bucket element strides (u64 per element), indexed by the round that
+// READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
+//   r1 7+1+1=9   r2 7+1+1=9   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
+// Round r's OUTPUT stride is round r+1's input stride.
+constexpr uint32_t kFbStride[6] = { 0u, 9u, 9u, 10u, 8u, 6u };
+constexpr uint32_t kFbMaxStride = 10u;
+// Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
+// occupancy is ~Binomial(capacity, 1/nb): mean = capacity/nb, sigma ~ sqrt(mean), and
+// the max over nb buckets sits near mean + 4.5 sigma. mean/4 + 256 is ~17 sigma at
+// 2^25 -- drop-free with wide margin, and keeps the packed array under the device's
+// 3.9 GB single-allocation limit. Drops are counted and gate every run regardless.
+static uint32_t fb_cap_for(uint32_t mean) { return mean + (mean >> 2) + 256u; }
+
 // Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
 // lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
 static void rowbucket_footprint(uint32_t capacity, size_t& total, size_t& single) {
     const uint32_t nb = 1u << 14;
-    uint32_t mean = capacity / nb;
-    uint32_t cap  = mean + (mean >> 1) + 512;
+    const uint32_t cap = fb_cap_for(capacity / nb);
     const size_t nslots = (size_t)nb * cap;
-    single = nslots * 7 * 8;                                    // fb_work[i] -- largest
-    const size_t perSet = single + nslots*4 + nslots*4 + nslots*4*4 + (size_t)nb*4;
+    single = nslots * kFbMaxStride * 8;                         // fb_elem[i] -- largest
+    const size_t perSet = single + (size_t)nb*4;                // packed record + counts
     total = 2*perSet + (size_t)5*capacity*4*2 + 64;             // +left/right/counters
 }
 
@@ -102,17 +114,10 @@ static bool want_rowbucket(Runtime& rt, const Budget& b) {
 // so bucketDrops==0 at 2^25 (cap ~1.75x mean) -- ~12 GB, fits 16 GB.
 static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     p.fb_num_buckets = 1u << 14;
-    uint32_t mean = p.capacity / p.fb_num_buckets;
-    p.fb_bucket_cap = mean + (mean >> 1) + 512;
+    p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     for (int i = 0; i < 2; ++i) {
-        p.fb_work[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * 7 * 8);
-        p.fb_gi[i]     = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
-        p.fb_lead[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
-        // Leaf payload stride: max over rounds of sOut = 4 (round 2's 4-leaf child).
-        // Round 3 stores a 2-uint contrib, round 4 stores nothing -- so the old
-        // 9-uint worst case (padNum(5)) is no longer carried. Saves ~1.1 GB.
-        p.fb_leaves[i] = rt.alloc(CL_MEM_READ_WRITE, nslots * 4 * 4);
+        p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * kFbMaxStride * 8);
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
@@ -779,15 +784,13 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
         Mem mp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
         Kernel k = rt.kernel(prog, "round1_mix_scatter_fat");
-        cl_mem ppMem = mp.get(), cnt = pb.fb_counts[0].get(), bw = pb.fb_work[0].get(),
-               bg = pb.fb_gi[0].get(), bl = pb.fb_lead[0].get(), blv = pb.fb_leaves[0].get(), dr = mdrops.get();
+        cl_mem ppMem = mp.get(), cnt = pb.fb_counts[0].get(), be = pb.fb_elem[0].get(), dr = mdrops.get();
         for (uint32_t begin = 0; begin < total; begin += batch) {
             uint32_t count = (total - begin < batch) ? (total - begin) : batch;
             rt.set_arg(k.get(), 0, sizeof(cl_mem), &ppMem); rt.set_arg(k.get(), 1, begin); rt.set_arg(k.get(), 2, count);
-            rt.set_arg(k.get(), 3, bucketBits); rt.set_arg(k.get(), 4, cap);
-            rt.set_arg(k.get(), 5, sizeof(cl_mem), &cnt); rt.set_arg(k.get(), 6, sizeof(cl_mem), &bw);
-            rt.set_arg(k.get(), 7, sizeof(cl_mem), &bg); rt.set_arg(k.get(), 8, sizeof(cl_mem), &bl);
-            rt.set_arg(k.get(), 9, sizeof(cl_mem), &blv); rt.set_arg(k.get(), 10, sizeof(cl_mem), &dr);
+            rt.set_arg(k.get(), 3, bucketBits); rt.set_arg(k.get(), 4, cap); rt.set_arg(k.get(), 5, kFbStride[1]);
+            rt.set_arg(k.get(), 6, sizeof(cl_mem), &cnt); rt.set_arg(k.get(), 7, sizeof(cl_mem), &be);
+            rt.set_arg(k.get(), 8, sizeof(cl_mem), &dr);
             RUN(k.get(), count, 0);
         }
     }
@@ -824,10 +827,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         if      (r == 3) fusedName = "round_fused_7_6";
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
-        cl_mem ic = pb.fb_counts[inSet].get(), iw = pb.fb_work[inSet].get(), ig = pb.fb_gi[inSet].get(),
-               il = pb.fb_lead[inSet].get(), ilv = pb.fb_leaves[inSet].get();
-        cl_mem oc = pb.fb_counts[outSet].get(), ow = pb.fb_work[outSet].get(), og = pb.fb_gi[outSet].get(),
-               ol = pb.fb_lead[outSet].get(), olv = pb.fb_leaves[outSet].get();
+        cl_mem ic = pb.fb_counts[inSet].get(),  ie = pb.fb_elem[inSet].get();
+        cl_mem oc = pb.fb_counts[outSet].get(), oe = pb.fb_elem[outSet].get();
         cl_mem aL = pb.left.get(), aR = pb.right.get(), gc = pb.fb_gictr.get(), dr = mdrops.get();
         int a = 0;
         rt.set_arg(k.get(), a++, bucketBits); rt.set_arg(k.get(), a++, submaskBits);
@@ -835,12 +836,9 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, Lout); rt.set_arg(k.get(), a++, LmixNext); rt.set_arg(k.get(), a++, padNext);
         rt.set_arg(k.get(), a++, sIn); rt.set_arg(k.get(), a++, sOut); rt.set_arg(k.get(), a++, outOff);
         rt.set_arg(k.get(), a++, sBuild);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &iw);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ig); rt.set_arg(k.get(), a++, sizeof(cl_mem), &il);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ilv);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ow);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &og); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ol);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &olv);
+        rt.set_arg(k.get(), a++, kFbStride[r]); rt.set_arg(k.get(), a++, kFbStride[r + 1]);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ie);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &oe);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
         RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
@@ -862,14 +860,13 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     {
         Kernel k = rt.kernel(prog, "round5_fused_lds");
         uint32_t outOff5 = (uint32_t)(5 - 1) * capacity, Lout5 = lout_for(5);
-        cl_mem ic = pb.fb_counts[inSet].get(), iw = pb.fb_work[inSet].get(),
-               ig = pb.fb_gi[inSet].get(), il = pb.fb_lead[inSet].get();
+        cl_mem ic = pb.fb_counts[inSet].get(), ie = pb.fb_elem[inSet].get();
         cl_mem aL = pb.left.get(), aR = pb.right.get(), ss = mSurvSlots.get(), sc = mSurvCount.get(), dr = mdrops.get();
         int a = 0;
         rt.set_arg(k.get(), a++, bucketBits); rt.set_arg(k.get(), a++, submaskBits); rt.set_arg(k.get(), a++, cap);
         rt.set_arg(k.get(), a++, Lout5); rt.set_arg(k.get(), a++, outOff5);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &iw);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ig); rt.set_arg(k.get(), a++, sizeof(cl_mem), &il);
+        rt.set_arg(k.get(), a++, kFbStride[5]);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ie);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ss); rt.set_arg(k.get(), a++, sizeof(cl_mem), &sc);
         rt.set_arg(k.get(), a++, survCap); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);

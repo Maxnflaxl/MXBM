@@ -536,10 +536,11 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
         for(uint32_t j=0;j<sIn;++j) in[i].tree[j]=(uint32_t)(sm(s)&0x1FFFFFFu);  // 25-bit leaf ids
     }
     // Mix (sets collision key), then host-scatter into FAT input buckets.
+    // Packed records: [work 7 | meta=(gi<<32)|lead | leafwords] (see FUSED_LDS in lds.cl).
+    const uint32_t inStride = 7u + 1u + (sIn + 1u)/2u;
+    const uint32_t outStride = 7u + 1u + (sOut + 1u)/2u;
     std::vector<uint32_t> counts(numBuckets,0);
-    std::vector<uint64_t> bwork((size_t)numBuckets*inCap*7,0);
-    std::vector<uint32_t> bgi((size_t)numBuckets*inCap,0), blead((size_t)numBuckets*inCap,0);
-    std::vector<uint32_t> bleaves((size_t)numBuckets*inCap*sIn,0);
+    std::vector<uint64_t> belem((size_t)numBuckets*inCap*inStride,0);
     uint32_t hostDrop=0;
     for (uint32_t i=0;i<N;++i){
         uint64_t mw0 = ref::cpu_mix_w0(in[i], r);
@@ -547,24 +548,19 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
         uint32_t b = key >> (24u - bucketBits);
         uint32_t pos = counts[b]++;
         if (pos>=inCap){ hostDrop++; continue; }
-        size_t d=(size_t)b*inCap+pos;
-        bwork[d*7]=mw0; for(int w=1;w<7;++w) bwork[d*7+w]=in[i].w[w];
-        bgi[d]=i; blead[d]=in[i].tree[0];
-        for(uint32_t j=0;j<sIn;++j) bleaves[d*sIn+j]=in[i].tree[j];
+        size_t d=((size_t)b*inCap+pos)*inStride;
+        belem[d]=mw0; for(int w=1;w<7;++w) belem[d+w]=in[i].w[w];
+        belem[d+7]=((uint64_t)i<<32)|(uint64_t)in[i].tree[0];
+        for(uint32_t j=0;j<sIn;++j)
+            belem[d+8+(j>>1)] |= (uint64_t)in[i].tree[j] << ((j&1u)*32u);
     }
     check(hostDrop==0,"host input scatter drop-free (raise inCap if this fails)");
 
     // Upload + run round_fused_lds.
     Mem mInCounts=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)numBuckets*4,counts.data());
-    Mem mInWork=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,bwork.size()*8,bwork.data());
-    Mem mInGi=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,bgi.size()*4,bgi.data());
-    Mem mInLead=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,blead.size()*4,blead.data());
-    Mem mInLeaves=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,bleaves.size()*4,bleaves.data());
+    Mem mInElem=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,belem.size()*8,belem.data());
     Mem mOutCounts=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
-    Mem mOutWork=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*7*8);
-    Mem mOutGi=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*4);
-    Mem mOutLead=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*4);
-    Mem mOutLeaves=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*sOut*4);
+    Mem mOutElem=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*outStride*8);
     Mem mAllL=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*4);
     Mem mAllR=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*outCap*4);
     Mem mGiCtr=rt.alloc(CL_MEM_READ_WRITE,4);
@@ -572,8 +568,8 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
     rt.fill_u32(mOutCounts.get(),0u,numBuckets); rt.fill_u32(mGiCtr.get(),0u,1); rt.fill_u32(mDrops.get(),0u,4);
 
     { Kernel k=rt.kernel(prog,"round_fused_lds");
-      cl_mem ic=mInCounts.get(),iw=mInWork.get(),ig=mInGi.get(),il=mInLead.get(),ilv=mInLeaves.get();
-      cl_mem oc=mOutCounts.get(),ow=mOutWork.get(),og=mOutGi.get(),ol=mOutLead.get(),olv=mOutLeaves.get();
+      cl_mem ic=mInCounts.get(), ie=mInElem.get();
+      cl_mem oc=mOutCounts.get(), oe=mOutElem.get();
       cl_mem aL=mAllL.get(),aR=mAllR.get(),gc=mGiCtr.get(),dr=mDrops.get();
       int a=0;
       rt.set_arg(k.get(),a++,bucketBits); rt.set_arg(k.get(),a++,submaskBits);
@@ -581,12 +577,9 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
       rt.set_arg(k.get(),a++,Lout); rt.set_arg(k.get(),a++,LmixNext); rt.set_arg(k.get(),a++,padNext);
       rt.set_arg(k.get(),a++,sIn); rt.set_arg(k.get(),a++,sOut); rt.set_arg(k.get(),a++,0u/*out_off*/);
       rt.set_arg(k.get(),a++,sOut/*sBuild: RAW variant builds exactly what it stores*/);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ic); rt.set_arg(k.get(),a++,sizeof(cl_mem),&iw);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ig); rt.set_arg(k.get(),a++,sizeof(cl_mem),&il);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ilv);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&oc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ow);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&og); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ol);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&olv);
+      rt.set_arg(k.get(),a++,inStride); rt.set_arg(k.get(),a++,outStride);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ic); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ie);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&oc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&oe);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&aL); rt.set_arg(k.get(),a++,sizeof(cl_mem),&aR);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&gc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&dr);
       rt.run1d(k.get(), ((size_t)numBuckets << submaskBits)*WG, WG); }
@@ -597,13 +590,13 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
 
     // Read back GPU children.
     std::vector<uint32_t> oc(numBuckets); rt.read(mOutCounts.get(),(size_t)numBuckets*4,oc.data());
-    std::vector<uint64_t> ow((size_t)numBuckets*outCap*7); rt.read(mOutWork.get(),ow.size()*8,ow.data());
-    std::vector<uint32_t> olv((size_t)numBuckets*outCap*sOut); rt.read(mOutLeaves.get(),olv.size()*4,olv.data());
+    std::vector<uint64_t> oe((size_t)numBuckets*outCap*outStride); rt.read(mOutElem.get(),oe.size()*8,oe.data());
     std::vector<FChild> gpu;
     for(uint32_t b=0;b<numBuckets;++b){ uint32_t c=oc[b]<outCap?oc[b]:outCap;
-        for(uint32_t p=0;p<c;++p){ size_t d=(size_t)b*outCap+p; FChild fc; fc.nlv=sOut;
-            for(int w=0;w<7;++w) fc.w[w]=ow[d*7+w];
-            for(uint32_t i=0;i<sOut;++i) fc.lv[i]=olv[d*sOut+i]; gpu.push_back(fc); } }
+        for(uint32_t p=0;p<c;++p){ size_t d=((size_t)b*outCap+p)*outStride; FChild fc; fc.nlv=sOut;
+            for(int w=0;w<7;++w) fc.w[w]=oe[d+w];
+            for(uint32_t i=0;i<sOut;++i) fc.lv[i]=(uint32_t)(oe[d+8+(i>>1)] >> ((i&1u)*32u));
+            gpu.push_back(fc); } }
 
     if (exact) {
         // Oracle: cpu_round then re-mix each child for round r+1.
