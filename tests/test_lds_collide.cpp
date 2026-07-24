@@ -8,6 +8,7 @@
 #include "check.h"
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -304,6 +305,75 @@ static void test_scatter_cost(Runtime& rt, cl_program prog) {
     check(true,"scatter cost characterized");
 }
 
+// Compaction ARCHITECTURE decision: does compaction win with (H1) compile-time
+// fixed-width AoS, or does it need (H2) SoA word-planes -- and does SoA even beat
+// the AoS-7 baseline on scatter? Races all three at N=2^25, warm best-of-N.
+// Decides the whole rewrite: H1 wins -> a few fixed-width kernels; H2 wins -> full
+// SoA; neither beats AoS-7 -> compaction is dead, pivot.
+static void test_compaction_arch(Runtime& rt, cl_program prog) {
+    section("compaction architecture: AoS-fixed (H1) vs SoA-planes (H2) vs AoS-7 baseline @ 2^25");
+    const uint32_t N=1u<<25, bb=14, numBuckets=1u<<bb;
+    const uint32_t bucketCap=(N>>bb)+(N>>(bb+2))+512;   // ~3072, mean ~2048 -> drop-free
+    const uint32_t sched[5]={7,7,6,5,1};                // emit width per round [7,7,6,5,1]
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m; } return b; };
+
+    auto w = gen_elem(N,24,0x3);   // AoS 7-wide source
+
+    // --- H1 + baseline: AoS fixed-width scatter (aos_scatterW) ---
+    double aos[8]; for(int i=0;i<8;++i) aos[i]=0;
+    { Mem mW=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,(void*)w.data());
+      Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
+      Mem mBW=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*7*8);  // 7-word max
+      Mem mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+      uint32_t maxDrop=0;
+      auto runW=[&](const char* name){ return best([&]{ rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4);
+          Kernel k=rt.kernel(prog,name); cl_mem a=mW.get(),c=mC.get(),bw=mBW.get(),d=mD.get();
+          rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bb);rt.set_arg(k.get(),2,bucketCap);
+          rt.set_arg(k.get(),3,sizeof(cl_mem),&a);rt.set_arg(k.get(),4,sizeof(cl_mem),&c);
+          rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);rt.set_arg(k.get(),6,sizeof(cl_mem),&d);
+          auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+          double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+          uint32_t dr[4]; rt.read(mD.get(),16,dr); if(dr[0]>maxDrop)maxDrop=dr[0]; return m; }); };
+      aos[1]=runW("aos_scatter1"); aos[5]=runW("aos_scatter5"); aos[6]=runW("aos_scatter6"); aos[7]=runW("aos_scatter7");
+      std::printf("  AoS-fixed emit: w1=%.2f w5=%.2f w6=%.2f w7=%.2f ms  (maxBucketDrop=%u)\n",aos[1],aos[5],aos[6],aos[7],maxDrop);
+      check(maxDrop==0,"AoS-fixed scatter drop-free");
+    }
+
+    // --- H2: SoA plane scatter (soa_scatterW). Transpose source into 7 planes. ---
+    double soa[8]; for(int i=0;i<8;++i) soa[i]=0;
+    { std::vector<Mem> sp, bp;   // 7 source planes (N u64), 7 bucket planes
+      for(int p=0;p<7;++p){ std::vector<uint64_t> plane(N); for(uint32_t g=0;g<N;++g) plane[g]=w[(size_t)g*7+p];
+        sp.push_back(rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*8,plane.data())); }
+      for(int p=0;p<7;++p) bp.push_back(rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*8));
+      Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4), mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+      uint32_t maxDrop=0;
+      auto runW=[&](const char* name){ return best([&]{ rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4);
+          Kernel k=rt.kernel(prog,name); cl_mem c=mC.get(),d=mD.get();
+          rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bb);rt.set_arg(k.get(),2,bucketCap);
+          for(int p=0;p<7;++p){ cl_mem s=sp[p].get(); rt.set_arg(k.get(),3+p,sizeof(cl_mem),&s); }
+          rt.set_arg(k.get(),10,sizeof(cl_mem),&c);
+          for(int p=0;p<7;++p){ cl_mem b=bp[p].get(); rt.set_arg(k.get(),11+p,sizeof(cl_mem),&b); }
+          rt.set_arg(k.get(),18,sizeof(cl_mem),&d);
+          auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+          double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+          uint32_t dr[4]; rt.read(mD.get(),16,dr); if(dr[0]>maxDrop)maxDrop=dr[0]; return m; }); };
+      soa[1]=runW("soa_scatter1"); soa[5]=runW("soa_scatter5"); soa[6]=runW("soa_scatter6"); soa[7]=runW("soa_scatter7");
+      std::printf("  SoA-plane emit: w1=%.2f w5=%.2f w6=%.2f w7=%.2f ms  (maxBucketDrop=%u)\n",soa[1],soa[5],soa[6],soa[7],maxDrop);
+      check(maxDrop==0,"SoA-plane scatter drop-free");
+    }
+
+    // Per-solve emit totals (5 rounds, schedule [7,7,6,5,1]).
+    double baseline=5*aos[7];
+    double h1=aos[sched[0]]+aos[sched[1]]+aos[sched[2]]+aos[sched[3]]+aos[sched[4]];
+    double h2=soa[sched[0]]+soa[sched[1]]+soa[sched[2]]+soa[sched[3]]+soa[sched[4]];
+    std::printf("  --> per-solve emit: AoS-7 baseline=%.1f ms | H1 AoS-compacted=%.1f ms (%+.0f%%) | H2 SoA-compacted=%.1f ms (%+.0f%%)\n",
+        baseline, h1, 100.0*(h1-baseline)/baseline, h2, 100.0*(h2-baseline)/baseline);
+    std::printf("  --> SoA-7 vs AoS-7 (pure layout, no compaction): %.2f vs %.2f ms (%+.0f%%)\n",
+        soa[7], aos[7], 100.0*(soa[7]-aos[7])/aos[7]);
+    check(true,"compaction architecture characterized");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
@@ -317,6 +387,7 @@ int main() {
     test_correctness(rt, prog.get());
     test_combine(rt, prog.get());
     test_scatter_cost(rt, prog.get());
+    test_compaction_arch(rt, prog.get());
 
     // Compaction prototype: how much does shrinking the element to its
     // significant-word schedule actually save on the dominant emit-to-bucket cost?

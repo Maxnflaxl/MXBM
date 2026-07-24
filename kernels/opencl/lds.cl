@@ -273,6 +273,63 @@ __kernel void p2_scatter_w(uint N, uint bucket_bits, uint bucket_cap, uint ew,
     else atomic_inc(&drops[0]);
 }
 
+// ===========================================================================
+// COMPACTION ARCHITECTURE DECISION (measurement only, not wired).
+// The AoS runtime-width scatter (p2_scatter_w, `for w<ew`) measured a compaction
+// LOSS because the runtime loop bound defeats unrolling. Two rival fixes:
+//   (H1) AoS with COMPILE-TIME width  -> fully unrolled, no SoA needed.
+//   (H2) SoA word-planes              -> one buffer per word; skip zero planes.
+// SoA also risks LOSING scatter: one AoS element write touches ~1 cache line
+// (56 B contiguous); the same element in SoA fans across W plane buffers = up to
+// W scattered lines. test_compaction_arch() races H1 vs H2 vs the AoS-7 baseline.
+// ===========================================================================
+
+// H1: AoS scatter with a COMPILE-TIME word count W (loop unrolls; bucket stride
+// = W, so late-round elements occupy exactly W u64). Source stays 7-wide AoS.
+#define AOS_SCATTER_W(NAME, W)                                                  \
+__kernel void NAME(uint N, uint bucket_bits, uint bucket_cap,                   \
+                   __global const ulong* work, __global uint* counts,          \
+                   __global ulong* bwork, __global uint* drops) {              \
+    uint g = get_global_id(0); if (g >= N) return;                             \
+    uint key = (uint)(work[(size_t)g*7] & 0xFFFFFFu);                          \
+    uint b = key >> (24u - bucket_bits);                                       \
+    uint pos = atomic_inc(&counts[b]);                                         \
+    if (pos >= bucket_cap) { atomic_inc(&drops[0]); return; }                  \
+    size_t d = (size_t)b*bucket_cap + pos;                                     \
+    for (uint w = 0; w < W; ++w) bwork[d*W + w] = work[(size_t)g*7 + w];       \
+}
+AOS_SCATTER_W(aos_scatter1, 1)
+AOS_SCATTER_W(aos_scatter5, 5)
+AOS_SCATTER_W(aos_scatter6, 6)
+AOS_SCATTER_W(aos_scatter7, 7)
+
+// H2: SoA scatter -- element g is (p0[g]..p6[g]) across 7 source planes; write
+// the W significant planes to W bucket planes at the same slot d. W is a
+// compile-time constant so `if (W>k)` dead-code-eliminates the unused planes.
+#define SOA_SCATTER_W(NAME, W)                                                  \
+__kernel void NAME(uint N, uint bucket_bits, uint bucket_cap,                   \
+    __global const ulong* p0, __global const ulong* p1, __global const ulong* p2, \
+    __global const ulong* p3, __global const ulong* p4, __global const ulong* p5, \
+    __global const ulong* p6, __global uint* counts,                           \
+    __global ulong* b0, __global ulong* b1, __global ulong* b2,                \
+    __global ulong* b3, __global ulong* b4, __global ulong* b5,                \
+    __global ulong* b6, __global uint* drops) {                                \
+    uint g = get_global_id(0); if (g >= N) return;                             \
+    uint key = (uint)(p0[g] & 0xFFFFFFu);                                      \
+    uint b = key >> (24u - bucket_bits);                                       \
+    uint pos = atomic_inc(&counts[b]);                                         \
+    if (pos >= bucket_cap) { atomic_inc(&drops[0]); return; }                  \
+    size_t d = (size_t)b*bucket_cap + pos;                                     \
+    b0[d] = p0[g];                                                             \
+    if (W > 1) b1[d] = p1[g];  if (W > 2) b2[d] = p2[g];                       \
+    if (W > 3) b3[d] = p3[g];  if (W > 4) b4[d] = p4[g];                       \
+    if (W > 5) b5[d] = p5[g];  if (W > 6) b6[d] = p6[g];                       \
+}
+SOA_SCATTER_W(soa_scatter1, 1)
+SOA_SCATTER_W(soa_scatter5, 5)
+SOA_SCATTER_W(soa_scatter6, 6)
+SOA_SCATTER_W(soa_scatter7, 7)
+
 // Collide + combine: one workgroup per (bucket, sub-mask). Stage full elements
 // into LDS, chain by middle key bits, and for each equal-full-key pair emit the
 // bh3_combine child work (7 u64) + the two parent indices. Parents read from LDS.
