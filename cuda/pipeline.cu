@@ -49,7 +49,7 @@ void entry_scatter(const uint64_t* __restrict__ pp4, uint32_t begin, uint32_t co
 // Only work word 0 is consulted: at Lout=24 combine zeroes c[1..6] and masks c[0] to 24
 // bits, and the x[1]<<40 term contributes nothing below bit 40. See "the terminal
 // round's dead work words" in docs/performance.md.
-__global__ __launch_bounds__(256)
+__global__ __launch_bounds__(kWG)
 void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_bucket_cap,
                     uint32_t out_off,
                     const uint32_t* __restrict__ in_counts,
@@ -217,6 +217,13 @@ struct CudaSolver {
                                           elem[inSet], left, right, survSlots, survCount,
                                           survCap, drops);
 
+        cudaError_t le = cudaGetLastError();
+        if (le != cudaSuccess) {
+            // A launch that fails (bad launch bounds, too many threads) otherwise just
+            // yields zero survivors, which reads like a correctness bug in the kernels.
+            printf("CUDA launch error: %s\n", cudaGetErrorString(le));
+            return out;
+        }
         uint32_t hs = 0, hd[4] = {0,0,0,0};
         cudaMemcpy(&hs, survCount, 4, cudaMemcpyDeviceToHost);
         cudaMemcpy(hd, drops, 16, cudaMemcpyDeviceToHost);

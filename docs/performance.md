@@ -882,65 +882,28 @@ ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.
 | the two atomics | both load-bearing; removing either is slower |
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined — nothing left to win |
 
-**Leads.** The structural list is now empty, and that is a measured statement rather than
-a shrug — every lever below was closed by an experiment, not by argument:
+**Leads.** Both backends are now close to their measured floors, and the CUDA one is past
+the target. What is left is not more solver micro-optimization:
 
-| lever | closed by |
-|---|---|
-| fewer bytes | every record is `ceil(bits/64)` ([audit](#the-record-redundancy-audit)) |
-| redundant rescan | removing it entirely buys nothing over halving it ([geometry](#row-bucket-geometry)) |
-| occupancy | `lwork` alone exceeds the per-element LDS budget ([details](#occupancy-again)) |
-| coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](#two-level-bucketing)) |
-| the two atomics | both load-bearing; removing either is slower |
-| overlapping the entry | no spare capacity — the rounds fill every SM ([details](#overlapping-the-entry-pass)) |
-| `apply_mix`, back-refs, rebuild | 2.2 ms combined; nothing left to take |
+1. **Settle the comparison.** Accepted pool shares over a fixed interval, the only metric
+   independent of either miner's counters. `docs-internal/MINER_COMP.md` has the protocol
+   and the sample-size arithmetic. The margin (56.1 ± 2.3 against 53) is real but thin
+   enough that this matters.
+2. **Wire the CUDA backend into the miner**, keeping OpenCL as the portable fallback. It
+   is currently standalone under `cuda/`, gated on the KAT but not reachable from the
+   stratum path.
+3. **Overclocking.** Deferred until parity was in sight. BeamHash III is bandwidth-bound,
+   so a memory offset scales it close to linearly — and it applies to lolMiner equally,
+   so the honest comparison is overclocked against overclocked.
+4. **Per-path VRAM budget on the CUDA side.** The OpenCL path got this; the CUDA one
+   hardcodes its geometry. Reach, not speed.
 
-What remains is not solver work:
-
-1. **Overclocking.** Deliberately deferred until parity was in sight, and it now is.
-   BeamHash III is bandwidth-bound (312 GB/s aggregate), so a memory offset scales this
-   workload close to linearly. It applies to lolMiner equally, so the honest comparison is
-   overclocked-against-overclocked.
-2. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
-   row-bucket path needs 239. That constant is what keeps 12 GB cards on the 5× slower
-   fallback. Reach, not speed.
-
-### On the remaining ~4 ms
-
-The pipeline sits within ~3 % of its own memory floor: 39.1 ms of traffic at the measured
-312 GB/s against 40.3 ms achieved. For lolMiner to do 35.8 ms on the same bytes it would
-need ~350 GB/s. So exactly one of three things is true.
-
-**1. It moves fewer bytes.** The [audit](#the-record-redundancy-audit) says that requires
-dropping a field something reads, and every record is already `ceil(bits/64)`.
-
-**2. It achieves a better rate.** Its writes are scattered too — the emit is a key-random
-scatter for any Wagner implementation — and
-[bucket count, occupancy, atomics and reorder schemes](#what-didnt-work) are all measured
-irrelevant to that rate here. A CUDA backend is the plausible remainder; it is on the
-roadmap and [the CUDA backend](#the-cuda-backend).
-
-**3. The two figures are not counting the same thing.** This one deserves weight, because
-we just caught it in our own metric: this solver produces **2.29 survivors per solve** but
-only **1.95 that pass CPU verification** — a 17 % gap between "solutions found" and
-"solutions that are actually solutions". A miner reporting the former would show ~17 %
-higher sol/s for identical work.
-
-**The 3 GB figure is not the clue it looks like.** It is tempting to read Beam's "minimum
-3 GB" as evidence of a leaner algorithm we have missed. It is the opposite: at 2^25
-elements 3 GB is **89 B/element**, and two live layers of work words alone are 112 B, so a
-conforming 3 GB implementation *cannot* hold two layers — it must process each round in
-slices and re-read the previous layer once per slice, costing **+176 B/element/round**.
-The 3 GB design is necessarily *slower*. It is the algorithm's minimum viable spec, not a
-speed technique, and on a 16 GB card any fast miner will spend memory the way this one
-does. **Questioning the Wagner variant is the wrong place to look** — that is a
-retraction of what an earlier revision of this section suggested.
-
-**The cheapest way to settle it is not a code change.** Reported sol/s is
-implementation-defined; **accepted pool shares over a fixed interval are not**. Running
-both miners against the same pool for the same wall-clock time and comparing accepted
-shares removes the counting question entirely, and tells us whether the remaining gap is
-4 ms of engineering or a measurement artefact.
+**Where the remaining time is, for anyone picking it up.** Of the CUDA backend's 35.2 ms:
+r3, r4 and terminal (16.6 ms) sit at **78–80 % of theoretical DRAM peak** and are
+effectively done; `entry` (2.6 ms) is at **98.6 % of SM throughput**, compute-bound on
+siphash that the PoW definition fixes; and r1 + r2 (16.0 ms) hold what headroom exists, at
+28 % and 53 % DRAM, limited by siphash and global latency rather than bandwidth. Every
+lever tried against that headroom is in the table above, and all of them are null.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
@@ -995,7 +958,7 @@ them legal. `cuobjdump -sass | grep LDG.E.128` is the check.
 **Caveats, because "target beaten" is a claim worth being careful with:**
 
 - The 53 sol/s figure is user-measured from lolMiner's own display. The
-  [counting question](#on-the-remaining-4-ms) is still open — this solver produces 2.29
+  [counting question](#the-cuda-backend) is still open — this solver produces 2.29
   survivors per solve but only 1.95 that verify, a 17 % gap between "solutions found" and
   "solutions that are solutions". If lolMiner reports the former, our margin is larger; if
   the latter, it is the ~4 % measured here.
@@ -1037,6 +1000,51 @@ with DRAM headroom, so trading bytes for the removal of round 2's 14-siphash reb
 plausible — and this trade has reversed on every previous regime change. Measured on CUDA
 with 128-bit access in place: **35.0 ms with the pair record against 39.2 ms without**.
 Keep it.
+
+### Levers tried after the MIO fix — all null
+
+Each was indicated by the profile, implemented, measured, and kept out. Recorded with the
+mechanism, because "we tried it" without a reason is not reusable.
+
+| lever | result | why |
+|---|---|---|
+| `cp.async` staging | 35.0 → 35.3 ms | alignment, below |
+| block size 288 / 320 / 384 | 35.1 → 35.5 / 35.6 / 36.9 | below |
+| pair record removed | 35.0 → 39.2 ms | keep the pair record |
+
+**`cp.async`.** The indicated lever: global-memory latency is now the top stall
+everywhere (r3 52.8 %, r4 58.7 %) and this is the feature built for it. It does not pay,
+and the reason is structural. `cp.async` is only on its fast path at **16 B granularity**,
+where it bypasses L1 and the register file — and 16 B requires *both* source and
+destination to be 16 B aligned. Our shared destination is `lwork[pos*INW]` with `INW = 7`,
+i.e. byte offset `pos*56`, aligned only for even `pos`. Padding `lwork` to an even u64
+stride fixes alignment and destroys banking:
+
+```
+stride 7 u64 -> 14 u32 banks, gcd(14,32) = 2  ->  2-way conflict   (today)
+stride 8 u64 -> 16 u32 banks, gcd(16,32) = 16 -> 16-way conflict   (16 B aligned)
+```
+
+The chain walk reads `a[0..6]` and `b[0..6]` per matched pair — **92 M shared loads per
+round**, the dominant shared traffic. Trading 2-way for 16-way conflicts there to enable a
+4-instruction async copy in staging is not close. That leaves the 8 B path, which is not
+the fast path, and it measured accordingly. Retained behind `-DMXBM_CPASYNC=1`.
+
+**Block size.** The staged group is `mean_bucket / 2^submaskBits` = **264** elements
+against a 256-thread block, so one warp of eight runs a second loop iteration with 8 of
+256 lanes busy while the other seven wait — which is exactly the 15–16 % barrier stall the
+first profile showed. Sizing the block at or above 264 removes the imbalance and is still
+slower: bigger blocks cost more in shared memory per block and scheduling flexibility than
+the imbalance costs. 256 stays.
+
+**Pair record.** Re-tested because rounds 1 and 2 are the two kernels with DRAM headroom
+(28 % and 53 %), so trading bytes to delete round 2's 14-siphash rebuild looked plausible,
+and this trade has reversed on every previous regime change. It did not reverse here.
+
+> Finding these needed a working error check. A launch that fails — `terminal_round` still
+> carried `__launch_bounds__(256)` while being launched with 288 threads — returns *zero
+> survivors*, which reads exactly like a correctness bug in the kernels. `solve()` now
+> checks `cudaGetLastError()` and says so.
 
 ### What CUDA offered that OpenCL could not
 

@@ -9,10 +9,23 @@
 // t[word] into a dynamic index and spills an 8-element array to local memory once per
 // emitted child. See "compile-time round constants" in docs/performance.md.
 #include "bh3_records.cuh"
+#if MXBM_CPASYNC
+#include <cuda_pipeline.h>
+#endif
+#ifndef MXBM_CPASYNC
+#define MXBM_CPASYNC 0
+#endif
 
 namespace mxbm { namespace cuda {
 
-constexpr uint32_t kWG      = 256u;
+// The staged group is mean_bucket / 2^submaskBits = 264 elements, so a 256-thread block
+// runs a SECOND loop iteration with 8 of 256 lanes busy while the other seven warps wait
+// at the barrier -- which is where the 15-16% barrier stall comes from. Sizing the block
+// at or above the group removes it. Sweepable with -DMXBM_WG.
+#ifndef MXBM_WG
+#define MXBM_WG 256
+#endif
+constexpr uint32_t kWG      = (uint32_t)MXBM_WG;
 constexpr uint32_t kFCap    = 384u;        // group cap; must cover the group-size TAIL
 // 128, down from OpenCL's 512. Within a group the bucket fixes the key's high bits and
 // the sub-mask its low ones, leaving exactly 24 - bucketBits - submaskBits = 7 varying
@@ -97,6 +110,18 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             // memory-INSTRUCTION issue rather than bandwidth, so instruction count is
             // the thing to cut here.
             static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
+#if MXBM_CPASYNC
+            // cp.async: global -> shared without a register round-trip, and without the
+            // warp stalling on the load before it can store. Global-latency stalls are
+            // now the top stall in this kernel (52.8% long_scoreboard), which is exactly
+            // what this is for. 8 B granularity: lwork's stride is INW u64, so the shared
+            // destination is only 16 B aligned for even pos.
+            #pragma unroll
+            for (int w = 0; w < INW; ++w)
+                __pipeline_memcpy_async(&lwork[pos*INW + w], &in_belem[d + w], 8);
+            __pipeline_commit();
+            const uint64_t p0 = in_belem[d + INW], p1 = in_belem[d + INW + 1];
+#else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
             lwork[pos*INW + 0] = q0.x; lwork[pos*INW + 1] = q0.y;
@@ -104,6 +129,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             lwork[pos*INW + 4] = q2.x; lwork[pos*INW + 5] = q2.y;
             lwork[pos*INW + 6] = q3.x;
             const uint64_t p0 = q3.y, p1 = in_belem[d + INW + 1];
+#endif
             const uint32_t l0 = r3_l0(p0);
             lgi[pos] = r3_gi(p1); lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = l0;          lleaf[pos*LEAFW + 1] = r3_l1(p0);
@@ -112,6 +138,12 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             // INW-generic: this branch serves LM_USE (INW=6) and LM_RAW (INW=7), and
             // hardcoding three ulonglong2 loads silently dropped word 6 for the latter.
             static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
+#if MXBM_CPASYNC
+            #pragma unroll
+            for (int w = 0; w < INW; ++w)
+                __pipeline_memcpy_async(&lwork[pos*INW + w], &in_belem[d + w], 8);
+            __pipeline_commit();
+#else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             #pragma unroll
             for (int j = 0; j < INW/2; ++j) {
@@ -119,6 +151,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 lwork[pos*INW + 2*j] = q.x; lwork[pos*INW + 2*j + 1] = q.y;
             }
             if constexpr (INW & 1) lwork[pos*INW + INW-1] = in_belem[d + INW-1];
+#endif
             const uint64_t meta = in_belem[d + INW];
             lgi[pos] = (uint32_t)(meta >> 32); llead[pos] = (uint32_t)meta; lkey[pos] = key;
             for (uint32_t i = 0; i < SIN; ++i)
@@ -126,6 +159,10 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                     (uint32_t)(in_belem[d + INW + 1 + (i >> 1)] >> ((i & 1u) * 32u));
         }
     }
+#if MXBM_CPASYNC
+    if constexpr (LMODE == LM_EMIT || LMODE == LM_USE || LMODE == LM_RAW)
+        __pipeline_wait_prior(0);      // all in-flight copies land before the barrier
+#endif
     __syncthreads();
     const uint32_t total = gcount < kFCap ? gcount : kFCap;
 

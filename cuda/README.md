@@ -87,6 +87,21 @@ r3 emit :  10 x ST.64  ->  4 x ST.128 + 2      r4 load :  9 x LD.64 -> 4 x LD.12
 pointer's alignment, and emitted zero 128-bit accesses even after the padding made them
 valid. Check with `cuobjdump -sass | grep LDG.E.128` rather than assuming.
 
+### Levers tried after that — all null
+
+| lever | result |
+|---|---|
+| `cp.async` staging (`-DMXBM_CPASYNC=1`) | 35.0 → 35.3 ms |
+| block size 288 / 320 / 384 (`-DMXBM_WG`) | 35.1 → 35.5 / 35.6 / 36.9 |
+| remove the pair record (`-DMXBM_R2_FULL=1`) | 35.0 → 39.2 ms |
+| more occupancy (2 → 3 blocks/SM on r3) | no change |
+
+`cp.async` is the interesting one: it is the feature built for the stall we now have
+(global latency, 52–59 %), but its fast path is 16 B and that needs a 16 B-aligned *shared*
+destination. `lwork[pos*7]` is `pos*56`, aligned only for even `pos`; padding the stride to
+8 u64 fixes that and turns the walk's 92 M shared loads/round from 2-way into 16-way bank
+conflicts. The 8 B path is all that is left and it is not the fast path.
+
 Two traps met on the way: a plain `if (LMODE == ...)` still *compiles* discarded branches,
 so the alignment `static_assert`s fired in unrelated instantiations until the dispatch
 became `if constexpr`; and the `cudaOccupancy` calls instantiate the templates too, so a
