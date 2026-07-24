@@ -9,6 +9,9 @@
 #include "kat_vectors.h"
 #include <cstdio>
 #include <cmath>
+#ifndef MXBM_R2_FULL
+#define MXBM_R2_FULL 0
+#endif
 #include <vector>
 #include "beamhash/bh3_verify.h"
 #include "beamhash/bh3_blake2b.h"
@@ -159,7 +162,7 @@ struct CudaSolver {
         const uint32_t mean = capacity / nb;
         cap    = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
         nslots = (size_t)nb * cap;
-        const uint32_t setStride[2] = { 10u, 8u };
+        const uint32_t setStride[2] = { 10u, MXBM_R2_FULL ? 10u : 8u };
         elem[0] = dalloc<uint64_t>(nslots*setStride[0]);
         elem[1] = dalloc<uint64_t>(nslots*setStride[1]);
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
@@ -200,8 +203,13 @@ struct CudaSolver {
                     counts[inSet], elem[inSet], counts[o], elem[o],                      \
                     left, right, gictr, drops, dpp);                                     \
               inSet = o; }
+#if MXBM_R2_FULL
+        ROUND(1, 7,7,2,LM_SEEDF,424u,2u,1u,2u,2u, 1u,10u)
+        ROUND(2, 7,7,2,LM_RAW,  400u,4u,2u,4u,4u, 10u,10u)
+#else
         ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
         ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,10u)
+#endif
         ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u)
         ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
         #undef ROUND

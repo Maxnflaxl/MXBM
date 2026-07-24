@@ -26,7 +26,11 @@ constexpr uint32_t kFCap    = 384u;        // group cap; must cover the group-si
 constexpr uint32_t kTabSize = 128u;
 constexpr uint32_t kEmpty   = 0xFFFFFFFFu;
 
-enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4 };
+enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4,
+             // A/B pair (MXBM_R2_FULL): round 1 emits a FULL packed record and round 2
+             // reads it instead of rebuilding from two seed indices. Trades bytes for
+             // compute in the two kernels that still have DRAM headroom.
+             LM_SEEDF = 5, LM_RAW = 6 };
 
 template<int INW, int OUTW, int LEAFW, int LMODE,
          uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
@@ -78,7 +82,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         if ((key & (submaskCount - 1u)) != mask) continue;
         const uint32_t pos = atomicAdd(&gcount, 1u);
         if (pos >= kFCap) { atomicAdd(&drops[1], 1u); continue; }
-        if constexpr (LMODE == LM_SEED) {
+        if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
             lgi[pos] = (uint32_t)(rec0 >> 32); lkey[pos] = key;      // derive later
         } else if constexpr (LMODE == LM_RD2) {
             const uint64_t rec1 = in_belem[d + 1];
@@ -105,12 +109,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             lleaf[pos*LEAFW + 0] = l0;          lleaf[pos*LEAFW + 1] = r3_l1(p0);
             lleaf[pos*LEAFW + 2] = r3_l2(p0,p1); lleaf[pos*LEAFW + 3] = r3_l3(p1);
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
+            // INW-generic: this branch serves LM_USE (INW=6) and LM_RAW (INW=7), and
+            // hardcoding three ulonglong2 loads silently dropped word 6 for the latter.
             static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
-            ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2];
-            lwork[pos*INW + 0] = q0.x; lwork[pos*INW + 1] = q0.y;
-            lwork[pos*INW + 2] = q1.x; lwork[pos*INW + 3] = q1.y;
-            lwork[pos*INW + 4] = q2.x; lwork[pos*INW + 5] = q2.y;
+            #pragma unroll
+            for (int j = 0; j < INW/2; ++j) {
+                const ulonglong2 q = v[j];
+                lwork[pos*INW + 2*j] = q.x; lwork[pos*INW + 2*j + 1] = q.y;
+            }
+            if constexpr (INW & 1) lwork[pos*INW + INW-1] = in_belem[d + INW-1];
             const uint64_t meta = in_belem[d + INW];
             lgi[pos] = (uint32_t)(meta >> 32); llead[pos] = (uint32_t)meta; lkey[pos] = key;
             for (uint32_t i = 0; i < SIN; ++i)
@@ -124,7 +132,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     // EXPAND + CHAIN. Every lane is active here, which is why the re-derivations live in
     // this loop and not the staging one (worth 8x their SIMD utilisation).
     for (uint32_t pos = lId; pos < total; pos += kWG) {
-        if constexpr (LMODE == LM_SEED) {
+        if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
             const uint32_t idx = lgi[pos];
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
             bh3::Elem e; bh3::seed_element(pp, idx, e);
@@ -192,7 +200,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         *reinterpret_cast<ulonglong2*>(out_belem + od) =
                             make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi));
-                    } else if constexpr (LMODE == LM_RD2) {
+                    } else if constexpr (LMODE == LM_RD2 || LMODE == LM_RAW) {
                         // Matching 128-bit stores; the padded stride makes od*8 16 B
                         // aligned. 5 x ST.128 instead of 9 x ST.64.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
@@ -202,6 +210,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         v[2] = make_ulonglong2(c.w[4], c.w[5]);
                         v[3] = make_ulonglong2(c.w[6], r3_p0(ctree[0], ctree[1], ctree[2]));
                         out_belem[od + OUTW + 1] = r3_p1(ctree[2], ctree[3], cgi);
+                    } else if constexpr (LMODE == LM_SEEDF) {
+                        // Full packed record: 7 work + meta + 1 leaf u64 (sOut = 2).
+                        static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+                        ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
+                        v[0] = make_ulonglong2(c.w[0], c.w[1]);
+                        v[1] = make_ulonglong2(c.w[2], c.w[3]);
+                        v[2] = make_ulonglong2(c.w[4], c.w[5]);
+                        v[3] = make_ulonglong2(c.w[6],
+                                   ((uint64_t)cgi << 32) | (uint64_t)ctree[0]);
+                        out_belem[od + 8] = ((uint64_t)ctree[1] << 32) | (uint64_t)ctree[0];
                     } else if constexpr (LMODE == LM_EMIT) {
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);

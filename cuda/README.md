@@ -50,14 +50,16 @@ echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modp
 
 | | ms | sol/s |
 |---|---|---|
-| OpenCL (shipping) | 40.3 | 47.1 |
-| CUDA, first working port | 41.6 | 45.7 |
-| **CUDA + 128-bit record access** | **35.3** | **55.2** |
+| OpenCL (shipping) | 41.0 | 48.2 |
+| CUDA, first working port | 41.6 | ~48 |
+| **CUDA + 128-bit record access** | **35.2** | **56.1** |
 
-Now measured **like-for-like**: median over 20 distinct nonces, persistent buffers,
+Now measured **like-for-like**: median over **300** distinct nonces, persistent buffers,
 including survivor readback, recovery and CPU verification, counting only solutions that
-pass `bh3::is_valid_solution`. Both paths report **1.95 verified solutions/solve**, which
-cross-checks that the two implementations agree.
+pass `bh3::is_valid_solution`. Both paths report **1.98 verified solutions/solve**, which
+cross-checks that the two implementations agree. 300 nonces is not gratuitous: solutions
+per solve is Poisson-ish and needs ~600 observed solutions for ±4 %, so a 20-nonce run
+(±16 %) cannot support a claimed margin over a 53 sol/s target.
 
 ## What the profiler actually bought
 

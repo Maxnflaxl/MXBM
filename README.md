@@ -11,11 +11,11 @@ implementation.
 > **Status: GPU solver working, optimization ongoing.** MXBM connects to a real
 > Beam pool over TLS, authenticates with your wallet address, receives live jobs,
 > and runs the full job → solve → difficulty → submit pipeline on an **OpenCL GPU
-> solver**. On an RTX 4070 Ti SUPER it does **47.5 sol/s** (40.0 ms per solve, end-to-end) — up
+> solver**. On an RTX 4070 Ti SUPER it does **48.2 sol/s** (41.0 ms per solve, end-to-end) — up
 > from 1.8 sol/s when the solver first found a share — verified against the BeamHash III
 > known-answer vectors.
 >
-> A **CUDA backend** measures **55.2 sol/s** on the same card and the same gate, which is
+> A **CUDA backend** measures **56.1 sol/s** on the same card and the same gate, which is
 > past the ~53 sol/s the fastest closed-source miner reaches at stock clocks. It is not
 > yet wired into the miner — the shipping solver is still OpenCL. See
 > [docs/performance.md](docs/performance.md) for the full measured history and the caveats

@@ -65,11 +65,12 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | √-scaled bucket capacity → geometry (16, 1) | 42.7 | 40.4 | **47.0** | −2.3 | −5.4 % | [Capacity](#bucket-capacity), [Geometry](#row-bucket-geometry) | [Occupancy, again](#occupancy-again) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Shipping (OpenCL): 47.5 sol/s** — 40.0 ms end-to-end, 40.3 ms pipeline bench.
-**CUDA backend: 55.2 sol/s** — 35.3 ms end-to-end, same methodology
+**Shipping (OpenCL): 48.2 sol/s** — 41.0 ms end-to-end.
+**CUDA backend: 56.1 sol/s** — 35.2 ms end-to-end, same methodology
 ([details](#the-cuda-backend)). Not yet wired into the miner.
+Both measured over **300 distinct nonces**, ±4.1 % (1σ) on the rate.
 
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) = 35.8 ms — **the CUDA backend is ~4 % past it**;
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) = 35.8 ms — **the CUDA backend is ~6 % past it**;
 the shipping OpenCL path is 1.12× short. Read the caveats before treating the target as
 beaten.
 
@@ -955,14 +956,21 @@ builds with `nvcc` directly, and the shipping solver is still OpenCL.
 
 | | end-to-end | verified/solve | sol/s |
 |---|---|---|---|
-| OpenCL (shipping) | 40.0 ms | 1.95 | 47.5 |
-| **CUDA backend** | **35.3 ms** | **1.95** | **55.2** |
+| OpenCL (shipping) | 41.0 ms | 1.98 | 48.2 |
+| **CUDA backend** | **35.2 ms** | **1.98** | **56.1** |
 | lolMiner (user-measured, stock) | — | — | 53.0 |
 
-Same methodology on both sides: median over 20 **distinct nonces**, persistent buffers,
+Same methodology on both sides: median over **300 distinct nonces**, persistent buffers,
 including survivor readback, back-reference recovery and CPU verification, counting only
-solutions that pass `bh3::is_valid_solution`. The verified rate coming out at **1.95 on
+solutions that pass `bh3::is_valid_solution`. The verified rate coming out at **1.98 on
 both** is a useful cross-check that the two implementations agree.
+
+**On sample size.** Solutions per solve is Poisson-ish, so the rate needs ~600 observed
+solutions for ±4 %. An earlier revision quoted 55.2 sol/s from 20 nonces — about 39
+solutions, ±16 % — which was not enough to state a margin over a 53 sol/s target. At 300
+nonces the figure is **56.1 ± 2.3**, so the lower bound only just clears the target. That
+is a real margin but a thin one relative to the error, which is precisely why the
+share-rate comparison is the thing that settles it.
 
 **Why it is faster, and it is not the language.** The port initially measured 41.6 ms —
 *slower* than OpenCL — because it reproduced the OpenCL algorithm exactly. The gain came
@@ -996,6 +1004,39 @@ them legal. `cuobjdump -sass | grep LDG.E.128` is the check.
   depend on either miner's counters. See `docs-internal/MINER_COMP.md`.
 - The backend is standalone. Wiring it into the stratum path, and keeping OpenCL as the
   portable fallback, is remaining work.
+
+### Where the CUDA backend stands after the fix
+
+Second profiler run, comparing against the first:
+
+| kernel | ms | MIO throttle | global stall | DRAM %peak |
+|---|---|---|---|---|
+| entry | 2.58 → 2.58 | 0.0 → 0.0 % | 2.4 % | 16.2 % |
+| r1 | 5.93 → 5.82 | 1.8 → 1.5 % | 20.2 % | **28.1 %** |
+| r2 | 13.29 → **10.22** | **12.0 → 2.6 %** | 20.3 % | **53.0 %** |
+| r3 | 12.23 → **9.95** | **22.0 → 9.3 %** | **52.8 %** | **78.1 %** |
+| r4 | 6.39 → 5.65 | 3.0 → 2.4 % | **58.7 %** | **79.8 %** |
+| terminal | 1.05 → 1.04 | 2.4 → 2.5 % | 34.8 % | **79.5 %** |
+
+**The MIO lever is spent** and `long_scoreboard` (global memory latency) has replaced it,
+which is the correct state for a memory-bound kernel. Three consequences:
+
+- **r3, r4 and terminal are effectively done** — all three at 78–80 % of theoretical DRAM
+  peak, which is very high for a scattered-access mix. 16.6 of the 35.2 ms with perhaps
+  20 % of headroom even under perfect latency hiding.
+- **The remaining headroom is r1 + r2**, 16.0 ms at only 28 % and 53 % DRAM.
+- **Shared-memory bank conflicts are a red herring.** 65–81 M per round looks alarming but
+  is ~0.9 per shared load, which is the *inherent* cost of 64-bit shared access: a 32-lane
+  `u64` load needs 64 banks' worth and always takes two wavefronts. No stride fixes it —
+  7 u64 gives `gcd(14,32) = 2` (2-way), 8 u64 gives 16-way, 10 u64 gives 4-way while
+  enabling 128-bit loads, i.e. 4 instructions × 4-way beats 7 × 2-way by nothing. This is
+  also why the OpenCL [SoA LDS staging](#soa-lds-staging) experiment measured slower.
+
+**The pair record was re-tested here and survives.** Rounds 1 and 2 are the two kernels
+with DRAM headroom, so trading bytes for the removal of round 2's 14-siphash rebuild looked
+plausible — and this trade has reversed on every previous regime change. Measured on CUDA
+with 128-bit access in place: **35.0 ms with the pair record against 39.2 ms without**.
+Keep it.
 
 ### What CUDA offered that OpenCL could not
 
@@ -1055,7 +1096,7 @@ move the floor, by an unknown amount. A realistic range is **3–8 % (1.2–3.2 
 a target that may be 11 % away or may be zero. The share-rate comparison costs an evening.
 
 > **How this estimate held up.** The range (3–8 %, landing 49–51 sol/s) was too
-> conservative: the measured result is **13 % over OpenCL, at 55.2 sol/s**. The ranking was
+> conservative: the measured result is **16 % over OpenCL, at 56.1 sol/s**. The ranking was
 > also wrong. Streaming stores were called the only item that could move achieved
 > bandwidth, and they were never needed; the win came from **instruction issue**, which
 > this section did not consider at all — because without a profiler there was no way to
