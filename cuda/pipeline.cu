@@ -163,6 +163,40 @@ int main() {
     // MXBM_CUDA_ITERS=1 for profiling: Nsight replays every launch several times to
     // collect counters, so three solves is three times the wait for no extra signal.
     const int iters = getenv("MXBM_CUDA_ITERS") ? atoi(getenv("MXBM_CUDA_ITERS")) : 3;
+    // Report the real occupancy limit per kernel. cudaOccupancyMaxActiveBlocksPerMultiprocessor
+    // needs no profiler, and Ada gives 100 KB of shared memory per SM where OpenCL only
+    // ever exposed 48 -- so the occupancy arithmetic done on the OpenCL side was against
+    // the wrong budget.
+    {
+        int shPerSM=0, shPerBlock=0;
+        cudaDeviceGetAttribute(&shPerSM, cudaDevAttrMaxSharedMemoryPerMultiprocessor, 0);
+        cudaDeviceGetAttribute(&shPerBlock, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0);
+        printf("device   : shared %d B/SM, %d B/block (opt-in)\n", shPerSM, shPerBlock);
+        // Ada splits 128 KB of L1/shared per SM by a CARVEOUT that defaults to favouring
+        // L1. Asking for the max-shared carveout is what actually makes the ~100 KB/SM
+        // available, and it is the difference between 2 and 3 blocks for round 3.
+        #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
+                                              cudaSharedmemCarveoutMaxShared)
+        CARVE((fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>));
+        CARVE((fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,9u>));
+        CARVE((fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,9u,8u>));
+        CARVE((fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>));
+        CARVE(terminal_round);
+        #undef CARVE
+        int b1=0,b2=0,b3=0,b4=0,bt=0;
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b1,
+            fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>, kWG, 0);
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b2,
+            fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,9u>, kWG, 0);
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b3,
+            fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,9u,8u>, kWG, 0);
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&b4,
+            fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>, kWG, 0);
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bt, terminal_round, kWG, 0);
+        printf("occupancy: r1=%d r2=%d r3=%d r4=%d terminal=%d blocks/SM (%d warps/SM max)\n",
+               b1,b2,b3,b4,bt, b3*(int)(kWG/32));
+    }
+
     cudaEvent_t t0, t1; cudaEventCreate(&t0); cudaEventCreate(&t1);
     for (int iter = 0; iter < iters; ++iter) {
         CK(cudaMemset(drops, 0, 16)); CK(cudaMemset(survCount, 0, 4));

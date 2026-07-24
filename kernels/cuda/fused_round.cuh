@@ -14,7 +14,16 @@ namespace mxbm { namespace cuda {
 
 constexpr uint32_t kWG      = 256u;
 constexpr uint32_t kFCap    = 384u;        // group cap; must cover the group-size TAIL
-constexpr uint32_t kTabSize = 512u;
+// 128, down from OpenCL's 512. Within a group the bucket fixes the key's high bits and
+// the sub-mask its low ones, leaving exactly 24 - bucketBits - submaskBits = 7 varying
+// bits -- and hk = (key >> submaskBits) & 127 selects precisely those, so 128 entries is
+// a PERFECT hash here: every distinct key gets its own chain, and a chain holds exactly
+// the elements sharing a key. 512 entries never addressed more than 128 of them.
+//
+// This holds for any geometry on the bucketBits + submaskBits = 17 line, which is the
+// only line the group-size constraint allows (see docs/performance.md, row-bucket
+// geometry). The 1.5 KB it frees against 512 is what buys round 3 a third block per SM.
+constexpr uint32_t kTabSize = 128u;
 constexpr uint32_t kEmpty   = 0xFFFFFFFFu;
 
 enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4 };
@@ -34,10 +43,18 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t* __restrict__ gi_counter,
                  uint32_t* __restrict__ drops,
                  const uint64_t* __restrict__ pp4) {
+    // `lead` is leaf 0 of the element's own prefix, so for every mode that stages real
+    // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
+    // exception: its leaf payload is the packed leftContrib, not leaves.
+    constexpr bool kNeedLead = (LMODE == LM_USE);
     __shared__ uint64_t lwork[INW * kFCap];
-    __shared__ uint32_t lgi[kFCap], llead[kFCap], lleaf[LEAFW * kFCap];
+    __shared__ uint32_t lgi[kFCap], lleaf[LEAFW * kFCap];
+    __shared__ uint32_t llead[kNeedLead ? kFCap : 1];
     __shared__ uint32_t lkey[kFCap], lchain[kFCap], tab[kTabSize];
     __shared__ uint32_t gcount;
+    auto lead_of = [&](uint32_t p) -> uint32_t {
+        return kNeedLead ? llead[p] : lleaf[p * LEAFW + 0];
+    };
 
     const uint32_t lId = threadIdx.x;
     const uint32_t submaskCount = 1u << submask_bits;
@@ -66,13 +83,13 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         } else if (LMODE == LM_RD2) {
             const uint64_t rec1 = in_belem[d + 1];
             const uint32_t li = pair_left(rec0), ri = pair_right(rec1);
-            lgi[pos] = pair_gi(rec1); llead[pos] = li; lkey[pos] = key;
-            lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;
+            lgi[pos] = pair_gi(rec1); lkey[pos] = key;
+            lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;   // leaf 0 IS the lead
         } else if (LMODE == LM_EMIT) {
             for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = in_belem[d + w];
             const uint64_t p0 = in_belem[d + INW], p1 = in_belem[d + INW + 1];
             const uint32_t l0 = r3_l0(p0);
-            lgi[pos] = r3_gi(p1); llead[pos] = l0; lkey[pos] = key;
+            lgi[pos] = r3_gi(p1); lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = l0;          lleaf[pos*LEAFW + 1] = r3_l1(p0);
             lleaf[pos*LEAFW + 2] = r3_l2(p0,p1); lleaf[pos*LEAFW + 3] = r3_l3(p1);
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
@@ -97,7 +114,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             uint32_t t1[1] = { idx };
             bh3::apply_mix(e, t1, 1u, 448u);
             for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = e.w[w];
-            llead[pos] = idx; lleaf[pos*LEAFW + 0] = idx;
+            lleaf[pos*LEAFW + 0] = idx;
         } else if (LMODE == LM_RD2) {
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
             bh3::Elem e;
@@ -117,7 +134,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         while (oth != kEmpty) {
             if (++walk > 64u) { atomicAdd(&drops[3], 1u); break; }
             if (lkey[oth] == key) {
-                const uint32_t la = llead[pos], lb = llead[oth];
+                const uint32_t la = lead_of(pos), lb = lead_of(oth);
                 const uint32_t ga = lgi[pos],  gb = lgi[oth];
                 uint32_t leftPos = pos, rightPos = oth;
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
@@ -130,12 +147,12 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 uint32_t ctree[9]; uint64_t contribOut = 0;
                 if (LMODE == LM_USE) {
                     for (int i = 0; i < 8; ++i) ctree[i] = 0u;
-                    ctree[8] = llead[rightPos];
+                    ctree[8] = lead_of(rightPos);
                     const uint64_t lc = ((uint64_t)lleaf[leftPos*LEAFW+1] << 32)
                                       |  (uint64_t)lleaf[leftPos*LEAFW+0];
                     bh3::apply_mix(c, ctree, PADN, LOUT);
                     c.w[0] = bh3::rotl64(bh3::rotl64(c.w[0], 40) + lc, 24);
-                    ctree[0] = llead[leftPos];
+                    ctree[0] = lead_of(leftPos);
                 } else {
                     for (uint32_t i = 0; i < SBUILD; ++i)
                         ctree[i] = (i < SIN) ? lleaf[leftPos*LEAFW + i]
