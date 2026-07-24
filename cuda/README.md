@@ -30,10 +30,25 @@ echo 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' | sudo tee /etc/modp
 |---|---|
 | primitives on device | **done** — 0 mismatches vs host over 1 M elements |
 | emit-shape probe | **done** — see `emit_shape_probe.cu` for results and caveats |
-| fused round kernel | not started |
-| entry / terminal kernels | not started |
-| host layer (buffers, launches) | not started |
+| fused round kernel | **done** — `kernels/cuda/fused_round.cuh`, templated |
+| entry / terminal kernels | **done** — in `pipeline.cu` |
+| host layer (buffers, launches) | **done** — enough to run and gate a full solve |
+| **full KAT solve** | **PASS** — 3/3 survivors, drop-free, 41.6–42.4 ms |
+| recover + golden byte-compare | not started (survivor count is the gate for now) |
+| profile under Nsight | blocked on counter permission (reboot) |
 | wire into CMake behind a flag | not started |
+
+## Current standing vs OpenCL
+
+| | ms | note |
+|---|---|---|
+| OpenCL (shipping) | **40.2** | after this session's tuning |
+| CUDA (first working port) | **41.6** | untuned; no CUDA-specific feature used yet |
+
+Within ~4 % on the first run, which is the expected starting point — the port reproduces
+the OpenCL algorithm exactly, including every tuning decision baked into it (compile-time
+per-round constants, the (16,1) geometry, `restrict`, the non-divergent expand). Nothing
+CUDA-only has been applied yet; that is the next phase, and the profiler is the point.
 
 ## The one thing that made this cheap
 
