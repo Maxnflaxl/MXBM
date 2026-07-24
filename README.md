@@ -72,6 +72,12 @@ proof-of-work core, a stratum client, a difficulty filter, a solver behind a
 single interface (the seam the GPU backends plug into), and the CLI/console/API
 shell. See **[docs/architecture.md](docs/architecture.md)** for the full map.
 
+## Performance
+
+The GPU solver's optimization history — every change, its measured effect, and the
+experiments that failed — is tracked in **[docs/performance.md](docs/performance.md)**,
+along with the measured hardware limits that bound further work.
+
 ## Contributing
 
 Issues and pull requests are welcome. Please read

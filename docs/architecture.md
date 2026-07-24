@@ -84,3 +84,10 @@ or GPU. Golden vectors (wire messages, proof-of-work KATs, SHA-256 and difficult
 vectors) are checked in under `tests/vectors/` and `tests/`. See
 [building.md](building.md) for how to run them, including the optional Beam
 differential oracle.
+
+## GPU solver performance
+
+The GPU collision-finding pipeline — its two paths, the per-round schedule, and the
+measured hardware limits that shape it — is documented in
+[performance.md](performance.md), which also keeps the running log of every
+optimization and every failed experiment.
