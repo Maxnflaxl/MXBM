@@ -201,7 +201,6 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     const size_t backrefBytes = (size_t)5 * p.capacity * 4;
     p.left  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
     p.right = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
-    p.lead  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
 
     p.bucket_count = rt.alloc(CL_MEM_READ_WRITE, (size_t)b.num_buckets * 4);
     p.bucket_slots = rt.alloc(CL_MEM_READ_WRITE, (size_t)b.num_buckets * b.slots_per_bucket * 4);
@@ -359,7 +358,10 @@ uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_
     cl_mem bucketSlotsMem = pb.bucket_slots.get();
     cl_mem inWorkMem      = pb.work[r & 1].get();
     cl_mem outWorkMem     = pb.work[((r < (int)kNumRounds) ? r + 1 : 0) & 1].get();
-    cl_mem leadMem        = pb.lead.get();   // aliased: all_lead_in (read) + all_lead (write) -- disjoint row ranges per round
+    // round_match still declares all_lead_in / all_lead but reads and writes neither
+    // (see round.cl: "all_lead dropped ... in_lead_off/all_lead_in unused now"), so
+    // both are bound to `left` rather than keeping a 5*capacity array alive for them.
+    cl_mem leadMem        = pb.left.get();
     cl_mem leftMem        = pb.left.get();
     cl_mem rightMem       = pb.right.get();
     cl_mem countersMem    = pb.counters.get();

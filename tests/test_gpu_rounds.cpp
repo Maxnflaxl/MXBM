@@ -83,7 +83,7 @@ int main() {
             actual = ns*(pb.fb_stride[0] + pb.fb_stride[1])*8
                    + 2*(uint64_t)pb.fb_num_buckets*4 + 2*5*C*4;
         } else {
-            actual = 2*C*7*8 + 2*9*C*4 + 3*5*C*4 + (uint64_t)b.num_buckets*(1 + b.slots_per_bucket)*4
+            actual = 2*C*7*8 + 2*9*C*4 + 2*5*C*4 + (uint64_t)b.num_buckets*(1 + b.slots_per_bucket)*4
                    + 2*C*8 + C*4 + 256*((C+255)/256)*4;
         }
         const double perElem = (double)actual / (double)b.elems_per_round;

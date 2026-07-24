@@ -531,7 +531,6 @@ static void test_r3_match(Runtime& rt) {
     rt.write(pb.work[(3) & 1].get(), work3.size() * 8, work3.data());
     rt.write(pb.left.get(),  fx.left.size()  * 4, fx.left.data());
     rt.write(pb.right.get(), fx.right.size() * 4, fx.right.data());
-    rt.write(pb.lead.get(),  fx.lead.size()  * 4, fx.lead.data());
     // (E3a) Materialize each level-2 element's 4-leaf prefix (== elems[k].tree)
     // into leaves[3&1] (AoS, stride 9) so round_mix reads it directly and match
     // grows the children's prefixes -- the previous round's match would have.
@@ -650,7 +649,6 @@ static void test_r3_match(Runtime& rt) {
         rt.write(pb2.work[(3) & 1].get(), work3.size() * 8, work3.data());
         rt.write(pb2.left.get(),  fx.left.size()  * 4, fx.left.data());
         rt.write(pb2.right.get(), fx.right.size() * 4, fx.right.data());
-        rt.write(pb2.lead.get(),  fx.lead.size()  * 4, fx.lead.data());
         {   // (E3a) same leaf-prefix materialization as the direct path above
             std::vector<uint32_t> lv2((size_t)capacity * 9, 0);
             for (uint32_t k = 0; k < Ntotal; ++k)

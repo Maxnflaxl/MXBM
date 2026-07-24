@@ -162,7 +162,6 @@ static void test_r5_survivor(Runtime& rt) {
     std::vector<uint32_t> lead(5 * (size_t)capacity, 0u);
     lead[3 * (size_t)capacity + 0] = leaves0[0];
     lead[3 * (size_t)capacity + 1] = leaves0[0];
-    rt.write(pb.lead.get(), lead.size() * 4, lead.data());
 
     // (E3a) Materialize each staged element's 9-leaf prefix into leaves[5&1]
     // (AoS, stride 9) so round_mix reads it directly instead of the old back-ref
@@ -219,7 +218,6 @@ static void test_r5_survivor(Runtime& rt) {
     std::vector<uint32_t> allLeft(5 * (size_t)capacity), allRight(5 * (size_t)capacity), allLead(5 * (size_t)capacity);
     rt.read(pb.left.get(),  allLeft.size()  * 4, allLeft.data());
     rt.read(pb.right.get(), allRight.size() * 4, allRight.data());
-    rt.read(pb.lead.get(),  allLead.size()  * 4, allLead.data());
     const uint32_t outOff = (5 - 1) * capacity;   // 4*capacity
     check(allLeft[outOff + 0] == 0u && allRight[outOff + 0] == 1u,
           "r=5: survivor's back-ref row 4 == {left=0, right=1} (left = smaller slot, tie-break on equal lead)");

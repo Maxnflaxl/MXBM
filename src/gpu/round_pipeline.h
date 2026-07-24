@@ -26,7 +26,11 @@ struct PipelineBuffers {
                                 // at once, so 2 physical buffers suffice -- frees ~7.7 GB vs the old 6.
     Mem leaves[2];              // E3a: ping-pong AoS leaf prefixes (leaf i at slot*BH3_MAX_LEAVES+i),
                                 // sized 9*capacity uint (max S). leaves[r&1] holds work[r]'s prefix.
-    Mem left, right, lead;      // consolidated: uint[5*capacity] each; round k at (k-1)*capacity
+    Mem left, right;            // consolidated: uint[5*capacity] each; round k at (k-1)*capacity
+    // NOTE: there is no `lead` array. It used to be a third row of the same shape, but
+    // an element's lead IS leaf 0 of its own prefix, so round_match stopped writing it
+    // ("all_lead dropped") -- the allocation just outlived the write by several rounds
+    // of cleanup. Worth 20 B/element on the sort path.
     Mem bucket_count;           // uint[num_buckets]
     Mem bucket_slots;           // uint[num_buckets*slots_per_bucket]
     Mem counters;               // uint[4]: {out_count, bucket_drops, pair_drops, spare}
