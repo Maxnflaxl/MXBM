@@ -746,7 +746,7 @@ FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u)    // r2: 
 // Lout(r) == Lmix(r+1) for every round, so `Lout` serves both roles.
 FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild)
 FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u)   // r3 fallback (full packed record)
-FUSED_LDS(round_fused_6_5,  6, 5, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u)    // r4: stages contrib, no leaf emit
+FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u)    // r4: stages contrib, no leaf emit
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
@@ -790,8 +790,16 @@ __kernel void round5_fused_lds(
     __global uint*  all_left, __global uint* all_right,   // indexed by survivor slot (row out_off)
     __global uint*  surv_slots, __global uint* surv_count, uint surv_cap,
     __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
-    // Round-5 input = round-4 output = inwords_for(5) = 5 significant words.
-    #define LDS_R5W 5u
+    // Round-5 input = ONE work word, not the 5 significant ones round 4 produces.
+    // The terminal test is z = OR(c[0..6]) after bh3_combine at Lout(5) = 24, which
+    // forces c[1..6] to zero and masks c[0] to 24 bits; and
+    //   c[0] = ((x[0] >> 24) | (x[1] << 40)) & 0xFFFFFF
+    // where the x[1] term shifts zeros into bits 0..23. So the test reduces to
+    // "bits 24..47 of a[0]^b[0] are zero" -- words 1..4 are never consulted. The key
+    // (word 0's low 24 bits) comes from the same word. Round 4 therefore emits 1 work
+    // word + meta = 16 B instead of 48 B. Checked over 200k random pairs and gated by
+    // the survivor count (must stay 3 on the KAT) plus the goldens.
+    #define LDS_R5W 1u
     #define LDS_R5LOUT 24u   // Lout(5); see the note at the combine below
     __local ulong lwork[LDS_R5W * LDS_FCAP];
     __local uint  lgi[LDS_FCAP];
