@@ -17,13 +17,13 @@ report; BeamHash III yields ~1.9 solutions per solve.
 | **GPU** | OpenCL 1.2+ device. Developed and measured on NVIDIA (Ada, sm_89). |
 | **VRAM — to run at all** | ~6 GB |
 | **VRAM — for a search that actually finds solutions** | **~16 GB today** (see the caveat below) |
-| **VRAM — what a full search genuinely needs** | **~6.95 GiB** (row-bucket path) |
-| **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.3× over |
+| **VRAM — what a full search genuinely needs** | **~7.30 GiB** (row-bucket path) |
+| **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
 
 > **Known limitation.** The 16 GB figure is *not* a property of the algorithm — it is a
-> stale heuristic in `compute_budget`. The real full-search footprint is ~6.95 GiB, so
+> stale heuristic in `compute_budget`. The real full-search footprint is ~7.30 GiB, so
 > 12 GB cards should be usable. See [Known limitations](#known-limitations).
 
 ---
@@ -50,12 +50,12 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
-| Row-bucket (default) | **6.95 GiB** | 222 B | 2.83 GiB |
+| Row-bucket (default) | **7.30 GiB** | 234 B | 3.19 GiB |
 | Sort (fallback) | 8.89 GiB | 285 B | ~1.8 GiB |
 
 The largest single allocation matters independently of total VRAM: OpenCL reports
 `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, commonly **¼ of VRAM** on NVIDIA. The row-bucket path's
-2.83 GiB record array therefore needs a card reporting ≥ ~2.9 GiB max-alloc (i.e. ≥ ~12 GB
+3.19 GiB record array therefore needs a card reporting ≥ ~3.2 GiB max-alloc (i.e. ≥ ~13 GB
 VRAM); smaller cards fall back to the sort path automatically (`want_rowbucket`).
 
 ---
@@ -86,9 +86,9 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | |
 |---|---|
-| Throughput | **33.8 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
-| End-to-end solve | 56–62 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
-| Solve time | 56.2 ms median (`./build/bench_rounds 20`) |
+| Throughput | **36.1 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
+| End-to-end solve | ~53 ms (`GpuSolver::solve()`, incl. recovery + CPU verification) |
+| Solve time | 52.7 ms median (`./build/bench_rounds 20`) |
 
 See [performance.md](performance.md) for the full optimization history.
 
@@ -102,7 +102,7 @@ These are open issues in MXBM, not properties of BeamHash III.
 
 `compute_budget` sizes the seed layer at **396 B/element**
 (`5 rounds × 68 B resident + 56 B seed`), a formula left over from an earlier
-six-buffer design. The current pipeline needs **222 B/element** (row-bucket).
+six-buffer design. The current pipeline needs **234 B/element** (row-bucket).
 
 The budget also uses a *single* `kBytesPerElement = 304` for both paths, sized for the
 sort path — so row-bucket cards are assessed against the sort path's appetite. Splitting
@@ -113,7 +113,7 @@ Consequences:
 - A full 2^25 search is only granted when `VRAM × 0.85 ≥ 2^25 × 396`, i.e. **≥ 14.6 GiB
   reported VRAM** — effectively 16 GB cards only.
 - **12 GB cards are downgraded to a partial (non-functional) search** even though the
-  real 6.95 GiB footprint would fit.
+  real 7.30 GiB footprint would fit.
 - 16 GB cards with high driver/display reservation can fall below the threshold and
   silently degrade.
 
@@ -123,7 +123,7 @@ There is no warning or error when `elems_per_round < 2^25`, despite that configu
 being unable to find solutions in practice. It should refuse to start, or at minimum warn
 loudly, rather than mine nothing while appearing healthy.
 
-### 3. Memory efficiency is ~2.3× off the algorithm's design target
+### 3. Memory efficiency is ~2.4× off the algorithm's design target
 
 Beam's own mining documentation states:
 
@@ -131,8 +131,8 @@ Beam's own mining documentation states:
 > — <https://beam.mw/docs/mining>
 
 That is the **algorithm's design target**, not a third-party miner's quirk: BeamHash III
-was designed by Wilke Trei, who also writes lolMiner. MXBM currently needs **6.95 GiB**,
-roughly **2.3× more** than the algorithm is meant to require.
+was designed by Wilke Trei, who also writes lolMiner. MXBM currently needs **7.30 GiB**,
+roughly **2.4× more** than the algorithm is meant to require.
 
 At 2^25 elements, a 3 GB budget implies **≈ 96 B/element in total** — less than the
 **3.61 GiB** that two live layers of raw 56 B work words occupy in MXBM's design. So the
@@ -150,9 +150,13 @@ structurally different, such as:
 > below held.** Rounds 1–3 store no work state at all — an element is rebuilt from the
 > seed indices that it already had to carry as leaves, so the records are 8 B / 16 B /
 > 24 B instead of 8 / 72 / 80. Footprint fell **8.36 → 6.95 GiB** and solve time fell
-> **103.6 → 83.2 ms** *in the same changes*, which is the "same problem" hypothesis
-> confirming itself. (Solve time has since fallen further, to 56.6 ms, for an unrelated
-> reason — see "compile-time round constants" in [performance.md](performance.md).)
+> **103.6 → 83.2 ms** *in the same changes*.
+>
+> **Caveat added later:** the round-3 part of that was subsequently *reverted* — once
+> compile-time round constants sped the kernel up, its 4-seed rebuild no longer hid in
+> memory stalls and cost more than the bytes it saved. Rounds 1–2 keep index-only
+> storage; round 3 stores work state again. Solve time is now 52.7 ms and the footprint
+> 7.30 GiB. See "retiring the round-3 quad record" in [performance.md](performance.md).
 >
 > It does **not** extend to rounds 4–5. Rebuild cost doubles per round while the record
 > it replaces shrinks, and round 3 already sits at the point where the recompute stops
