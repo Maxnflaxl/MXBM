@@ -50,15 +50,16 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 | 2026-07-24 | Drop the redundant `lead` from the round-3 record | 54.0 | 52.7 | **36.1** | −1.3 | −2.4 % | [Redundant lead](#the-redundant-lead-field) | — |
 | 2026-07-24 | Round 5 stores **1** work word, not 5 | 52.7 | 47.5 | **40.0** | −5.2 | −9.9 % | [Terminal work words](#the-terminal-rounds-dead-work-words) | — |
 | 2026-07-24 | Retune row-bucket geometry to (15, 2) | 47.5 | 42.7 | **44.5** | −4.8 | −10.1 % | [Geometry](#row-bucket-geometry) | — |
+| 2026-07-24 | √-scaled bucket capacity → geometry (16, 1) | 42.7 | 40.4 | **47.0** | −2.3 | −5.4 % | [Capacity](#bucket-capacity), [Geometry](#row-bucket-geometry) | [Occupancy, again](#occupancy-again) |
 | | | | | | | | | [Occupancy tuning](#occupancy-tuning), [dense key array](#dense-key-array), [decoupled scatter](#decoupled-scatter), [two-level bucketing](#two-level-bucketing) |
 
-**Current: 44.5 sol/s** (42.7 ms/solve).
+**Current: 47.0 sol/s** (40.4 ms/solve; ~43 ms end-to-end).
 
-**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.19×**.
+**Target:&nbsp; 53 sol/s** (lolMiner, stock) — remaining gap **~1.13×**.
 
-Started at **1.8 sol/s** when the solver first worked → **24× faster**.
+Started at **1.8 sol/s** when the solver first worked → **26× faster**.
 
-VRAM for a full search: **8.36 → 7.83 GiB** (268 → 251 B/element).
+VRAM for a full search: **8.36 → 7.46 GiB** (268 → 239 B/element).
 
 *Bench and end-to-end agree; the ~7 ms of non-pipeline overhead seen at 83 ms did not
 scale with the rounds.*
@@ -93,7 +94,7 @@ Fusion is the point: the coalesced-gather win is destroyed if a separate scatter
 re-reads the elements — see [Un-fused LDS path](#un-fused-lds-path).
 
 Path selection is by device memory (`want_rowbucket` in `src/gpu/round_pipeline.cpp`):
-row-bucket needs 7.83 GiB with a 3.42 GiB largest single allocation, so smaller cards fall
+row-bucket needs 7.46 GiB with a 3.27 GiB largest single allocation, so smaller cards fall
 back to the sort path automatically. `MXBM_ROWBUCKET=1` / `MXBM_NO_ROWBUCKET=1` override.
 (The *budget* still gates on a single sort-path-sized constant, which is stricter than
 this — see [open leads](#current-focus-and-open-leads).)
@@ -510,23 +511,45 @@ lowered: the group size is `mean_bucket / 2^submaskBits`, and `LDS_FCAP` must co
 `FCAP ≈ 693`, which does not fit in 48 KB — measured as **773 655 group drops**.
 
 But the group size depends only on the *sum* `bucketBits + submaskBits`. Halving the
-bucket and the sub-mask together holds it at 256 — same `FCAP`, same LDS — while halving
-the rescan. That pins the sum at 17, leaving three candidates:
+bucket and the sub-mask together holds the group fixed — same `FCAP`, same LDS — while
+halving the rescan. Swept twice, before and after [capacity](#bucket-capacity) was fixed:
 
-| bucketBits, submaskBits | ms | |
-|---|---|---|
-| (14, 3) | 47.5 | drop-free, 7.30 GiB — was |
-| **(15, 2)** | **42.5** | drop-free, 7.83 GiB — **now** |
-| (16, 1) | 214.9 | 4.3 GB single allocation exceeds the 3.9 GB device limit, so
-`want_rowbucket` falls back to the sort path |
+| (bb, sm) | rescan | ms | |
+|---|---|---|---|
+| (14, 3) | 8× | 47.5 | original |
+| (15, 2) | 4× | 42.6 | |
+| **(16, 1)** | **2×** | **40.4** | **now**, 7.46 GiB |
+| (17, 0) | 1× | 40.4 | no gain over 2×, and 8.35 GiB |
+| (16, 2), (17, 1) | | 46.6, 45.4 | group falls to 132, half the workgroup idle |
+| (18, 0) | | — | single allocation exceeds the device limit → sort-path fallback |
 
-Every round gains: r1 7.5 → 6.8, r2 14.0 → 13.4, r3 14.5 → 12.9, r4 8.4 → 7.0.
+Every round gained twice over: r1 7.5 → 6.4, r2 14.0 → 13.0, r3 14.5 → 12.3, r4 8.4 → 6.5.
 
-It costs 0.53 GiB, because `fb_cap_for`'s `+256` per-bucket constant is now paid 32 768
-times instead of 16 384 — which makes the open
-[tighter bucket capacity](#current-focus-and-open-leads) lead worth roughly double what it
-was. Exposed as `MXBM_BB` / `MXBM_SM`, because the right balance depends on the record
-widths and those moved four times in one session.
+**(16, 1) only became reachable after the capacity fix** — at the old capacity its single
+allocation was 4.3 GB against the device's 3.9 GB limit, so `want_rowbucket` silently fell
+back to the sort path. That is the 214.9 ms that appeared in an earlier version of this
+table: not a slow geometry, a fallback.
+
+**(17, 0) is the informative negative.** Removing the redundant rescan *entirely* buys
+nothing over halving it, for 0.9 GiB more — so this lever is spent, and `submaskBits = 1`
+is where it stops paying. Exposed as `MXBM_BB` / `MXBM_SM`, because the right balance
+depends on the record widths and those moved four times in one session.
+
+### Bucket capacity
+
+`fb_cap_for` was dimensionally wrong. Occupancy is Poisson(mean) so σ = **√mean**, but the
+headroom term was `mean/4`, which scales with the mean — over-reserving, and worsening as
+buckets coarsen. Measured with a new `MXBM_OCC` probe over 52 round-solve samples:
+
+```
+mean 1024   sd 32   max = mean + 4.07..4.35 sd   (tightly concentrated)
+old cap = mean + 17.3 sd
+```
+
+The concentration is expected: the max of *n* Poisson draws sits near
+`mean + σ√(2 ln n)`. Now `mean + 8√mean + 32` — still an enormous margin (a Poisson tail
+at 8σ is ~1e-15 per bucket) at 14 % less memory. On its own it is memory-only
+(7.83 → 6.88 GiB, speed unchanged); its value is that it unlocked the geometry above.
 
 ---
 
@@ -727,6 +750,23 @@ either real alternative. It therefore measured "atomic removed **and** locality 
 An ablation that replaces a value must substitute something with the same access
 footprint, or it prices two changes as one.
 
+### Occupancy, again
+[Occupancy tuning](#occupancy-tuning) was measured irrelevant early on, when the pipeline
+was purely scatter-bound. That is **no longer true** — the geometry work moved the solver
+off the pure-scatter rate, and occupancy now helps. It is just not reachable.
+
+`(17,1)` with `LDS_FCAP=192` fits **2 workgroups/SM** and measured **39.3 ms** against
+`(16,1)`'s 40.4. But `FCAP=192` is only `mean + 5.2σ` on the group tail, against the
+`8σ` standard [capacity](#bucket-capacity) now uses. At a matched margin
+(`FCAP=224`, 8σ) the same configuration measures **40.6 ms — no better than (16,1)**. The
+gain was bought with drop headroom, not for free.
+
+And it cannot be bought back by trimming LDS. For 2 wg/SM at group 264 the budget is
+`(24576 − 2052) / 384 = 58.7 B/element`; `lwork` alone is **56 B** (`INW = 7` u64), so
+everything else — `lgi`, `llead`, `lkey`, `lchain`, `lleaf` — would have to fit in 2.6 B.
+Not staging `lwork` is the [un-fused path](#un-fused-lds-path), which doubles the work
+traffic and measured far worse. **Occupancy is structurally blocked by the element width.**
+
 ---
 
 ## Established limits
@@ -771,53 +811,48 @@ existing arithmetic compile down properly, not from moving fewer bytes.
 
 ## Current focus and open leads
 
-**Where the time goes** (42.7 ms): r1 6.8, r2 13.4, r3 12.9, r4 7.0, plus a ~2.7 ms
-entry and a ~2.0 ms terminal.
+**Where the time goes** (40.4 ms bench, ~43 ms end-to-end): r1 6.4, r2 13.0, r3 12.3,
+r4 6.5, plus a ~2.7 ms entry and a ~2.0 ms terminal.
 
-**Against the roofline.** With the records at their
-[information floors](#the-record-redundancy-audit) the pipeline moves 168 B/element of
-scattered record writes, 176 B of coalesced reads and 32 B of back-refs — **11.75 GiB per
-solve**. Measured in situ, that is **11.75 GiB / 42.7 ms = 296 GB/s aggregate**, against
-the 260 GB/s an isolated pure-scatter probe reaches and ~510 GB/s of coalesced peak.
+**Against the roofline.** The pipeline moves **11.75 GiB per solve** (168 B/element of
+scattered record writes, 176 B of coalesced reads, 32 B of back-refs) in 40.4 ms =
+**312 GB/s aggregate**, against 260 GB/s for an isolated pure scatter and ~510 GB/s of
+coalesced peak. The geometry work pushed it *above* the pure-scatter rate by removing
+redundant scan traffic rather than by moving fewer bytes.
 
-The pipeline now runs *above* the pure-scatter rate, because the geometry retune bought
-back scan efficiency rather than bandwidth. But the scattered writes still set the pace,
-and that is the frame for what is left:
+**Three levers are now closed by measurement, not assertion:**
 
-- **Bytes are done.** Not by assertion — every record is `ceil(bits/64)` with no removable
-  field, tabulated in [the audit](#the-record-redundancy-audit).
-- **The access pattern is near its ceiling.** Two-level bucketing, magazines,
-  warp-aggregated atomics, occupancy and bucket count are all measured dead
-  ([below](#what-didnt-work)); both atomics are load-bearing.
-- **What remains is work that is not memory at all.** `apply_mix` is ~3.3 ms across all
-  rounds, back-refs ~2 ms at their roofline, and the redundant bucket rescan — which the
-  geometry change just halved and which is *still* 4× per bucket.
+- **Bytes** — every record is `ceil(bits/64)` with no removable field
+  ([audit](#the-record-redundancy-audit)).
+- **The redundant rescan** — eliminating it entirely buys nothing over halving it
+  ([geometry](#row-bucket-geometry)).
+- **Occupancy** — it now helps, but `lwork` alone exceeds the per-element LDS budget for
+  2 wg/SM ([occupancy, again](#occupancy-again)).
 
 **Leads, most promising first:**
 
-1. **The rescan is still 4×.** Halving it again needs the group size held at 256 while
-   `bucketBits + submaskBits` rises to 18 — i.e. `(16, 2)`, whose 4.3 GB single allocation
-   the device rejects. That allocation is dominated by `fb_cap_for`'s `+256` per-bucket
-   slack, so **lead 2 unlocks lead 1**: a tighter capacity shrinks the array enough for
-   (16,2) to fit, and buys another rescan halving on top of its own saving.
-2. **Tighter bucket capacity.** `mean + mean/4 + 256` is ~17σ against a distribution whose
-   max sits near mean + 4.5σ, and the `+256` is now paid 32 768 times. Needs a measured
-   occupancy distribution across nonces, and must stay drop-free — but it is the single
-   highest-leverage item left, because it is also the gate on lead 1.
+1. **Nonce-level pipelining.** End-to-end is ~43 ms against a 40.4 ms bench, and the
+   entry/terminal passes (~4.7 ms) plus readback, recovery and CPU verification do not
+   saturate memory the way the rounds do. Overlapping one nonce's tail with the next
+   nonce's head is the only remaining *structural* idea that does not need a better
+   algorithm. It needs a second set of the small buffers, not a full second pipeline —
+   round 4's output is 16 B/element now, so the tail's working set is far smaller than it
+   was when this was last considered.
+2. **Drop the redundant back-ref rows.** Rounds 1–2's back-refs duplicate information the
+   round-2 record already carries (its four seed indices), but that record is overwritten
+   by round 4's output in the ping-pong. Round 4's output is now only 16 B/element, so
+   giving it a small dedicated buffer would leave round 2's records intact for recovery
+   and save 16 B/element of writes (~1 ms, 0.5 GiB) at the cost of ~0.8 GiB and a recover
+   rewrite. Net memory is roughly a wash; the win is the traffic.
 3. **Per-path VRAM budget.** `kBytesPerElement = 304` is sized for the *sort* path; the
-   row-bucket path needs 251. That single constant forces the ≥ 14.6 GiB threshold in
-   [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md).
-4. **Nonce-level pipelining.** The entry and terminal passes (~4.7 ms combined) plus
-   readback and CPU verification do not saturate memory the way the rounds do. Overlapping
-   one nonce's tail with the next nonce's head is the only remaining *structural* idea that
-   does not need a better algorithm. It costs a second set of buffers, so it is gated on
-   the memory leads above.
+   row-bucket path needs 239. That single constant forces the ≥ 14.6 GiB threshold in
+   [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md), and is what keeps 12 GB cards on the 5×
+   slower fallback.
 
-**Re-measure trades after any speed-up.** The round-3 quad record went from −3.6 ms to
-+2.2 ms once [compile-time constants](#compile-time-round-constants) removed the stalls it
-was hiding in; the geometry above had been stale for the entire project. Anything in
-[what worked](#what-worked) that balances two costs is a candidate for re-testing after
-the next large win.
+**Re-measure trades after any speed-up.** This is now three-for-three: the round-3 quad
+record flipped sign, the geometry had been stale since the fused path was built, and
+occupancy went from irrelevant to helpful. Anything in [what worked](#what-worked) that
+balances two costs is a candidate for re-testing after the next win.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
