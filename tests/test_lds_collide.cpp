@@ -170,7 +170,7 @@ static Digest oracle_combine(const std::vector<uint64_t>& w, uint32_t Lout) {
 }
 static Digest run_combine(Runtime& rt, cl_program prog, const std::vector<uint64_t>& w,
         uint32_t bucketBits, uint32_t submaskBits, uint32_t bucketCap, uint32_t Lout,
-        uint32_t outCap, uint32_t drops[4], double* ms) {
+        uint32_t outCap, uint32_t drops[4], double* ms, double* scatterMs = nullptr) {
     uint32_t N=(uint32_t)(w.size()/7), numBuckets=1u<<bucketBits;
     Mem mW=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,(void*)w.data());
     Mem mCounts=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
@@ -184,7 +184,9 @@ static Digest run_combine(Runtime& rt, cl_program prog, const std::vector<uint64
     { Kernel k=rt.kernel(prog,"p2_scatter_elem"); cl_mem a=mW.get(),c=mCounts.get(),bw=mBW.get(),bi=mBI.get(),d=mDrops.get();
       rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bucketBits);rt.set_arg(k.get(),2,bucketCap);
       rt.set_arg(k.get(),3,sizeof(cl_mem),&a);rt.set_arg(k.get(),4,sizeof(cl_mem),&c);rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);
-      rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);rt.set_arg(k.get(),7,sizeof(cl_mem),&d); rt.run1d(k.get(),N); }
+      rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);rt.set_arg(k.get(),7,sizeof(cl_mem),&d);
+      auto ts=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+      if(scatterMs)*scatterMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-ts).count(); }
     uint32_t groups=numBuckets<<submaskBits;
     { Kernel k=rt.kernel(prog,"p2_collide_combine");
       cl_mem c=mCounts.get(),bw=mBW.get(),bi=mBI.get(),ow=mOW.get(),ol=mOL.get(),orr=mOR.get(),oc=mOC.get(),d=mDrops.get();
@@ -216,15 +218,90 @@ static void test_combine(Runtime& rt, cl_program prog) {
         check((drops[0]|drops[1]|drops[2]|drops[3])==0,(std::string("no drops -- ")+msg).c_str());
         check(got==orc,(std::string("child digest == oracle -- ")+msg).c_str());
     }
-    // Timing at pipeline scale (real 56B element in LDS).
+    // WARM steady-state breakdown at 2^25 (preallocated buffers reused across
+    // iterations, so no cold first-touch): best-of-6 for scatter and collide.
     const uint32_t N=1u<<25; auto w=gen_elem(N,24,0x99);
     Digest orc=oracle_combine(w,Lout);
-    uint32_t bucketCap=(N>>14)+(N>>16)+512, outCap=N+(N>>2), drops[4]; double ms=0;
-    Digest got=run_combine(rt,prog,w,14,3,bucketCap,Lout,outCap,drops,&ms);
-    std::printf("  N=2^25 b=14 s=3: collide+combine=%.2f ms, %llu children, drops={%u,%u,%u,%u}\n",
-        ms,(unsigned long long)got.n,drops[0],drops[1],drops[2],drops[3]);
-    check((drops[0]|drops[1]|drops[2]|drops[3])==0,"2^25 combine drop-free");
-    check(got==orc,"2^25 child digest == oracle");
+    const uint32_t bb=14, sm=3, numBuckets=1u<<bb;
+    uint32_t bucketCap=(N>>bb)+(N>>(bb+2))+512, outCap=N+(N>>2);
+    Mem mW=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,(void*)w.data());
+    Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4);
+    Mem mBW=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*7*8);
+    Mem mBI=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*4);
+    Mem mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+    Mem mOW=rt.alloc(CL_MEM_READ_WRITE,(size_t)outCap*7*8);
+    Mem mOL=rt.alloc(CL_MEM_READ_WRITE,(size_t)outCap*4), mOR=rt.alloc(CL_MEM_READ_WRITE,(size_t)outCap*4);
+    Mem mOC=rt.alloc(CL_MEM_READ_WRITE,4);
+    uint32_t drops[4]={0,0,0,0}; double bestSc=1e9, bestCo=1e9; uint32_t children=0;
+    for (int it=0; it<6; ++it) {
+        rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4); rt.fill_u32(mOC.get(),0u,1);
+        { Kernel k=rt.kernel(prog,"p2_scatter_elem"); cl_mem a=mW.get(),c=mC.get(),bw=mBW.get(),bi=mBI.get(),d=mD.get();
+          rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bb);rt.set_arg(k.get(),2,bucketCap);
+          rt.set_arg(k.get(),3,sizeof(cl_mem),&a);rt.set_arg(k.get(),4,sizeof(cl_mem),&c);rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);
+          rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);rt.set_arg(k.get(),7,sizeof(cl_mem),&d);
+          auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+          double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); if(it&&m<bestSc)bestSc=m; }
+        { Kernel k=rt.kernel(prog,"p2_collide_combine");
+          cl_mem c=mC.get(),bw=mBW.get(),bi=mBI.get(),ow=mOW.get(),ol=mOL.get(),orr=mOR.get(),oc=mOC.get(),d=mD.get();
+          rt.set_arg(k.get(),0,bb);rt.set_arg(k.get(),1,sm);rt.set_arg(k.get(),2,bucketCap);rt.set_arg(k.get(),3,Lout);
+          rt.set_arg(k.get(),4,sizeof(cl_mem),&c);rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);
+          rt.set_arg(k.get(),7,sizeof(cl_mem),&ow);rt.set_arg(k.get(),8,sizeof(cl_mem),&ol);rt.set_arg(k.get(),9,sizeof(cl_mem),&orr);
+          rt.set_arg(k.get(),10,sizeof(cl_mem),&oc);rt.set_arg(k.get(),11,outCap);rt.set_arg(k.get(),12,sizeof(cl_mem),&d);
+          auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),(size_t)(numBuckets<<sm)*WG,WG);
+          double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); if(it&&m<bestCo)bestCo=m; }
+        rt.read(mOC.get(),4,&children);
+    }
+    rt.read(mD.get(),4*4,drops);
+    Digest got{}; got.n=children<outCap?children:outCap;
+    { std::vector<uint64_t> ow((size_t)got.n*7); if(got.n) rt.read(mOW.get(),(size_t)got.n*7*8,ow.data());
+      for(uint64_t i=0;i<got.n;++i) for(int k=0;k<7;++k) got.x[k]^=ow[i*7+k]; }
+    std::printf("  [P2 WARM @ 2^25, b=%u s=%u, real 56B elem] scatter(=emit proxy)=%.2f ms  stage+find+combine+flatemit=%.2f ms"
+                "  %llu children  drops={%u,%u,%u,%u}\n",
+        bb, sm, bestSc, bestCo, (unsigned long long)got.n, drops[0],drops[1],drops[2],drops[3]);
+    check((drops[0]|drops[1]|drops[2]|drops[3])==0,"2^25 warm drop-free");
+    check(got==orc,"2^25 warm child digest == oracle");
+}
+
+// Characterize the SCATTER cost: is 56B-element bucketing slow due to atomic
+// contention (helped by more buckets) or scattered write size (56B vs 8B slot)?
+static void test_scatter_cost(Runtime& rt, cl_program prog) {
+    section("scatter cost sweep (contention vs write-size) at N=2^25");
+    const uint32_t N=1u<<25;
+    auto wElem = gen_elem(N,24,0x7);       // 56B elements for p2_scatter_elem
+    auto pairs = gen(N,24,0x7);            // 8B (key,index) for p2_scatter
+    for (uint32_t bb : {14u,16u,18u}) {
+        uint32_t numBuckets=1u<<bb, meanBucket=N>>bb;
+        // Cap so the 56B bucket buffer stays under the 4.18 GB max-alloc limit.
+        uint32_t capLimit=(uint32_t)(3.6e9/((double)numBuckets*56.0));
+        uint32_t bucketCap=meanBucket*2+64; if (bucketCap>capLimit) bucketCap=capLimit;
+        // --- 8B slot/key scatter (lightweight) ---
+        double t8=1e9;
+        { Mem mE=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*8,(void*)pairs.data());
+          Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4), mB=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*8);
+          Mem mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+          for(int it=0;it<3;++it){ rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4);
+            Kernel k=rt.kernel(prog,"p2_scatter"); cl_mem e=mE.get(),c=mC.get(),b=mB.get(),d=mD.get();
+            rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bb);rt.set_arg(k.get(),2,bucketCap);
+            rt.set_arg(k.get(),3,sizeof(cl_mem),&e);rt.set_arg(k.get(),4,sizeof(cl_mem),&c);
+            rt.set_arg(k.get(),5,sizeof(cl_mem),&b);rt.set_arg(k.get(),6,sizeof(cl_mem),&d);
+            auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+            double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); if(m<t8)t8=m; } }
+        // --- 56B full-element scatter ---
+        double t56=1e9;
+        { Mem mW=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,(size_t)N*7*8,(void*)wElem.data());
+          Mem mC=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*4), mBW=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*7*8);
+          Mem mBI=rt.alloc(CL_MEM_READ_WRITE,(size_t)numBuckets*bucketCap*4), mD=rt.alloc(CL_MEM_READ_WRITE,4*4);
+          for(int it=0;it<3;++it){ rt.fill_u32(mC.get(),0u,numBuckets); rt.fill_u32(mD.get(),0u,4);
+            Kernel k=rt.kernel(prog,"p2_scatter_elem"); cl_mem a=mW.get(),c=mC.get(),bw=mBW.get(),bi=mBI.get(),d=mD.get();
+            rt.set_arg(k.get(),0,N);rt.set_arg(k.get(),1,bb);rt.set_arg(k.get(),2,bucketCap);
+            rt.set_arg(k.get(),3,sizeof(cl_mem),&a);rt.set_arg(k.get(),4,sizeof(cl_mem),&c);rt.set_arg(k.get(),5,sizeof(cl_mem),&bw);
+            rt.set_arg(k.get(),6,sizeof(cl_mem),&bi);rt.set_arg(k.get(),7,sizeof(cl_mem),&d);
+            auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+            double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); if(m<t56)t56=m; } }
+        std::printf("  bucket_bits=%u (%u buckets, ~%u/bucket): 8B-slot scatter=%.2f ms | 56B-elem scatter=%.2f ms\n",
+            bb, numBuckets, meanBucket, t8, t56);
+    }
+    check(true,"scatter cost characterized");
 }
 
 int main() {
@@ -236,6 +313,7 @@ int main() {
 
     test_correctness(rt, prog.get());
     test_combine(rt, prog.get());
+    test_scatter_cost(rt, prog.get());
 
     // Empirical fork sweep at pipeline scale: which (bucketBits, submaskBits)
     // split is fastest while drops==0? Realistic uniform 24-bit keys, N=2^25.
