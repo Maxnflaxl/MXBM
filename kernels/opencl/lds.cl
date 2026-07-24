@@ -455,11 +455,27 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 //     rotl24( rotl40( apply_mix(child, [0x8, rightLead], 9, 288) ) + leftContrib ).
 // Verified bit-exact vs the full mix (500k random trials). Shrinks round 3's emit
 // 88 -> 64 B/child and round 4's stage read by the same.
-#define LMODE_RAW  0   // stage raw leaves, emit raw leaves            (r1, r2)
+#define LMODE_RAW  0   // stage raw leaves, emit raw leaves            (unused; r2 fallback)
 #define LMODE_EMIT 1   // stage raw leaves, emit the compact contrib   (r3)
 #define LMODE_USE  2   // stage the contrib, no leaf emit              (r4)
-#define LMODE_SEED 3   // RE-DERIVE the element from its index          (r1)
+#define LMODE_SEED 3   // RE-DERIVE from index; emit a 16 B PAIR record (r1)
+#define LMODE_RD2  4   // RE-DERIVE from that pair record                (r2)
 #define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
+
+// PAIR RECORD (round 1 -> round 2), 16 B instead of the 72 B packed element. A
+// round-2 element is one combine away from two seeds, so its two parent indices
+// determine it completely -- and those indices ARE its two leaves. Round 1 emits
+// only (key, leftIdx, rightIdx, gi) and round 2 rebuilds the 56 B work state in
+// its non-divergent expand loop, where the recompute measured +0.4 ms (see
+// docs/performance.md). Seed indices are 25-bit (2^25 seeds); gi is 26-bit.
+//   word0 = key[0,24) | leftIdx  << 24
+//   word1 = rightIdx  | gi       << 25
+#define RD2_IDXMASK 0x1FFFFFFu
+inline uint  rd2_left (ulong w0) { return (uint)(w0 >> 24) & RD2_IDXMASK; }
+inline uint  rd2_right(ulong w1) { return (uint)(w1)       & RD2_IDXMASK; }
+inline uint  rd2_gi   (ulong w1) { return (uint)(w1 >> 25); }
+inline ulong rd2_w0(uint key, uint li) { return (ulong)key | ((ulong)li << 24); }
+inline ulong rd2_w1(uint ri, uint gi)  { return (ulong)ri  | ((ulong)gi << 25); }
 
 // PACKED ELEMENT LAYOUT. Each element is ONE contiguous record instead of four
 // parallel arrays, because global writes are serviced in 32 B sectors: a 4 B gi and a
@@ -512,7 +528,20 @@ __kernel void NAME(                                                             
                    staging loop runs 8 sub-mask passes at ~4/32 lanes; the expand loop \
                    runs once at 32/32. See "non-divergent expand" in docs/performance.md. */ \
                 lgi[pos] = (uint)(rec0 >> 32); lkey[pos] = key;                       \
+            } else if ((LMODE) == LMODE_RD2) {                                        \
+                /* Unpack the 16 B pair record. Cheap field extraction only -- the     \
+                   two seed derivations are deferred to the expand loop below. */      \
+                ulong rec1 = in_belem[d + 1u];                                        \
+                uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
+                lgi[pos] = rd2_gi(rec1); llead[pos] = li; lkey[pos] = key;            \
+                lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
             } else {                                                                  \
+                /* NOT deferred, unlike the seed expand: this is a LOAD, not compute.
+                   Tried parking p and reading the record in the all-lanes loop --
+                   measured SLOWER (r2 24.3->26.2, r4 25.1->27.5). These loads already
+                   overlap across the 8 staging iterations, so moving them into a
+                   single-iteration loop removes that memory-level parallelism and adds
+                   an LDS round-trip. Divergence costs compute, not bandwidth. */      \
                 for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
                 ulong meta = in_belem[d + (INW)];                                     \
                 lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key; \
@@ -537,6 +566,22 @@ __kernel void NAME(                                                             
             se[0] = bh3_apply_mix(se, t1, 1u, 448u);                                  \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = se[w];            \
             llead[pos] = idx; lleaf[pos*(LEAFW) + 0] = idx;                           \
+        }                                                                             \
+        if ((LMODE) == LMODE_RD2) {                                                   \
+            /* DEFERRED EXPAND, round 2: rebuild the 56 B work state from the two      \
+               parent seed indices. Measured +0.4 ms here versus +23.5 ms for the same \
+               arithmetic in the sub-mask-filtered staging loop. */                    \
+            uint li = lleaf[pos*(LEAFW) + 0], ri = lleaf[pos*(LEAFW) + 1];            \
+            ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
+            ulong sa[7], sb[7], cc[7]; uint t1[1]; uint t2[2];                        \
+            bh3_seed_element(pp, li, sa); t1[0] = li;                                 \
+            sa[0] = bh3_apply_mix(sa, t1, 1u, 448u);                                  \
+            bh3_seed_element(pp, ri, sb); t1[0] = ri;                                 \
+            sb[0] = bh3_apply_mix(sb, t1, 1u, 448u);                                  \
+            bh3_combine(sa, sb, 424u, cc);                                            \
+            t2[0] = li; t2[1] = ri;                                                   \
+            cc[0] = bh3_apply_mix(cc, t2, 2u, 424u);                                  \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
         }                                                                             \
         uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);                   \
         lchain[pos] = atomic_xchg(&tab[hk], pos);                                     \
@@ -582,15 +627,24 @@ __kernel void NAME(                                                             
                 if (cpos < out_bucket_cap) {                                          \
                     uint cgi = atomic_inc(gi_counter);                                \
                     size_t od = ((size_t)cb * out_bucket_cap + cpos) * out_stride;    \
-                    for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];       \
-                    out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0];    \
-                    if ((LMODE) == LMODE_EMIT) {                                      \
-                        out_belem[od + (OUTW) + 1u] = contribOut;                     \
+                    if ((LMODE) == LMODE_SEED) {                                      \
+                        /* 16 B PAIR RECORD instead of the 72 B element: round 2       \
+                           re-derives the work state from these two indices, so the    \
+                           work words and the leaf payload need not be stored at all.  \
+                           ctree[0]/ctree[1] are the two parent seed indices. */       \
+                        out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
+                        out_belem[od + 1u] = rd2_w1(ctree[1], cgi);                   \
                     } else {                                                          \
-                        for (uint j = 0; j*2u < sOut; ++j) {                          \
-                            uint lo = ctree[j*2u];                                     \
-                            uint hi = (j*2u + 1u < sOut) ? ctree[j*2u + 1u] : 0u;      \
-                            out_belem[od + (OUTW) + 1u + j] = ((ulong)hi << 32) | (ulong)lo; \
+                        for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
+                        out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0]; \
+                        if ((LMODE) == LMODE_EMIT) {                                  \
+                            out_belem[od + (OUTW) + 1u] = contribOut;                 \
+                        } else {                                                      \
+                            for (uint j = 0; j*2u < sOut; ++j) {                      \
+                                uint lo = ctree[j*2u];                                 \
+                                uint hi = (j*2u + 1u < sOut) ? ctree[j*2u + 1u] : 0u;  \
+                                out_belem[od + (OUTW) + 1u + j] = ((ulong)hi << 32) | (ulong)lo; \
+                            }                                                         \
                         }                                                             \
                     }                                                                 \
                     all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos]; \
@@ -603,8 +657,9 @@ __kernel void NAME(                                                             
 // (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is per-round rather
 // than a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4, r4 the
 // 2-uint contrib.
-FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED)  // r1: re-derives seeds from indices
-FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r2 (sIn=2)
+FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED)  // r1: seeds in, 16 B pair record out
+FUSED_LDS(round_fused_rd2, 7, 7, 2, LMODE_RD2)    // r2: re-derives from the pair record
+FUSED_LDS(round_fused_lds, 7, 7, 2, LMODE_RAW)    // r2 fallback (full packed record)
 FUSED_LDS(round_fused_7_6, 7, 6, 4, LMODE_EMIT)   // r3: stages 4 leaves, emits contrib
 FUSED_LDS(round_fused_6_5, 6, 5, 2, LMODE_USE)    // r4: stages contrib, no leaf emit
 

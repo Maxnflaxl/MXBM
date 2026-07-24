@@ -63,11 +63,14 @@ bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
 // READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
-//   r1 THIN (index,key) = 1   r2 7+1+1=9   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
-// Round r's OUTPUT stride is round r+1's input stride. Round 1's input is a bare
-// 8 B (index,key) record: seeds are re-derived from the index in-kernel rather than
-// stored, which measured 2.5 ms against 18.2 ms to store and re-read them.
-constexpr uint32_t kFbStride[6] = { 0u, 1u, 9u, 10u, 8u, 6u };
+//   r1 THIN (index,key) = 1   r2 PAIR = 2   r3 7+1+2=10   r4 6+1+1=8   r5 5+1=6
+// Round r's OUTPUT stride is round r+1's input stride. Rounds 1 and 2 both read
+// RE-DERIVABLE records rather than stored work state:
+//   r1 reads a bare 8 B (index,key)      -- seed re-derived in-kernel (2.5 vs 18.2 ms)
+//   r2 reads a 16 B (key,left,right,gi)  -- rebuilt from its two parent seeds
+// Both derivations live in the kernel's non-divergent expand loop; done in the
+// sub-mask-filtered staging loop instead, round 2's cost 23.5 ms rather than 0.4.
+constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 10u, 8u, 6u };
 constexpr uint32_t kFbMaxStride = 10u;
 // Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
 // occupancy is ~Binomial(capacity, 1/nb): mean = capacity/nb, sigma ~ sqrt(mean), and
@@ -828,6 +831,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
         const char* fusedName = "round_fused_lds";
         if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
+        else if (r == 2) fusedName = "round_fused_rd2";    // re-derives from the pair record
         else if (r == 3) fusedName = "round_fused_7_6";
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
