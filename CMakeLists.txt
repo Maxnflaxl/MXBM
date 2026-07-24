@@ -210,7 +210,8 @@ if(OpenCL_FOUND)
       ${CMAKE_SOURCE_DIR}/kernels/opencl/bh3.cl
       ${CMAKE_SOURCE_DIR}/kernels/opencl/seed.cl
       ${CMAKE_SOURCE_DIR}/kernels/opencl/round.cl
-      ${CMAKE_SOURCE_DIR}/kernels/opencl/sort.cl)
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/sort.cl
+      ${CMAKE_SOURCE_DIR}/kernels/opencl/lds.cl)
   add_custom_command(
     OUTPUT ${MXBM_KERNELS_HEADER}
     COMMAND ${CMAKE_COMMAND} "-DKERNEL_FILES=${MXBM_KERNEL_FILES}"
@@ -241,6 +242,14 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_sort PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_sort PRIVATE mxbm_gpu)
   add_test(NAME gpu_sort COMMAND test_gpu_sort)
+
+  # P2a: LDS-local bucketed collision finder (kernels/opencl/lds.cl) validated in
+  # isolation vs a CPU group-by-key oracle + an empirical fork sweep.
+  add_executable(test_lds_collide tests/test_lds_collide.cpp)
+  add_dependencies(test_lds_collide mxbm_kernels_gen)
+  target_include_directories(test_lds_collide PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_lds_collide PRIVATE mxbm_gpu)
+  add_test(NAME lds_collide COMMAND test_lds_collide)
 
   add_executable(test_round_mix tests/test_round_mix.cpp)
   add_dependencies(test_round_mix mxbm_kernels_gen)
