@@ -628,6 +628,51 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
     }
 }
 
+// DECOUPLED-SCATTER OCCUPANCY PROBE: race the SAME uncoalesced fat scatter (2^25
+// 56B elems -> 16384 buckets) at three occupancy levels via a compile-time dummy
+// __local array (tiny=max occ, 24KB=~2wg/SM, 40KB=~1wg/SM like the fused kernel),
+// plus a coalesced-copy peak reference. If lo(40KB) is much slower than hi(tiny),
+// the fused kernel's scatter is occupancy-starved and splitting it into its own
+// high-occupancy kernel is the real lever; if they're equal, decoupling won't help.
+static void test_scatter_occupancy(Runtime& rt, cl_program prog) {
+    section("decoupled-scatter occupancy probe @ 2^25, 56B elems -> 16384 buckets");
+    const uint32_t N=1u<<25, ew=7, bb=14, nb=1u<<bb;
+    const uint32_t cap=(N>>bb)+(N>>(bb+1))+512;
+    const int ITERS=6;
+    auto best=[&](std::function<double()> once){ double b=1e9; for(int i=0;i<ITERS;++i){ double m=once(); if(i&&m<b)b=m;} return b; };
+    std::vector<uint64_t> src((size_t)N*ew); uint64_t s=0x5CA77E4ULL;
+    for(size_t i=0;i<src.size();++i) src[i]=sm(s);
+    std::vector<uint32_t> keys(N); for(uint32_t i=0;i<N;++i) keys[i]=(uint32_t)(sm(s)&0xFFFFFFu);
+    Mem mSrc=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,src.size()*8,src.data());
+    Mem mKeys=rt.alloc(CL_MEM_READ_ONLY|CL_MEM_COPY_HOST_PTR,keys.size()*4,keys.data());
+    Mem mCounts=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*4);
+    Mem mBuckets=rt.alloc(CL_MEM_READ_WRITE,(size_t)nb*cap*ew*8);
+    Mem mDst=rt.alloc(CL_MEM_READ_WRITE,src.size()*8);
+    Mem mDrops=rt.alloc(CL_MEM_READ_WRITE,4*4);
+    const double GB=(double)(2.0*(double)N*ew*8)/1e9;   // read src + write buckets
+    double tcopy=best([&]{ Kernel k=rt.kernel(prog,"bw_copy"); cl_mem a=mSrc.get(),b=mDst.get();
+        rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,ew); rt.set_arg(k.get(),2,sizeof(cl_mem),&a); rt.set_arg(k.get(),3,sizeof(cl_mem),&b);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N);
+        return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
+    std::printf("  peak coalesced copy   : %.2f ms  (%.0f GB/s)\n", tcopy, GB/tcopy*1000.0);
+    auto runScatter=[&](const char* name){ uint32_t md=0; double t=best([&]{
+        rt.fill_u32(mCounts.get(),0u,nb); rt.fill_u32(mDrops.get(),0u,4);
+        Kernel k=rt.kernel(prog,name); cl_mem sr=mSrc.get(),ky=mKeys.get(),c=mCounts.get(),bk=mBuckets.get(),dr=mDrops.get();
+        rt.set_arg(k.get(),0,N); rt.set_arg(k.get(),1,bb); rt.set_arg(k.get(),2,cap); rt.set_arg(k.get(),3,ew);
+        rt.set_arg(k.get(),4,sizeof(cl_mem),&sr); rt.set_arg(k.get(),5,sizeof(cl_mem),&ky);
+        rt.set_arg(k.get(),6,sizeof(cl_mem),&c); rt.set_arg(k.get(),7,sizeof(cl_mem),&bk); rt.set_arg(k.get(),8,sizeof(cl_mem),&dr);
+        auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
+        double m=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+        rt.read(mDrops.get(),4,&md); return m; });
+        std::printf("  %-24s: %.2f ms  (%.0f GB/s)  drops=%u\n", name, t, GB/t*1000.0, md); return t; };
+    double thi =runScatter("scatter_probe_hi");
+    double tmid=runScatter("scatter_probe_mid");
+    double tlo =runScatter("scatter_probe_lo");
+    std::printf("  --> SAME scatter vs occupancy: hi(tiny)=%.2f  mid(24KB)=%.2f  lo(40KB=fused)=%.2f ms  (lo/hi=%.2fx)\n",
+        thi,tmid,tlo, tlo/thi);
+    check(true,"scatter occupancy characterized");
+}
+
 int main() {
     if (!Runtime::any_device_available()) { std::printf("SKIP: no OpenCL device\n"); return 0; }
     Runtime rt;
@@ -644,6 +689,7 @@ int main() {
     test_compaction_arch(rt, prog.get());
     test_gather_locality(rt, prog.get());
     test_leaf_locality(rt, prog.get());
+    test_scatter_occupancy(rt, prog.get());
 
     // STEP B: fused round kernel correctness (exact vs oracle, all leaf widths
     // r=1..4) + scale/drop-free at pipeline scale.

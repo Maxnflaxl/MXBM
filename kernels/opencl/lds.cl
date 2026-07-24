@@ -280,6 +280,43 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 #endif
 #define LDS_FLEAF 8u         // max parent leaf prefix staged (sleaves_for(<=4) = 8)
 
+// ===========================================================================
+// DECOUPLED-SCATTER OCCUPANCY PROBE. Question: does the SAME uncoalesced fat
+// scatter run faster at high occupancy (standalone kernel, tiny LDS) than at the
+// fused kernel's low occupancy (~41 KB LDS => 1 wg/SM)? If yes, splitting the
+// scatter out of the fused find into its own high-occupancy kernel is the lever.
+// DUMMYW __local uints are filled + read (runtime index) so the compiler must
+// allocate them, pinning occupancy the way the fused kernel's real LDS does.
+// ===========================================================================
+#define SCATTER_PROBE(NAME, DUMMYW)                                                  \
+__kernel void NAME(uint N, uint bucket_bits, uint bucket_cap, uint ew,               \
+                   __global const ulong* src, __global const uint* keys,             \
+                   __global uint* counts, __global ulong* buckets, __global uint* drops) { \
+    __local uint dummy[(DUMMYW)];                                                    \
+    uint li = get_local_id(0);                                                       \
+    for (uint i = li; i < (DUMMYW); i += 256u) dummy[i] = i ^ get_group_id(0);       \
+    barrier(CLK_LOCAL_MEM_FENCE);                                                    \
+    uint g = get_global_id(0); if (g >= N) return;                                   \
+    ulong contam = (ulong)dummy[g % (DUMMYW)];                                       \
+    uint key = keys[g];                                                              \
+    uint b = key >> (24u - bucket_bits);                                             \
+    uint pos = atomic_inc(&counts[b]);                                               \
+    if (pos < bucket_cap) { size_t d = (size_t)b*bucket_cap + pos;                   \
+        buckets[d*ew] = src[(size_t)g*ew] ^ contam;                                  \
+        for (uint w = 1; w < ew; ++w) buckets[d*ew + w] = src[(size_t)g*ew + w]; }   \
+    else atomic_inc(&drops[0]);                                                      \
+}
+SCATTER_PROBE(scatter_probe_hi, 4u)        // ~tiny LDS -> max occupancy
+SCATTER_PROBE(scatter_probe_mid, 6144u)    // 24 KB -> ~2 wg/SM
+SCATTER_PROBE(scatter_probe_lo, 10240u)    // 40 KB -> ~1 wg/SM (fused-kernel occupancy)
+
+// Coalesced copy: peak-ish sequential write reference (each thread writes ew
+// contiguous words; threads tile the array -> fully coalesced overall).
+__kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong* dst) {
+    uint g = get_global_id(0); if (g >= N) return;
+    for (uint w = 0; w < ew; ++w) dst[(size_t)g*ew + w] = src[(size_t)g*ew + w];
+}
+
 // COMPACTION variants: work carried at per-round significant widths. INW = input
 // parent words (inwords_for(r)), OUTW = emitted child words (outwords_for(r)). Both
 // are COMPILE-TIME so the stage/combine/emit loops fully unroll (a runtime width cost
