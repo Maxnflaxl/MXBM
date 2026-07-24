@@ -912,10 +912,8 @@ dropping a field something reads, and every record is already `ceil(bits/64)`.
 **2. It achieves a better rate.** Its writes are scattered too — the emit is a key-random
 scatter for any Wagner implementation — and
 [bucket count, occupancy, atomics and reorder schemes](#what-didnt-work) are all measured
-irrelevant to that rate here. A CUDA backend is the plausible remainder (`cp.async` for
-the staging loop, better register allocation than the OpenCL compiler), and it is already
-on the roadmap — but with only ~1.2 ms between us and the floor, it cannot be worth 4 ms
-by itself.
+irrelevant to that rate here. A CUDA backend is the plausible remainder; it is on the
+roadmap and [scoped below](#what-a-cuda-backend-would-and-would-not-buy).
 
 **3. The two figures are not counting the same thing.** This one deserves weight, because
 we just caught it in our own metric: this solver produces **2.29 survivors per solve** but
@@ -943,6 +941,48 @@ shares removes the counting question entirely, and tells us whether the remainin
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
 scatter for occupancy, SoA layouts in either global or local memory, and shrinking the
 element below the `[7,7,6,5,1]` schedule.
+
+---
+
+## What a CUDA backend would (and would not) buy
+
+Scoped because it is the largest remaining roadmap item, and the temptation is to assume it
+closes the gap. It probably does not.
+
+**Port surface.** Small, which is the good news:
+
+| | lines | difficulty |
+|---|---|---|
+| `bh3.cl` primitives (siphash, `apply_mix`, `combine`) | 79 | mechanical, and the KAT gates it exactly |
+| `FUSED_LDS` (one macro → 5 round kernels) | ~200 | the macro becomes a template — arguably cleaner |
+| entry, terminal, recover, survivor scan | ~200 | mechanical |
+| host layer (`cl_runtime`, `round_pipeline`) | ~1200 | mostly OpenCL plumbing CUDA does not need |
+
+**Estimate: ~2 weeks** to a bit-exact port that *matches* current OpenCL performance — half
+a day for the primitives, 2–3 days for the kernels, 2–3 for the host layer, 2–3 getting it
+byte-identical on the goldens. That last item is where ports of this kind actually sink
+time. Optimisation is on top of that.
+
+**What CUDA offers that OpenCL cannot express, ranked by plausible value *here*:**
+
+1. **Non-temporal / streaming stores** (`st.global.cs`). Emitted records are read exactly
+   once, by the next round. Today they pass through L2 and evict staging reads that *do*
+   have reuse. This is the only item that could move the **achieved bandwidth**, which is
+   the only thing that moves the floor.
+2. **Better register allocation and scheduling** than the OpenCL compiler — historically
+   worth a few per cent.
+3. **`cp.async`** (Ampere+) for the staging loop, which is exactly our global→shared
+   pattern. But it hides *latency*, and we are bandwidth-bound. Expect little.
+4. **`__match_any_sync`** to replace the LDS hash table in the collision find. Elegant, and
+   worth ~nothing: all non-memory work totals 2.2 ms.
+
+**Honest ceiling.** The pipeline is within ~3 % of its own memory floor. Nothing above
+reduces bytes moved, so items 2–4 are bounded by that ~1.2 ms of headroom. Only item 1 can
+move the floor, by an unknown amount. A realistic range is **3–8 % (1.2–3.2 ms)** →
+~37–39 ms / 49–51 sol/s. **Short of 53 unless possibility 3 above is also true.**
+
+**Recommendation: settle the counting question first.** A CUDA rewrite is two weeks against
+a target that may be 11 % away or may be zero. The share-rate comparison costs an evening.
 
 ---
 

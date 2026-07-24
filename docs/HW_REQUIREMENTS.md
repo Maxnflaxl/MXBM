@@ -100,13 +100,11 @@ These are open issues in MXBM, not properties of BeamHash III.
 
 ### 1. The VRAM budget is ~1.65× too conservative
 
-`compute_budget` sizes the seed layer at **396 B/element**
+`compute_budget` sizes the seed layer per collision path (**256 B/element** row-bucket, **284 B** sort; measured 239 and 264). It used to use one figure of **396 B/element**
 (`5 rounds × 68 B resident + 56 B seed`), a formula left over from an earlier
-six-buffer design. The current pipeline needs **239 B/element** (row-bucket).
+six-buffer design. The row-bucket path needs **239 B/element** and is now budgeted at 256.
 
-The budget also uses a *single* `kBytesPerElement = 304` for both paths, sized for the
-sort path — so row-bucket cards are assessed against the sort path's appetite. Splitting
-the constant per path is the remaining work here.
+**Fixed 2026-07-25:** the budget is now per-path, and the row-bucket geometry adapts to the device's single-allocation limit — a card that cannot host the finest bucket layout steps down one geometry (~5 % slower) instead of falling back to the sort path (~5×).
 
 Consequences:
 
