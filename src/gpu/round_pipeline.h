@@ -41,6 +41,22 @@ struct PipelineBuffers {
     Mem lds_bslot;             // uint[num_buckets*bucket_cap] original slot
     Mem lds_blead;             // uint[num_buckets*bucket_cap] lead (first leaf)
     Mem lds_counts;            // uint[num_buckets] arrival counters
+
+    // MXBM_ROWBUCKET fused row-bucket path (round_fused_lds). FAT bucket ping-pong:
+    // the entry (round1_mix_scatter_fat) writes set 0; round r reads set S, emits
+    // round-(r+1) children into set S^1 (bucketed by the child's freshly-mixed key),
+    // then S^=1. Each element = work[7] + gi (dense per-level id: back-ref index +
+    // (lead,gi) tiebreak) + lead + leaves[<=9] (materialized child prefix, carried
+    // coalesced -- STEP A: fat wins +17 ms/solve). No flat work[]/leaves[]/sort
+    // scratch is allocated on this path. left/right stay for recover (same row
+    // convention as the sort path: round r fills row (r-1)*capacity, indexed by gi).
+    uint32_t fb_num_buckets = 0, fb_bucket_cap = 0;
+    Mem fb_work[2];            // ulong[nb*cap*7]
+    Mem fb_gi[2];              // uint[nb*cap]
+    Mem fb_lead[2];            // uint[nb*cap]
+    Mem fb_leaves[2];          // uint[nb*cap*9]
+    Mem fb_counts[2];          // uint[nb] arrival counters
+    Mem fb_gictr;              // uint[1] per-round dense child-gi counter
 };
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b);

@@ -282,7 +282,7 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 
 __kernel void round_fused_lds(
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,
-    uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut,
+    uint Lout, uint Lmix_next, uint padnum_next, uint sIn, uint sOut, uint out_off,
     __global const uint*  in_counts,
     __global const ulong* in_bwork,    // [nb*in_cap*7]
     __global const uint*  in_bgi,      // [nb*in_cap]      stable per-level id (tiebreak + backref)
@@ -368,8 +368,114 @@ __kernel void round_fused_lds(
                     for (uint w = 0; w < LDS_PW; ++w) out_bwork[od*LDS_PW + w] = c[w];
                     out_bgi[od] = cgi; out_blead[od] = ctree[0];
                     for (uint i = 0; i < sOut; ++i) out_bleaves[od*sOut + i] = ctree[i];
-                    all_left[cgi] = lgi[leftPos]; all_right[cgi] = lgi[rightPos];
+                    all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos];
                 } else atomic_inc(&drops[2]);
+            }
+            oth = lchain[oth];
+        }
+    }
+}
+
+// ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
+// single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
+// element DIRECTLY into round-1 FAT buckets (no flat work[1]/leaves[1]). gi = seed
+// index (recover reads it as a leaf at row 0); lead = leaves[0] = idx.
+__kernel void round1_mix_scatter_fat(__global const ulong* pp4, uint begin, uint count,
+                                     uint bucket_bits, uint bucket_cap,
+                                     __global uint* counts, __global ulong* bwork,
+                                     __global uint* bgi, __global uint* blead,
+                                     __global uint* bleaves, __global uint* drops) {
+    uint g = (uint)get_global_id(0);
+    if (g >= count) return;
+    uint idx = begin + g;
+    ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+    ulong e[7];
+    bh3_seed_element(pp, idx, e);
+    uint tree1[1] = { idx };
+    e[0] = bh3_apply_mix(e, tree1, 1u, 448u);
+    uint key = (uint)(e[0] & 0xFFFFFFu);
+    uint b = key >> (24u - bucket_bits);
+    uint pos = atomic_inc(&counts[b]);
+    if (pos < bucket_cap) {
+        size_t d = (size_t)b*bucket_cap + pos;
+        for (int k = 0; k < 7; ++k) bwork[d*LDS_PW + k] = e[k];
+        bgi[d] = idx; blead[d] = idx; bleaves[d*1 + 0] = idx;   // sIn=1 for round 1
+    } else atomic_inc(&drops[1]);
+}
+
+// TERMINAL (round 5) for the fused row-bucket path: like round_fused_lds but NO
+// child mix/scatter -- combine colliding round-5 pairs at Lout(5)=24 and detect the
+// all-zero survivor (two byte-identical round-5 elements XOR to 0). No leaves needed
+// (recover walks back-refs). Survivor slot = a dense atomic index; its back-ref row
+// (out_off = 4*capacity) holds the two round-5 parent gi's so recover can descend.
+__kernel void round5_fused_lds(
+    uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint Lout, uint out_off,
+    __global const uint*  in_counts,
+    __global const ulong* in_bwork,    // [nb*in_cap*7]
+    __global const uint*  in_bgi,
+    __global const uint*  in_blead,
+    __global uint*  all_left, __global uint* all_right,   // indexed by survivor slot (row out_off)
+    __global uint*  surv_slots, __global uint* surv_count, uint surv_cap,
+    __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
+    __local ulong lwork[LDS_PW * LDS_FCAP];
+    __local uint  lgi[LDS_FCAP];
+    __local uint  llead[LDS_FCAP];
+    __local uint  lkey[LDS_FCAP];
+    __local uint  lchain[LDS_FCAP];
+    __local uint  tab[LDS_TABSIZE];
+    __local uint  gcount;
+
+    uint lId = get_local_id(0);
+    uint submaskCount = 1u << submask_bits;
+    uint bucket = get_group_id(0) / submaskCount;
+    uint mask   = get_group_id(0) % submaskCount;
+
+    if (lId == 0) gcount = 0;
+    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    uint cnt = in_counts[bucket];
+    if (cnt > in_bucket_cap) cnt = in_bucket_cap;
+    size_t base = (size_t)bucket * in_bucket_cap;
+    for (uint p = lId; p < cnt; p += LDS_WG) {
+        size_t d = base + p;
+        uint key = (uint)(in_bwork[d*LDS_PW] & 0xFFFFFFu);
+        if ((key & (submaskCount - 1u)) != mask) continue;
+        uint pos = atomic_inc(&gcount);
+        if (pos < LDS_FCAP) {
+            for (uint w = 0; w < LDS_PW; ++w) lwork[pos*LDS_PW + w] = in_bwork[d*LDS_PW + w];
+            lgi[pos] = in_bgi[d]; llead[pos] = in_blead[d]; lkey[pos] = key;
+        } else atomic_inc(&drops[1]);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+    uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;
+
+    for (uint pos = lId; pos < total; pos += LDS_WG) {
+        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);
+        lchain[pos] = atomic_xchg(&tab[hk], pos);
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (uint pos = lId; pos < total; pos += LDS_WG) {
+        uint key = lkey[pos];
+        uint oth = lchain[pos], walk = 0;
+        while (oth != LDS_EMPTY) {
+            if (++walk > 64u) { atomic_inc(&drops[3]); break; }
+            if (lkey[oth] == key) {
+                uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];
+                uint leftPos = pos, rightPos = oth;
+                if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
+                ulong a[7], b[7], c[7];
+                for (uint w = 0; w < LDS_PW; ++w) { a[w] = lwork[leftPos*LDS_PW+w]; b[w] = lwork[rightPos*LDS_PW+w]; }
+                bh3_combine(a, b, Lout, c);
+                ulong z = 0ul; for (uint w = 0; w < LDS_PW; ++w) z |= c[w];
+                if (z == 0ul) {   // survivor: byte-identical round-5 elements
+                    uint si = atomic_inc(surv_count);
+                    if (si < surv_cap) {
+                        all_left[out_off + si] = lgi[leftPos]; all_right[out_off + si] = lgi[rightPos];
+                        surv_slots[si] = si;
+                    } else atomic_inc(&drops[2]);
+                }
             }
             oth = lchain[oth];
         }

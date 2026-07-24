@@ -326,6 +326,15 @@ if(OpenCL_FOUND)
   set_tests_properties(gpu_rounds_lds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LDS_MATCH=1")
   add_test(NAME gpu_solver_lds COMMAND test_gpu_solver)
   set_tests_properties(gpu_solver_lds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LDS_MATCH=1")
+  # P2 STEP C: the SAME goldens through the FUSED row-bucket pipeline (round1_mix_
+  # scatter_fat -> round_fused_lds x4 -> round5_fused_lds). Byte-identical goldens
+  # are the equivalence gate; the win is ~215 -> ~148 ms/solve.
+  add_test(NAME gpu_rounds_rowbucket COMMAND test_gpu_rounds)
+  set_tests_properties(gpu_rounds_rowbucket PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_ROWBUCKET=1")
+  add_test(NAME gpu_solver_rowbucket COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_rowbucket PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_ROWBUCKET=1")
+  add_test(NAME gpu_recover_rowbucket COMMAND test_gpu_recover)
+  set_tests_properties(gpu_recover_rowbucket PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_ROWBUCKET=1")
 
   # Phase-D benchmark harness (manual-run, NOT registered as a ctest gate):
   # repeats the full 2^25 solve N times, enforces the D0 correctness gate,

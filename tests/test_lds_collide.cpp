@@ -579,7 +579,7 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
       rt.set_arg(k.get(),a++,bucketBits); rt.set_arg(k.get(),a++,submaskBits);
       rt.set_arg(k.get(),a++,inCap); rt.set_arg(k.get(),a++,outCap);
       rt.set_arg(k.get(),a++,Lout); rt.set_arg(k.get(),a++,LmixNext); rt.set_arg(k.get(),a++,padNext);
-      rt.set_arg(k.get(),a++,sIn); rt.set_arg(k.get(),a++,sOut);
+      rt.set_arg(k.get(),a++,sIn); rt.set_arg(k.get(),a++,sOut); rt.set_arg(k.get(),a++,0u/*out_off*/);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&ic); rt.set_arg(k.get(),a++,sizeof(cl_mem),&iw);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&ig); rt.set_arg(k.get(),a++,sizeof(cl_mem),&il);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&ilv);

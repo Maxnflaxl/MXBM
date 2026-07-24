@@ -60,9 +60,38 @@ bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr)
 } // namespace
 
 bool compact_active();   // defined below; gates the compacted sort path
+bool use_rowbucket();    // defined below; MXBM_ROWBUCKET fused row-bucket path
+
+// Fused row-bucket allocation: FAT bucket ping-pong + left/right for recover. No
+// flat work[]/leaves[]/sort scratch (the buckets ARE the resident storage). Sized
+// so bucketDrops==0 at 2^25 (cap ~1.75x mean) -- ~12 GB, fits 16 GB.
+static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
+    p.fb_num_buckets = 1u << 14;
+    uint32_t mean = p.capacity / p.fb_num_buckets;
+    p.fb_bucket_cap = mean + (mean >> 1) + 512;
+    const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
+    for (int i = 0; i < 2; ++i) {
+        p.fb_work[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * 7 * 8);
+        p.fb_gi[i]     = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
+        p.fb_lead[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * 4);
+        p.fb_leaves[i] = rt.alloc(CL_MEM_READ_WRITE, nslots * 9 * 4);
+        p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
+    }
+    p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
+    // Consolidated back-ref rows for recover (5 rounds x capacity, indexed by gi).
+    const size_t backrefBytes = (size_t)5 * p.capacity * 4;
+    p.left  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
+    p.right = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
+    p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
+}
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     PipelineBuffers p;
+    if (use_rowbucket()) {
+        p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
+        alloc_rowbucket(rt, b, p);
+        return p;
+    }
     // Buffers/out_capacity are sized to b.capacity (= seed count + headroom) so a
     // round's genuine collision count, which fluctuates a few thousand above the
     // 2^25 seed count, is never clamped (see Budget::capacity). b.capacity == 0
@@ -515,6 +544,7 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
 // One source of truth, read once, shared by alloc_pipeline and run_single_round.
 bool use_sort_match() { static bool v = (std::getenv("MXBM_LEGACY_MATCH") == nullptr); return v; }
 bool use_lds_match()  { static bool v = (std::getenv("MXBM_LDS_MATCH") != nullptr); return v; }
+bool use_rowbucket()  { static bool v = (std::getenv("MXBM_ROWBUCKET") != nullptr); return v; }
 
 // P2c: LDS-local match. round_scatter_lds buckets work[r] (+slot+lead) into
 // bucket-contiguous storage; round_collide_lds finds collisions in LDS and emits
@@ -677,8 +707,129 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
     return clamped;
 }
 
+// MXBM_ROWBUCKET: the fused row-bucket pipeline. ENTRY (round1_mix_scatter_fat)
+// mixes seeds and scatters into round-1 FAT buckets; round_fused_lds runs r=1..4,
+// each fusing round r's match + round (r+1)'s mix + scatter into the next FAT
+// bucket set (ping-pong); round5_fused_lds combines at Lout=24 and emits the
+// all-zero survivors. Back-refs (pb.left/right, row (r-1)*capacity by gi) and
+// recover are shared with the sort path. Same PipelineResult contract.
+static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, const Budget& b,
+                             const uint64_t pp[4], const std::atomic<bool>* abort, bool verbose) {
+    PipelineResult result;
+    auto tPipeline = clk::now();
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
+                                         std::string(kLdsClSource)}, "");
+    const uint32_t nb = pb.fb_num_buckets, cap = pb.fb_bucket_cap, capacity = pb.capacity;
+    const uint32_t bucketBits = 14, submaskBits = 3, survCap = 1024;
+    const uint32_t total = (b.elems_per_round != 0) ? b.elems_per_round : capacity;
+    const uint32_t batch = (b.seed_batch != 0) ? b.seed_batch : total;
+
+    Mem mdrops = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
+    rt.fill_u32(mdrops.get(), 0u, 4);
+
+    // ENTRY: mix seeds + scatter into round-1 FAT buckets (set 0).
+    auto tSeed = clk::now();
+    rt.fill_u32(pb.fb_counts[0].get(), 0u, nb);
+    {
+        uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
+        Mem mp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
+        Kernel k = rt.kernel(prog, "round1_mix_scatter_fat");
+        cl_mem ppMem = mp.get(), cnt = pb.fb_counts[0].get(), bw = pb.fb_work[0].get(),
+               bg = pb.fb_gi[0].get(), bl = pb.fb_lead[0].get(), blv = pb.fb_leaves[0].get(), dr = mdrops.get();
+        for (uint32_t begin = 0; begin < total; begin += batch) {
+            uint32_t count = (total - begin < batch) ? (total - begin) : batch;
+            rt.set_arg(k.get(), 0, sizeof(cl_mem), &ppMem); rt.set_arg(k.get(), 1, begin); rt.set_arg(k.get(), 2, count);
+            rt.set_arg(k.get(), 3, bucketBits); rt.set_arg(k.get(), 4, cap);
+            rt.set_arg(k.get(), 5, sizeof(cl_mem), &cnt); rt.set_arg(k.get(), 6, sizeof(cl_mem), &bw);
+            rt.set_arg(k.get(), 7, sizeof(cl_mem), &bg); rt.set_arg(k.get(), 8, sizeof(cl_mem), &bl);
+            rt.set_arg(k.get(), 9, sizeof(cl_mem), &blv); rt.set_arg(k.get(), 10, sizeof(cl_mem), &dr);
+            rt.run1d(k.get(), count);
+        }
+    }
+    result.t_seed_ms = ms_since(tSeed);
+
+    // MIDDLE r=1..4: fused match + child-mix + child-scatter, ping-ponging FAT sets.
+    int inSet = 0;
+    uint32_t prevOut = total;
+    for (int r = 1; r <= 4; ++r) {
+        RoundStats& st = result.rounds[r - 1];
+        int outSet = inSet ^ 1;
+        auto tM = clk::now();
+        rt.fill_u32(pb.fb_counts[outSet].get(), 0u, nb);
+        rt.fill_u32(pb.fb_gictr.get(), 0u, 1);
+        uint32_t Lout = lout_for(r), LmixNext = lmix_for(r + 1), padNext = padnum_for(r + 1);
+        uint32_t sIn = sleaves_for(r), sOut = sleaves_for(r + 1), outOff = (uint32_t)(r - 1) * capacity;
+        Kernel k = rt.kernel(prog, "round_fused_lds");
+        cl_mem ic = pb.fb_counts[inSet].get(), iw = pb.fb_work[inSet].get(), ig = pb.fb_gi[inSet].get(),
+               il = pb.fb_lead[inSet].get(), ilv = pb.fb_leaves[inSet].get();
+        cl_mem oc = pb.fb_counts[outSet].get(), ow = pb.fb_work[outSet].get(), og = pb.fb_gi[outSet].get(),
+               ol = pb.fb_lead[outSet].get(), olv = pb.fb_leaves[outSet].get();
+        cl_mem aL = pb.left.get(), aR = pb.right.get(), gc = pb.fb_gictr.get(), dr = mdrops.get();
+        int a = 0;
+        rt.set_arg(k.get(), a++, bucketBits); rt.set_arg(k.get(), a++, submaskBits);
+        rt.set_arg(k.get(), a++, cap); rt.set_arg(k.get(), a++, cap);
+        rt.set_arg(k.get(), a++, Lout); rt.set_arg(k.get(), a++, LmixNext); rt.set_arg(k.get(), a++, padNext);
+        rt.set_arg(k.get(), a++, sIn); rt.set_arg(k.get(), a++, sOut); rt.set_arg(k.get(), a++, outOff);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &iw);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ig); rt.set_arg(k.get(), a++, sizeof(cl_mem), &il);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ilv);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ow);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &og); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ol);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &olv);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
+        rt.run1d(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
+        uint32_t childCount = 0; rt.read(pb.fb_gictr.get(), 4, &childCount);
+        st.in = prevOut; st.out = childCount; st.bucket_drops = 0; st.pair_drops = 0;
+        st.t_match_ms = ms_since(tM);
+        if (verbose) std::printf("  r%d: in=%u out=%u | fused=%.1f ms\n", r, st.in, st.out, st.t_match_ms);
+        prevOut = childCount; inSet = outSet;
+        if (abort && abort->load(std::memory_order_relaxed)) return PipelineResult{};
+    }
+
+    // TERMINAL r=5: combine at Lout(5)=24, emit all-zero survivors (row 4 back-refs).
+    auto tSurv = clk::now();
+    Mem mSurvSlots = rt.alloc(CL_MEM_READ_WRITE, (size_t)survCap * 4);
+    Mem mSurvCount = rt.alloc(CL_MEM_READ_WRITE, 4);
+    rt.fill_u32(mSurvCount.get(), 0u, 1);
+    {
+        Kernel k = rt.kernel(prog, "round5_fused_lds");
+        uint32_t outOff5 = (uint32_t)(5 - 1) * capacity, Lout5 = lout_for(5);
+        cl_mem ic = pb.fb_counts[inSet].get(), iw = pb.fb_work[inSet].get(),
+               ig = pb.fb_gi[inSet].get(), il = pb.fb_lead[inSet].get();
+        cl_mem aL = pb.left.get(), aR = pb.right.get(), ss = mSurvSlots.get(), sc = mSurvCount.get(), dr = mdrops.get();
+        int a = 0;
+        rt.set_arg(k.get(), a++, bucketBits); rt.set_arg(k.get(), a++, submaskBits); rt.set_arg(k.get(), a++, cap);
+        rt.set_arg(k.get(), a++, Lout5); rt.set_arg(k.get(), a++, outOff5);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &iw);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ig); rt.set_arg(k.get(), a++, sizeof(cl_mem), &il);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ss); rt.set_arg(k.get(), a++, sizeof(cl_mem), &sc);
+        rt.set_arg(k.get(), a++, survCap); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
+        rt.run1d(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
+    }
+    uint32_t survCount = 0; rt.read(mSurvCount.get(), 4, &survCount);
+    uint32_t clamped = survCount < survCap ? survCount : survCap;
+    result.survivor_slots.resize(clamped);
+    if (clamped) rt.read(mSurvSlots.get(), (size_t)clamped * 4, result.survivor_slots.data());
+    result.survivors = clamped;
+    result.rounds[4].in = prevOut; result.rounds[4].out = clamped;
+    result.t_survivor_ms = ms_since(tSurv);
+    result.t_total_ms = ms_since(tPipeline);
+
+    uint32_t dr[4]; rt.read(mdrops.get(), sizeof dr, dr);
+    if (verbose) {
+        double sps = result.t_total_ms > 0.0 ? 1000.0 / result.t_total_ms : 0.0;
+        std::printf("  r5: survivors=%u  drops{bucket/group=%u out=%u chain=%u}\n", clamped, dr[1], dr[2], dr[3]);
+        std::printf("  [rowbucket] seed=%.1f survivor=%.1f total=%.1f ms  ->  %.2f solve/s\n",
+                    result.t_seed_ms, result.t_survivor_ms, result.t_total_ms, sps);
+    }
+    return result;
+}
+
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
                              const std::atomic<bool>* abort, bool verbose) {
+    if (use_rowbucket()) return run_pipeline_rowbucket(rt, pb, b, pp, abort, verbose);
     PipelineResult result;
     auto tPipeline = clk::now();
 
