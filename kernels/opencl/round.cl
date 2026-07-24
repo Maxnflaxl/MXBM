@@ -51,6 +51,31 @@ __kernel void round_mix(uint N, uint capacity, uint padNum, uint Lmix,
     // D3 fusion: emit the sort pair from the freshly-mixed key (no key_extract pass).
     pairs_out[(size_t)g] = ((ulong)g << 32) | (uint)(e[0] & 0xFFFFFFu);
 }
+// COMPACTION variants: work stored at INW = inwords_for(r) significant words. The
+// upper (7-INW) words are 0 in the uncompacted layout (prior round's bh3_combine
+// masked them to Lout) and apply_mix folds only e[0..6] (rotl(0)=0), so reading INW
+// words + zero-filling is bit-exact. INW is a COMPILE-TIME constant so the read
+// loop fully unrolls -- a runtime stride here cost +24 ms (mix regressed 50->74),
+// the same unrolling-killer that sank runtime-width match. r2,r3 (INW=7) reuse the
+// stock round_mix unchanged; only r4 (6) and r5 (5) need a narrowed variant.
+#define ROUND_MIX_C(NAME, INW)                                                  \
+__kernel void NAME(uint N, uint capacity, uint padNum, uint Lmix,               \
+                   __global ulong* work,                                        \
+                   __global const uint* leaves_in,                             \
+                   __global ulong* pairs_out) {                                 \
+    uint g = (uint)get_global_id(0);                                           \
+    if (g >= N) return;                                                        \
+    uint tree[9];                                                             \
+    for (uint i = 0; i < padNum; ++i) tree[i] = leaves_in[(size_t)g*BH3_MAX_LEAVES + i]; \
+    ulong e[7];                                                               \
+    for (int k = 0; k < 7; ++k) e[k] = 0ul;                                   \
+    for (int k = 0; k < (INW); ++k) e[k] = work[(size_t)g*(INW) + k];          \
+    e[0] = bh3_apply_mix(e, tree, padNum, Lmix);                              \
+    work[(size_t)g*(INW)] = e[0];                                             \
+    pairs_out[(size_t)g] = ((ulong)g << 32) | (uint)(e[0] & 0xFFFFFFu);        \
+}
+ROUND_MIX_C(round_mix_c6, 6)   // r4 input: 6 significant words
+ROUND_MIX_C(round_mix_c5, 5)   // r5 input: 5 significant words
 // round_scatter: radix-bucket N mixed elements by the top bucket_bits of
 // their 24-bit collision key, so the sortless all-pairs match (T4) only
 // searches within a bucket. bucket_count[b] is the raw (uncapped) atomic
@@ -180,6 +205,18 @@ __kernel void survivor_scan(uint N, __global const ulong* work,
     uint g = (uint)get_global_id(0);
     if (g >= N) return;
     for (int w = 0; w < 7; ++w) if (work[(size_t)g*7 + w] != 0ul) return;
+    uint oi = atomic_inc(&counters[3]);
+    if (oi < cap) out_slots[oi] = g;
+}
+// COMPACTION variant: r5 children stored at `stride` = outwords_for(5) = 1 word.
+// Lout=24 keeps only word0's low 24 bits (upper 40 bits of word0 and all of
+// words 1..6 are 0), so the all-7-zero solution marker collapses to word0 == 0.
+__kernel void survivor_scan_s(uint N, uint stride, __global const ulong* work,
+                              __global uint* out_slots, uint cap,
+                              __global uint* counters /* [3]=survivors */) {
+    uint g = (uint)get_global_id(0);
+    if (g >= N) return;
+    if (work[(size_t)g*stride] != 0ul) return;
     uint oi = atomic_inc(&counters[3]);
     if (oi < cap) out_slots[oi] = g;
 }

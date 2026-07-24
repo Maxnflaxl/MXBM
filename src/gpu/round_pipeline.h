@@ -10,6 +10,12 @@ namespace mxbm { namespace gpu {
 
 struct PipelineBuffers {
     uint32_t capacity = 0;      // elems per round (= budget.elems_per_round)
+    // Compaction: when true, the sort path stores work at the significant-word
+    // schedule [7,7,6,5,1] and dispatches the fixed-width mix/match variants
+    // (round_mix_c*, round_match_sorted_*, survivor_scan_s). Set once at
+    // alloc_pipeline from the active path so every kernel agrees on the stride;
+    // white-box tests that hand-drive the legacy stride-7 kernels clear it.
+    bool compact = false;
     Mem work[2];                // ping-pong: round r reads work[r&1], writes work[(r+1)&1] (each
                                 // capacity*7*8 B). Only 2 of the logical 6 round-slots are ever live
                                 // at once, so 2 physical buffers suffice -- frees ~7.7 GB vs the old 6.

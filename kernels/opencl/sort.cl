@@ -249,3 +249,63 @@ __kernel void round_match_sorted(uint N, uint Lout, uint lead_identity,
         }
     }
 }
+
+// COMPACTION: byte-for-byte the same contract as round_match_sorted, but the work
+// gather/emit widths are COMPILE-TIME constants so both loops fully unroll (the
+// runtime-bound loop was the measured loss -- test_compaction_arch: fixed-width
+// AoS recovers the full ~25% the runtime version threw away). Parents are stored
+// at INW = inwords_for(r) words ([7,7,7,6,5]); children at OUTW = outwords_for(r)
+// ([7,7,6,5,1]). Zero-filling ea/eb[INW..6] is bit-exact (prior Lout masked those
+// to 0), and bh3_combine's child word i depends only on parent words i,i+1, so the
+// first OUTW child words are identical to the full-width combine. Leaves are
+// unaffected (BH3_MAX_LEAVES stride, orthogonal to work width).
+#define MATCH_SORTED_W(NAME, INW, OUTW)                                           \
+__kernel void NAME(uint N, uint Lout, uint lead_identity,                         \
+                   uint out_off, uint out_capacity,                              \
+                   __global const ulong* sorted_pairs,                           \
+                   __global const uint* offsets,                                 \
+                   __global const ulong* in_work,                                \
+                   __global ulong* out_work,                                     \
+                   __global uint* all_left, __global uint* all_right,            \
+                   __global uint* counters,                                      \
+                   __global const uint* leaves_in,                              \
+                   __global uint* leaves_out,                                    \
+                   uint s_in, uint s_out) {                                       \
+    uint g = get_global_id(0);                                                   \
+    if (g >= N) return;                                                          \
+    uint ka = sort_key(sorted_pairs[g]);                                         \
+    if (g > 0 && sort_key(sorted_pairs[g - 1]) == ka) return;                    \
+    uint m = 1;                                                                  \
+    while (g + m < N && sort_key(sorted_pairs[g + m]) == ka) ++m;                \
+    uint o = offsets[g];                                                         \
+    for (uint a = 0; a < m; ++a) {                                               \
+        uint sa = sort_index(sorted_pairs[g + a]);                              \
+        uint la = lead_identity ? sa : leaves_in[(size_t)sa*BH3_MAX_LEAVES];    \
+        for (uint bb = a + 1; bb < m; ++bb) {                                   \
+            uint sb = sort_index(sorted_pairs[g + bb]);                         \
+            uint lb = lead_identity ? sb : leaves_in[(size_t)sb*BH3_MAX_LEAVES];\
+            uint left = sa, right = sb;                                         \
+            if (lb < la || (lb == la && sb < sa)) { left = sb; right = sa; }    \
+            ulong ea[7], eb[7], ec[7];                                          \
+            for (int w = 0; w < 7; ++w) { ea[w] = 0ul; eb[w] = 0ul; }           \
+            for (int w = 0; w < (INW); ++w) {                                   \
+                ea[w] = in_work[(size_t)left*(INW)+w];                          \
+                eb[w] = in_work[(size_t)right*(INW)+w];                         \
+            }                                                                   \
+            bh3_combine(ea, eb, Lout, ec);                                      \
+            uint oi = o++;                                                      \
+            if (oi < out_capacity) {                                            \
+                for (int w = 0; w < (OUTW); ++w) out_work[(size_t)oi*(OUTW) + w] = ec[w]; \
+                all_left[out_off + oi] = left; all_right[out_off + oi] = right; \
+                for (uint i = 0; i < s_out; ++i) {                             \
+                    uint leaf = (i < s_in) ? leaves_in[(size_t)left*BH3_MAX_LEAVES + i]  \
+                                           : leaves_in[(size_t)right*BH3_MAX_LEAVES + (i - s_in)]; \
+                    leaves_out[(size_t)oi*BH3_MAX_LEAVES + i] = leaf;          \
+                }                                                              \
+            } else atomic_inc(&counters[2]);                                   \
+        }                                                                      \
+    }                                                                          \
+}
+MATCH_SORTED_W(round_match_sorted_7_6, 7, 6)   // r3: in 7 words, child 6
+MATCH_SORTED_W(round_match_sorted_6_5, 6, 5)   // r4: in 6 words, child 5
+MATCH_SORTED_W(round_match_sorted_5_1, 5, 1)   // r5: in 5 words, child 1

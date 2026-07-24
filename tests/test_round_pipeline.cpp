@@ -139,6 +139,11 @@ static void test_r5_survivor(Runtime& rt) {
 
     PipelineBuffers pb = alloc_pipeline(rt, bud);
     check(pb.capacity == capacity, "r=5: pipeline capacity == 16");
+    // This section hand-stages work buffers at stride 7 and drives the legacy
+    // scatter()/match() kernels directly, so pin the uncompacted layout: mix_level
+    // and survivor_scan otherwise honor pb.compact (default on) and would read the
+    // r5 element at stride 5 / output at stride 1, misaligning the manual staging.
+    pb.compact = false;
 
     // Stage raw (pre-mix) work at work[5] slots 0 and 1 -- IDENTICAL (per
     // CORRECTION 3: full duplication, not merely equal work with distinct

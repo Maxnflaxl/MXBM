@@ -39,7 +39,27 @@ uint32_t lout_for(int r) {
     static const uint32_t T[5] = {424u, 400u, 376u, 288u, 24u};
     return T[r - 1];
 }
+// COMPACTION significant-word schedule (== ceil(Lout/64)). A round's OUTPUT child
+// carries outwords_for(r) meaningful u64; its INPUT parents carry inwords_for(r) =
+// outwords_for(r-1) (round 1's seeds are full 7). Words above these are 0 (masked
+// by the prior round's bh3_combine), so storing/reading only the significant words
+// is bit-exact. Used to pick the fixed-width match variant + strided mix per round.
+uint32_t outwords_for(int r) {
+    static const uint32_t T[5] = {7u, 7u, 6u, 5u, 1u};
+    return T[r - 1];
+}
+uint32_t inwords_for(int r) {
+    static const uint32_t T[5] = {7u, 7u, 7u, 6u, 5u};
+    return T[r - 1];
+}
+// Compacted sort path (DEFAULT): fixed-width mix (round_mix_c6/c5) + fixed-width
+// match variants (round_match_sorted_{7_6,6_5,5_1}) shrink the dominant gather/emit
+// to the [7,7,6,5,1] significant-word schedule -- measured 224->214 ms (~4.4%),
+// byte-identical goldens. Set MXBM_NO_COMPACT to fall back to full-width stride-7.
+bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr); return v; }
 } // namespace
+
+bool compact_active();   // defined below; gates the compacted sort path
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     PipelineBuffers p;
@@ -49,6 +69,7 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     // (synthetic tests that hand-build a Budget) falls back to elems_per_round --
     // those tests supply their own non-overflowing data, so no headroom is needed.
     p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
+    p.compact  = compact_active();   // compacted stride/kernels for the sort path
 
     // Each resident element is 7 x uint64 (56 B) of work state, matching
     // kSeedElemBytes. PING-PONG: round r reads work[r&1] and writes work[(r+1)&1];
@@ -139,21 +160,34 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
     }
 }
 
+// Compaction is only meaningful on the sort path (it feeds the fixed-width match
+// variants); never activate it under legacy/LDS, which read work at stride 7.
+bool use_sort_match();   // defined below
+bool use_lds_match();    // defined below
+bool compact_active() { return use_compact() && use_sort_match() && !use_lds_match(); }
+
 void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog, "round_mix");
-
     uint32_t capacity = pb.capacity;
     uint32_t padNum   = padnum_for(r);
     uint32_t Lmix     = lmix_for(r);
     cl_mem workMem   = pb.work[r & 1].get();
     cl_mem leavesMem = pb.leaves[r & 1].get();   // E3a: work[r]'s materialized prefix
+    cl_mem pairsMem  = pb.sort_pairs[0].get();   // D3: fused (key,index) sort pairs
 
+    // Compaction: fixed-width in-place mix by round. inwords_for(r) = [_,7,7,6,5]
+    // for r=2..5; r2,r3 (7) reuse stock round_mix, r4 (6) / r5 (5) use narrowed
+    // variants. Same signature as round_mix, so only the kernel name changes.
+    const char* mixName = "round_mix";
+    if (pb.compact) {
+        if      (r == 4) mixName = "round_mix_c6";
+        else if (r == 5) mixName = "round_mix_c5";
+    }
+    Kernel k = rt.kernel(prog, mixName);
     rt.set_arg(k.get(), 0, N);
     rt.set_arg(k.get(), 1, capacity);
     rt.set_arg(k.get(), 2, padNum);
     rt.set_arg(k.get(), 3, Lmix);
-    cl_mem pairsMem = pb.sort_pairs[0].get();    // D3: fused (key,index) sort pairs
     rt.set_arg(k.get(), 4, sizeof(cl_mem), &workMem);
     rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesMem);
     rt.set_arg(k.get(), 6, sizeof(cl_mem), &pairsMem);
@@ -429,7 +463,15 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
 
     auto tEm = clk::now();
     {
-        Kernel k = rt.kernel(prog, "round_match_sorted");
+        // Compaction: fixed-width match variant by round (r3:7->6, r4:6->5,
+        // r5:5->1). r1,r2 stay full-width. All variants share this signature.
+        const char* matchName = "round_match_sorted";
+        if (pb.compact) {
+            if      (r == 3) matchName = "round_match_sorted_7_6";
+            else if (r == 4) matchName = "round_match_sorted_6_5";
+            else if (r == 5) matchName = "round_match_sorted_5_1";
+        }
+        Kernel k = rt.kernel(prog, matchName);
         uint32_t Lout = lout_for(r);
         uint32_t leadIdentity = (r == 1) ? 1u : 0u;
         uint32_t outOff = (uint32_t)(r - 1) * pb.capacity;
@@ -597,7 +639,6 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
     rt.write(pb.counters.get(), sizeof counters, counters);
 
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog, "survivor_scan");
 
     Mem outSlots = rt.alloc(CL_MEM_READ_WRITE, (size_t)cap * 4);
     // Round 5's children live in pb.work[0] (match()'s r==5 special case --
@@ -606,12 +647,27 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
     cl_mem outSlotsMem = outSlots.get();
     cl_mem countersMem = pb.counters.get();
 
-    rt.set_arg(k.get(), 0, N);
-    rt.set_arg(k.get(), 1, sizeof(cl_mem), &workMem);
-    rt.set_arg(k.get(), 2, sizeof(cl_mem), &outSlotsMem);
-    rt.set_arg(k.get(), 3, cap);
-    rt.set_arg(k.get(), 4, sizeof(cl_mem), &countersMem);
-    rt.run1d(k.get(), N);
+    if (pb.compact) {
+        // r5 children are stored at outwords_for(5) = 1 word; the all-zero marker
+        // collapses to word0 == 0 (upper words were 0 under Lout=24 anyway).
+        Kernel k = rt.kernel(prog, "survivor_scan_s");
+        uint32_t stride = outwords_for(5);
+        rt.set_arg(k.get(), 0, N);
+        rt.set_arg(k.get(), 1, stride);
+        rt.set_arg(k.get(), 2, sizeof(cl_mem), &workMem);
+        rt.set_arg(k.get(), 3, sizeof(cl_mem), &outSlotsMem);
+        rt.set_arg(k.get(), 4, cap);
+        rt.set_arg(k.get(), 5, sizeof(cl_mem), &countersMem);
+        rt.run1d(k.get(), N);
+    } else {
+        Kernel k = rt.kernel(prog, "survivor_scan");
+        rt.set_arg(k.get(), 0, N);
+        rt.set_arg(k.get(), 1, sizeof(cl_mem), &workMem);
+        rt.set_arg(k.get(), 2, sizeof(cl_mem), &outSlotsMem);
+        rt.set_arg(k.get(), 3, cap);
+        rt.set_arg(k.get(), 4, sizeof(cl_mem), &countersMem);
+        rt.run1d(k.get(), N);
+    }
 
     rt.read(pb.counters.get(), sizeof counters, counters);
     uint32_t survivors = counters[3];
