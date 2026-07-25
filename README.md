@@ -16,13 +16,12 @@ implementation.
 > reference solver. Measured history, hardware limits and the caveats on comparing
 > miners: **[docs/performance.md](docs/performance.md)**.
 >
-> **Energy is the current constraint, not speed.** The card runs pinned at its
-> board power limit in every kernel, so joules per solution are set by how long a
-> solve takes — and MXBM's 7.46 GiB footprint against BeamHash III's 3 GB design
-> target costs it ~11 % against the reference miner on sol/s per watt even while
-> it wins on sol/s. See
-> [Power and efficiency](docs/performance.md#power-and-efficiency) and
-> [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md).
+> **Cap the board power.** MXBM runs pinned at the card's power limit in every
+> kernel, so at stock it looks less efficient than the reference miner purely
+> because it uses watts the other cannot reach. Measured at **equal power** it is
+> ahead on both axes — 55.5 sol/s at 239 W against 53.3 at 239 W, +3.9 % on
+> sol/s/W — and dropping the limit 285 → 240 W costs only 3.5 % of throughput.
+> See [Power and efficiency](docs/performance.md#power-and-efficiency).
 
 Licensed under the [Apache License 2.0](LICENSE).
 

@@ -169,9 +169,12 @@ way:
 | core clock | 2700 MHz | 2745 MHz | |
 
 **~5 % faster, ~11 % less efficient** — 45 W more for 3 sol/s more. On a
-power-limited rig, which is most rigs, that trade is a loss. Four leads were
-listed when this was first recorded; three are now measured and one still needs
-root. Reproduce with `benchmarks/power_bench.sh`, `benchmarks/stage_power.sh` and
+power-limited rig, which is most rigs, that reads as a loss.
+
+**It is not one. That table compares two different operating points, and at equal
+power MXBM wins both.** All four leads listed when this was first recorded have
+now been measured; the rest of this section is what they said. Reproduce with
+`benchmarks/power_bench.sh`, `benchmarks/stage_power.sh` and
 `benchmarks/power_sweep.sh`.
 
 ### The card is at its power limit, in every kernel
@@ -214,15 +217,61 @@ Two consequences, and they matter more than the table:
 
 1. **Energy per solve tracks time per solve.** At a fixed cap, sol/s/W is just
    sol/s ÷ 285. Every speed optimization in this document is an efficiency
-   optimization of the same size, and no amount of watt-shaving is available
-   independently of it. Matching the reference miner's 0.223 sol/s/W *at stock*
-   therefore needs **63.5 sol/s** — there is no way to get there by drawing less.
+   optimization of the same size, and no amount of watt-shaving *inside* the
+   workload is available independently of it — there is no slack kernel to
+   quieten. Matching the reference miner's 0.223 sol/s/W while still drawing
+   285 W would need **63.5 sol/s**. Moving the cap itself is the other lever, and
+   it turns out to be the cheap one.
 2. **The published comparison is between two different operating points.** The
    reference miner draws 238.7 W with σ 4.05: it is *not* at the cap, and leaves
    46 W unused. Comparing sol/s/W at stock rewards whichever miner fails to fill
-   the machine. The comparison that decides a power-limited rig is at **equal
-   power**, and it is the one lead still unmeasured — `benchmarks/power_sweep.sh`
-   runs it and needs root for `nvidia-smi -pl`.
+   the machine — see [the equal-power comparison](#the-equal-power-comparison),
+   which is the one that decides a power-limited rig.
+
+### The equal-power comparison
+
+`benchmarks/power_sweep.sh`, 90 s per point, board limit set with
+`nvidia-smi -pl`, restored afterwards. sol/s here is `mxbm --benchmark`'s own
+figure over ~2 500 solves, which counts 2.01 verified solutions per solve rather
+than the 1.975 the progress log converts with — hence 57.5 at stock where the
+table above says 56.5. Same solver, same milliseconds; only the conversion
+differs, and it is applied identically at every row:
+
+| board limit | sol/s | ms/solve | measured | SM clock | sol/s/W | J/solution |
+|---|---|---|---|---|---|---|
+| 240 W | 55.5 | 36.0 | 239.4 W | 2580 MHz | **0.2318** | **4.31** |
+| 255 W | 56.3 | 35.6 | 254.4 W | 2625 MHz | 0.2213 | 4.52 |
+| 270 W | 57.1 | 35.1 | 269.2 W | 2670 MHz | 0.2121 | 4.71 |
+| 285 W *(stock)* | **57.5** | **34.8** | 284.1 W | 2700 MHz | 0.2024 | 4.94 |
+| *reference miner, uncapped* | *53.27* | — | *238.7 W* | *2745 MHz* | *0.2231* | *4.48* |
+
+At 239.4 W against the reference miner's own 238.7 W — a 0.3 % difference in
+draw, so this is as close to like-for-like as the hardware allows:
+
+| | MXBM @ 240 W | reference miner | |
+|---|---|---|---|
+| speed | 55.5 sol/s | 53.27 sol/s | **+4.2 %** |
+| efficiency | 0.2318 sol/s/W | 0.2231 sol/s/W | **+3.9 %** |
+| energy | 4.31 J/solution | 4.48 J/solution | **−3.7 %** |
+
+**MXBM is ahead on both axes at equal power.** The 11 % efficiency deficit was
+an operating-point artefact and nothing else: MXBM spends every watt the board
+allows and converts them into throughput, the reference miner cannot reach the
+limit in the first place. The asymmetry is one-directional and worth stating
+plainly — *we* can choose to draw less, *it* cannot choose to draw more.
+
+The curve is also unusually flat, which is the practical finding: **dropping the
+board limit 15.8 % (285 → 240 W) costs 3.5 % of throughput** — about 0.22 % of
+speed per 1 % of power. That is the shape of a workload whose DRAM-bound rounds
+do not care much about core clock, and it means a power cap is close to free.
+Efficiency was still climbing at the bottom of the sweep, so the optimum is
+below 240 W and has not been found yet; `LIMITS="180 200 220 240" power_sweep.sh`
+extends it.
+
+Two caveats on the reference figure, both inherited from
+`docs-internal/MINER_COMP_RESULTS.md`: the two miners' runs were not
+simultaneous, and its sol/s is its own counter, whose definition relative to ours
+is the open question the accepted-share protocol exists to settle.
 
 ### The memory traffic is compulsory
 
@@ -231,23 +280,26 @@ each round reading its input layer once and writing its output layer once:
 
 | stage | compulsory rd | wr | measured rd | wr | excess |
 |---|---|---|---|---|---|
-| entry | — | 268 MB | 0 | 265 MB | −1.3 % |
-| r1 | 268 | 805 | 271 | 798 | −0.5 % |
-| r2 | 537 | 2953 | 539 | 3015 | +1.9 % |
-| r3 | 2684 | 2416 | 2695 | 2410 | +0.1 % |
-| r4 | 2147 | 805 | 2157 | 802 | +0.2 % |
-| terminal | 537 | — | 539 | 19 | +3.9 % |
-| **total** | | | **13.51 GB** | | **+0.7 %** |
+| entry | — | 268 MB | 5 | 258 MB | −1.9 % |
+| r1 | 268 | 805 | 271 | 796 | −0.6 % |
+| r2 | 537 | 2685 | 543 | 2811 | +4.1 % |
+| r3 | 2416 | 2416 | 2427 | 2398 | −0.2 % |
+| r4 | 2147 | 805 | 2149 | 802 | −0.1 % |
+| terminal | 537 | — | 539 | 1 | +0.4 % |
+| **total** | | | **13.00 GB** | | **+1.0 %** |
 
-Measured traffic is within **0.7 %** of compulsory: no write amplification, no
-redundant re-reads, nothing left for the cache to save. The 13.5 GB is not waste
-— it is what a 72–80 B element costs when five rounds each consume a layer and
+Measured traffic is within **1 %** of compulsory: no write amplification, no
+redundant re-reads, nothing left for the cache to save. The 13.0 GB is not waste
+— it is what a 72 B element costs when five rounds each consume a layer and
 produce one. The kernel times sum to **101 %** of the solve, which also rules out
 the fourth lead: there is no idle spin between rounds to reclaim.
 
-*(Both columns are the pre-pad-fix layout, so that the excess column compares
-like with like. Removing the pad took the total to **12.97 GB**; the compulsory
-figures for r2's write and r3's read fall by 268 MB each with it.)*
+This is the post-fix profile (`sudo ./cuda/profile.sh`, 2026-07-25). Before
+[the pad was removed](#the-round-2-alignment-pad) the total was **13.51 GB**:
+round 3's read fell by exactly the predicted 268 MB and round 2's write by
+204 MB, the shortfall being the sector granularity of splitting one store stream
+into two. Round 2 is now the only line materially above compulsory, and that
++4.1 % is the same split — it writes 72 B of record as 64 + 8 to two places.
 
 So the byte count can only fall by making records narrower, and one place was
 found where a record was wider than its own contents ([the round-2 alignment
@@ -255,14 +307,17 @@ pad](#the-round-2-alignment-pad)). Everything else needs the structural change i
 [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target):
 streaming / in-place layer reuse.
 
-### Where the 11 % actually is
+### What the footprint still costs
 
-The reference miner spends **4.48 J per solution** (238.7 W ÷ 53.27 sol/s); MXBM
-spends **4.97** (284.1 ÷ 57.2). Since MXBM's watts are pinned by the board and its
-traffic is within 0.7 % of compulsory, that gap is not tuning slack — it is the
-2.4× memory-footprint gap showing up as joules, exactly as HW_REQUIREMENTS
-predicted before it was measured. Memory efficiency and energy efficiency are one
-problem.
+The equal-power comparison settles the *ranking*, not the *margin*. At its own
+operating point the reference miner spends **4.48 J per solution**; MXBM at stock
+spends **4.94** and only undercuts it by capping down to 240 W. A 4 % lead bought
+by giving up 3.5 % of throughput is a genuine lead, but a thin one, and where the
+rest of it went is not mysterious: 13.0 GB of compulsory traffic per solve, from
+a 7.46 GiB footprint against a 3 GB design target. Memory efficiency and energy
+efficiency remain one problem, exactly as HW_REQUIREMENTS predicted before either
+was measured — the difference now is that it is a lead to extend rather than a
+deficit to erase.
 
 Full data, method and caveats for the head-to-head: `docs-internal/MINER_COMP_RESULTS.md`.
 The two runs were not simultaneous, so the reference miner's power figure still
@@ -1123,15 +1178,19 @@ ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.
 **Leads.** Both backends are now close to their measured floors, and the CUDA one is past
 the target. What is left is not more solver micro-optimization:
 
-0. **Efficiency, not speed, is the open problem.** MXBM wins on sol/s and loses on
-   sol/s/W, and [the measurements](#power-and-efficiency) say the watts cannot be
-   attacked directly — the board limit is saturated in every kernel, so joules per
-   solution are set by time per solution and by nothing else. Two things follow. The
-   immediate one is the **equal-power comparison** (`benchmarks/power_sweep.sh`, needs
-   root), which may show MXBM already ahead at 240 W and would change what the headline
-   should say. The structural one is the **footprint**: 13 GB of compulsory traffic per
-   solve against a design target that implies far less, which is the same work item
-   HW_REQUIREMENTS.md has carried all along, now with a second reason to do it.
+0. **Ship the power cap as a setting.** Measured 2026-07-25: dropping the board limit
+   285 → 240 W costs **3.5 % of throughput** and buys **15.8 % of the power**, which
+   puts MXBM ahead of the reference miner on speed *and* efficiency simultaneously
+   ([the sweep](#the-equal-power-comparison)). That is a better default than stock for
+   any rig paying for electricity, and MXBM cannot currently set it —
+   [overclocking.md](overclocking.md) has the design for `--pl` and it is unimplemented.
+   Two immediate follow-ups: **find the actual optimum**, since efficiency was still
+   climbing at the bottom of the sweep (`LIMITS="180 200 220 240"`), and **re-measure
+   the reference miner capped**, since it was compared at its own uncapped draw.
+0b. **The footprint is still the structural lever.** 13.0 GB of compulsory traffic per
+   solve from a 7.46 GiB footprint, against a 3 GB design target. It now buys margin
+   rather than closing a deficit, but it is the same work item HW_REQUIREMENTS.md has
+   carried all along, and it is the only one that moves both axes at once.
 1. **Settle the comparison.** Accepted pool shares over a fixed interval, the only metric
    independent of either miner's counters. `docs-internal/MINER_COMP.md` has the protocol
    and the sample-size arithmetic. The margin (56.1 ± 2.3 against 53) is real but thin

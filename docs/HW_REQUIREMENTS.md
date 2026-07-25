@@ -103,7 +103,13 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 |---|---|---|
 | Throughput | **56.5 sol/s** | 48.2 sol/s |
 | End-to-end solve | **35.0 ms** | 41.0 ms |
-| Board power | 284 W (at the card's 285 W limit) | — |
+| Board power | 284 W — the card's 285 W limit, hit continuously | — |
+| Efficiency | 0.202 sol/s/W stock, **0.232 capped to 240 W** | — |
+
+The card is power-limited, not thermally limited, in every kernel. Capping the
+board to 240 W costs 3.5 % of throughput and buys 15.8 % of the power, so a capped
+rig is both faster and more efficient than the reference miner — see
+[Power and efficiency](performance.md#the-equal-power-comparison).
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces (±4.1 %, 1σ).
@@ -188,13 +194,15 @@ structurally different, such as:
 > [docs/performance.md](performance.md)). Reaching 3 GB needs the *first* route —
 > streaming / in-place reuse — not more re-derivation.
 
-This is correctness-neutral, but it is **also an energy gap**, and that half is now
-measured rather than suspected. A solve moves **13.5 GB** of DRAM traffic, which is
-within **0.7 %** of the compulsory minimum for these record widths — there is no waste
+This is correctness-neutral, but it is **also an energy cost**, and that half is now
+measured rather than suspected. A solve moves **13.0 GB** of DRAM traffic, which is
+within **1 %** of the compulsory minimum for these record widths — there is no waste
 left to reclaim, only records to narrow. Meanwhile the card runs pinned at its 285 W
-board limit in every kernel, so joules per solution are set by how long a solve takes,
-and MXBM needs 4.97 J/solution against lolMiner's 4.48. An implementation holding 3 GB
-instead of 7.46 would move proportionally fewer bytes, which is the leading hypothesis
-for that 11 %. See ["Power and efficiency"](performance.md#power-and-efficiency) for the
-measurements. Reducing the per-element footprint remains the highest-value open work
-item — it is now the *efficiency* lever, since throughput already clears the target.
+board limit in every kernel, so joules per solution are set by how long a solve takes:
+4.94 J/solution at stock, 4.31 capped to 240 W, against lolMiner's 4.48 at its own
+uncapped 239 W. MXBM is therefore ahead on energy *when capped* and behind when not,
+and the margin either way is set by the bytes. An implementation holding 3 GB instead
+of 7.46 would move proportionally fewer of them. See
+["Power and efficiency"](performance.md#power-and-efficiency). Reducing the per-element
+footprint remains the highest-value open work item — it is now the lever that widens a
+lead rather than one that closes a deficit, since throughput already clears the target.
