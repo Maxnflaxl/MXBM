@@ -22,6 +22,10 @@ nvmlReturn_t (*p_power)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_clock)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_temp)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_fan)(nvmlDevice_t, unsigned*) = nullptr;
+nvmlReturn_t (*p_driver)(char*, unsigned) = nullptr;
+// nvmlPciInfo_t's first member is the "domain:bus:device.function" string; the
+// struct is larger, so a generous buffer is passed and only that prefix read.
+nvmlReturn_t (*p_pci)(nvmlDevice_t, void*) = nullptr;
 
 template<class F> void bind(F& fn, const char* name) { fn = (F)dlsym(g_lib, name); }
 
@@ -44,6 +48,9 @@ bool nvml_init() {
     bind(p_clock,    "nvmlDeviceGetClockInfo");
     bind(p_temp,     "nvmlDeviceGetTemperature");
     bind(p_fan,      "nvmlDeviceGetFanSpeed");
+    bind(p_driver,   "nvmlSystemGetDriverVersion");
+    bind(p_pci,      "nvmlDeviceGetPciInfo_v3");
+    if (!p_pci) bind(p_pci, "nvmlDeviceGetPciInfo_v2");
     if (!p_init || !p_handle) { dlclose(g_lib); g_lib = nullptr; return false; }
 
     if (p_init() != NVML_SUCCESS)              { dlclose(g_lib); g_lib = nullptr; return false; }
@@ -70,6 +77,40 @@ Telemetry nvml_sample() {
     if (p_temp  && p_temp (g_dev, /*NVML_TEMPERATURE_GPU=*/0, &v) == NVML_SUCCESS) { t.have_temp = true; t.temp_c = v; }
     if (p_fan   && p_fan  (g_dev, &v) == NVML_SUCCESS) { t.have_fan = true; t.fan_pct = v; }
     return t;
+}
+
+std::string nvml_driver_version() {
+    if (!g_ready || !p_driver) return std::string();
+    char buf[96] = {0};
+    if (p_driver(buf, sizeof buf - 1) != NVML_SUCCESS) return std::string();
+    buf[sizeof buf - 1] = 0;
+    return buf;
+}
+
+std::string nvml_pci_address() {
+    if (!g_ready || !p_pci) return std::string();
+    // Oversized and zeroed: nvmlPciInfo_t has grown across NVML versions and
+    // we deliberately do not declare it, so give the driver more room than any
+    // known version needs and read only the leading busId string it starts
+    // with. Under-sizing this would let NVML write past the buffer.
+    char info[512] = {0};
+    if (p_pci(g_dev, info) != NVML_SUCCESS) return std::string();
+    info[sizeof info - 1] = 0;
+    // "00000000:01:00.0" -> "1:0": drop the domain, and the .function suffix,
+    // and strip the leading zeros each field is padded with.
+    std::string id(info);
+    size_t c1 = id.find(':');
+    if (c1 == std::string::npos) return std::string();
+    size_t c2 = id.find(':', c1 + 1);
+    if (c2 == std::string::npos) return std::string();
+    size_t dot = id.find('.', c2 + 1);
+    std::string bus = id.substr(c1 + 1, c2 - c1 - 1);
+    std::string dev = id.substr(c2 + 1, (dot == std::string::npos ? id.size() : dot) - c2 - 1);
+    auto strip = [](std::string v) {
+        size_t i = v.find_first_not_of('0');
+        return i == std::string::npos ? std::string("0") : v.substr(i);
+    };
+    return strip(bus) + ":" + strip(dev);
 }
 
 }} // namespace mxbm::gpu

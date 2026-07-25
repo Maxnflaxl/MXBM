@@ -19,13 +19,14 @@ namespace mxbm { namespace ui {
 // candidate rates) are always >= 0.
 std::string format_units(double value);
 
-// The the reference miner-style "--shortstats" one-liner: "Average speed (15s): X.X
-// sol/s", X.X = snapshot.sol15 to one decimal. The "(15s)" text is a fixed
-// literal matching Phase B's default --shortstats interval -- it does not
-// read back the caller's actual ticker interval, per this function's
+// The the reference miner-style "--shortstats" one-liner: "Average speed (15s): X.XX
+// sol/s", the value being snapshot.sol15 to `digits` decimals (--digits; 2 by
+// default, matching the stats table's Speed column). The "(15s)" text is a
+// fixed literal matching the default --shortstats interval -- it does not read
+// back the caller's actual ticker interval, per this function's
 // single-Snapshot-argument interface (Ticker may run on a different
 // interval; see ticker.h).
-std::string format_speed_line(const miner::Stats::Snapshot& snapshot);
+std::string format_speed_line(const miner::Stats::Snapshot& snapshot, int digits = 2);
 
 // The the reference miner-style "--longstats" multi-line table: opening dashed rule,
 // session header (clock/uptime, version, algorithm, pool+latency), a blank
@@ -50,18 +51,28 @@ std::string format_speed_line(const miner::Stats::Snapshot& snapshot);
 //                   refresh" figure; the short, more volatile 15s window is
 //                   what the separate format_speed_line() ticker line uses
 //                   instead, matching the reference miner's own two-cadence split).
-//   Pool column   = always 0.0 -- MXBM does not yet track a pool-observed/
-//                   share-derived hashrate distinct from its own solver
-//                   rate (the reference miner's "poolHr"); the column is kept
-//                   structurally (for layout parity) with an inert value
-//                   rather than omitted.
+//   Pool column   = snapshot.pool_sol_session (the reference miner's "poolHr"): the rate
+//                   the POOL credited, from the summed target difficulty of
+//                   accepted shares. Measures the same quantity as Speed by a
+//                   different route and agrees with it in expectation -- see
+//                   docs/usage.md, "Speed vs pool rate", for why they diverge.
 //   Iter. column  = snapshot.iter60 (raw solver attempt rate, i.e. solve()
 //                   calls/sec -- distinct from Speed/Pool's *candidate*-rate
 //                   "sol/s" units).
-//   Eff./Power/CCLK/MCLK/Core/Fan = always "--" -- no sensor backend exists
-//                   before M3's GPU work.
+//   Eff./Power/CCLK/MCLK/Core/Fan = per-field telemetry, each "--" when the
+//                   platform could not supply that particular reading.
+//
+// `api_port` is the port the /summary API is serving on, or 0 when it is off --
+// it and the NVIDIA driver version (Snapshot::driver_version) join the version
+// on the block's identity line, both omitted when unknown rather than faked.
+//
+// `digits` (--digits) sets the decimals on the Speed and Pool columns, whose
+// field widens to match so nothing to their right shifts; the two header lines
+// are padded by the same amount.
 std::string format_stats_block(const miner::Stats::Snapshot& snapshot,
                                 const char* version,
-                                const char* clock_hhmmss);
+                                const char* clock_hhmmss,
+                                int digits = 2,
+                                int api_port = 0);
 
 } } // namespace mxbm::ui

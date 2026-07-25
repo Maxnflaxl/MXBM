@@ -18,9 +18,84 @@ namespace mxbm { namespace ui { namespace console {
 // mostly-mechanical print layer.
 void init(bool nocolor);
 
+// -- transcript log (--log / --logfile) --------------------------------------
+//
+// Tees everything printed above into a file: the same lines, in the same
+// order, with two deliberate differences.
+//
+//   1. Never coloured. A log is read later, by grep and by eye, and ANSI
+//      escapes in a file are noise at best and confusing at worst.
+//   2. ALWAYS timestamped, one "[YYYY-MM-DD HH:MM:SS] " prefix per line,
+//      regardless of --timeprint. That flag is about the console, which is
+//      watched live and where the time is usually redundant; a file is read
+//      hours later, where a line with no time on it is nearly useless.
+//
+// Opens `path` for APPEND -- a restart continues the record instead of
+// truncating it, which is the one behaviour that matters on a rig that
+// watchdog-restarts overnight. An empty `path` means the default,
+// "logs/mxbm_<YYYY-MM-DD_HH-MM-SS>.log" relative to the working directory,
+// creating logs/ if it does not exist; the per-session filename is why
+// appending rarely matters in practice but still costs nothing.
+//
+// Returns false if the file (or the directory) could not be opened, leaving
+// logging off -- a miner must not refuse to mine because it could not write a
+// log. On success, `resolved_path` (when non-null) receives the path actually
+// opened, which the caller is expected to print so the user knows where it
+// went.
+bool open_log(const std::string& path, std::string* resolved_path = nullptr);
+
+// Flushes and closes the transcript. Safe to call when no log is open.
+void close_log();
+
 void banner();
 
+// -- startup sequence, in the reference miner's order and wording ----------------------
+//
+// Hardware first, pool second: what the miner found and chose, then where it
+// is sending the work. That order is the reference miner's, and it is the more useful one
+// -- a device that failed to initialise is the reason a pool connection is
+// pointless, so seeing it first saves reading further.
+
+// "Setup Miner..." -- opens the hardware section.
+void setup_miner();
+
+// "<API> driver detected." / "Number of <API> supported GPUs: N", the pair
+// the reference miner prints per runtime. `count` is what that runtime enumerated.
+void driver_detected(const char* api, int count);
+
+// The indented per-device block:
+//
+//   Device 0:
+//       Name:    NVIDIA GeForce RTX 4070 Ti SUPER
+//       Address: 1:0
+//       Vendor:  NVIDIA Corporation
+//       Drivers: Cuda
+//       Memory:  15963 MByte
+//       Active:  true (Selected Algorithm: BeamHash III (CUDA))
+//
+// Every field except Name and Active is dropped when empty rather than printed
+// as a blank or a guess: MXBM reads the address from NVML, which is absent on
+// a non-NVIDIA card, and inventing a PCI address would be worse than omitting
+// the line. `active_detail` is the parenthetical after "true"; pass "" for an
+// inactive device.
+void device_block(int index, const std::string& name, const std::string& address,
+                  const std::string& vendor, const std::string& driver,
+                  unsigned long long memory_bytes, const std::string& active_detail);
+
+// "Connecting to pool..." -- no host on this line; the host appears on the
+// connected() line below, with the address it actually resolved to.
+void connecting_to_pool();
+
 void connecting(const std::string& host, uint16_t port, bool tls);
+
+// "Connected to de.beam.herominers.com(141.95.126.31):1130  (TLS enabled)" --
+// the resolved IP is on the line because a pool that round-robins across
+// regions is otherwise impossible to tell apart in a log. `ip` may be empty
+// (then only the hostname is shown).
+void connected_to(const std::string& host, const std::string& ip, uint16_t port, bool tls);
+
+// "TLS Handshake success" -- only printed for a TLS connection.
+void tls_handshake_ok();
 
 void connected(bool tls);
 void authorized(const std::string& user);

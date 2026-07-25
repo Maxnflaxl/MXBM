@@ -7,6 +7,8 @@
 
 #include <cstdint>
 #include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -53,10 +55,23 @@ bool Transport::connect(const std::string& host, uint16_t port, bool tls, bool v
     }
 
     int fd = -1;
+    peer_ip_.clear();
     for (addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0) continue;
-        if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
+        if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+            // Record which of the resolved addresses actually answered -- the
+            // loop may have walked past several that did not.
+            char ip[INET6_ADDRSTRLEN] = {0};
+            const void* src = nullptr;
+            if (ai->ai_family == AF_INET) {
+                src = &reinterpret_cast<sockaddr_in*>(ai->ai_addr)->sin_addr;
+            } else if (ai->ai_family == AF_INET6) {
+                src = &reinterpret_cast<sockaddr_in6*>(ai->ai_addr)->sin6_addr;
+            }
+            if (src && inet_ntop(ai->ai_family, src, ip, sizeof ip)) peer_ip_ = ip;
+            break;
+        }
         ::close(fd);
         fd = -1;
     }

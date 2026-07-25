@@ -40,6 +40,28 @@ const char* const kHeader1 =
 const char* const kHeader2 =
     "                  sol/s  sol/s   it/s    A/S/R  Share  sol/s/W      W   MHz    MHz  Temp  Pct";
 
+// Layout constants the --digits widening needs. The Name field is 17 wide and
+// the Speed value follows it with NO separator (see format_stats_block); Speed
+// and Pool are 6 wide at the default 2 decimals, one space apart.
+constexpr int kNameW = 17;
+constexpr int kSpeedW = 6;          // at kDefaultDigits
+constexpr int kDefaultDigits = 2;
+
+// Speed and Pool are the only --digits-sensitive columns, and both grow by
+// (digits - 2) characters. The two header lines have to gain the same padding
+// at the same two boundaries, or every column to the right of Pool goes out of
+// line with the values beneath it. At the default this is a no-op returning the
+// literals above verbatim -- which is what tests/test_format.cpp's golden pins.
+std::string widen_header(const char* header, int digits) {
+    const int k = digits - kDefaultDigits;
+    if (k <= 0) return header;
+    std::string h = header;
+    const std::string pad((size_t)k, ' ');
+    h.insert(kNameW, pad);                       // Speed's field grows...
+    h.insert(kNameW + k + kSpeedW + 1, pad);     // ...then Pool's, one space later
+    return h;
+}
+
 } // namespace
 
 std::string format_units(double value) {
@@ -52,9 +74,9 @@ std::string format_units(double value) {
     return buf;
 }
 
-std::string format_speed_line(const miner::Stats::Snapshot& s) {
+std::string format_speed_line(const miner::Stats::Snapshot& s, int digits) {
     char buf[128];
-    std::snprintf(buf, sizeof buf, "Average speed (15s): %.1f sol/s", s.sol15);
+    std::snprintf(buf, sizeof buf, "Average speed (15s): %.*f sol/s", digits, s.sol15);
     return buf;
 }
 
@@ -81,7 +103,13 @@ static std::string short_device_name(const std::string& full) {
 
 std::string format_stats_block(const miner::Stats::Snapshot& s,
                                 const char* version,
-                                const char* clock_hhmmss) {
+                                const char* clock_hhmmss,
+                                int digits,
+                                int api_port) {
+    // Speed and Pool carry --digits decimals; their field widens with them so
+    // the columns to the right stay put (see widen_header, which pads the two
+    // header lines by exactly the same amount).
+    const int speed_w = kSpeedW + (digits - kDefaultDigits);
     // Latency shows the connect-handshake duration until the first share
     // result comes back (last_latency_ms < 0), then switches to the
     // measured submit-to-result latency.
@@ -119,8 +147,9 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
 
     char device_row[256];
     std::snprintf(device_row, sizeof device_row,
-        "%-17s%6.2f %6.2f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
-        short_device_name(s.device_label).c_str(), s.sol60, s.pool_sol_session, s.iter60,
+        "%-17s%*.*f %*.*f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
+        short_device_name(s.device_label).c_str(),
+        speed_w, digits, s.sol60, speed_w, digits, s.pool_sol_session, s.iter60,
         shares.c_str(), best.c_str(),
         eff, pw, cclk, mclk, tmp, fan);
 
@@ -129,23 +158,62 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     // them), so this format string is shorter, not just filled with "--".
     char total_row[256];
     std::snprintf(total_row, sizeof total_row,
-        "%-18s%6.2f %6.2f %6.1f %8s %6s %8s %6s",
-        "Total", s.sol60, s.pool_sol_session, s.iter60,
+        "%-18s%*.*f %*.*f %6.1f %8s %6s %8s %6s",
+        "Total", speed_w, digits, s.sol60, speed_w, digits, s.pool_sol_session, s.iter60,
         shares.c_str(), best.c_str(), "--", "--");
 
+    // Dev-fee row: only rendered when a fee is actually configured
+    // (devfee_rate > 0), so a no-fee build's table is unchanged rather
+    // than carrying a permanent "0.0%" line. It reports what has really
+    // been spent this session -- rounds, seconds and the fee pool's own
+    // share verdicts -- next to the configured rate, which is what lets a
+    // user check the rate against their uptime instead of taking it on
+    // trust. "(active now)" marks a round in progress, so the pool switch
+    // visible above is explained rather than mysterious.
+    char devfee_row[192];
+    if (s.devfee_rate > 0.0) {
+        // %.4g, matching ui::console::devfee_notice: it renders the shipped
+        // 1% as "1" and a --dev-fee 2.5 as "2.5", never rounding a rate the
+        // user chose into one they did not. A fixed %.1f would print 2.55%
+        // as "2.5%" while charging 2.55%, which is the one thing a fee
+        // disclosure must not do.
+        std::snprintf(devfee_row, sizeof devfee_row,
+            "Dev fee %.4g%%: %llu round%s, %.0fs total, %llu/%llu/%llu A/S/R%s",
+            s.devfee_rate * 100.0,
+            (unsigned long long)s.devfee_slices, s.devfee_slices == 1 ? "" : "s",
+            s.devfee_seconds,
+            (unsigned long long)s.devfee_accepted, (unsigned long long)s.devfee_stale,
+            (unsigned long long)s.devfee_rejected,
+            s.devfee_active ? "  (active now)" : "");
+    } else {
+        devfee_row[0] = '\0';
+    }
+
+    // Identity line, the reference miner's shape: what is running, what driver it is
+    // running on, and where the API is. The driver version earns its place --
+    // it is the component most likely to explain a hashrate that moved on its
+    // own, and a log carrying it answers "what changed?" without a second
+    // source. Both halves are omitted rather than faked when unknown: no NVML
+    // means no driver line, and api_port 0 means the API is off, not port
+    // zero.
+    std::string ident = "MXBM " + std::string(version);
+    if (!s.driver_version.empty()) ident += ", Nvidia " + s.driver_version;
+    if (api_port > 0) ident += ", API port " + std::to_string(api_port);
+
     std::string out;
-    out.reserve(640);
+    out.reserve(704);
     out += kRule47;   out += '\n';
     out += line2;     out += '\n';
-    out += "MXBM ";   out += version; out += '\n';
+    out += ident;     out += '\n';
     out += "Mining: BeamHash III\n";
     out += line5;     out += '\n';
     out += '\n';
-    out += kHeader1;  out += '\n';
-    out += kHeader2;  out += '\n';
+    out += widen_header(kHeader1, digits);  out += '\n';
+    out += widen_header(kHeader2, digits);  out += '\n';
     out += device_row; out += '\n';
     out += kRule27;   out += '\n';
     out += total_row; out += '\n';
+    if (devfee_row[0]) { out += devfee_row; out += '\n'; }
     out += kRule47;
     return out;
 }

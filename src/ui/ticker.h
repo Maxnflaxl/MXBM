@@ -28,7 +28,15 @@ public:
     // Spawns the worker thread reporting from `stats` (which must outlive
     // the Ticker, or at least until stop()/the destructor returns) on the
     // given cadences. No-op if already started.
-    void start(const miner::Stats& stats, int short_s, int long_s);
+    //
+    // `digits` (--digits) is the decimal count for the speed figures on both
+    // lines. `timeprint` (--timeprint) prefixes the SHORT line with an
+    // "[HH:MM:SS]" stamp; off by default, matching the reference miner. It affects only
+    // that line and only on screen -- the long block already carries a clock in
+    // its own header, and the transcript log timestamps every line regardless
+    // (see console::open_log).
+    void start(const miner::Stats& stats, int short_s, int long_s,
+               int digits = 2, bool timeprint = false, int api_port = 0);
 
     // Signals the worker to stop and joins it. No-op if not started.
     void stop();
@@ -46,6 +54,9 @@ private:
     const miner::Stats* stats_ = nullptr;
     int short_s_ = 15;   // the reference miner's own --shortstats default
     int long_s_ = 60;    // the reference miner's own --longstats default
+    int digits_ = 2;
+    bool timeprint_ = false;
+    int api_port_ = 0;   // shown on the stats block's identity line; 0 = API off
 };
 
 } } // namespace mxbm::ui

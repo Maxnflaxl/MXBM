@@ -4,6 +4,10 @@
 #include "version.h"
 
 #include <cstdio>
+#include <ctime>
+#include <mutex>
+
+#include <sys/stat.h>
 
 namespace mxbm { namespace ui { namespace console {
 
@@ -11,35 +15,168 @@ namespace {
 
 bool g_nocolor = false;
 
+// The transcript, when --log is on. Guarded by g_mutex along with the stdout
+// writes themselves: console functions are called from four threads (the
+// ticker, the stratum client, the mining worker, main), and without the lock a
+// multi-line stats block could be split down the middle by a share line
+// arriving from another thread -- on screen and, worse, in the file.
+std::mutex g_mutex;
+std::FILE* g_log = nullptr;
+
 const char* const kGreen = "\033[1;32m";
 const char* const kRed   = "\033[1;31m";
 const char* const kBlue  = "\033[1;34m";
+// Dark yellow: SGR 33 WITHOUT the bold/bright attribute the others carry --
+// bright yellow on a light terminal is close to unreadable, and the job line
+// is frequent enough that it should sit quietly behind the share lines rather
+// than compete with them.
+const char* const kYellow = "\033[33m";
 const char* const kReset = "\033[0m";
 
+// localtime, not gmtime: a log is read by the person standing next to the rig,
+// who is comparing it against their own wall clock. localtime_r for thread
+// safety -- std::localtime returns a shared static buffer.
+std::tm local_now() {
+    std::time_t t = std::time(nullptr);
+    std::tm out{};
+    localtime_r(&t, &out);
+    return out;
+}
+
+// One "[YYYY-MM-DD HH:MM:SS] text" line into the transcript. Caller holds
+// g_mutex. Flushed per line: a rig that loses power mid-session should still
+// have everything up to the last second, and one flush per line at a handful
+// of lines a minute costs nothing.
+void log_line(const char* text, size_t len) {
+    if (!g_log) return;
+    std::tm tm = local_now();
+    char stamp[32];
+    std::snprintf(stamp, sizeof stamp, "[%04d-%02d-%02d %02d:%02d:%02d] ",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    std::fputs(stamp, g_log);
+    std::fwrite(text, 1, len, g_log);
+    std::fputc('\n', g_log);
+    std::fflush(g_log);
+}
+
+// Splits an already-assembled multi-line block and logs each line with its own
+// timestamp -- the same reason stats_block colours per line rather than
+// wrapping the whole block: every line has to stand on its own.
+void log_block(const std::string& block) {
+    if (!g_log) return;
+    size_t i = 0;
+    while (i <= block.size()) {
+        size_t j = block.find('\n', i);
+        const size_t end = (j == std::string::npos) ? block.size() : j;
+        log_line(block.data() + i, end - i);
+        if (j == std::string::npos) break;
+        i = j + 1;
+    }
+}
+
 void print_line(const std::string& text) {
+    std::lock_guard<std::mutex> lock(g_mutex);
     std::fputs(text.c_str(), stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);
+    log_line(text.data(), text.size());
 }
 
 void print_colored(const char* color, const std::string& text) {
-    if (g_nocolor) { print_line(text); return; }
-    std::fputs(color, stdout);
-    std::fputs(text.c_str(), stdout);
-    std::fputs(kReset, stdout);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_nocolor) {
+        std::fputs(text.c_str(), stdout);
+    } else {
+        std::fputs(color, stdout);
+        std::fputs(text.c_str(), stdout);
+        std::fputs(kReset, stdout);
+    }
     std::fputc('\n', stdout);
     std::fflush(stdout);
+    log_line(text.data(), text.size());   // never coloured in the file
 }
 
 } // namespace
 
 void init(bool nocolor) { g_nocolor = nocolor; }
 
+bool open_log(const std::string& path, std::string* resolved_path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_log) { std::fclose(g_log); g_log = nullptr; }
+
+    std::string target = path;
+    if (target.empty()) {
+        // Default location. mkdir failing is not checked separately: if the
+        // directory could not be created AND does not already exist, the fopen
+        // below fails and reports the whole thing as one failure -- while an
+        // EEXIST from a directory that was already there is exactly what we
+        // want and is not an error at all.
+        ::mkdir("logs", 0755);
+        std::tm tm = local_now();
+        char name[64];
+        std::snprintf(name, sizeof name, "logs/mxbm_%04d-%02d-%02d_%02d-%02d-%02d.log",
+                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                      tm.tm_hour, tm.tm_min, tm.tm_sec);
+        target = name;
+    }
+
+    g_log = std::fopen(target.c_str(), "a");
+    if (!g_log) return false;
+    if (resolved_path) *resolved_path = target;
+    return true;
+}
+
+void close_log() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_log) { std::fclose(g_log); g_log = nullptr; }
+}
+
 void banner() {
     std::string text = std::string("MXBM ") + mxbm::version() + " — open BeamHash III miner";
     print_line(text);
     print_line("");
 }
+
+void setup_miner() { print_line("Setup Miner..."); }
+
+void driver_detected(const char* api, int count) {
+    print_line(std::string(api) + " driver detected.");
+    print_line("Number of " + std::string(api) + " supported GPUs: " + std::to_string(count));
+}
+
+void device_block(int index, const std::string& name, const std::string& address,
+                  const std::string& vendor, const std::string& driver,
+                  unsigned long long memory_bytes, const std::string& active_detail) {
+    print_line("Device " + std::to_string(index) + ":");
+    auto field = [](const char* label, const std::string& value) {
+        if (value.empty()) return;   // omitted, never guessed -- see console.h
+        print_line(std::string("    ") + label + value);
+    };
+    field("Name:    ", name);
+    field("Address: ", address);
+    field("Vendor:  ", vendor);
+    field("Drivers: ", driver);
+    if (memory_bytes) {
+        // MByte on the 1024 scale, matching how every GPU tool reports VRAM.
+        field("Memory:  ", std::to_string(memory_bytes / (1024ULL * 1024ULL)) + " MByte");
+    }
+    field("Active:  ", active_detail.empty() ? "false"
+                                             : "true (" + active_detail + ")");
+    print_line("");
+}
+
+void connecting_to_pool() { print_line("Connecting to pool..."); }
+
+void connected_to(const std::string& host, const std::string& ip, uint16_t port, bool tls) {
+    std::string text = "Connected to " + host;
+    if (!ip.empty()) text += "(" + ip + ")";
+    text += ":" + std::to_string(port);
+    if (tls) text += "  (TLS enabled)";
+    print_colored(kGreen, text);
+}
+
+void tls_handshake_ok() { print_colored(kGreen, "TLS Handshake success"); }
 
 void connecting(const std::string& host, uint16_t port, bool tls) {
     std::string text = "Connecting to pool " + host + ":" + std::to_string(port);
@@ -69,7 +206,7 @@ void job(const std::string& id, uint32_t difficulty, uint64_t height) {
     // share/best-share notation.
     char units[32];
     std::snprintf(units, sizeof units, "%.0f", pow::to_display_units(difficulty));
-    print_line("New job received: " + id + " Difficulty: " + units);
+    print_colored(kYellow, "New job received: " + id + " Difficulty: " + units);
 }
 
 void share_found(const std::string& device, double units, double target_units) {
@@ -150,7 +287,14 @@ void info(const std::string& msg) {
 }
 
 void stats_block(const std::string& block) {
-    if (g_nocolor) { print_line(block); return; }
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_nocolor) {
+        std::fputs(block.c_str(), stdout);
+        std::fputc('\n', stdout);
+        std::fflush(stdout);
+        log_block(block);
+        return;
+    }
     // Colour each line separately rather than wrapping the whole block in one
     // SGR pair. The block is multi-line, and a single unterminated colour would
     // stay in effect across every newline -- so anything another thread printed
@@ -169,6 +313,7 @@ void stats_block(const std::string& block) {
         i = j + 1;
     }
     std::fflush(stdout);
+    log_block(block);   // uncoloured, on both paths through this function
 }
 
 void error(const std::string& msg) {

@@ -47,6 +47,11 @@ public:
     // (pool mode; plan-mandated default — see transport.h).
     bool connect(const std::string& host, uint16_t port, bool tls);
 
+    // The IP the pool hostname resolved to on the current connection, "" if
+    // not connected. Passed straight through from the Transport -- see its
+    // peer_ip() for why it is worth reporting.
+    const std::string& peer_ip() const { return transport_.peer_ip(); }
+
     // Stores api_key for re-login on reconnect, then sends Login on the wire.
     void login(const std::string& api_key);
 

@@ -58,11 +58,20 @@ int main() {
           "format_units(999999) == 1000.0k (still below the 1e6 M-threshold)");
 
     // -- format_speed_line: the --shortstats one-liner, sol15-driven --
+    //
+    // Two decimals by default, matching the stats table's Speed column: the
+    // line and the table report the same quantity, and printing it to
+    // different precisions in the two places was an inconsistency, not a
+    // feature. --digits moves both together.
     {
         miner::Stats::Snapshot s{};
-        s.sol15 = 53.5;
-        check(format_speed_line(s) == "Average speed (15s): 53.5 sol/s",
-              "format_speed_line renders sol15 to one decimal");
+        s.sol15 = 53.4712;
+        check(format_speed_line(s) == "Average speed (15s): 53.47 sol/s",
+              "format_speed_line renders sol15 to two decimals by default");
+        check(format_speed_line(s, 0) == "Average speed (15s): 53 sol/s",
+              "--digits 0 drops the decimal point entirely");
+        check(format_speed_line(s, 4) == "Average speed (15s): 53.4712 sol/s",
+              "--digits widens the value");
     }
 
     // -- format_stats_block: full --longstats table, golden byte-for-byte --
@@ -149,6 +158,115 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
               "Iter. column value ends flush with its header");
         check(header.find("Shares") + 6 == device.find("5/0/0") + 5,
               "Shares column value ends flush with its header");
+    }
+
+    // -- the dev-fee row: present when a fee is charged, absent when none is --
+    //
+    // The golden block above is a no-fee snapshot (devfee_rate 0), which is
+    // what pins the "absent" half: adding an unconditional row would have
+    // broken it. This pins the other half -- that a build which DOES charge
+    // says so on the table, with the numbers a user needs to check the rate
+    // against their own uptime rather than take it on trust.
+    {
+        miner::Stats::Snapshot s{};
+        s.pool = "de.beam.herominers.com:1130";
+        s.device_label = "GPU 0";
+        s.uptime = std::chrono::seconds(7200);
+        s.accepted = 40;
+        s.devfee_rate = 0.01;
+        s.devfee_slices = 2;
+        s.devfee_seconds = 72.0;
+        s.devfee_accepted = 1;
+
+        std::string got = format_stats_block(s, "0.4", "19:47:26");
+        check(got.find("Dev fee 1%") != std::string::npos,
+              "the stats table states the fee rate when one is charged");
+        check(format_stats_block([&]{ auto t = s; t.devfee_rate = 0.025; return t; }(), "0.4", "19:47:26")
+                  .find("Dev fee 2.5%") != std::string::npos,
+              "a fractional rate is shown exactly, not rounded");
+        check(got.find("2 rounds, 72s total") != std::string::npos,
+              "...alongside what has actually been spent this session");
+        check(got.find("1/0/0 A/S/R") != std::string::npos,
+              "...and the fee pool's own share verdicts, kept out of the user's row");
+        check(got.find("(active now)") == std::string::npos,
+              "no round is marked active when none is running");
+
+        // The user's own Shares column must still read 40/0/0 -- the fee's
+        // single accepted share must not have leaked into their count.
+        check(got.find("40/0/0") != std::string::npos,
+              "the user's share counters exclude dev-fee shares");
+
+        s.devfee_active = true;
+        check(format_stats_block(s, "0.4", "19:47:26").find("(active now)") != std::string::npos,
+              "a round in progress is marked, so the pool switch is explained");
+
+        s.devfee_rate = 0.0;
+        check(format_stats_block(s, "0.4", "19:47:26").find("Dev fee") == std::string::npos,
+              "a build with no fee shows no dev-fee row at all");
+    }
+
+    // -- the identity line: version, driver, API port --
+    //
+    // Both extras are omitted rather than faked when unknown, which is what
+    // keeps the golden above (a fixture with neither) valid.
+    {
+        miner::Stats::Snapshot s{};
+        s.pool = "pool.example.com:1130";
+        s.uptime = std::chrono::seconds(60);
+
+        std::string bare = split_lines(format_stats_block(s, "0.5.1", "12:00:00"))[2];
+        check(bare == "MXBM 0.5.1",
+              "no driver and no API port leaves the version standing alone");
+
+        s.driver_version = "610.43.03";
+        std::string full = split_lines(format_stats_block(s, "0.5.1", "12:00:00", 2, 8080))[2];
+        check(full == "MXBM 0.5.1, Nvidia 610.43.03, API port 8080",
+              "the driver version and API port join the version line");
+
+        std::string no_api = split_lines(format_stats_block(s, "0.5.1", "12:00:00", 2, 0))[2];
+        check(no_api == "MXBM 0.5.1, Nvidia 610.43.03",
+              "API port 0 means the API is off, so it is left off the line -- not printed as port 0");
+    }
+
+    // -- --digits keeps the whole table in lockstep --
+    //
+    // Speed and Pool each widen by (digits - 2), so the two header lines and
+    // the two value rows must ALL grow by exactly 2*(digits-2) characters. If
+    // the headers ever drift from the values, every column to the right of
+    // Pool is silently misaligned -- which a test that only checks the numbers
+    // would never notice.
+    {
+        miner::Stats::Snapshot s{};
+        s.sol60 = 53.4712;
+        s.pool_sol_session = 52.1035;
+        s.iter60 = 28.1;
+        s.accepted = 10;
+        s.best_share_units = 8012.0;
+        s.pool = "pool.example.com:1130";
+        s.device_label = "NVIDIA GeForce RTX 4070 Ti SUPER";
+        s.uptime = std::chrono::seconds(8130);
+
+        std::vector<std::string> a = split_lines(format_stats_block(s, "1.0.0", "12:00:00", 2));
+        std::vector<std::string> b = split_lines(format_stats_block(s, "1.0.0", "12:00:00", 4));
+        check(a.size() == b.size(), "--digits does not add or drop table lines");
+
+        int widened = 0;
+        bool only_expected_growth = true;
+        if (a.size() == b.size()) {
+            for (size_t i = 0; i < a.size(); ++i) {
+                const long grew = (long)b[i].size() - (long)a[i].size();
+                if (grew == 4) ++widened;               // 2 columns x 2 extra decimals
+                else if (grew != 0) only_expected_growth = false;
+            }
+        }
+        check(only_expected_growth,
+              "every line either keeps its width or grows by exactly the two columns' worth");
+        check(widened == 4,
+              "the two header lines and the two value rows all widen together");
+
+        // And the values really are at the new precision.
+        check(format_stats_block(s, "1.0.0", "12:00:00", 4).find("53.4712") != std::string::npos,
+              "--digits 4 renders the Speed column to four decimals");
     }
 
     return summary("format");

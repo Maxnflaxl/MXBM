@@ -33,14 +33,18 @@ std::string clock_hhmmss() {
 
 Ticker::~Ticker() { stop(); }
 
-void Ticker::start(const miner::Stats& stats, int short_s, int long_s) {
+void Ticker::start(const miner::Stats& stats, int short_s, int long_s,
+                   int digits, bool timeprint, int api_port) {
     if (started_) return;
     stats_ = &stats;
     short_s_ = short_s;
     long_s_ = long_s;
+    digits_ = digits;
+    timeprint_ = timeprint;
+    api_port_ = api_port;
     started_ = true;
     stop_requested_ = false;
-    worker_ = std::thread(&Ticker::worker_main, this);
+    worker_ = std::thread([this] { try { worker_main(); } catch (...) {} });
 }
 
 void Ticker::stop() {
@@ -82,10 +86,17 @@ void Ticker::worker_main() {
         // Engine::worker_main extracting the mailbox then processing
         // unlocked) -- stats_->snapshot() takes Stats's own, separate
         // mutex, and console I/O should never hold up stop().
-        if (fire_short) console::info(format_speed_line(stats_->snapshot()));
+        if (fire_short) {
+            std::string line = format_speed_line(stats_->snapshot(), digits_);
+            // --timeprint stamps the SHORT line only: the long block already
+            // carries a clock in its own header, and the transcript log
+            // timestamps every line regardless (see console::open_log).
+            if (timeprint_) line = "[" + clock_hhmmss() + "] " + line;
+            console::info(line);
+        }
         if (fire_long) {
-            console::stats_block(
-                format_stats_block(stats_->snapshot(), mxbm::version(), clock_hhmmss().c_str()));
+            console::stats_block(format_stats_block(
+                stats_->snapshot(), mxbm::version(), clock_hhmmss().c_str(), digits_, api_port_));
         }
     }
 }
