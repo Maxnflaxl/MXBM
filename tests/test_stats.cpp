@@ -184,5 +184,93 @@ int main() {
               "a second accept adds its own job's difficulty (8000/8000)");
     }
 
+    // -- Series: Welford against a two-pass reference --
+    //
+    // The online form is only worth having if it agrees with the textbook
+    // two-pass computation, so compute both over the same values. Numbers are
+    // the live-session 60 s samples from docs/performance.md, outlier included.
+    {
+        const double vals[] = { 56.1, 55.9, 58.9, 39.7, 54.2, 57.0, 56.4, 55.1 };
+        const size_t n = sizeof vals / sizeof vals[0];
+        Stats::Series ser;
+        for (size_t i = 0; i < n; ++i) ser.add(vals[i]);
+
+        double sum = 0.0, lo = vals[0], hi = vals[0];
+        for (size_t i = 0; i < n; ++i) {
+            sum += vals[i];
+            if (vals[i] < lo) lo = vals[i];
+            if (vals[i] > hi) hi = vals[i];
+        }
+        const double mean = sum / (double)n;
+        double ss = 0.0;
+        for (size_t i = 0; i < n; ++i) ss += (vals[i] - mean) * (vals[i] - mean);
+        const double sd = std::sqrt(ss / (double)(n - 1));
+
+        check(ser.n == n, "Series counts every sample");
+        check(std::fabs(ser.mean - mean) < 1e-9, "Series mean matches a two-pass mean");
+        check(std::fabs(ser.stddev() - sd) < 1e-9,
+              "Series stddev matches a two-pass sample stddev (n-1)");
+        check(ser.min == lo && ser.max == hi, "Series tracks both extremes");
+    }
+
+    // -- Series: the counts where a variance formula falls over --
+    {
+        Stats::Series e;
+        check(e.n == 0 && e.stddev() == 0.0, "an unsampled Series reports no spread");
+        e.add(42.0);
+        check(e.n == 1 && e.mean == 42.0 && e.min == 42.0 && e.max == 42.0,
+              "one sample: it is the mean and both extremes");
+        check(e.stddev() == 0.0, "one sample: stddev is 0, not a divide by n-1 == 0");
+        e.add(42.0);
+        check(e.stddev() == 0.0, "two identical samples have exactly zero spread");
+    }
+
+    // -- session series: the sampling rules, through the real snapshot() path --
+    {
+        Stats s;
+        long long fake_ms = 0;
+        install_fake_clock(s, fake_ms);
+
+        double cur_power = 300.0;
+        s.set_telemetry_source([&cur_power](Stats::Snapshot& snap) {
+            snap.has_power = true;
+            snap.power_w = cur_power;
+        });
+
+        s.snapshot();                       // t=0: first fold, banks 300
+        fake_ms = 500;  cur_power = 999.0;
+        Stats::Snapshot limited = s.snapshot();   // <1 s later: must NOT fold
+        check(limited.series.power_w.n == 1 && limited.series.power_w.max == 300.0,
+              "a second snapshot within the sample interval does not fold again");
+
+        fake_ms = 1000; cur_power = 310.0; s.snapshot();
+        fake_ms = 2000; cur_power = 290.0;
+        Stats::Snapshot three = s.snapshot();
+        check(three.series.power_w.n == 3, "one fold per sample interval, no more");
+        check(three.series.power_w.min == 290.0 && three.series.power_w.max == 310.0,
+              "telemetry extremes track the session, not the latest reading");
+        check(std::fabs(three.series.power_w.mean - 300.0) < 1e-9,
+              "telemetry mean averages the folded samples only (the 999 was skipped)");
+
+        // A windowed rate must not be sampled before its window has filled:
+        // sol15 reads 0.0 for the first 15 s, which would pin the minimum at
+        // zero for the entire session.
+        check(three.series.sol15.n == 0, "sol15 is not sampled before 15 s of uptime");
+        check(three.series.sol60.n == 0, "sol60 is not sampled before 60 s of uptime");
+
+        s.record_attempt(30);               // 30 candidates at t=2 s
+        fake_ms = 15000;
+        Stats::Snapshot at15 = s.snapshot();
+        check(at15.series.sol15.n == 1, "sol15 starts being sampled once its window is full");
+        check(std::fabs(at15.series.sol15.mean - 2.0) < 1e-9,
+              "the sampled sol15 is the rate itself (30 candidates / 15 s)");
+        check(at15.series.sol60.n == 0, "sol60 still waits for its own longer window");
+
+        fake_ms = 60000;
+        Stats::Snapshot at60 = s.snapshot();
+        check(at60.series.sol60.n == 1 && at60.series.iter60.n == 1,
+              "the 60 s window starts sampling at 60 s, attempts rate alongside it");
+    }
+
     return summary("stats");
 }

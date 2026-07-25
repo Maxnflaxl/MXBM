@@ -139,6 +139,36 @@ public:
         bool dev;        // found during a developer-fee round
     };
 
+    // Running summary of one repeatedly-sampled quantity: how many samples,
+    // their mean and standard deviation, and the extremes seen. Constant
+    // memory -- no sample is retained -- via Welford's online algorithm, which
+    // stays numerically stable where the textbook sum-of-squares does not (that
+    // one subtracts two large nearly-equal numbers, and a long session reaches
+    // sample counts where the cancellation eats most of the precision).
+    //
+    // SESSION-SCOPED AND NEVER RESET, which is the whole point: these outlive
+    // every consumer's own history. The dashboard's chart ring holds ~30
+    // minutes and starts over on reload, so the range it can draw is only ever
+    // the range it still happens to be holding -- a thermal spike or a clock
+    // dip from an hour ago is simply gone. These are the whole run's.
+    struct Series {
+        uint64_t n = 0;
+        double mean = 0.0;
+        double min = 0.0, max = 0.0;   // both meaningless while n == 0
+        double m2 = 0.0;               // sum of squared deviations from the mean
+        void add(double v);
+        // SAMPLE standard deviation (n-1 denominator), matching the +/-1 sigma
+        // figures docs/performance.md quotes. 0 with fewer than two samples.
+        double stddev() const;
+    };
+
+    // Everything summarised over the session. Field names mirror the Snapshot
+    // fields each one summarises.
+    struct SeriesSet {
+        Series sol15, sol60, iter60;
+        Series power_w, sm_clock_mhz, mem_clock_mhz, temp_c, fan_pct;
+    };
+
     // How many found shares are retained. At a typical few shares a minute
     // this is roughly the last half-hour -- enough to see the spread and any
     // vardiff step, while keeping the /summary body small enough that polling
@@ -159,6 +189,11 @@ public:
         long long last_latency_ms;          // -1 until the first record_result
         std::string pool;                   // "host:port"
         std::string device_label;           // e.g. "NVIDIA GeForce RTX 4070 Ti SUPER" or "CPU 0 reference"
+        // Installed GPU driver version ("610.43.03"), empty when unknown. Set
+        // once at startup; reported on the stats block's identity line and in
+        // the /summary API, because a driver update is the likeliest
+        // explanation for a hashrate that moved with no change to the miner.
+        std::string driver_version;
         long long connect_ms;               // TCP+TLS handshake duration
         std::chrono::seconds uptime;
         std::string last_job_id;
@@ -175,6 +210,8 @@ public:
         uint64_t devfee_accepted = 0, devfee_stale = 0, devfee_rejected = 0;
         // Oldest first, at most kRecentShares entries.
         std::vector<RecentShare> recent_shares;
+        // Session-long summary of the sampled quantities above -- see Series.
+        SeriesSet series;
         // Device telemetry, filled by whatever the platform can supply (NVML on
         // NVIDIA). Each has_* is false when that particular query is unavailable --
         // laptops commonly report power but not fan -- so the table can show the
@@ -198,6 +235,11 @@ public:
     // at startup after the solver backend is chosen; thread-safe. Defaults to
     // "GPU 0" since the GPU solver is the default backend.
     void set_device_label(std::string label);
+
+    // Sets the GPU driver version shown alongside the miner version. Set once
+    // at startup, from whatever the platform can report (NVML on NVIDIA);
+    // left empty when there is none. Thread-safe, like set_device_label.
+    void set_driver_version(std::string v);
 
     // Installed once at startup by whichever backend can supply telemetry; called
     // while building a snapshot. Left null on platforms with none.
@@ -260,6 +302,7 @@ private:
     std::string last_job_id_;
     double last_job_units_ = 0.0;
     std::string device_label_ = "GPU 0";
+    std::string driver_version_;
 
     // Developer-fee ledger, kept strictly apart from the counters above.
     double devfee_rate_ = 0.0;
@@ -276,6 +319,15 @@ private:
         bool dev;
     };
     std::deque<FoundShare> found_;   // oldest first, capped at kRecentShares
+
+    // Session-long summaries, folded from inside snapshot() -- see the comment
+    // there for the sampling rules. `mutable` because snapshot() is const and
+    // stays that way: it is a read for every caller, and the accumulation is
+    // bookkeeping about the reads themselves. Both are written only under
+    // mutex_, like every other member here.
+    mutable SeriesSet series_;
+    mutable std::chrono::steady_clock::time_point last_series_sample_;
+    mutable bool series_sampled_ = false;   // false until the first fold
 };
 
 } } // namespace mxbm::miner

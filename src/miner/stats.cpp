@@ -1,5 +1,7 @@
 #include "miner/stats.h"
 
+#include <cmath>
+
 namespace mxbm { namespace miner {
 
 namespace {
@@ -7,6 +9,25 @@ constexpr std::chrono::minutes kPruneAge{15};
 constexpr std::chrono::seconds kWindow15{15};
 constexpr std::chrono::seconds kWindow60{60};
 constexpr size_t kSubmitCap = 64;
+// Shortest gap between two folds into Snapshot::series. Rate-limits the
+// accumulation so that a second dashboard polling the API cannot double the
+// sample count and reweight the mean -- see snapshot().
+constexpr std::chrono::seconds kSeriesInterval{1};
+}
+
+// Welford's online update: keep the running mean, and accumulate squared
+// deviations against it rather than squaring the values themselves.
+void Stats::Series::add(double v) {
+    if (n == 0) { min = max = v; }
+    else { if (v < min) min = v; if (v > max) max = v; }
+    ++n;
+    double delta = v - mean;
+    mean += delta / (double)n;
+    m2 += delta * (v - mean);   // deliberately the NEW mean: that is what makes it Welford
+}
+
+double Stats::Series::stddev() const {
+    return n >= 2 ? std::sqrt(m2 / (double)(n - 1)) : 0.0;
 }
 
 void Stats::set_telemetry_source(TelemetryFn fn) {
@@ -17,6 +38,11 @@ void Stats::set_telemetry_source(TelemetryFn fn) {
 void Stats::set_device_label(std::string label) {
     std::lock_guard<std::mutex> lock(mutex_);
     device_label_ = std::move(label);
+}
+
+void Stats::set_driver_version(std::string v) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    driver_version_ = std::move(v);
 }
 
 Stats::Stats() {
@@ -166,6 +192,7 @@ Stats::Snapshot Stats::snapshot() const {
     s.last_latency_ms = last_latency_ms_;
     s.pool = pool_;
     s.device_label = device_label_;
+    s.driver_version = driver_version_;
     if (telemetry_) telemetry_(s);
     s.connect_ms = connect_ms_;
     s.uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_);
@@ -184,6 +211,45 @@ Stats::Snapshot Stats::snapshot() const {
         s.recent_shares.push_back(
             RecentShare{std::chrono::duration<double>(now - f.t).count(), f.units, f.target, f.dev});
     }
+
+    // Fold this observation into the session-long summaries. Sampled HERE, on
+    // the read path, rather than from a producer on the mining thread: the
+    // telemetry source is only queried while building a snapshot, so this is
+    // where a power/clock/temperature reading exists at all, and adding a
+    // per-second NVML query to the worker thread would perturb the very rate
+    // being measured.
+    //
+    // The cost of that choice: the sample count follows how often the miner is
+    // OBSERVED, not a fixed schedule. The console ticker alone yields a sample
+    // per tick; an open dashboard adds one per poll, up to the rate limit
+    // below. So Series::n is "samples taken", never "seconds elapsed", and the
+    // mean is a mean over observations rather than a time-weighted average.
+    // For a rate that is already a moving average over a fixed window, those
+    // coincide as long as observations don't correlate with the value, which
+    // ticker and poll timers don't.
+    if (!series_sampled_ || now - last_series_sample_ >= kSeriesInterval) {
+        series_sampled_ = true;
+        last_series_sample_ = now;
+        // A windowed rate reads far below the truth until its window has
+        // actually filled -- sol15 is 0.0 for the first 15 seconds of any
+        // session -- so a window is only sampled once it is full. Without this
+        // guard every speed series would have its minimum pinned at 0.0 for
+        // the whole run, and its mean quietly dragged down by startup.
+        if (now - start_ >= kWindow15) series_.sol15.add(s.sol15);
+        if (now - start_ >= kWindow60) {
+            series_.sol60.add(s.sol60);
+            series_.iter60.add(s.iter60);
+        }
+        // Telemetry is sampled only when the platform actually supplied it, so
+        // a card that reports power but not fan builds a power series and
+        // leaves the fan one empty rather than filling it with zeroes.
+        if (s.has_power)     series_.power_w.add(s.power_w);
+        if (s.has_sm_clock)  series_.sm_clock_mhz.add((double)s.sm_clock_mhz);
+        if (s.has_mem_clock) series_.mem_clock_mhz.add((double)s.mem_clock_mhz);
+        if (s.has_temp)      series_.temp_c.add((double)s.temp_c);
+        if (s.has_fan)       series_.fan_pct.add((double)s.fan_pct);
+    }
+    s.series = series_;
     return s;
 }
 
