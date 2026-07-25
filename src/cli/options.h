@@ -25,6 +25,12 @@ struct Options {
     std::string devices;             // accepted, stored; device SELECTION is a Phase-D notice
     bool watchdog_requested = false; // accepted; watchdog monitoring notice
     std::string solver = "auto";     // --solver gpu|ref|auto (default: prefer gpu, fall back to ref)
+
+    // Offline benchmark mode. Non-empty => solve synthetic jobs and report
+    // sol/s instead of connecting to a pool; --pool/--user are then neither
+    // required nor used. benchmark_seconds 0 means run until Ctrl+C.
+    std::string benchmark;
+    int benchmark_seconds = 0;
     std::string config_path, json_profile;  // --config PATH, --profile NAME (with --json)
     bool use_json_config = false;    // --json
     bool version_requested = false, help_requested = false;

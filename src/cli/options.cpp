@@ -1,5 +1,6 @@
 #include "cli/options.h"
 
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
@@ -28,6 +29,8 @@ std::string usage_text() {
         "  --longstats N          long-stats interval in seconds, >=1 (default: 60)\n"
         "  --devices LIST         device selector (accepted, stored; device selection is a later phase)\n"
         "  --watchdog             enable the watchdog (accepted; arrives in a later phase)\n"
+        "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
+        "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
         "  --solver cuda|opencl|gpu|ref|auto\n"
         "                         solver backend. gpu = any GPU (CUDA preferred), cuda/opencl\n"
         "                         pin one, ref = CPU reference. Default: auto\n"
@@ -174,6 +177,35 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             if (i + 1 >= argc) { err = "missing value for --devices\n\n" + usage_text(); return false; }
             out.devices = argv[++i];
             out.seen.devices = true;
+            continue;
+        }
+        if (arg == "--benchmark") {
+            if (i + 1 >= argc) { err = "missing value for --benchmark\n\n" + usage_text(); return false; }
+            std::string v = argv[++i];
+            // Accept the same spellings --algo does, so the two flags agree.
+            std::string up;
+            for (char c : v) up += (char)std::toupper((unsigned char)c);
+            if (up != "BEAM-III" && up != "BEAMHASH3" && up != "BEAMHASHIII" && up != "BEAM") {
+                err = "invalid --benchmark algorithm (only BEAM-III is supported)\n\n" + usage_text();
+                return false;
+            }
+            out.benchmark = "BEAM-III";
+            // --benchmark names the algorithm itself, exactly as the reference miner's does,
+            // so it satisfies the --algo requirement rather than duplicating it.
+            // An explicit --algo may still be given; a conflicting one is caught
+            // by the BEAM-III check below, since both write the same variable.
+            algo = "BEAM-III";
+            continue;
+        }
+        if (arg == "--benchmark-seconds") {
+            if (i + 1 >= argc) { err = "missing value for --benchmark-seconds\n\n" + usage_text(); return false; }
+            char* end = nullptr;
+            long v = std::strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v < 1) {
+                err = "invalid --benchmark-seconds (must be an integer >= 1)\n\n" + usage_text();
+                return false;
+            }
+            out.benchmark_seconds = (int)v;
             continue;
         }
         if (arg == "--solver") {

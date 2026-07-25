@@ -6,6 +6,7 @@
 // stratum::Client::run()'s doc comment for why there's no return path or
 // cleanup here (the reference miner-style).
 #include <chrono>
+#include <atomic>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -24,6 +25,7 @@
 #include "stratum/client.h"
 #include "stratum/messages.h"
 #include "miner/engine.h"
+#include "miner/benchmark.h"
 #include "version.h"
 #include "gpu/nvml.h"
 #ifdef MXBM_HAVE_OPENCL
@@ -121,7 +123,8 @@ int main(int argc, char** argv) {
     // POOLS/POOL instead -- see cli::parse_args's doc comment) -- so the
     // "at least one pool" check moved here, after the config-merge above
     // has had its chance to fill opts.pools in.
-    if (opts.pools.empty()) {
+    const bool benchmark_mode = !opts.benchmark.empty();
+    if (opts.pools.empty() && !benchmark_mode) {
         std::fputs("missing --pool (or config with POOLS)\n", stderr);
         return 1;
     }
@@ -161,7 +164,9 @@ int main(int argc, char** argv) {
 
     miner::Stats stats;
 
-    ui::console::connecting(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
+    if (!benchmark_mode) {
+        ui::console::connecting(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
+    }
 
     stratum::Client client;
 
@@ -169,18 +174,20 @@ int main(int argc, char** argv) {
     // own reconnect loop keep retrying below. login() runs unconditionally to
     // store the api_key credential even on initial connection failure, so the
     // reconnect loop has valid credentials for its re-login attempts.
-    auto connect_t0 = std::chrono::steady_clock::now();
-    bool up = client.connect(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
-    auto connect_t1 = std::chrono::steady_clock::now();
-    stats.record_connect(
-        opts.pools[0].host + ":" + std::to_string(opts.pools[0].port),
-        std::chrono::duration_cast<std::chrono::milliseconds>(connect_t1 - connect_t0).count());
-    if (up) {
-        ui::console::connected(opts.pools[0].tls);
-    } else {
-        ui::console::error("Initial connection failed — will keep retrying");
+    if (!benchmark_mode) {
+        auto connect_t0 = std::chrono::steady_clock::now();
+        bool up = client.connect(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
+        auto connect_t1 = std::chrono::steady_clock::now();
+        stats.record_connect(
+            opts.pools[0].host + ":" + std::to_string(opts.pools[0].port),
+            std::chrono::duration_cast<std::chrono::milliseconds>(connect_t1 - connect_t0).count());
+        if (up) {
+            ui::console::connected(opts.pools[0].tls);
+        } else {
+            ui::console::error("Initial connection failed — will keep retrying");
+        }
+        client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
     }
-    client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
 
     // Solver selection (Phase C Task 4): pick a backend for opts.solver
     // ("gpu" | "ref" | "auto" -- validated by cli::parse_args, so no other
@@ -294,6 +301,85 @@ int main(int argc, char** argv) {
         } else {
             ui::console::info("No solver backend available (no CUDA or OpenCL device, and no Beam oracle build) - monitoring jobs only (no solving)");
         }
+    }
+
+    // --benchmark: solve synthetic jobs and report, then exit. Placed AFTER
+    // solver selection and telemetry so a benchmark run reports the same
+    // device line, the same ticker cadence and the same stats table as mining
+    // -- the whole value of this mode is that its sol/s is comparable to the
+    // mining figure, which only holds if it comes from the same code.
+    if (benchmark_mode) {
+        if (!solver) {
+            ui::console::error("--benchmark needs a working solver backend; none is available");
+            return 1;
+        }
+        char line[192];
+        if (opts.benchmark_seconds > 0) {
+            std::snprintf(line, sizeof line,
+                "Benchmarking %s for %ds - no pool, no wallet",
+                opts.benchmark.c_str(), opts.benchmark_seconds);
+        } else {
+            std::snprintf(line, sizeof line,
+                "Benchmarking %s - no pool, no wallet (Ctrl+C to stop)",
+                opts.benchmark.c_str());
+        }
+        ui::console::info(line);
+
+        // Ctrl+C ends the run and still prints the summary, rather than
+        // killing the process and losing it. The flag is checked between
+        // solves; request_abort() additionally cuts short a solve already in
+        // flight, so the wait is bounded by a round, not a whole solve.
+        static std::atomic<bool>* s_stop = nullptr;
+        static miner::Solver* s_solver = nullptr;
+        std::atomic<bool> stop{false};
+        s_stop = &stop;
+        s_solver = solver.get();
+        std::signal(SIGINT, [](int) {
+            if (s_stop) s_stop->store(true, std::memory_order_relaxed);
+            if (s_solver) s_solver->request_abort();
+        });
+
+        ui::Ticker ticker;
+        ticker.start(stats, opts.shortstats, opts.longstats);
+        miner::BenchmarkResult r;
+        try {
+            r = miner::run_benchmark(*solver, stats, opts.benchmark_seconds, stop);
+        } catch (const std::exception& e) {
+            // A backend can construct successfully and still fail on first
+            // launch -- most commonly out of memory, because available() sees
+            // free VRAM at startup that another process has taken by the time
+            // a kernel runs. Report it; do not let it reach the runtime and
+            // core-dump, which reads like a solver bug rather than contention.
+            ticker.stop();
+            std::signal(SIGINT, SIG_DFL);
+            ui::console::error(std::string("Benchmark failed: ") + e.what());
+            ui::console::info("If another process is using the GPU, stop it and retry: "
+                              "a full BeamHash III search needs ~7.5 GiB free.");
+            return 1;
+        }
+        ticker.stop();
+        std::signal(SIGINT, SIG_DFL);
+
+        // Quote sol/s as the headline (what pools and other miners report) but
+        // print solves and solutions-per-solve alongside, because sol/s is the
+        // product of the two and a change in either moves it. p5/p95 are there
+        // so a run can be judged stable or not without a second run.
+        std::snprintf(line, sizeof line, "Benchmark: %llu solves in %.1fs",
+                      (unsigned long long)r.solves, r.elapsed_s);
+        ui::console::info(line);
+        std::snprintf(line, sizeof line,
+            "  %.1f sol/s   (%.2f verified solutions/solve, %.2f solves/s)",
+            r.sol_per_s, r.per_solve_avg, r.solves_per_s);
+        ui::console::info(line);
+        std::snprintf(line, sizeof line,
+            "  %.1f ms/solve median   (p5 %.1f, p95 %.1f)",
+            r.median_ms, r.p5_ms, r.p95_ms);
+        ui::console::info(line);
+        if (r.solves < 100) {
+            ui::console::info("  note: fewer than 100 solves - too few to quote a margin; "
+                              "use --benchmark-seconds to run longer");
+        }
+        return 0;
     }
 
     // Engine, submit_fn, and on_attempt are all solver-agnostic (Engine
