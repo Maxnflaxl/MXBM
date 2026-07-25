@@ -39,7 +39,7 @@ void Stats::record_attempt(uint32_t candidates) {
 
 void Stats::record_submit(const std::string& job_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    submits_.push_back(PendingSubmit{job_id, now_fn()});
+    submits_.push_back(PendingSubmit{job_id, now_fn(), last_job_units_});
     while (submits_.size() > kSubmitCap) submits_.pop_front();
 }
 
@@ -56,6 +56,10 @@ void Stats::record_result(int code) {
 
     if (!submits_.empty()) {
         auto t0 = submits_.front().t;
+        // Bank the pool-credited work only on ACCEPT: stale and rejected shares pay
+        // nothing, and counting them would inflate the pool rate exactly when
+        // something is going wrong.
+        if (code == 1) accepted_units_ += submits_.front().units;
         submits_.pop_front();
         auto now = now_fn();
         last_latency_ms_ =
@@ -96,6 +100,7 @@ Stats::Snapshot Stats::snapshot() const {
     s.sol60 = (double)cand60 / 60.0;
     double elapsed = std::chrono::duration<double>(now - start_).count();
     s.sol_session = elapsed > 0.0 ? (double)total_candidates_ / elapsed : 0.0;
+    s.pool_sol_session = elapsed > 0.0 ? accepted_units_ / elapsed : 0.0;
     s.iter60 = (double)n60 / 60.0;
     s.accepted = accepted_;
     s.stale = stale_;

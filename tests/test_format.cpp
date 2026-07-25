@@ -107,5 +107,49 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
         check_golden_block(got, golden, "format_stats_block matches the the reference miner-style golden exactly");
     }
 
+    // -- the Name column must not shift the other columns --
+    // A full NVIDIA device string is 32 chars and used to overflow the 17-wide Name
+    // field, pushing every following column right and breaking the header alignment
+    // (reported from a live run). Assert on COLUMN POSITIONS against the header rather
+    // than a golden, so this keeps testing the actual invariant if the table changes.
+    {
+        miner::Stats::Snapshot s{};
+        s.sol60 = 57.08;
+        s.pool_sol_session = 54.30;
+        s.iter60 = 28.1;
+        s.accepted = 5;
+        s.best_share_units = 2700.0;
+        s.last_latency_ms = 17;
+        s.pool = "de.beam.herominers.com:1130";
+        s.device_label = "NVIDIA GeForce RTX 4070 Ti SUPER";
+        s.uptime = std::chrono::seconds(60);
+
+        std::string got = format_stats_block(s, "0.4", "19:47:26");
+        std::vector<std::string> lines;
+        for (size_t i = 0, j; i <= got.size(); i = j + 1) {
+            j = got.find('\n', i);
+            if (j == std::string::npos) j = got.size();
+            lines.push_back(got.substr(i, j - i));
+        }
+        // lines: 0 rule, 1 stats, 2 MXBM, 3 mining, 4 connected, 5 blank,
+        //        6 header1, 7 header2, 8 device
+        const std::string& header = lines.at(6);
+        const std::string& device = lines.at(8);
+
+        check(device.compare(0, 17, "RTX 4070 Ti SUPER") == 0,
+              "device row strips the vendor prefix to fit the 17-wide Name column");
+        check(device.find("NVIDIA") == std::string::npos,
+              "the redundant vendor prefix is gone from the table");
+        // Right-aligned numeric columns must end where their header ends.
+        check(header.find("Speed") + 5 == device.find("57.08") + 5,
+              "Speed column value ends flush with its header");
+        check(header.find("Pool") + 4 == device.find("54.30") + 5,
+              "Pool column value ends flush with its header");
+        check(header.find("Iter.") + 5 == device.find("28.1") + 4,
+              "Iter. column value ends flush with its header");
+        check(header.find("Shares") + 6 == device.find("5/0/0") + 5,
+              "Shares column value ends flush with its header");
+    }
+
     return summary("format");
 }

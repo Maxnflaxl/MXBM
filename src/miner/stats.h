@@ -37,6 +37,8 @@ public:
     // internal deque (see class comment below), not by id -- Beam results
     // don't echo a submit id beyond the job id, and oldest-first is what
     // the reference miner's own latency numbers reflect at our submit rates.
+    // The submitted share's credited value is the CURRENT job's target difficulty,
+    // captured here so record_result() can bank it when the pool accepts.
     void record_submit(const std::string& job_id);
 
     // Called with the achieved difficulty of a newly found share, in the
@@ -70,6 +72,12 @@ public:
 
     struct Snapshot {
         double sol15, sol60, sol_session;   // candidates/sec over windows
+        // Pool-side rate: the work the POOL has credited, i.e. the summed target
+        // difficulty of accepted shares over session time. Uses the job's target
+        // rather than each share's achieved difficulty -- achieved is >= target by
+        // construction and averages ~2x it, so summing achieved would overstate the
+        // rate by about a factor of two. 0 until the first share is accepted.
+        double pool_sol_session = 0.0;
         double iter60;                      // attempts/sec over the 60 s window
         uint64_t accepted, stale, rejected;
         double best_share_units;
@@ -117,6 +125,7 @@ public:
     std::function<std::chrono::steady_clock::time_point()> now_fn;
 
 private:
+    double accepted_units_ = 0.0;   // summed target difficulty of accepted shares
     TelemetryFn telemetry_;
     struct Event {
         std::chrono::steady_clock::time_point t;
@@ -125,6 +134,7 @@ private:
     struct PendingSubmit {
         std::string job_id;
         std::chrono::steady_clock::time_point t;
+        double units;      // the job's target difficulty when this was submitted
     };
 
     // Drops attempts_ entries older than 15 minutes relative to `now`.

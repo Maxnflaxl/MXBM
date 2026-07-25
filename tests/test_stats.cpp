@@ -3,6 +3,7 @@
 // see miner/stats.h). No threads -- record_*()/snapshot() are called
 // directly.
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -142,6 +143,45 @@ int main() {
         check(snap.pool == "de.beam.herominers.com:1130", "record_connect sets pool");
         check(snap.connect_ms == 11, "record_connect sets connect_ms");
         check(snap.reconnects == 2, "record_disconnect increments reconnects");
+    }
+
+    // -- pool_sol_session: pool-credited work rate --
+    // Regression: this column rendered a hardcoded 0.0 for its entire life. The
+    // numerator is the job's TARGET difficulty at submit time, not the share's
+    // achieved difficulty (which averages ~2x target and would overstate the rate),
+    // and only ACCEPTED shares pay.
+    //
+    // The fake clock is installed after construction, so start_ was captured from
+    // the real clock and `elapsed` carries a sub-millisecond real offset. The
+    // timestamps below are therefore kilosecond-scale, making that offset a <1e-6
+    // relative error, and the checks use a tolerance rather than equality.
+    {
+        Stats s;
+        long long fake_ms = 0;
+        install_fake_clock(s, fake_ms);
+
+        s.record_job("j1", 2000.0);
+        fake_ms = 1000;
+        s.record_submit("j1");        // captures the 2000 target in flight
+        s.record_job("j2", 6000.0);   // difficulty changes before the result lands
+        s.record_result(1);           // must bank 2000 (submit-time), not 6000
+
+        s.record_submit("j2");
+        s.record_result(3);           // stale -- pays nothing
+        s.record_submit("j2");
+        s.record_result(2);           // rejected -- pays nothing
+
+        fake_ms = 4000000;            // 4000 s
+        Stats::Snapshot a = s.snapshot();
+        check(std::fabs(a.pool_sol_session - 0.5) < 1e-3,
+              "pool_sol_session == accepted submit-time difficulty / elapsed (2000/4000)");
+
+        s.record_submit("j2");
+        s.record_result(1);           // banks 6000 -> 8000 total
+        fake_ms = 8000000;            // 8000 s
+        Stats::Snapshot b = s.snapshot();
+        check(std::fabs(b.pool_sol_session - 1.0) < 1e-3,
+              "a second accept adds its own job's difficulty (8000/8000)");
     }
 
     return summary("stats");

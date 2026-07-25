@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 
 namespace mxbm { namespace ui {
 
@@ -57,6 +58,27 @@ std::string format_speed_line(const miner::Stats::Snapshot& s) {
     return buf;
 }
 
+// The Name column is 17 wide. A full device string ("NVIDIA GeForce RTX 4070 Ti
+// SUPER", 32 chars) overflows it and pushes every following column out of line, so
+// drop the vendor prefix -- which carries no information in a per-device row -- and
+// truncate only if what remains still does not fit.
+static std::string short_device_name(const std::string& full) {
+    static const char* kPrefixes[] = {
+        "NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "AMD ",
+        "Advanced Micro Devices, Inc. ", "Intel(R) ", "Intel ",
+    };
+    std::string n = full;
+    for (const char* p : kPrefixes) {
+        const size_t len = std::strlen(p);
+        if (n.compare(0, len, p) == 0) { n.erase(0, len); break; }
+    }
+    constexpr size_t kNameWidth = 17;
+    // Plain truncation, not an ellipsis: %-17s pads by BYTES and a multi-byte glyph
+    // would occupy one column while counting as three, re-breaking the alignment.
+    if (n.size() > kNameWidth) n.resize(kNameWidth);
+    return n;
+}
+
 std::string format_stats_block(const miner::Stats::Snapshot& s,
                                 const char* version,
                                 const char* clock_hhmmss) {
@@ -98,7 +120,7 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     char device_row[256];
     std::snprintf(device_row, sizeof device_row,
         "%-17s%6.2f %6.2f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
-        s.device_label.c_str(), s.sol60, 0.0, s.iter60,
+        short_device_name(s.device_label).c_str(), s.sol60, s.pool_sol_session, s.iter60,
         shares.c_str(), best.c_str(),
         eff, pw, cclk, mclk, tmp, fan);
 
@@ -108,7 +130,7 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     char total_row[256];
     std::snprintf(total_row, sizeof total_row,
         "%-18s%6.2f %6.2f %6.1f %8s %6s %8s %6s",
-        "Total", s.sol60, 0.0, s.iter60,
+        "Total", s.sol60, s.pool_sol_session, s.iter60,
         shares.c_str(), best.c_str(), "--", "--");
 
     std::string out;
