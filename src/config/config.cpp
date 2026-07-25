@@ -8,6 +8,7 @@
 #include <climits>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 
 #include "nlohmann/json.hpp"
 
@@ -85,6 +86,104 @@ bool parse_json_bool(const nlohmann::ordered_json& j, bool& out) {
     return false;
 }
 
+// --- the option tables ---------------------------------------------------
+//
+// One row per configurable option: the config key, where the value lands in
+// cli::Options, which Seen flag guards it, and the range or domain it must
+// satisfy. BOTH loaders below walk these same tables, so a row added here is
+// understood by the flat and the JSON format at once, validated identically in
+// each, and cannot drift between them -- which is what the previous
+// hand-written blocks could not promise. The bounds themselves come from
+// cli/options.h, shared with the command-line parser for the same reason.
+//
+// Only the structural keys still need bespoke code below: ALGO (a pure guard --
+// Options has nowhere to store it), and POOL/POOLS with the USER/PASS/TLS that
+// bind to them.
+//
+// Every option carries a Seen flag and is skipped when it is already set: that
+// is the CLI-wins-over-config rule, applied uniformly. Rules that span two
+// options -- LOGFILE implying LOG, BENCHMARK satisfying ALGO -- deliberately
+// live nowhere near here; they cannot be settled until both sources have been
+// merged, so cli::resolve_implied_options() owns them.
+
+struct IntOpt {
+    const char* key;
+    int cli::Options::*field;
+    bool cli::Options::Seen::*seen;
+    long lo, hi;
+};
+
+struct BoolOpt {
+    const char* key;
+    const char* alias;                    // nullptr when the key has no alias
+    bool cli::Options::*field;
+    bool cli::Options::Seen::*seen;
+};
+
+struct StrOpt {
+    const char* key;
+    std::string cli::Options::*field;
+    bool cli::Options::Seen::*seen;
+    // nullptr-terminated list of accepted values, or nullptr for free-form
+    // text. Matching is case-insensitive: config values are hand-typed, and
+    // this file already accepts TRUE/on/OFF for booleans on the same grounds.
+    const char* const* domain;
+    // When non-null, the value stored on a domain hit -- so the spelling
+    // variants BENCHMARK accepts all normalise to one canonical form, exactly
+    // as --benchmark does on the command line.
+    const char* canonical;
+    bool join_array;                      // JSON only: accept an array, join with commas
+};
+
+struct DblOpt {
+    const char* key;
+    double cli::Options::*field;
+    bool cli::Options::Seen::*seen;
+    double lo, hi;
+};
+
+constexpr const char* kSolverDomain[] = {"cuda", "opencl", "gpu", "ref", "auto", nullptr};
+constexpr const char* kBenchmarkDomain[] = {"BEAM-III", "BEAMHASH3", "BEAMHASHIII", "BEAM", nullptr};
+
+constexpr IntOpt kIntOpts[] = {
+    {"APIPORT",           &cli::Options::apiport,           &cli::Options::Seen::apiport,           cli::kApiPortMin, cli::kApiPortMax},
+    {"SHORTSTATS",        &cli::Options::shortstats,        &cli::Options::Seen::shortstats,        cli::kStatsIntervalMin, INT_MAX},
+    {"LONGSTATS",         &cli::Options::longstats,         &cli::Options::Seen::longstats,         cli::kStatsIntervalMin, INT_MAX},
+    {"DIGITS",            &cli::Options::digits,            &cli::Options::Seen::digits,            cli::kDigitsMin, cli::kDigitsMax},
+    {"BENCHMARK_SECONDS", &cli::Options::benchmark_seconds, &cli::Options::Seen::benchmark_seconds, cli::kBenchmarkSecondsMin, INT_MAX},
+};
+
+constexpr BoolOpt kBoolOpts[] = {
+    {"NOCOLOR",   "NOCOLOUR", &cli::Options::nocolor,            &cli::Options::Seen::nocolor},
+    {"LOG",       nullptr,    &cli::Options::log_enabled,        &cli::Options::Seen::log},
+    {"TIMEPRINT", nullptr,    &cli::Options::timeprint,          &cli::Options::Seen::timeprint},
+    {"WATCHDOG",  nullptr,    &cli::Options::watchdog_requested, &cli::Options::Seen::watchdog},
+};
+
+constexpr StrOpt kStrOpts[] = {
+    {"DEVICES",   &cli::Options::devices,   &cli::Options::Seen::devices,   nullptr,          nullptr,    true},
+    {"LOGFILE",   &cli::Options::log_path,  &cli::Options::Seen::logfile,   nullptr,          nullptr,    false},
+    {"SOLVER",    &cli::Options::solver,    &cli::Options::Seen::solver,    kSolverDomain,    nullptr,    false},
+    {"BENCHMARK", &cli::Options::benchmark, &cli::Options::Seen::benchmark, kBenchmarkDomain, "BEAM-III", false},
+};
+
+constexpr DblOpt kDblOpts[] = {
+    // Raise-only is not enforced here: main() compares against the built-in
+    // rate and rejects a lower one, so a config file gets the same refusal --
+    // and the same explanation -- as a command line would.
+    {"DEVFEE", &cli::Options::devfee_pct, &cli::Options::Seen::devfee, cli::kDevFeePctMin, cli::kDevFeePctMax},
+};
+
+// Case-insensitive lookup of `v` in a nullptr-terminated domain. Returns the
+// matching entry (so a caller can use its canonical spelling) or nullptr.
+const char* domain_find(const char* const* domain, const std::string& v) {
+    const std::string u = to_upper(v);
+    for (const char* const* p = domain; *p; ++p) {
+        if (to_upper(*p) == u) return *p;
+    }
+    return nullptr;
+}
+
 // --- JSON profile application -------------------------------------------
 
 // ALGO/APIPORT/NOCOLOR/SHORTSTATS/LONGSTATS/DEVICES. ALGO is validated
@@ -100,96 +199,86 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
             err = "unsupported ALGO in profile '" + profile_name + "' (only BEAM-III is supported)";
             return false;
         }
+        // Record that an algorithm was supplied from SOME source, so a profile
+        // carrying ALGO satisfies main()'s post-merge requirement on its own
+        // and the user need not repeat --algo on every command line.
+        opts.seen.algo = true;
     }
 
-    if (!opts.seen.apiport) {
-        auto it = prof.find("APIPORT");
-        if (it != prof.end()) {
-            if (!it->is_number_integer()) {
-                err = "invalid APIPORT in profile '" + profile_name + "' (must be an integer)";
-                return false;
-            }
-            long long v = it->get<long long>();
-            if (v < 0 || v > 65535) {
-                err = "invalid APIPORT in profile '" + profile_name + "' (must be 0..65535)";
-                return false;
-            }
-            opts.apiport = static_cast<int>(v);
-            opts.seen.apiport = true;
+    auto bad = [&](const char* key) {
+        err = "invalid " + std::string(key) + " in profile '" + profile_name + "'";
+        return false;
+    };
+
+    // Integers. The INT_MAX upper bound is not decoration: a JSON value >= 2^31
+    // would wrap when narrowed to int, and a zero or negative stats interval
+    // sends the ticker's wake deadline into the past, busy-looping it.
+    for (const IntOpt& o : kIntOpts) {
+        if (opts.seen.*(o.seen)) continue;
+        auto it = prof.find(o.key);
+        if (it == prof.end()) continue;
+        if (!it->is_number_integer() || it->get<long long>() < o.lo || it->get<long long>() > o.hi) {
+            err = "invalid " + std::string(o.key) + " in profile '" + profile_name +
+                  "' (must be " + std::to_string(o.lo) + ".." + std::to_string(o.hi) + ")";
+            return false;
         }
+        opts.*(o.field) = static_cast<int>(it->get<long long>());
+        opts.seen.*(o.seen) = true;
     }
 
-    if (!opts.seen.nocolor) {
-        // NOCOLOUR is the British-spelling alias -- same acceptance as the
-        // flat loader's "NOCOLOR" || "NOCOLOUR" key check and the CLI's
-        // --nocolor/--nocolour.
-        auto it = prof.find("NOCOLOR");
-        if (it == prof.end()) it = prof.find("NOCOLOUR");
-        if (it != prof.end()) {
-            bool v;
-            if (!parse_json_bool(*it, v)) {
-                err = "invalid NOCOLOR in profile '" + profile_name + "'";
-                return false;
-            }
-            opts.nocolor = v;
-            opts.seen.nocolor = true;
-        }
+    for (const BoolOpt& o : kBoolOpts) {
+        if (opts.seen.*(o.seen)) continue;
+        auto it = prof.find(o.key);
+        if (it == prof.end() && o.alias) it = prof.find(o.alias);
+        if (it == prof.end()) continue;
+        bool v;
+        if (!parse_json_bool(*it, v)) return bad(o.key);
+        opts.*(o.field) = v;
+        opts.seen.*(o.seen) = true;
     }
 
-    if (!opts.seen.shortstats) {
-        auto it = prof.find("SHORTSTATS");
-        if (it != prof.end()) {
-            // Upper-bounded at INT_MAX (matching the flat loader's
-            // parse_flat_int(..., 1, INT_MAX, ...) range): a JSON value
-            // >= 2^31 would otherwise wrap when cast to int below, and a
-            // negative/zero shortstats interval sends the ticker's wake
-            // deadline into the past, busy-looping it.
-            if (!it->is_number_integer() || it->get<long long>() < 1 || it->get<long long>() > INT_MAX) {
-                err = "invalid SHORTSTATS in profile '" + profile_name + "' (must be 1.." + std::to_string(INT_MAX) + ")";
-                return false;
-            }
-            opts.shortstats = static_cast<int>(it->get<long long>());
-            opts.seen.shortstats = true;
+    for (const DblOpt& o : kDblOpts) {
+        if (opts.seen.*(o.seen)) continue;
+        auto it = prof.find(o.key);
+        if (it == prof.end()) continue;
+        if (!it->is_number()) return bad(o.key);
+        const double v = it->get<double>();
+        if (!(v >= o.lo) || !(v <= o.hi)) {   // written to reject NaN too
+            err = "invalid " + std::string(o.key) + " in profile '" + profile_name +
+                  "' (must be " + std::to_string(o.lo) + ".." + std::to_string(o.hi) + ")";
+            return false;
         }
+        opts.*(o.field) = v;
+        opts.seen.*(o.seen) = true;
     }
 
-    if (!opts.seen.longstats) {
-        auto it = prof.find("LONGSTATS");
-        if (it != prof.end()) {
-            // Same INT_MAX upper bound as SHORTSTATS above, same reason.
-            if (!it->is_number_integer() || it->get<long long>() < 1 || it->get<long long>() > INT_MAX) {
-                err = "invalid LONGSTATS in profile '" + profile_name + "' (must be 1.." + std::to_string(INT_MAX) + ")";
-                return false;
-            }
-            opts.longstats = static_cast<int>(it->get<long long>());
-            opts.seen.longstats = true;
-        }
-    }
+    for (const StrOpt& o : kStrOpts) {
+        if (opts.seen.*(o.seen)) continue;
+        auto it = prof.find(o.key);
+        if (it == prof.end()) continue;
 
-    if (!opts.seen.devices) {
-        auto it = prof.find("DEVICES");
-        if (it != prof.end()) {
-            std::string joined;
-            if (it->is_string()) {
-                joined = it->get<std::string>();
-            } else if (it->is_array()) {
-                // the reference miner accepts DEVICES as an array; join into the same
-                // comma-separated form --devices takes on the CLI.
-                for (size_t i = 0; i < it->size(); ++i) {
-                    if (!(*it)[i].is_string()) {
-                        err = "invalid DEVICES in profile '" + profile_name + "'";
-                        return false;
-                    }
-                    if (i) joined += ",";
-                    joined += (*it)[i].get<std::string>();
-                }
-            } else {
-                err = "invalid DEVICES in profile '" + profile_name + "'";
-                return false;
+        std::string value;
+        if (it->is_string()) {
+            value = it->get<std::string>();
+        } else if (o.join_array && it->is_array()) {
+            // the reference miner accepts DEVICES as an array; join into the same
+            // comma-separated form --devices takes on the command line.
+            for (size_t i = 0; i < it->size(); ++i) {
+                if (!(*it)[i].is_string()) return bad(o.key);
+                if (i) value += ",";
+                value += (*it)[i].get<std::string>();
             }
-            opts.devices = joined;
-            opts.seen.devices = true;
+        } else {
+            return bad(o.key);
         }
+
+        if (o.domain) {
+            const char* hit = domain_find(o.domain, value);
+            if (!hit) return bad(o.key);
+            value = o.canonical ? o.canonical : hit;
+        }
+        opts.*(o.field) = value;
+        opts.seen.*(o.seen) = true;
     }
 
     return true;
@@ -325,9 +414,11 @@ bool load_flat_config(const std::string& path, cli::Options& opts, std::string& 
         return false;
     }
 
-    std::string algo, pool, user, pass, tls_str, apiport_str, nocolor_str, shortstats_str, longstats_str, devices;
-    bool has_algo = false, has_pool = false, has_user = false, has_pass = false, has_tls = false;
-    bool has_apiport = false, has_nocolor = false, has_shortstats = false, has_longstats = false, has_devices = false;
+    // Collected first, applied after: POOL needs the USER/PASS/TLS bound to it
+    // whatever order the file lists them in. A repeated key keeps its LAST
+    // value, which is what a hand-edited file commenting-out-and-retrying
+    // expects.
+    std::map<std::string, std::string> kv;
 
     std::string line;
     while (std::getline(f, line)) {
@@ -335,89 +426,95 @@ bool load_flat_config(const std::string& path, cli::Options& opts, std::string& 
         if (t.empty() || t[0] == '#') continue;
         size_t eq = t.find('=');
         if (eq == std::string::npos) continue;   // no '=' on the line: ignore (forward-compat)
-
-        std::string key = to_upper(trim(t.substr(0, eq)));
-        std::string val = trim(t.substr(eq + 1));
-
-        if      (key == "ALGO")       { algo = val;       has_algo = true; }
-        else if (key == "POOL")       { pool = val;       has_pool = true; }
-        else if (key == "USER")       { user = val;       has_user = true; }
-        else if (key == "PASS")       { pass = val;       has_pass = true; }
-        else if (key == "TLS")        { tls_str = val;    has_tls = true; }
-        else if (key == "APIPORT")    { apiport_str = val; has_apiport = true; }
-        else if (key == "NOCOLOR" || key == "NOCOLOUR") { nocolor_str = val; has_nocolor = true; }
-        else if (key == "SHORTSTATS") { shortstats_str = val; has_shortstats = true; }
-        else if (key == "LONGSTATS")  { longstats_str = val;  has_longstats = true; }
-        else if (key == "DEVICES")    { devices = val;    has_devices = true; }
-        // else: unknown key, ignored (forward-compat)
+        // Unknown keys are simply never looked up below -- ignored, for
+        // forward compatibility with a file written for a later MXBM.
+        kv[to_upper(trim(t.substr(0, eq)))] = trim(t.substr(eq + 1));
     }
 
-    if (has_algo && algo != "BEAM-III") {
-        err = "unsupported ALGO in config file: " + path + " (only BEAM-III is supported)";
+    auto find = [&kv](const char* key, const char* alias = nullptr) {
+        auto it = kv.find(key);
+        if (it == kv.end() && alias) it = kv.find(alias);
+        return it;
+    };
+    auto bad = [&](const char* key) {
+        err = "invalid " + std::string(key) + " in config file: " + path;
         return false;
-    }
+    };
 
-    if (!opts.seen.apiport && has_apiport) {
-        int v;
-        if (!parse_flat_int(apiport_str, 0, 65535, v)) {
-            err = "invalid APIPORT in config file: " + path;
+    auto algo_it = find("ALGO");
+    if (algo_it != kv.end()) {
+        if (algo_it->second != "BEAM-III") {
+            err = "unsupported ALGO in config file: " + path + " (only BEAM-III is supported)";
             return false;
         }
-        opts.apiport = v;
-        opts.seen.apiport = true;
+        opts.seen.algo = true;   // see the JSON loader's note above
     }
 
-    if (!opts.seen.nocolor && has_nocolor) {
+    // The same tables the JSON loader walks -- see kIntOpts above.
+    for (const IntOpt& o : kIntOpts) {
+        auto it = find(o.key);
+        if (it == kv.end() || opts.seen.*(o.seen)) continue;
+        int v;
+        if (!parse_flat_int(it->second, o.lo, o.hi, v)) return bad(o.key);
+        opts.*(o.field) = v;
+        opts.seen.*(o.seen) = true;
+    }
+
+    for (const BoolOpt& o : kBoolOpts) {
+        auto it = find(o.key, o.alias);
+        if (it == kv.end() || opts.seen.*(o.seen)) continue;
         bool v;
-        if (!parse_flat_bool(nocolor_str, v)) {
-            err = "invalid NOCOLOR in config file: " + path;
-            return false;
+        if (!parse_flat_bool(it->second, v)) return bad(o.key);
+        opts.*(o.field) = v;
+        opts.seen.*(o.seen) = true;
+    }
+
+    for (const DblOpt& o : kDblOpts) {
+        auto it = find(o.key);
+        if (it == kv.end() || opts.seen.*(o.seen)) continue;
+        errno = 0;
+        char* end = nullptr;
+        const double v = std::strtod(it->second.c_str(), &end);
+        if (it->second.empty() || !end || *end != '\0' || errno == ERANGE ||
+            !(v >= o.lo) || !(v <= o.hi)) {   // the >=/<= form rejects NaN too
+            return bad(o.key);
         }
-        opts.nocolor = v;
-        opts.seen.nocolor = true;
+        opts.*(o.field) = v;
+        opts.seen.*(o.seen) = true;
     }
 
-    if (!opts.seen.shortstats && has_shortstats) {
-        int v;
-        if (!parse_flat_int(shortstats_str, 1, INT_MAX, v)) {
-            err = "invalid SHORTSTATS in config file: " + path;
-            return false;
+    for (const StrOpt& o : kStrOpts) {
+        auto it = find(o.key);
+        if (it == kv.end() || opts.seen.*(o.seen)) continue;
+        std::string value = it->second;
+        if (o.domain) {
+            const char* hit = domain_find(o.domain, value);
+            if (!hit) return bad(o.key);
+            value = o.canonical ? o.canonical : hit;
         }
-        opts.shortstats = v;
-        opts.seen.shortstats = true;
+        opts.*(o.field) = value;
+        opts.seen.*(o.seen) = true;
     }
 
-    if (!opts.seen.longstats && has_longstats) {
-        int v;
-        if (!parse_flat_int(longstats_str, 1, INT_MAX, v)) {
-            err = "invalid LONGSTATS in config file: " + path;
-            return false;
-        }
-        opts.longstats = v;
-        opts.seen.longstats = true;
-    }
-
-    if (!opts.seen.devices && has_devices) {
-        opts.devices = devices;
-        opts.seen.devices = true;
-    }
-
-    if (!opts.seen.pools && has_pool) {
+    auto pool_it = find("POOL"), user_it = find("USER"), pass_it = find("PASS"), tls_it = find("TLS");
+    const bool has_user = user_it != kv.end(), has_pass = pass_it != kv.end(), has_tls = tls_it != kv.end();
+    if (!opts.seen.pools && pool_it != kv.end()) {
+        const std::string& pool = pool_it->second;
         cli::PoolEntry pe;
         if (!split_host_port(pool, pe.host, pe.port)) {
             err = "invalid POOL host:port in config file: " + path;
             return false;
         }
-        pe.user = has_user ? user : std::string();
+        pe.user = has_user ? user_it->second : std::string();
         if (pe.user.empty()) {
             err = "POOL given without USER in config file: " + path;
             return false;
         }
-        pe.pass = has_pass ? pass : std::string();
+        pe.pass = has_pass ? pass_it->second : std::string();
         pe.tls = true;
         if (has_tls) {
             bool v;
-            if (!parse_flat_bool(tls_str, v)) {
+            if (!parse_flat_bool(tls_it->second, v)) {
                 err = "invalid TLS in config file: " + path;
                 return false;
             }

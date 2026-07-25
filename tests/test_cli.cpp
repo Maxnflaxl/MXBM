@@ -222,5 +222,102 @@ int main() {
         check(o.json_profile == "rig1", "--profile survives after bare --json");
     }
 
+    // --dev-fee: a percentage the user opts into paying. Parsing accepts any
+    // 0..100 value; the raise-only rule (a value below the built-in rate is
+    // refused outright) lives in main(), which is where that rate is known.
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",
+                            "--dev-fee","2.5"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "--dev-fee 2.5 parses");
+        check(o.devfee_pct == 2.5 && o.seen.devfee, "--dev-fee stores the percent + sets seen.devfee");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1"};
+        Options o; std::string e;
+        check(parse_args(7,(char**)av,o,e), "no --dev-fee parses");
+        check(o.devfee_pct < 0.0 && !o.seen.devfee,
+              "absent --dev-fee leaves the built-in rate in force");
+    }
+    for (const char* bad : {"-1", "101", "abc", "2.5x", ""}) {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",
+                            "--dev-fee", bad};
+        Options o; std::string e;
+        check(!parse_args(9,(char**)av,o,e), "--dev-fee rejects an out-of-range or non-numeric value");
+        check(!e.empty(), "--dev-fee rejection carries an error message");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",
+                            "--dev-fee"};
+        Options o; std::string e;
+        check(!parse_args(8,(char**)av,o,e), "--dev-fee with no value is rejected");
+    }
+
+    // -- --log / --logfile / --timeprint / --digits --
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1"};
+        Options o; std::string e;
+        check(parse_args(7,(char**)av,o,e), "parse ok with none of the log flags");
+        check(!o.log_enabled && o.log_path.empty() && !o.timeprint && o.digits == 2,
+              "defaults: no log, no stamp on the short line, two decimals");
+    }
+    {
+        // A bare --log/--timeprint must not swallow the flag that follows --
+        // the same trap --tls's optional value avoids.
+        const char* av[] = {"mxbm","--algo","BEAM-III","--log","--timeprint","--pool","p:1130","--user","a.r1"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "bare --log/--timeprint parse");
+        check(o.log_enabled && o.timeprint, "a bare flag means on");
+        check(o.pools.size() == 1 && o.pools[0].host == "p",
+              "a bare --log does not swallow the next flag");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
+                            "--log","off","--timeprint","0"};
+        Options o; std::string e;
+        check(parse_args(11,(char**)av,o,e), "explicit off values parse");
+        check(!o.log_enabled && !o.timeprint, "off/0 turn them back off");
+    }
+    {
+        // Naming a file is itself the request to log to it -- but that rule is
+        // resolved AFTER any config merge (a config may supply either half), so
+        // parse_args only records the path and the Seen flag. See
+        // cli::resolve_implied_options.
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
+                            "--logfile","/tmp/x.log"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "--logfile parses");
+        check(o.log_path == "/tmp/x.log" && o.seen.logfile, "--logfile records the path");
+        check(!o.seen.log, "--logfile alone does not claim to have set the switch");
+        resolve_implied_options(o);
+        check(o.log_enabled, "--logfile implies --log once the sources are merged");
+    }
+    {
+        // ...but an explicit --log off still wins, wherever it appears.
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
+                            "--log","off","--logfile","/tmp/x.log"};
+        Options o; std::string e;
+        check(parse_args(11,(char**)av,o,e), "--log off alongside a --logfile parses");
+        resolve_implied_options(o);
+        check(!o.log_enabled, "an explicit --log off beats --logfile's implication");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--digits","4"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "--digits parses");
+        check(o.digits == 4 && o.seen.digits, "--digits is recorded");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--digits","9"};
+        Options o; std::string e;
+        check(!parse_args(9,(char**)av,o,e), "--digits rejects a value outside 0..6");
+        check(!e.empty(), "the --digits rejection carries a message");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--logfile"};
+        Options o; std::string e;
+        check(!parse_args(8,(char**)av,o,e), "--logfile with no value is rejected");
+    }
+
     return summary("cli");
 }

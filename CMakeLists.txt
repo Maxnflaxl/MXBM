@@ -123,7 +123,10 @@ add_library(mxbm_config STATIC src/config/config.cpp)
 target_include_directories(mxbm_config PUBLIC src)
 target_link_libraries(mxbm_config PUBLIC mxbm_json)
 
-add_executable(test_config tests/test_config.cpp)
+# options.cpp comes along for cli::resolve_implied_options: the config loaders
+# and the CLI parser share one option table, and the rules that span both
+# sources are tested here against the real merge.
+add_executable(test_config tests/test_config.cpp src/cli/options.cpp)
 target_include_directories(test_config PRIVATE tests src)
 target_link_libraries(test_config PRIVATE mxbm_config)
 target_compile_definitions(test_config PRIVATE MXBM_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")

@@ -200,5 +200,116 @@ int main() {
         std::remove(p.c_str());
     }
 
+    // --- the whole option table, both formats ---
+    //
+    // Both loaders walk the same table (config.cpp), so what matters is that
+    // every row really is reachable from each format and validated the same
+    // way. These two cases cover the rows added when the hand-written blocks
+    // were replaced -- previously a config file could not set any of them.
+    {
+        std::string p = write_temp("mxbm_test_config_alloptions.cfg",
+            "POOL = pool.example.com:1130\n"
+            "USER = addr123\n"
+            "LOG = on\n"
+            "LOGFILE = /tmp/mxbm-flat.log\n"
+            "TIMEPRINT = true\n"
+            "DIGITS = 4\n"
+            "SOLVER = cuda\n"
+            "WATCHDOG = 1\n"
+            "DEVFEE = 2.5\n");
+        Options o; std::string err;
+        check(load_flat_config(p, o, err), "flat config with the full option set loads");
+        check(o.log_enabled && o.log_path == "/tmp/mxbm-flat.log", "flat LOG/LOGFILE apply");
+        check(o.timeprint && o.digits == 4, "flat TIMEPRINT/DIGITS apply");
+        check(o.solver == "cuda" && o.watchdog_requested, "flat SOLVER/WATCHDOG apply");
+        check(o.devfee_pct == 2.5 && o.seen.devfee, "flat DEVFEE applies");
+        std::remove(p.c_str());
+    }
+    {
+        std::string p = write_temp("mxbm_test_config_alloptions.json",
+            R"({"RIG1": {"LOG": 1, "LOGFILE": "/tmp/mxbm-json.log", "TIMEPRINT": true,
+                         "DIGITS": 3, "SOLVER": "opencl", "WATCHDOG": true, "DEVFEE": 1.5,
+                         "POOLS": [{"POOL":"pool.example.com:1130","USER":"addr123"}]}})");
+        Options o; std::string err;
+        check(load_json_config(p, "RIG1", o, err), "JSON profile with the full option set loads");
+        check(o.log_enabled && o.log_path == "/tmp/mxbm-json.log", "JSON LOG/LOGFILE apply");
+        check(o.timeprint && o.digits == 3, "JSON TIMEPRINT/DIGITS apply");
+        check(o.solver == "opencl" && o.watchdog_requested, "JSON SOLVER/WATCHDOG apply");
+        check(o.devfee_pct == 1.5, "JSON DEVFEE applies");
+        std::remove(p.c_str());
+    }
+
+    // --- ranges and domains are enforced identically in both formats ---
+    //
+    // The point of sharing one table with the CLI: a config file must never be
+    // able to set a value the command line would reject. DIGITS is bounded
+    // 0..6 in cli/options.h, and SOLVER's domain is the same five words.
+    {
+        std::string p = write_temp("mxbm_test_config_baddigits.cfg", "DIGITS = 40\n");
+        Options o; std::string err;
+        check(!load_flat_config(p, o, err), "flat DIGITS outside 0..6 is rejected");
+        check(err.find("DIGITS") != std::string::npos, "the rejection names the key");
+        std::remove(p.c_str());
+    }
+    {
+        std::string p = write_temp("mxbm_test_config_baddigits.json", R"({"R": {"DIGITS": 40}})");
+        Options o; std::string err;
+        check(!load_json_config(p, "R", o, err), "JSON DIGITS outside 0..6 is rejected too");
+        std::remove(p.c_str());
+    }
+    {
+        std::string p = write_temp("mxbm_test_config_badsolver.cfg", "SOLVER = quantum\n");
+        Options o; std::string err;
+        check(!load_flat_config(p, o, err), "a SOLVER outside the accepted set is rejected");
+        std::remove(p.c_str());
+    }
+    {
+        // Hand-typed values get the same case-insensitivity the booleans have.
+        std::string p = write_temp("mxbm_test_config_casesolver.cfg", "SOLVER = CUDA\n");
+        Options o; std::string err;
+        check(load_flat_config(p, o, err), "SOLVER accepts a differently-cased spelling");
+        check(o.solver == "cuda", "...and stores the canonical lower-case form");
+        std::remove(p.c_str());
+    }
+
+    // --- CLI still wins over the config, for the new options too ---
+    {
+        std::string p = write_temp("mxbm_test_config_precedence.cfg",
+            "DIGITS = 5\nLOG = on\nSOLVER = ref\n");
+        Options o; std::string err;
+        o.digits = 2; o.seen.digits = true;          // as if --digits 2 had been given
+        o.log_enabled = false; o.seen.log = true;    // as if --log off
+        check(load_flat_config(p, o, err), "config loads over CLI-supplied values");
+        check(o.digits == 2 && !o.log_enabled, "a CLI-set option is not overwritten by the config");
+        check(o.solver == "ref", "...while an option the CLI did not set still comes from the config");
+        std::remove(p.c_str());
+    }
+
+    // --- the cross-source rules (cli::resolve_implied_options) ---
+    //
+    // These cannot live in either the parser or the loader: each sees only
+    // half the picture. The interesting case is a path from one source and the
+    // switch from the other.
+    {
+        Options o;                       // LOGFILE from a config, nothing from the CLI
+        o.log_path = "/tmp/x.log";
+        resolve_implied_options(o);
+        check(o.log_enabled, "a log path with no explicit switch means logging on");
+    }
+    {
+        Options o;                       // --log off on the CLI, LOGFILE in the config
+        o.log_enabled = false; o.seen.log = true;
+        o.log_path = "/tmp/x.log";
+        resolve_implied_options(o);
+        check(!o.log_enabled, "an explicit off is never overridden by a path");
+    }
+    {
+        Options o;                       // BENCHMARK from a config satisfies --algo
+        o.benchmark = "BEAM-III";
+        check(!o.seen.algo, "precondition: no algo seen yet");
+        resolve_implied_options(o);
+        check(o.seen.algo, "a benchmark algorithm stands in for --algo, whatever supplied it");
+    }
+
     return summary("config");
 }

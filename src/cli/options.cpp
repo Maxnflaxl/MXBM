@@ -41,6 +41,12 @@ std::string usage_text() {
         "  --profile NAME         select a profile from the --json config\n"
         "  --config PATH          load a flat KEY = VALUE config file\n"
         "  --nocolor, --nocolour  disable ANSI colors in console output\n"
+        "  --log [0|1]            write a timestamped transcript of the console to a file\n"
+        "                         (default: off; see --logfile for where it goes)\n"
+        "  --logfile PATH         transcript location; implies --log. Default when --log is\n"
+        "                         given alone: logs/mxbm_<date>_<time>.log\n"
+        "  --timeprint [0|1]      stamp the short-stats line with [HH:MM:SS] (default: off)\n"
+        "  --digits N             decimals on the speed figures, 0..6 (default: 2)\n"
         "  --version              print the version string and exit\n"
         "  --help                 show this help text\n";
 }
@@ -148,14 +154,49 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.seen.nocolor = true;
             continue;
         }
+        if (arg == "--log" || arg == "--timeprint") {
+            // Optional value, handled exactly like --tls above: the on/off
+            // token is consumed only when it really is one, so a bare "--log"
+            // followed by another flag does not swallow that flag.
+            bool value = true;
+            if (i + 1 < argc) {
+                std::string v = argv[i + 1];
+                if (v == "0" || v == "off")     { value = false; ++i; }
+                else if (v == "1" || v == "on") { value = true;  ++i; }
+            }
+            if (arg == "--log") { out.log_enabled = value; out.seen.log = true; }
+            else                { out.timeprint = value;   out.seen.timeprint = true; }
+            continue;
+        }
+        if (arg == "--logfile") {
+            if (i + 1 >= argc) { err = "missing value for --logfile\n\n" + usage_text(); return false; }
+            out.log_path = argv[++i];
+            out.seen.logfile = true;
+            // The "a log path means logging" rule lives in
+            // resolve_implied_options(), not here: a config file may supply
+            // either half, and this parser cannot see it.
+            continue;
+        }
+        if (arg == "--digits") {
+            if (i + 1 >= argc) { err = "missing value for --digits\n\n" + usage_text(); return false; }
+            int v;
+            if (!parse_int(argv[++i], kDigitsMin, kDigitsMax, v)) {
+                err = "invalid --digits (must be 0..6)\n\n" + usage_text();
+                return false;
+            }
+            out.digits = v;
+            out.seen.digits = true;
+            continue;
+        }
         if (arg == "--watchdog") {
             out.watchdog_requested = true;
+            out.seen.watchdog = true;
             continue;
         }
         if (arg == "--apiport") {
             if (i + 1 >= argc) { err = "missing value for --apiport\n\n" + usage_text(); return false; }
             int v;
-            if (!parse_int(argv[++i], 0, 65535, v)) { err = "invalid --apiport (must be 0..65535)\n\n" + usage_text(); return false; }
+            if (!parse_int(argv[++i], kApiPortMin, kApiPortMax, v)) { err = "invalid --apiport (must be 0..65535)\n\n" + usage_text(); return false; }
             out.apiport = v;
             out.seen.apiport = true;
             continue;
@@ -163,7 +204,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         if (arg == "--shortstats") {
             if (i + 1 >= argc) { err = "missing value for --shortstats\n\n" + usage_text(); return false; }
             int v;
-            if (!parse_int(argv[++i], 1, INT_MAX, v)) { err = "invalid --shortstats (must be >=1)\n\n" + usage_text(); return false; }
+            if (!parse_int(argv[++i], kStatsIntervalMin, INT_MAX, v)) { err = "invalid --shortstats (must be >=1)\n\n" + usage_text(); return false; }
             out.shortstats = v;
             out.seen.shortstats = true;
             continue;
@@ -171,7 +212,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         if (arg == "--longstats") {
             if (i + 1 >= argc) { err = "missing value for --longstats\n\n" + usage_text(); return false; }
             int v;
-            if (!parse_int(argv[++i], 1, INT_MAX, v)) { err = "invalid --longstats (must be >=1)\n\n" + usage_text(); return false; }
+            if (!parse_int(argv[++i], kStatsIntervalMin, INT_MAX, v)) { err = "invalid --longstats (must be >=1)\n\n" + usage_text(); return false; }
             out.longstats = v;
             out.seen.longstats = true;
             continue;
@@ -193,6 +234,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
                 return false;
             }
             out.benchmark = "BEAM-III";
+            out.seen.benchmark = true;
             // --benchmark names the algorithm itself, exactly as the reference miner's does,
             // so it satisfies the --algo requirement rather than duplicating it.
             // An explicit --algo may still be given; a conflicting one is caught
@@ -204,11 +246,12 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             if (i + 1 >= argc) { err = "missing value for --benchmark-seconds\n\n" + usage_text(); return false; }
             char* end = nullptr;
             long v = std::strtol(argv[++i], &end, 10);
-            if (!end || *end != '\0' || v < 1) {
+            if (!end || *end != '\0' || v < kBenchmarkSecondsMin) {
                 err = "invalid --benchmark-seconds (must be an integer >= 1)\n\n" + usage_text();
                 return false;
             }
             out.benchmark_seconds = (int)v;
+            out.seen.benchmark_seconds = true;
             continue;
         }
         if (arg == "--dev-fee") {
@@ -225,7 +268,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             errno = 0;
             const double pct = std::strtod(v.c_str(), &end);
             if (v.empty() || !end || *end != '\0' || errno == ERANGE
-                || !(pct == pct) || pct < 0.0 || pct > 100.0) {
+                || !(pct == pct) || pct < kDevFeePctMin || pct > kDevFeePctMax) {
                 err = "invalid --dev-fee (must be a percentage in 0..100, e.g. 2.5)\n\n" + usage_text();
                 return false;
             }
@@ -325,6 +368,17 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
     }
 
     return true;
+}
+
+void resolve_implied_options(Options& opts) {
+    // A log path, from either source, means logging -- unless something said
+    // otherwise explicitly, which is exactly what seen.log records.
+    if (!opts.seen.log && !opts.log_path.empty()) opts.log_enabled = true;
+
+    // --benchmark/BENCHMARK names the algorithm itself, as the reference miner's does, so
+    // it satisfies main()'s "some source supplied an algorithm" requirement
+    // without --algo being repeated alongside it.
+    if (!opts.benchmark.empty()) opts.seen.algo = true;
 }
 
 } } // namespace mxbm::cli
