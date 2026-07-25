@@ -3,7 +3,8 @@
 **An open-source GPU miner for [Beam](https://beam.mw/) (BeamHash III).**
 
 MXBM is a clean-room, from-scratch implementation of the BeamHash III
-proof-of-work — the Equihash ⟨150,5⟩ variant Beam uses — built to be a fully
+proof-of-work — Beam's Equihash-style Wagner search on the ⟨144,5⟩ parameter
+shape (see [docs/beamhash-iii.md](docs/beamhash-iii.md)) — built to be a fully
 open, auditable alternative to the closed-source miners in the ecosystem. The
 proof-of-work core is validated bit-for-bit against Beam's own reference
 implementation.
@@ -89,6 +90,17 @@ GPU support targets both NVIDIA and AMD: an OpenCL baseline (runs on both), then
 vendor-tuned backends. The CUDA backend is done and shipping; HIP is not started. Both
 solvers are measured on NVIDIA only — AMD is untested so far.
 
+## The algorithm
+
+BeamHash III is documented here in full, written from Beam's published
+specifications rather than from folklore:
+
+| Doc | Covers |
+|-----|--------|
+| **[BeamHash III](docs/beamhash-iii.md)** | The current algorithm, the one MXBM implements — seeding, the per-round mixing step, the combination schedule, and the solution format, cross-referenced to the source |
+| [BeamHash II](docs/beamhash-ii.md) | The EquihashR family and the `r` parameter (block 321321 → 777777) |
+| [BeamHash I](docs/beamhash-i.md) | Beam's launch PoW, plus the Equihash and Wagner background the other two build on |
+
 ## Architecture
 
 MXBM is organized as small, independently testable units — a portable
@@ -103,6 +115,13 @@ experiments that failed — is tracked in **[docs/performance.md](docs/performan
 along with the measured hardware limits that bound further work. Hardware
 requirements, including the current VRAM limitations, are in
 **[HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)**.
+
+Comparing miners is harder than it looks: reported `sol/s` is implementation-defined,
+and MXBM measures a 17 % spread between "solutions found" and "solutions that verify"
+inside its own pipeline. **[docs/benchmarking.md](docs/benchmarking.md)** documents what
+MXBM counts (the conservative number), how to reproduce its figures, and the
+accepted-pool-share protocol that settles a comparison without trusting either miner's
+counters.
 
 ## Contributing
 

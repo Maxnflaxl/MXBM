@@ -148,7 +148,7 @@ yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
 
 ## Architecture
 
-The solver runs Wagner's algorithm for Equihash⟨150,5⟩: 2^25 seed elements, five
+The solver runs Wagner's algorithm on the ⟨144,5⟩ parameter shape: 2^25 seed elements, five
 rounds, each finding pairs that collide on a 24-bit key and combining them. BeamHash III
 adds a mandatory per-round `apply_mix` that folds the element's growing index tree into
 word 0, re-deriving the collision key every round.

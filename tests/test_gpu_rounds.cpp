@@ -175,7 +175,7 @@ int main() {
     // the reference is the catch; a human reads it.
     {
         const double kRefSolPerSec  = 53.0;   // the reference miner ~53 sol/s, RTX 4070 Ti SUPER
-        const double kSolsPerNonce  = 1.9;    // Equihash <150,5> statistical avg solutions/nonce
+        const double kSolsPerNonce  = 1.9;    // Wagner <144,5> statistical avg solutions/nonce
         const double kRefSolvePerSec = kRefSolPerSec / kSolsPerNonce;   // ~28 solve/s
         double solvePerSec = wallSecs > 0 ? 1.0 / wallSecs : 0.0;
         std::printf("\n  ==================== PERF ====================\n");

@@ -26,12 +26,18 @@ tests/        CTest suite; golden vectors under tests/vectors/
 
 ## The proof-of-work core
 
-`src/beamhash/` implements BeamHash III — Beam's Equihash ⟨150,5⟩ variant — from
-a verified specification. The core primitives (a non-standard SipHash element
-generator, the seed step, the mixing and combine steps, and 25-bit index
-packing) are written as a portable, dependency-free header so the same logic can
-later become a GPU kernel body. A host-side verifier reproduces Beam's
-`IsValidSolution`.
+`src/beamhash/` implements BeamHash III — Beam's Equihash-style Wagner search on
+the ⟨144,5⟩ parameter shape — from a verified specification. The core primitives
+(a non-standard SipHash element generator, the seed step, the mixing and combine
+steps, and 25-bit index packing) are written as a portable, dependency-free
+header so the same logic can later become a GPU kernel body. A host-side verifier
+reproduces Beam's `IsValidSolution`.
+
+The algorithm itself is documented separately, from Beam's published
+specifications: **[beamhash-iii.md](beamhash-iii.md)** for the algorithm MXBM
+implements, with [beamhash-i.md](beamhash-i.md) and
+[beamhash-ii.md](beamhash-ii.md) covering the two predecessors and the Equihash
+background they build on.
 
 Correctness is established two ways: against golden known-answer vectors
 (generated from Beam's own solver, since Beam ships none), and — when a Beam

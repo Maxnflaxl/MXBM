@@ -1,7 +1,8 @@
 # Hardware Requirements
 
-MXBM mines BeamHash III (Equihash⟨150,5⟩). This document states what hardware is
-needed, why, and where the current implementation falls short.
+MXBM mines BeamHash III — an Equihash-style Wagner search on the ⟨144,5⟩ parameter shape;
+see [beamhash-iii.md](beamhash-iii.md). This document states what hardware is needed, why,
+and where the current implementation falls short.
 
 All figures are computed from the allocator in `src/gpu/round_pipeline.cpp` and
 `src/gpu/budget.cpp`, and cross-checked against measurements on the reference card.
@@ -33,7 +34,7 @@ report; BeamHash III yields ~1.9 solutions per solve.
 A BeamHash III solution is **32 indices drawn from the full `[0, 2^25)` space**. Wagner's
 algorithm therefore has to hold a layer of 2^25 (≈ 33.5 M) elements, and each element
 carries 448 bits (56 B) of work state — BeamHash III's element is roughly 3× fatter than
-classic Equihash⟨150,5⟩ because its `apply_mix` re-derives the collision key from the
+a classic Equihash element because its `apply_mix` re-derives the collision key from the
 whole element every round.
 
 The solver keeps two layers live at once (round *r*'s input and round *r+1*'s output), so
