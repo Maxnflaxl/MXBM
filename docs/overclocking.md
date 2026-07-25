@@ -182,12 +182,25 @@ looks correct. Find the offset where sol/s peaks and back off from it.
 ## Also worth knowing
 
 `lolMiner --benchmark BEAM-III` runs the algorithm with **no pool and no wallet** and
-prints `Average speed (15s): N sol/s` — the same metric MXBM reports. This is a much
-better head-to-head than the ~400-share protocol in `docs-internal/MINER_COMP.md`:
-minutes instead of days, and no pool-side variance.
+prints `Average speed (15s): N sol/s`, in minutes.
 
-It must be run on an **idle GPU**. A run taken while MXBM was mining reported 25.5–27.2
-sol/s, which measures contention, not lolMiner.
+**It does not settle MXBM vs lolMiner, and must not be used for that.** An earlier
+revision of this document claimed it replaced the share-rate protocol in
+`docs-internal/MINER_COMP.md`. That was wrong, and wrong for the exact reason that
+protocol was written: reported sol/s is *implementation-defined*. MXBM counts solutions
+that pass CPU verification (1.98/solve) and not raw survivors (2.29/solve) — a 17 %
+difference — and we do not know which of the two lolMiner reports. Comparing its
+self-reported benchmark number against our self-reported number is precisely the
+untrustworthy comparison. Accepted pool shares remain the only arbiter, because the pool
+verifies independently of either miner's counters.
+
+Where the benchmark *is* useful is **A/B-ing OC settings within lolMiner**, the same way
+`bench_rounds` A/Bs settings within MXBM. A metric only has to be self-consistent to
+measure a delta; it has to be shared to measure a gap. So use it to find lolMiner's best
+OC quickly, then run the share-rate protocol once, between two already-tuned miners.
+
+Either way it must run on an **idle GPU**. A run taken while MXBM was mining reported
+25.5–27.2 sol/s, which measures contention, not lolMiner.
 
 lolMiner selects "BeamHash III **4G** (CUDA)" on this card — it fits the search in 4 GB
 where MXBM needs 7.46 GiB. That is independent evidence for the streaming / in-place
