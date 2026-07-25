@@ -153,6 +153,51 @@ yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
 
 ---
 
+## Power and efficiency — an open lead
+
+Every figure above measures **speed**. A run against the reference miner on the
+same card measured **power** for the first time, and it does not point the same
+way:
+
+| | MXBM | reference miner | ratio |
+|---|---|---|---|
+| speed (15 s median) | 56.20 sol/s | 53.27 sol/s | **1.055×** |
+| power (median) | 284.0 W | 238.7 W | **1.190×** |
+| efficiency | 0.198 sol/s/W | 0.223 sol/s/W | **0.887×** |
+| temperature | 65 °C | 60 °C | |
+| core clock | 2700 MHz | 2745 MHz | |
+
+**We are ~5 % faster and ~11 % less efficient** — 45 W more for 3 sol/s more. On
+a power-limited rig, which is most rigs, that trade is a loss, and nothing in
+this document has been optimized against it.
+
+What makes it a lead rather than merely bad news: the **clocks are the same**
+(identical memory clock, ours slightly lower on core), so the extra 45 W is work
+being done, not a higher operating point. Something in the pipeline is doing more
+per solve — DRAM traffic the obvious suspect, given the emit scatter already runs
+at the hardware floor, and the 5 °C gap suggesting sustained rather than bursty
+draw.
+
+Worth measuring, roughly in order of expected value:
+
+1. **Joules per solve, not watts.** Integrate NVML power over a fixed nonce count
+   for both miners. Watts alone conflate "faster" with "hungrier".
+2. **DRAM bytes per solve.** `dram__bytes.sum` from Nsight Compute against the
+   theoretical minimum for the round schedule. Moving significantly more bytes
+   than the algorithm requires would be the 45 W.
+3. **Does a power cap cost us the lead?** Re-measure sol/s at `nvidia-smi -pl 240`
+   — the reference miner's draw. If we still clear 53, the gap is a tuning
+   artefact rather than a structural one, and the headline should be quoted at
+   that cap.
+4. **Idle spin between rounds.** Cheap to rule out, and a busy-wait shows up as
+   power without throughput.
+
+Full data, method and caveats: `docs-internal/MINER_COMP_RESULTS.md`. The two
+runs were not simultaneous, so the power figure wants a back-to-back rerun before
+it is quoted outside that document.
+
+---
+
 ## Architecture
 
 The solver runs Wagner's algorithm on the ⟨144,5⟩ parameter shape: 2^25 seed elements, five

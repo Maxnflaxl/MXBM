@@ -2,35 +2,23 @@
 
 **An open-source GPU miner for [Beam](https://beam.mw/) (BeamHash III).**
 
-MXBM is a clean-room, from-scratch implementation of the BeamHash III
-proof-of-work — Beam's Equihash-style Wagner search on the ⟨144,5⟩ parameter
-shape (see [docs/beamhash-iii.md](docs/beamhash-iii.md)) — built to be a fully
-open, auditable alternative to the closed-source miners in the ecosystem. The
+MXBM is a from-scratch implementation of the BeamHash III proof-of-work —
+Beam's Equihash-style Wagner search on the ⟨144,5⟩ parameter shape (see
+[docs/beamhash-iii.md](docs/beamhash-iii.md)) — built to be a fully open,
+auditable alternative to the closed-source miners in the ecosystem. The
 proof-of-work core is validated bit-for-bit against Beam's own reference
 implementation.
 
-> **Status: GPU solver working, optimization ongoing.** MXBM connects to a real
-> Beam pool over TLS, authenticates with your wallet address, receives live jobs,
-> and runs the full job → solve → difficulty → submit pipeline on a **GPU solver**.
+> **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
+> Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
+> RTX 4070 Ti SUPER the CUDA backend does **56.1 sol/s** and the portable OpenCL
+> one 48.2. `--solver auto` prefers CUDA, falls back to OpenCL, then to a CPU
+> reference solver. Measured history, hardware limits and the caveats on comparing
+> miners: **[docs/performance.md](docs/performance.md)**.
 >
-> There are two GPU backends. On an RTX 4070 Ti SUPER the **CUDA** backend does
-> **56.1 sol/s** (35.2 ms per solve, end-to-end) and the portable **OpenCL** one
-> **48.2 sol/s** — up from 1.8 sol/s when the solver first found a share, and both
-> verified against the BeamHash III known-answer vectors. `--solver auto` (the default)
-> prefers CUDA, falls back to OpenCL, then to the CPU reference; CUDA is an optional
-> build component, so a machine without a CUDA toolchain still builds the OpenCL path.
->
-> The CUDA figure is past the ~53 sol/s the fastest closed-source miner reaches at stock
-> clocks, but by ~6 % against a ±4 % measurement error. See
-> [docs/performance.md](docs/performance.md) for the full measured history and the caveats
-> on that comparison.
->
-> A CPU reference solver remains available (`--solver ref`) for validating the
-> pipeline. **Note the VRAM requirement is currently high** (~16 GB for a search
-> that finds solutions, against a real footprint of 7.46 GiB) — see
-> [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md), which also
-> documents the known limitations behind that number. Builds and runs on Linux and
-> macOS.
+> **VRAM is the current constraint** — a search that finds solutions wants ~16 GB
+> against a real footprint of 7.46 GiB. See
+> [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md).
 
 Licensed under the [Apache License 2.0](LICENSE).
 
@@ -151,9 +139,7 @@ counters.
 
 Issues and pull requests are welcome. Please read
 [docs/contributing.md](docs/contributing.md) for the build/test workflow and the
-project's clean-room provenance rules (in short: MXBM contains no code copied
-from any closed-source miner; Beam-derived code is Apache-2.0 and attributed in
-[NOTICE](NOTICE)).
+code style.
 
 ## License
 

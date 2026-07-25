@@ -1,7 +1,6 @@
 # Contributing
 
-Contributions are welcome. This document covers the workflow and the one rule
-that is specific to MXBM: clean-room provenance.
+Contributions are welcome. This document covers the workflow and the code style.
 
 ## Workflow
 
@@ -23,19 +22,11 @@ clear responsibility, standard-library-only in the shipping paths (no Boost),
 and no new third-party dependencies without discussion. New proof-of-work or
 wire-format code should come with golden vectors, not just round-trip tests.
 
-## Clean-room provenance
+## Attribution
 
-MXBM is a clean-room implementation. **Do not copy code, disassembly, or
-extracted data from any closed-source miner** into this repository — not as
-source, not as vendored blobs, not in tests. MXBM's behavior may *resemble*
-other miners (console output shapes, command-line conventions, configuration
-file formats are functional facts, freely reimplemented), but its expression is
-original.
-
-Code derived from **Beam** is fine and encouraged: Beam is Apache-2.0 licensed,
-the same license as MXBM. When you port from Beam, keep the attribution comment
-naming the source file, and make sure the dependency is recorded in
-[NOTICE](../NOTICE).
+Code ported from **Beam** is fine and encouraged: Beam is Apache-2.0, the same
+licence as MXBM. Keep the attribution comment naming the source file, and record
+the dependency in [NOTICE](../NOTICE).
 
 ## Licensing of contributions
 
