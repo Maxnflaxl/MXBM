@@ -70,14 +70,19 @@ void build_nonce(const std::string& prefix, uint64_t counter, uint8_t out[8]) {
 
 Engine::Engine(stratum::Client& client, Solver& solver)
     : client_(client), solver_(solver) {
-    submit_fn = [this](const stratum::Solution& s) { client_.submit(s); };
+    // Default routes everything to the one Client this Engine was built
+    // with, ignoring Origin: a build with no dev-fee wiring only ever tags
+    // work Main anyway. main.cpp replaces this with a router that picks the
+    // connection by Origin.
+    submit_fn = [this](const stratum::Solution& s, Origin) { client_.submit(s); };
 }
 
 Engine::~Engine() {
     stop();
 }
 
-void Engine::process_job(const stratum::Job& job, const std::string& nonceprefix) {
+void Engine::process_job(const stratum::Job& job, const std::string& nonceprefix,
+                         Origin origin) {
     uint8_t input32[32];
     if (!from_hex_strict(job.input, input32, 32)) return;   // malformed: no crash, no submit
 
@@ -93,21 +98,26 @@ void Engine::process_job(const stratum::Job& job, const std::string& nonceprefix
     std::string nonce_hex = to_hex(nonce8, 8);
     for (const auto& cand : candidates) {
         if (!pow::clears_difficulty(cand.data(), job.difficulty)) continue;
-        submit_fn(stratum::Solution{job.id, nonce_hex, to_hex(cand.data(), cand.size())});
+        submit_fn(stratum::Solution{job.id, nonce_hex, to_hex(cand.data(), cand.size())}, origin);
     }
 }
 
 void Engine::on_job(const stratum::Job& job) {
-    // Runs on Client::run()'s thread -- the same thread that writes
+    // Runs on client_'s run() thread -- the same thread that writes
     // Client::nonceprefix_ -- so this current_nonceprefix() read is
-    // race-free (see class comment in engine.h). Snapshot it into the
-    // mailbox alongside the job so the worker thread never has to touch
-    // client_ itself.
-    std::string prefix = client_.current_nonceprefix();
+    // race-free (see class comment in engine.h). Snapshot it and hand it to
+    // the explicit-prefix form below, so the worker thread never has to
+    // touch client_ itself. A single-pool caller's work is always Main.
+    on_job(job, client_.current_nonceprefix(), Origin::Main);
+}
+
+void Engine::on_job(const stratum::Job& job, const std::string& nonceprefix,
+                    Origin origin) {
     {
         std::lock_guard<std::mutex> lock(mailbox_mutex_);
         latest_job_ = job;
-        latest_nonceprefix_ = prefix;
+        latest_nonceprefix_ = nonceprefix;
+        latest_origin_ = origin;
         has_job_ = true;
     }
     mailbox_cv_.notify_one();
@@ -146,12 +156,14 @@ void Engine::worker_main() {
     while (true) {
         stratum::Job job;
         std::string prefix;
+        Origin origin;
         {
             std::unique_lock<std::mutex> lock(mailbox_mutex_);
             mailbox_cv_.wait(lock, [this] { return has_job_ || stop_requested_; });
             if (stop_requested_) return;   // stop wins over starting another solve
             job = latest_job_;
             prefix = latest_nonceprefix_;
+            origin = latest_origin_;
             has_job_ = false;
         }
         // A malformed job.input never becomes solvable, and process_job()
@@ -177,11 +189,59 @@ void Engine::worker_main() {
         // GpuSolver, src/gpu/gpu_solver.cpp) makes that next call start
         // clean.
         while (true) {
-            process_job(job, prefix);   // may block here for a while with a real solver
-            std::lock_guard<std::mutex> lock(mailbox_mutex_);
+            // A GPU solver can throw at run time -- VRAM taken by another
+            // process, a driver reset, a device lost. This is a thread entry
+            // function, so letting that escape would call std::terminate() and
+            // core-dump the miner over a condition that is usually temporary.
+            // Catch it, report it, and retry: the common causes clear by
+            // themselves, and the miner is worth more alive.
+            //
+            // process_job() itself deliberately does NOT catch -- it is the
+            // synchronous, directly-unit-testable core (see the class comment),
+            // and swallowing exceptions there would hide solver failures from
+            // the tests that drive it. Robustness belongs with the threading.
+            bool failed = false;
+            try {
+                process_job(job, prefix, origin);   // may block here for a while with a real solver
+                solver_failures_ = 0;
+            } catch (const std::exception& e) {
+                failed = true;
+                ++solver_failures_;
+                if (on_solver_error) on_solver_error(e.what(), solver_failures_);
+            } catch (...) {
+                // Nothing in this tree throws a non-std::exception, but a
+                // driver-level binding could; terminate() must not be the
+                // fallback for something we merely did not anticipate.
+                failed = true;
+                ++solver_failures_;
+                if (on_solver_error) on_solver_error("unknown exception", solver_failures_);
+            }
+
+            std::unique_lock<std::mutex> lock(mailbox_mutex_);
             if (stop_requested_ || has_job_) break;
+            if (failed) {
+                // Back off before retrying, so a persistently broken device
+                // does not spin a core at full speed logging the same error.
+                // Waits on the mailbox condition rather than sleeping, so a
+                // stop request or a new job cuts the wait short -- a plain
+                // sleep here would trade a crash for a shutdown that hangs
+                // for the length of the backoff.
+                mailbox_cv_.wait_for(lock, retry_delay(),
+                                     [this] { return stop_requested_ || has_job_; });
+                if (stop_requested_ || has_job_) break;
+            }
         }
     }
+}
+
+std::chrono::milliseconds Engine::retry_delay() const {
+    // Exponential, doubling per consecutive failure, capped at 30x the base --
+    // fast enough to recover promptly from a one-off, slow enough that a dead
+    // device is retried twice a minute rather than thousands of times.
+    std::chrono::milliseconds d = retry_base_delay;
+    for (uint32_t i = 1; i < solver_failures_ && i < 6; ++i) d *= 2;
+    const std::chrono::milliseconds cap = retry_base_delay * 30;
+    return d > cap ? cap : d;
 }
 
 bool Engine::superseded_by_newer_job(const std::string& job_id) const {

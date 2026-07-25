@@ -13,7 +13,7 @@ src/
   beamhash/   BeamHash III proof-of-work core (portable, GPU-ready) + verifier
   pow/        Difficulty test (ported from Beam) + SHA-256 share filter
   stratum/    Pool client: wire messages, TCP+TLS transport, connection state machine
-  miner/      Solver interface, reference solver, mining engine, metrics
+  miner/      Solver interface, reference solver, mining engine, metrics, dev fee
   ui/         Console output, formatting, and the periodic stats ticker
   cli/        Command-line option parsing
   config/     Configuration-file loaders (JSON profiles + flat)
@@ -67,14 +67,25 @@ verifier over tens of thousands of fuzzed inputs.
   worker thread, runs the solver, filters each candidate through the difficulty
   test, and submits those that clear.
 - **`Stats`** collects windowed hash-rate, share counts, and latency for the
-  console and API.
+  console and API, in two ledgers — the user's and the developer fee's.
+- **`DevFee`** implements the 1.0% developer fee (see
+  [devfee.md](devfee.md)). It holds a second stratum connection to the fee
+  pool and, once a round is owed, has `JobRouter` switch the solver to that
+  pool's job for 36 seconds and then back. There is still only one `Engine`
+  and one solver; only the job being fed to it changes.
+- **`Origin`** tags every job — and every solution derived from it — with the
+  connection it came from, so a round ending mid-solve still submits to the
+  pool that issued the job rather than to whichever is active at the time.
 
 ## Threading model
 
 The running miner uses a small number of cooperating threads: the client's
 read loop, the engine's solver worker, the stats ticker, and (if enabled) the
-HTTP API's accept loop. Shared state is confined to the `Stats` object behind a
-single mutex; each thread has a clear owner and a clean shutdown path.
+HTTP API's accept loop. With the developer fee configured there are two more —
+the fee connection's own read loop and its scheduler. Shared state is confined
+to the `Stats` object and the `JobRouter`, each behind a single mutex; each
+thread has a clear owner and a clean shutdown path, except the two stratum
+read loops, which by design never return (see `stratum/client.h`).
 
 ## Difficulty
 

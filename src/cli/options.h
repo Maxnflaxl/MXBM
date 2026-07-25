@@ -26,6 +26,13 @@ struct Options {
     bool watchdog_requested = false; // accepted; watchdog monitoring notice
     std::string solver = "auto";     // --solver gpu|ref|auto (default: prefer gpu, fall back to ref)
 
+    // --dev-fee PCT: the developer fee the user WANTS to pay, as a
+    // percentage. Raise-only -- main() rejects a value below the built-in
+    // rate rather than clamping it, so "I lowered the fee" can never be
+    // silently untrue. Negative means "not given"; the built-in rate applies.
+    // See miner/devfee.h and docs/devfee.md.
+    double devfee_pct = -1.0;
+
     // Offline benchmark mode. Non-empty => solve synthetic jobs and report
     // sol/s instead of connecting to a pool; --pool/--user are then neither
     // required nor used. benchmark_seconds 0 means run until Ctrl+C.
@@ -46,7 +53,13 @@ struct Options {
     struct Seen {
         bool pools = false, user = false, pass = false, tls = false, nocolor = false;
         bool apiport = false, shortstats = false, longstats = false, devices = false;
-        bool solver = false;
+        bool solver = false, devfee = false;
+        // Unlike the rest, `algo` is not about CLI-wins-over-config precedence
+        // (there is only one legal value, so nothing can conflict) -- it
+        // records that SOME source supplied an algorithm at all, so main() can
+        // enforce that after the config merge rather than parse_args having to
+        // reject a command line a config file was about to complete.
+        bool algo = false;
     } seen;
 };
 
@@ -72,5 +85,6 @@ struct Options {
 // are collected independently and bound by occurrence order once the whole
 // command line has been scanned. Values in excess of the pool count are ignored.
 bool parse_args(int argc, char** argv, Options& out, std::string& err);
+
 
 } } // namespace mxbm::cli

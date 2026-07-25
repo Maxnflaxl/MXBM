@@ -117,7 +117,7 @@ int main() {
 
     Engine engine(client, solver);
     std::vector<Solution> submits;
-    engine.submit_fn = [&](const Solution& s) { submits.push_back(s); };
+    engine.submit_fn = [&](const Solution& s, Origin) { submits.push_back(s); };
 
     // Stats hook coverage: on_attempt must fire once per solve() return with
     // the candidate count, BEFORE any difficulty filtering -- set it here so
@@ -194,7 +194,7 @@ int main() {
         Engine stale_engine(client, stale_solver);
         stale_solver.engine = &stale_engine;
         std::vector<Solution> stale_submits;
-        stale_engine.submit_fn = [&](const Solution& s) { stale_submits.push_back(s); };
+        stale_engine.submit_fn = [&](const Solution& s, Origin) { stale_submits.push_back(s); };
 
         Job older{"job-older", valid_input, easy_difficulty, 2999999};
         stale_engine.process_job(older, "");
@@ -226,6 +226,50 @@ int main() {
     engine.on_job(hard);
     engine.process_job(easy, "");
     check(submits.empty(), "different-id mailbox entry suppresses the submit");
+
+    // -- Case 6: Origin travels with the job, all the way to submit_fn.
+    //
+    // This is what stops a dev-fee round from misrouting shares. main.cpp
+    // picks the connection to submit on from the Origin handed back here,
+    // so if the tag were dropped -- or read from "which pool is active now"
+    // instead of from the job -- every share solved across a round boundary
+    // would go to the wrong pool and be rejected as an unknown job id. See
+    // miner/origin.h.
+    std::vector<Origin> origins;
+    engine.submit_fn = [&](const Solution& s, Origin o) {
+        submits.push_back(s);
+        origins.push_back(o);
+    };
+
+    // Each case below re-arms the mailbox with the SAME job id it is about
+    // to process, exactly as the same-id-refresh case above does: Case 5
+    // left a different-id entry pending, and leaving it there would suppress
+    // these submits as stale before submit_fn ever ran.
+
+    // Direct call: the default is the user's pool, so single-pool callers
+    // (the benchmark harness, the unit tests above) need not name it.
+    submits.clear(); origins.clear();
+    engine.on_job(easy);
+    engine.process_job(easy, "");
+    check(origins.size() == 1 && origins[0] == Origin::Main,
+          "process_job defaults to the user's pool");
+
+    // Explicitly tagged as fee work: the tag must reach submit_fn unchanged.
+    submits.clear(); origins.clear();
+    engine.on_job(easy);
+    engine.process_job(easy, "", Origin::Dev);
+    check(origins.size() == 1 && origins[0] == Origin::Dev,
+          "an explicitly dev-tagged job submits as dev work");
+
+    // ...and it must survive the mailbox, which is the path live mining
+    // actually takes: on_job() stores the tag, worker_main() takes it back
+    // out. Preload the mailbox with a Dev-tagged entry, then drain it the
+    // same way the worker does.
+    submits.clear(); origins.clear();
+    engine.on_job(easy, "", Origin::Dev);
+    engine.process_job(easy, "", Origin::Dev);
+    check(origins.size() == 1 && origins[0] == Origin::Dev,
+          "the dev tag survives a round trip through the mailbox");
 
     return summary("engine");
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -18,7 +19,9 @@ namespace mxbm { namespace ui { namespace console {
 void init(bool nocolor);
 
 void banner();
+
 void connecting(const std::string& host, uint16_t port, bool tls);
+
 void connected(bool tls);
 void authorized(const std::string& user);
 void start_mining();
@@ -37,7 +40,14 @@ void job(const std::string& id, uint32_t difficulty, uint64_t height);
 // "CPU 0: Found a share of difficulty 8.0k" (green). `units` is the
 // achieved share difficulty in the same display units as
 // pow::achieved_units/pow::to_display_units.
-void share_found(const std::string& device, double units);
+//
+// `target_units` is the job's target in the same units. When positive, the
+// line gains the achieved/target multiple -- "8.0k (3.9x target)" -- which is
+// what turns a bare number into a judgement: difficulty alone means nothing
+// without the bar it had to clear, and pool vardiff moves that bar around all
+// session. Pass <= 0 (the default) when no target is known yet, and the
+// suffix is omitted rather than printing a meaningless ratio.
+void share_found(const std::string& device, double units, double target_units = -1.0);
 
 // ms < 0 (default) means "latency unknown" -- Phase A does not measure
 // submit-to-result round-trip -- and is omitted from the printed line.
@@ -46,6 +56,22 @@ void share_result(int code, const std::string& description, long long ms = -1);
 // Red "Pool connection lost - reconnecting..." -- wire to
 // stratum::Client::on_disconnect.
 void disconnected();
+
+// -- developer fee ----------------------------------------------------------
+//
+// The fee is announced, not concealed: one disclosure line at startup
+// stating the rate, the cadence and the destination, and a line at each end
+// of every round so the pool change is never a surprise. See
+// miner/devfee.h for why an open-source miner gains nothing from hiding it.
+
+// "Dev fee: 1.0% - one 36s round per 60min of mining, to <host>:<port>."
+void devfee_notice(double rate, std::chrono::seconds slice,
+                   std::chrono::seconds cycle, const std::string& pool);
+
+// "Dev fee round started (36s) - mining to the developer's address" and
+// "Dev fee round finished (36s) - back on your pool".
+void devfee_start(std::chrono::seconds slice);
+void devfee_end(std::chrono::seconds slice);
 
 void info(const std::string& msg);
 

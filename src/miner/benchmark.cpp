@@ -45,7 +45,7 @@ BenchmarkResult run_benchmark(Solver& solver, Stats& stats, int seconds,
     // Engine's constructor defaults submit_fn to client_.submit(). Replace it
     // before the first solve: a solution clearing the nominal difficulty below
     // would otherwise be written to a socket that was never opened.
-    engine.submit_fn = [](const stratum::Solution&) {};
+    engine.submit_fn = [](const stratum::Solution&, Origin) {};
 
     std::vector<double> samples;
     uint64_t solutions = 0;

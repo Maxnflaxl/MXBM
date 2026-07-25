@@ -24,6 +24,9 @@ static bool shape_ok(const char* v) {
 int main() {
     check(version() != nullptr && *version(), "version non-empty");
     check(shape_ok(version()), "version shape N.N.N [hex7|nogit]");
-    check(strncmp(version(), "0.4.", 4) == 0, "major.minor from project()");
+    // Pins that the runtime string really comes from project(VERSION ...) in
+    // CMakeLists.txt rather than a stale hardcoded stamp -- so this literal
+    // must be bumped in step with it.
+    check(strncmp(version(), "0.5.", 4) == 0, "major.minor from project()");
     return summary("version");
 }

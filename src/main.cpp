@@ -25,6 +25,7 @@
 #include "stratum/client.h"
 #include "stratum/messages.h"
 #include "miner/engine.h"
+#include "miner/devfee.h"
 #include "miner/benchmark.h"
 #include "version.h"
 #include "gpu/nvml.h"
@@ -124,6 +125,14 @@ int main(int argc, char** argv) {
     // "at least one pool" check moved here, after the config-merge above
     // has had its chance to fill opts.pools in.
     const bool benchmark_mode = !opts.benchmark.empty();
+    // Same post-merge placement, and for the same reason, as the pool check
+    // below: parse_args no longer rejects a bare command line that a config
+    // file was about to complete. Both loaders set seen.algo when they accept
+    // an ALGO key, so this fires only when NO source supplied one.
+    if (!opts.seen.algo && !benchmark_mode) {
+        std::fputs("unsupported algo (pass --algo BEAM-III, or set ALGO in your config)\n", stderr);
+        return 1;
+    }
     if (opts.pools.empty() && !benchmark_mode) {
         std::fputs("missing --pool (or config with POOLS)\n", stderr);
         return 1;
@@ -389,9 +398,25 @@ int main(int argc, char** argv) {
     // "was a solver built in" and "was one actually selected/available"
     // are now two separate questions.
     std::unique_ptr<miner::Engine> engine;
+
+    // Which pool's job the solver works on at any moment. With no fee
+    // configured the router only ever holds Main and is a pass-through to
+    // Engine::on_job; with the fee configured it is what DevFee switches
+    // across each round. One code path either way. See miner/devfee.h.
+    miner::JobRouter router(
+        [&engine](const stratum::Job& j, const std::string& prefix, miner::Origin origin) {
+            if (engine) engine->on_job(j, prefix, origin);
+        });
+
+    // Declared before submit_fn below, which captures it to route Dev-origin
+    // solutions, and destroyed after the router so its scheduler thread can
+    // still dispatch while shutting down.
+    std::unique_ptr<miner::DevFee> devfee;
+
     if (solver) {
         engine = std::make_unique<miner::Engine>(client, *solver);
-        engine->submit_fn = [&client, &stats, worker_label](const stratum::Solution& s) {
+        engine->submit_fn = [&client, &stats, &devfee, worker_label](
+                const stratum::Solution& s, miner::Origin origin) {
             // Achieved difficulty for the "Found a share" line and the best-share
             // stat: decode the 104-byte solution back out of its hex `output`
             // field, SHA-256 it (same predicate Engine's own clears_difficulty()
@@ -406,13 +431,44 @@ int main(int argc, char** argv) {
                 uint8_t hash[32];
                 sha256(soln, sizeof soln, hash);
                 double units = pow::achieved_units(hash);
-                ui::console::share_found(worker_label.c_str(), units);
-                stats.record_share_found(units);
+                // Only the user's own shares get a console line. A dev-fee
+                // share announced the same way would read as theirs and
+                // inflate what they think they found; the round's start/end
+                // lines and the stats table's dev-fee row report those
+                // instead, under their own heading.
+                if (origin == miner::Origin::Main) {
+                    // Report the share against the bar it had to clear. The
+                    // target is read at submit time, which is the same instant
+                    // record_submit() banks it -- and process_job() has already
+                    // refused to submit a job a newer one superseded, so the
+                    // current target is the one this share was found against.
+                    ui::console::share_found(worker_label.c_str(), units,
+                                             stats.current_job_units(origin));
+                }
+                stats.record_share_found(units, origin);
             }
-            stats.record_submit(s.id);
-            client.submit(s);
+            stats.record_submit(s.id, origin);
+            // Route by the Origin the JOB carried, never by which pool is
+            // active now: a fee round can end while this solve is still
+            // running, and sending its solution to the other pool would
+            // just earn an unknown-job-id rejection (miner/origin.h).
+            if (origin == miner::Origin::Dev) {
+                if (devfee) devfee->submit(s);
+            } else {
+                client.submit(s);
+            }
         };
         engine->on_attempt = [&stats](uint32_t candidates) { stats.record_attempt(candidates); };
+        engine->on_solver_error = [](const std::string& what, uint32_t n) {
+            ui::console::error("Solver error (" + std::to_string(n) + " in a row): " + what);
+            // The hint only on the first failure: once it is retrying every
+            // 30s, repeating the same advice would bury the errors themselves.
+            if (n == 1) {
+                ui::console::info("Retrying with backoff - mining continues. If another process "
+                                  "is using the GPU, stop it: a full BeamHash III search needs "
+                                  "~7.5 GiB free.");
+            }
+        };
     }
 
     client.on_result = [&opts, &stats](const stratum::Result& r) {
@@ -424,21 +480,76 @@ int main(int argc, char** argv) {
                 ui::console::error("Login failed (" + std::to_string(r.code) + "): " + r.description);
             }
         } else {
-            stats.record_result(r.code);
+            stats.record_result(r.code, miner::Origin::Main);
             ui::console::share_result(r.code, r.description, stats.snapshot().last_latency_ms);
         }
     };
 
     client.on_job = [&](const stratum::Job& j) {
-        stats.record_job(j.id, pow::to_display_units(j.difficulty));
+        stats.record_job(j.id, pow::to_display_units(j.difficulty), miner::Origin::Main);
         ui::console::job(j.id, j.difficulty, j.height);
-        if (engine) engine->on_job(j);
+        // Reading the prefix here is what keeps it race-free -- this runs on
+        // client.run()'s thread, the same one that rewrites it (engine.h).
+        router.offer(j, client.current_nonceprefix(), miner::Origin::Main);
     };
 
     client.on_disconnect = [&stats]() {
         ui::console::disconnected();
         stats.record_disconnect();
     };
+
+    // Developer fee. Announced at startup either way -- a build that takes
+    // one says so before it takes it, and a build that takes none says that
+    // too, so "does this binary charge me?" is answerable from the console
+    // and never has to be inferred. The mechanism, and why it is documented
+    // rather than defended, is in miner/devfee.h; the user-facing terms are
+    // in docs/devfee.md.
+    if (miner::devfee_configured() && engine) {
+        miner::DevFeePool pool = miner::devfee_pool();
+        miner::DevFeeSchedule sched = miner::devfee_schedule();
+
+        // --dev-fee raises the rate; it cannot lower it. A request below the
+        // built-in rate is refused outright rather than clamped: clamping
+        // would let the user walk away believing they had lowered it. The
+        // error names the real way to do that, which this project does not
+        // pretend is unavailable.
+        if (opts.devfee_pct >= 0.0) {
+            const double want = opts.devfee_pct / 100.0;
+            if (want < sched.rate) {
+                char msg[256];
+                std::snprintf(msg, sizeof msg,
+                    "--dev-fee %.4g%% is below this build's %.4g%% rate; the fee can be raised, "
+                    "not lowered (see docs/devfee.md).",
+                    opts.devfee_pct, sched.rate * 100.0);
+                ui::console::error(msg);
+                return 1;
+            }
+            sched.rate = want;
+        }
+
+        // The fee round logs in under the user's own worker name plus the
+        // rate, so it is identifiable on the fee pool as theirs rather than
+        // anonymous hashrate -- and so a raised rate is visible there too.
+        pool.user = miner::devfee_login(pool.user, opts.pools[0].user, sched.rate);
+
+        stats.set_devfee_rate(sched.rate);
+        ui::console::devfee_notice(sched.rate, sched.slice(), sched.cycle,
+                                   pool.host + ":" + std::to_string(pool.port));
+        devfee = std::make_unique<miner::DevFee>(router, stats, pool, sched);
+        devfee->on_slice_begin = [](std::chrono::seconds d) { ui::console::devfee_start(d); };
+        devfee->on_slice_end   = [](std::chrono::seconds d) { ui::console::devfee_end(d); };
+        devfee->on_note        = [](const std::string& m) { ui::console::info(m); };
+    } else if (engine) {
+        ui::console::info("Dev fee: none - this build mines entirely for you");
+        if (opts.devfee_pct > 0.0) {
+            // Honouring --dev-fee here is impossible, not merely declined:
+            // with no developer address compiled in there is nowhere to send
+            // the rounds. Say so rather than accepting the flag silently and
+            // charging nothing, which would look like the fee was taken.
+            ui::console::error("--dev-fee was given, but this build has no developer address "
+                               "compiled in - no fee can be taken. See docs/devfee.md.");
+        }
+    }
 
     ui::Ticker ticker;
     ticker.start(stats, opts.shortstats, opts.longstats);
@@ -453,6 +564,10 @@ int main(int argc, char** argv) {
     }
 
     if (engine) engine->start();
+    // Started after the engine so the fee's first job never arrives before
+    // there is a worker to mine it, and after the API/ticker so a fee round
+    // is already reportable the moment it can happen.
+    if (devfee) devfee->start();
 
     client.run();   // blocks forever, reconnecting on drop; Ctrl+C exits
     return 0;

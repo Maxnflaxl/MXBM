@@ -72,8 +72,23 @@ void job(const std::string& id, uint32_t difficulty, uint64_t height) {
     print_line("New job received: " + id + " Difficulty: " + units);
 }
 
-void share_found(const std::string& device, double units) {
-    print_colored(kGreen, device + ": Found a share of difficulty " + format_units(units));
+void share_found(const std::string& device, double units, double target_units) {
+    std::string text = device + ": Found a share of difficulty " + format_units(units);
+    if (target_units > 0.0) {
+        // Plain ASCII "x", not the "×" the dashboard uses: this line is
+        // routinely piped through tee, grep and log shippers, and an ASCII
+        // multiplier stays greppable everywhere.
+        // "(3.9x target of 2048)": the multiple AND the bar it cleared, on the
+        // one line. The multiple alone leaves you hunting back through the log
+        // for whatever the job difficulty was at the time, and vardiff moves it
+        // all session. Target unabbreviated -- it is the number you compare
+        // against, so throwing away digits to save four columns is a bad trade.
+        char mult[64];
+        std::snprintf(mult, sizeof mult, " (%.1fx target of %.0f)",
+                      units / target_units, target_units);
+        text += mult;
+    }
+    print_colored(kGreen, text);
 }
 
 void share_result(int code, const std::string& description, long long ms) {
@@ -90,6 +105,44 @@ void share_result(int code, const std::string& description, long long ms) {
 
 void disconnected() {
     print_colored(kRed, "Pool connection lost - reconnecting...");
+}
+
+void devfee_notice(double rate, std::chrono::seconds slice,
+                   std::chrono::seconds cycle, const std::string& pool) {
+    // Plain white, deliberately: this is neither good news nor an error, and
+    // colouring it either way would editorialise. Everything a user needs to
+    // check the arithmetic themselves is on the line -- rate, round length,
+    // cadence and destination.
+    // The cadence reads in minutes for the hour-scale cycle that ships, but
+    // falls back to seconds rather than rounding a short cycle down to
+    // "per 0min" -- which is what a test build with a compressed cycle would
+    // otherwise print.
+    char cadence[32];
+    const long long secs = (long long)cycle.count();
+    if (secs >= 60 && secs % 60 == 0) std::snprintf(cadence, sizeof cadence, "%lldmin", secs / 60);
+    else                              std::snprintf(cadence, sizeof cadence, "%llds", secs);
+
+    char buf[192];
+    std::snprintf(buf, sizeof buf,
+        "Dev fee: %.4g%% - one %llds round per %s of mining, to %s",
+        rate * 100.0, (long long)slice.count(), cadence, pool.c_str());
+    print_line(buf);
+}
+
+void devfee_start(std::chrono::seconds slice) {
+    char buf[128];
+    std::snprintf(buf, sizeof buf,
+        "Dev fee round started (%llds) - mining to the developer's address",
+        (long long)slice.count());
+    print_line(buf);
+}
+
+void devfee_end(std::chrono::seconds slice) {
+    char buf[128];
+    std::snprintf(buf, sizeof buf,
+        "Dev fee round finished (%llds) - back on your pool",
+        (long long)slice.count());
+    print_line(buf);
 }
 
 void info(const std::string& msg) {

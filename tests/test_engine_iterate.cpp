@@ -28,6 +28,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <stdexcept>
 
 #include "check.h"
 #include "miner/engine.h"
@@ -169,7 +170,7 @@ int main() {
     client.handle_line(wire::kResultLoginOk);   // seeds nonceprefix "a1f", as in test_engine.cpp
 
     Engine engine(client, solver);
-    engine.submit_fn = [](const Solution&) {};   // CountingSolver never returns candidates; defensive no-op
+    engine.submit_fn = [](const Solution&, Origin) {};   // CountingSolver never returns candidates; defensive no-op
 
     Job job1{"job-1", job1_input, 0u, 2500000};
     Job job2{"job-2", job2_input, 0u, 2500001};
@@ -270,6 +271,102 @@ int main() {
 
     check(solver.snapshot_abort_call_count() >= aborts_before_stop + 1,
           "stop() called Solver::request_abort()");
+
+    // ---- (d) a throwing solver must not take the process down ----
+    //
+    // solve() runs on the worker thread, and an exception escaping a thread
+    // entry function calls std::terminate(). Before the guard in worker_main()
+    // this test binary itself would abort here -- a GPU losing its VRAM to
+    // another process core-dumped the whole miner. The engine must instead
+    // report, back off, retry, and carry on once the solver recovers.
+    {
+        struct FlakySolver : Solver {
+            std::mutex m;
+            std::condition_variable cv;
+            int throws_left = 3;
+            int successes = 0;
+            std::vector<std::array<uint8_t, 104>> solve(const uint8_t*, const uint8_t*) override {
+                std::unique_lock<std::mutex> lock(m);
+                if (throws_left > 0) { --throws_left; throw std::runtime_error("simulated device failure"); }
+                ++successes;
+                cv.notify_all();
+                return {};
+            }
+        };
+
+        FlakySolver flaky;
+        Client c2;
+        c2.handle_line(wire::kResultLoginOk);
+        Engine e2(c2, flaky);
+        e2.submit_fn = [](const Solution&, Origin) {};
+        // Without this seam the three backoffs would be 1s + 2s + 4s; the
+        // retry path is what is under test, not the wall-clock duration.
+        e2.retry_base_delay = std::chrono::milliseconds(1);
+
+        std::mutex em;
+        std::vector<uint32_t> counts;
+        std::string first_what;
+        e2.on_solver_error = [&](const std::string& what, uint32_t n) {
+            std::lock_guard<std::mutex> lock(em);
+            if (counts.empty()) first_what = what;
+            counts.push_back(n);
+        };
+
+        e2.start();
+        e2.on_job(Job{"flaky-1", job1_input, 0u, 1});
+
+        // The worker survives the throws and resumes solving.
+        bool recovered = false;
+        {
+            std::unique_lock<std::mutex> lock(flaky.m);
+            recovered = flaky.cv.wait_for(lock, 5000ms, [&] { return flaky.successes >= 2; });
+        }
+        check(recovered, "worker survives a throwing solve() and resumes mining once it recovers");
+
+        e2.stop();
+
+        std::lock_guard<std::mutex> lock(em);
+        check(counts.size() == 3, "every failed solve() is reported exactly once");
+        check(!counts.empty() && counts.front() == 1, "the consecutive count starts at 1");
+        check(counts.size() == 3 && counts[2] == 3,
+              "the consecutive count rises while failures continue");
+        check(first_what.find("simulated device failure") != std::string::npos,
+              "the exception's own message is passed through, not a generic one");
+    }
+
+    // ---- (e) stop() stays prompt DURING a retry backoff ----
+    //
+    // The backoff waits on the mailbox condition rather than sleeping, so a
+    // shutdown cuts it short. With a plain sleep this would take the full
+    // backoff -- trading a crash for a hang, which is barely a fix.
+    {
+        struct AlwaysThrows : Solver {
+            std::vector<std::array<uint8_t, 104>> solve(const uint8_t*, const uint8_t*) override {
+                throw std::runtime_error("permanently broken device");
+            }
+        };
+        AlwaysThrows dead;
+        Client c3;
+        c3.handle_line(wire::kResultLoginOk);
+        Engine e3(c3, dead);
+        e3.submit_fn = [](const Solution&, Origin) {};
+        e3.retry_base_delay = std::chrono::milliseconds(30000);   // 30s: only an interruptible wait passes
+
+        std::atomic<int> errs{0};
+        e3.on_solver_error = [&](const std::string&, uint32_t) { errs.fetch_add(1); };
+        e3.start();
+        e3.on_job(Job{"dead-1", job1_input, 0u, 1});
+
+        // Wait for it to be inside the backoff, then time the shutdown.
+        for (int i = 0; i < 500 && errs.load() == 0; ++i) std::this_thread::sleep_for(10ms);
+        check(errs.load() >= 1, "the permanently-failing solver reported before the backoff");
+
+        auto t0 = std::chrono::steady_clock::now();
+        e3.stop();
+        auto elapsed = std::chrono::steady_clock::now() - t0;
+        check(elapsed < 3000ms,
+              "stop() interrupts the retry backoff instead of waiting it out");
+    }
 
     return summary("engine_iterate");
 }

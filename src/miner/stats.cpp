@@ -37,40 +37,97 @@ void Stats::record_attempt(uint32_t candidates) {
     prune_attempts(t);
 }
 
-void Stats::record_submit(const std::string& job_id) {
+void Stats::record_submit(const std::string& job_id, Origin origin) {
     std::lock_guard<std::mutex> lock(mutex_);
-    submits_.push_back(PendingSubmit{job_id, now_fn(), last_job_units_});
+    const double units = origin == Origin::Dev ? devfee_last_job_units_ : last_job_units_;
+    submits_.push_back(PendingSubmit{job_id, now_fn(), units, origin});
     while (submits_.size() > kSubmitCap) submits_.pop_front();
 }
 
-void Stats::record_share_found(double achieved_units) {
+void Stats::record_share_found(double achieved_units, Origin origin) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // The ring records EVERY found share, both origins, tagged -- it is a log
+    // of what happened, not a scoreboard, so excluding fee shares here would
+    // leave unexplained gaps in it. (Note this runs before the Main-only
+    // early return below; that return guards the best-share record, not this.)
+    // The target is captured HERE, not left for the consumer to pair up later:
+    // Stats already knows each origin's current job target, and by the time
+    // anyone reads this share the pool may well have stepped it.
+    const double target = (origin == Origin::Dev) ? devfee_last_job_units_ : last_job_units_;
+    found_.push_back(FoundShare{now_fn(), achieved_units, target, origin == Origin::Dev});
+    while (found_.size() > kRecentShares) found_.pop_front();
+
+    // Best-share is the user's session record. A share found during a fee
+    // slice belongs to the developer, so it does not compete for that slot.
+    if (origin != Origin::Main) return;
     if (achieved_units > best_share_units_) best_share_units_ = achieved_units;
 }
 
-void Stats::record_result(int code) {
+void Stats::record_result(int code, Origin origin) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (code == 1) ++accepted_;
-    else if (code == 3) ++stale_;
-    else ++rejected_;   // any other code, including defensively-handled 0: rejected bucket
+    if (origin == Origin::Dev) {
+        if (code == 1) ++devfee_accepted_;
+        else if (code == 3) ++devfee_stale_;
+        else ++devfee_rejected_;
+    } else {
+        if (code == 1) ++accepted_;
+        else if (code == 3) ++stale_;
+        else ++rejected_;   // any other code, including defensively-handled 0: rejected bucket
+    }
 
-    if (!submits_.empty()) {
-        auto t0 = submits_.front().t;
+    // Match the oldest STILL-PENDING submit of this same origin, rather than
+    // simply the oldest overall: both connections can have a submit in flight
+    // across a fee-slice boundary, and popping the other one's would both
+    // bank the wrong difficulty and report the wrong round trip.
+    for (auto it = submits_.begin(); it != submits_.end(); ++it) {
+        if (it->origin != origin) continue;
         // Bank the pool-credited work only on ACCEPT: stale and rejected shares pay
         // nothing, and counting them would inflate the pool rate exactly when
-        // something is going wrong.
-        if (code == 1) accepted_units_ += submits_.front().units;
-        submits_.pop_front();
-        auto now = now_fn();
-        last_latency_ms_ =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+        // something is going wrong. Dev-fee shares never bank at all --
+        // pool_sol_session is what the USER's pool credited them.
+        if (code == 1 && origin == Origin::Main) accepted_units_ += it->units;
+        const auto t0 = it->t;
+        submits_.erase(it);
+        // Likewise the displayed latency is the user's pool round trip; a fee
+        // slice must not overwrite it with a different pool's timing.
+        if (origin == Origin::Main) {
+            last_latency_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now_fn() - t0).count();
+        }
+        break;
     }
 }
 
-void Stats::record_job(const std::string& id, double units) {
+void Stats::record_job(const std::string& id, double units, Origin origin) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (origin == Origin::Dev) {
+        devfee_last_job_units_ = units;   // banked by a later record_submit(Dev)
+        return;                           // the table's job line stays the user's
+    }
     last_job_id_ = id;
     last_job_units_ = units;
+}
+
+double Stats::current_job_units(Origin origin) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return origin == Origin::Dev ? devfee_last_job_units_ : last_job_units_;
+}
+
+void Stats::set_devfee_rate(double rate) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    devfee_rate_ = rate;
+}
+
+void Stats::set_devfee_active(bool active) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    devfee_active_ = active;
+}
+
+void Stats::record_devfee_slice(std::chrono::seconds elapsed) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    devfee_seconds_ += (double)elapsed.count();
+    ++devfee_slices_;
 }
 
 void Stats::record_connect(const std::string& hostport, long long connect_ms) {
@@ -115,6 +172,18 @@ Stats::Snapshot Stats::snapshot() const {
     s.last_job_id = last_job_id_;
     s.last_job_units = last_job_units_;
     s.reconnects = reconnects_;
+    s.devfee_rate = devfee_rate_;
+    s.devfee_seconds = devfee_seconds_;
+    s.devfee_slices = devfee_slices_;
+    s.devfee_active = devfee_active_;
+    s.devfee_accepted = devfee_accepted_;
+    s.devfee_stale = devfee_stale_;
+    s.devfee_rejected = devfee_rejected_;
+    s.recent_shares.reserve(found_.size());
+    for (const auto& f : found_) {
+        s.recent_shares.push_back(
+            RecentShare{std::chrono::duration<double>(now - f.t).count(), f.units, f.target, f.dev});
+    }
     return s;
 }
 

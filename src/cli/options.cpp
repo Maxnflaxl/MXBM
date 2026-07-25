@@ -34,6 +34,9 @@ std::string usage_text() {
         "  --solver cuda|opencl|gpu|ref|auto\n"
         "                         solver backend. gpu = any GPU (CUDA preferred), cuda/opencl\n"
         "                         pin one, ref = CPU reference. Default: auto\n"
+        "  --dev-fee PCT          raise the developer fee above its built-in rate, as a\n"
+        "                         percentage (e.g. 2.5). Can only be raised, never lowered;\n"
+        "                         see docs/devfee.md\n"
         "  --json [PATH]          load a JSON config file (default: user_config.json)\n"
         "  --profile NAME         select a profile from the --json config\n"
         "  --config PATH          load a flat KEY = VALUE config file\n"
@@ -208,6 +211,28 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.benchmark_seconds = (int)v;
             continue;
         }
+        if (arg == "--dev-fee") {
+            // Raise-only. The flag exists so a user who wants to support the
+            // project can send more than the built-in rate; it deliberately
+            // cannot be used to send less, which is what makes it a tip
+            // rather than an opt-out. Anyone who wants a lower rate has the
+            // source and the licence (docs/devfee.md) -- rejecting the value
+            // here says so plainly instead of silently clamping it, which
+            // would leave the user believing they had lowered it.
+            if (i + 1 >= argc) { err = "missing value for --dev-fee\n\n" + usage_text(); return false; }
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            errno = 0;
+            const double pct = std::strtod(v.c_str(), &end);
+            if (v.empty() || !end || *end != '\0' || errno == ERANGE
+                || !(pct == pct) || pct < 0.0 || pct > 100.0) {
+                err = "invalid --dev-fee (must be a percentage in 0..100, e.g. 2.5)\n\n" + usage_text();
+                return false;
+            }
+            out.devfee_pct = pct;
+            out.seen.devfee = true;
+            continue;
+        }
         if (arg == "--solver") {
             if (i + 1 >= argc) { err = "missing value for --solver\n\n" + usage_text(); return false; }
             std::string v = argv[++i];
@@ -251,11 +276,18 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         return false;
     }
 
-    // MXBM mines exactly one algorithm; missing and mismatched both land here.
-    if (algo != "BEAM-III") {
+    // MXBM mines exactly one algorithm. A MISMATCHED --algo is rejected right
+    // here -- no later source can make "ETHASH" valid. A MISSING one is not,
+    // for exactly the reason the --pool note below gives: a config file may
+    // carry ALGO, and both loaders already validate it (config.cpp). Rejecting
+    // it here made that config key unreachable dead surface -- the loader
+    // could never run, because parse_args had already bailed. main() enforces
+    // "an algorithm came from somewhere" after the config merge.
+    if (!algo.empty() && algo != "BEAM-III") {
         err = "unsupported algo\n\n" + usage_text();
         return false;
     }
+    out.seen.algo = !algo.empty();
     // Unlike a missing/mismatched --algo, an empty --pool list is NOT
     // rejected here: Task 5's config-file loaders (mxbm::config) may supply
     // pools instead when opts.use_json_config/config_path is set. main()

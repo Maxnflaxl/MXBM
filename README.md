@@ -47,7 +47,11 @@ Licensed under the [Apache License 2.0](LICENSE).
 - **lolMiner-shaped UX** — a familiar console (per-interval speed line, periodic
   statistics block, share/accept lines), a compatible command-line surface, and
   both configuration-file formats.
-- **`/summary` HTTP API** for monitoring.
+- **Built-in dashboard and `/summary` HTTP API** — `--apiport N` serves a live
+  browser dashboard (hashrate, per-share difficulty scatter, power with an
+  optional energy-cost axis, clocks, temperature) alongside a JSON endpoint for
+  scripts. Entirely self-contained: no CDN, no external assets, so it works on
+  an isolated rig.
 - **CUDA and OpenCL GPU solvers** — a fused row-bucket Wagner pipeline that finds all
   five rounds' collisions in local memory. The best available backend is selected
   automatically, with fallback all the way down to the CPU reference. Every optimization
@@ -55,6 +59,26 @@ Licensed under the [Apache License 2.0](LICENSE).
   [docs/performance.md](docs/performance.md).
 - **Self-contained** — no Boost, no Beam runtime. The only dependencies are a
   vendored single-header JSON library and your system OpenSSL.
+
+## Developer fee
+
+MXBM takes a **1.0% developer fee** — one 36-second round per 60 minutes of
+mining, about 14.4 minutes a day. That is the same rate the closed-source
+BeamHash III miners charge.
+
+It is announced at startup and at each round, reported on its own row of the
+statistics table and in `/summary`, and kept in a separate ledger so it never
+touches your own share counts, best share, or pool-credited rate. Fee rounds
+log in under your own worker name plus the rate (`rig1_1`), so they are
+identifiable as yours. `--dev-fee PCT` raises the rate if you want to support
+the project with more; it cannot lower it.
+
+The fee is what funds MXBM's development: the solver work, the hardware it is
+measured on, and keeping it working as pools and drivers move. It is the same
+rate the closed-source miners charge, so an open miner costs you no more.
+
+Full terms, including exactly what is and is not counted, are in
+**[docs/devfee.md](docs/devfee.md)**.
 
 ## Quick start
 
@@ -79,7 +103,7 @@ files, and API.
 |-----------|------------------|--------|
 | Proof-of-work core | BeamHash III primitives + verifier, tested vs Beam | ✅ done |
 | Stratum client | Connect, authenticate, receive jobs from a real pool | ✅ done |
-| Miner shell | lolMiner-style console, CLI, config files, `/summary` API | ✅ done |
+| Miner shell | lolMiner-style console, CLI, config files, dashboard + `/summary` API | ✅ done |
 | GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
 | Solver performance | Close the gap to the fastest closed-source miners | ✅ done (CUDA, +6 %) |
 | Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
