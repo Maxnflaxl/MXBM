@@ -2,24 +2,16 @@
 
 namespace mxbm { namespace api {
 
-// The page served at "/" on --apiport: a plain document that polls /summary,
-// tabulates the same numbers the console stats block prints, and draws
-// hover-readable charts.
+// The page served at "/" on --apiport: polls /summary, tabulates the same
+// numbers the console stats block prints, and draws hover-readable charts.
 //
-// SELF-CONTAINED ON PURPOSE. No CDN, no external font, no fetch to anywhere
-// but this miner's own /summary -- tests/test_api.cpp asserts the served HTML
-// contains no absolute URL at all. Mining rigs frequently sit on isolated or
-// firewalled networks, and MXBM's whole dependency story is "a vendored JSON
-// header and your system OpenSSL"; a dashboard that quietly needed the public
-// internet would render blank exactly where it is most needed. The charts are
-// therefore drawn by hand on a <canvas> rather than pulled from a charting
-// library.
+// SELF-CONTAINED ON PURPOSE: rigs often sit on firewalled networks, so no CDN,
+// no external font, and the charts are hand-drawn on a <canvas>.
+// tests/test_api.cpp asserts the served HTML contains no absolute URL.
 //
-// HISTORY IS CLIENT-SIDE. miner::Stats keeps windowed RATES and running
-// counters, not a time series, so there is no history to serve -- the browser
-// accumulates its own ring buffer from the moment the page loads, and a
-// reload starts it over. The page says so in its footer rather than letting an
-// empty chart after a refresh look like a miner that stopped hashing.
+// HISTORY IS CLIENT-SIDE. miner::Stats keeps windowed rates and counters, not a
+// time series, so there is none to serve: the browser accumulates its own ring
+// from page load, and a reload starts it over.
 inline const char* dashboard_html() {
     return R"HTML(<!doctype html>
 <html lang="en">
@@ -32,15 +24,13 @@ inline const char* dashboard_html() {
   h1{font-size:15px;margin:0 0 .2em}
   #algo{color:#777;font-weight:normal}
   h2{font-size:13px;font-weight:normal;margin:1.3em 0 .3em;color:#555}
-  /* Flex, not inline-block: the tables have different natural widths, and
-     inline-block left them ragged with the third dropping to its own line. */
+  /* Flex, not inline-block: the tables have different natural widths and
+     inline-block dropped the third onto its own line. */
   #tables{display:flex;flex-wrap:wrap;gap:0 1.6em;align-items:flex-start}
   table{border-collapse:collapse;margin-bottom:.4em}
   th,td{border:1px solid #ccc;padding:1px 8px;text-align:left;white-space:nowrap}
   th{font-weight:normal;color:#555}
   td{font-variant-numeric:tabular-nums}
-  /* Viewport-relative so the charts fill whatever width and height the
-     window has, rather than being pinned to a fixed page width. */
   canvas{border:1px solid #ccc;width:100%;height:22vh;min-height:120px;max-height:260px;
          display:block;cursor:crosshair}
   .key{color:#777;margin:.25em 0 0;font-size:12px}
@@ -76,15 +66,12 @@ inline const char* dashboard_html() {
 <script>
 var MAX = 900, hist = [], fails = 0, lastData = null;
 // Found-share events and the current pool target. Unlike `hist`, these are
-// replaced from /summary on every poll rather than accumulated, because the
-// miner keeps the share log itself (Stats::kRecentShares).
+// replaced from /summary each poll rather than accumulated: the miner keeps the
+// share log itself (Stats::kRecentShares), so they survive a reload.
 var shares = [], jobDiff = 0;
 
-// Difficulty, abbreviated for the difficulty axis -- targets are in the
-// hundreds, lucky shares in the hundreds of thousands, and the axis gutter is
-// too narrow for either in full. ONLY the axis abbreviates: the legend and the
-// hover readout print n(v, 0) instead, because those are the places you go to
-// read the actual number and "143.5k" has thrown away the digits.
+// Difficulty abbreviated to fit the narrow axis gutter. ONLY the axis uses it:
+// legend and hover print n(v, 0), since "143.5k" has thrown the digits away.
 function fmtDiff(v) {
   if (v === null || v === undefined || !isFinite(v)) return '--';
   if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
@@ -92,40 +79,23 @@ function fmtDiff(v) {
   return v.toFixed(0);
 }
 
-// Chart definitions.
+// Series default to the LEFT axis; `axis:'right'` gives one its own,
+// independently scaled axis -- for values that share a canvas but not a range
+// (core ~2700 MHz against memory ~10250 MHz; share counts against difficulty).
 //
-// Series default to the LEFT axis; `axis:'right'` moves one to its own,
-// independently scaled right axis. That is what lets a chart carry values
-// that share a canvas but not a range:
-//
-//   clocks -- core (~2700 MHz) against memory (~10250 MHz). Same unit, but
-//             nearly fourfold apart, so one axis would flatten both and hide
-//             exactly the variation an overclocker watches for: a core clock
-//             dipping under thermal throttle.
-//   shares -- cumulative counts against the pool's current target difficulty.
-//             A share count means little without the difficulty it was found
-//             at, and pool vardiff moves that around a lot over a session.
-//
-// `altAxis` is different again: not a second series, but the SAME line
-// relabelled in another unit. Running cost is watts times a constant, so a
-// separate cost series would trace the power line pixel for pixel -- a
-// duplicate adding no shape. What the money needs is its own scale, not its
-// own curve.
+// `altAxis` is not a second series but the SAME line relabelled in another unit:
+// cost is watts times a constant, so a separate series would trace the power
+// line pixel for pixel. The money needs its own scale, not its own curve.
 var CHARTS = [
   { id: 'speed', title: 'hashrate (sol/s)', series: [
       { k: 's15',  label: '15s',  unit: '', color: '#0645ad', dec: 2 },
       { k: 's60',  label: '60s',  unit: '', color: '#a0139b', dec: 2 },
       { k: 'pool', label: 'pool', unit: '', color: '#0a7f5f', dec: 2 }] },
 
-  // Each share found, plotted at its ACHIEVED difficulty, against the pool
-  // target it had to clear. A scatter, not a line: shares are discrete events
-  // arriving at irregular moments, and joining them would draw a trend through
-  // what is really independent luck.
-  //
-  // Log Y, because the spread is enormous: achieved difficulty averages about
-  // twice the target but is unbounded above -- a 512-target session routinely
-  // produces the occasional six-figure share. On a linear axis that single
-  // outlier flattens every other share onto the floor.
+  // Each share at its ACHIEVED difficulty, against the target it had to clear.
+  // A scatter, not a line: joining discrete events would draw a trend through
+  // independent luck. Log Y because achieved difficulty is unbounded above --
+  // one six-figure share on a linear axis flattens the rest onto the floor.
   { id: 'found', title: 'shares found (achieved difficulty)', kind: 'events', log: true },
 
   { id: 'shares', title: 'share counts', series: [
@@ -163,12 +133,9 @@ function dur(s) {
   s = Math.floor(s || 0);
   return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ' + (s % 60) + 's';
 }
-// "value unit (min–max)", where the range is the SESSION's, taken straight from
-// /summary's Session_Stats rather than measured here. The browser's own ring
-// holds ~30 minutes and is wiped by a reload, so a thermal spike or a clock dip
-// from earlier in the run is gone from it -- the miner watched the whole thing.
-// Falls back to the bare value while nothing has been sampled yet, or while the
-// quantity has not actually moved.
+// "value unit (min–max)", where the range is the SESSION's, from /summary's
+// Session_Stats rather than measured here: the browser ring holds ~30 minutes
+// and is wiped by a reload, so an earlier spike is gone from it.
 function withRange(v, unit, st, dec) {
   if (v === null || v === undefined || !isFinite(v)) return '--';
   var out = n(v, dec) + unit;
@@ -186,10 +153,8 @@ function clock(d) {
 }
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
 
-// Energy price, entered on the power chart. Kept in localStorage (wrapped: a
-// browser with storage disabled throws on access, and the dashboard must still
-// work without persistence) so the figure survives a reload -- unlike the
-// sample history, which genuinely cannot.
+// Energy price, kept in localStorage so it survives a reload. Access is wrapped
+// because a browser with storage disabled throws on it.
 function store(k, v) {
   try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) {}
   return null;
@@ -205,16 +170,12 @@ function curSym() {
   return s || '$';
 }
 
-// Energy actually observed since this page loaded (trapezoid between
-// consecutive readings). Honest about its window: it can only cover time the
-// page has been open, which is why the table labels it "page" rather than
-// presenting it as a session total.
+// Energy observed since this page loaded (trapezoid between consecutive
+// readings). Only covers time the page has been open, hence the "page" label.
 //
-// ACCUMULATED as samples arrive, not re-integrated over `hist` on each poll.
-// That ring is capped at MAX and starts dropping its oldest sample once full,
-// so a re-integration would quietly stop growing after ~30 minutes and report
-// only the last half hour under a label that says "page" -- the figure would
-// plateau while the meter kept running.
+// ACCUMULATED as samples arrive, not re-integrated over `hist` on each poll:
+// that ring is capped at MAX and drops its oldest sample once full, so a
+// re-integration would silently plateau after ~30 minutes.
 var energyKWh = 0;
 function accrueEnergy(prev, cur) {
   if (!prev) return;
@@ -223,9 +184,8 @@ function accrueEnergy(prev, cur) {
   energyKWh += (a + b) / 2 * ((cur.time - prev.time) / 3600000.0) / 1000.0;
 }
 
-// Finite min/max of one series over the window; null when it has no data at
-// all (a platform reporting no fan, say) so the caller can skip it entirely
-// rather than draw a line through nothing.
+// Finite min/max of one series over the window; null when it has no data at all
+// (a platform reporting no fan) so the caller can skip the series entirely.
 function rangeOf(key) {
   var lo = Infinity, hi = -Infinity, any = false;
   for (var i = 0; i < hist.length; i++) {
@@ -237,15 +197,10 @@ function rangeOf(key) {
   }
   return any ? { lo: lo, hi: hi } : null;
 }
-// Never zoom tighter than this fraction of the value being plotted.
-//
-// Without a floor the axis fits whatever range the data happens to have, so a
-// quantity that is genuinely steady renders as violent noise: measured power on
-// this rig moves 0.4% peak-to-peak (283.5-284.6 W) and filled the entire chart
-// height. That is not smoothing and it hides nothing -- the data is unchanged
-// and the hover still reports exact values -- it just stops a flat line being
-// drawn as a mountain range. Series with real movement (sol15 swings ~10%
-// peak-to-peak) exceed the floor and are unaffected.
+// Never zoom tighter than this fraction of the value plotted. Without a floor
+// the axis fits whatever range the data has, so a steady quantity renders as
+// violent noise: power moving 0.4% peak-to-peak (283.5-284.6 W) filled the
+// whole chart height. Nothing is smoothed; hover still reports exact values.
 var MIN_REL_SPAN = 0.06;   // +/-3% around the midpoint
 
 function padRange(lo, hi) {
@@ -276,9 +231,8 @@ CHARTS.forEach(function (cfg) {
 
   cfg.el.addEventListener('mousemove', function (e) {
     var r = cfg.el.getBoundingClientRect();
-    // The scatter picks the nearest point by pixel distance, so it only needs
-    // the raw cursor position; the time-series charts index into the sample
-    // ring instead.
+    // The scatter picks the nearest point by pixel distance; the time-series
+    // charts index into the sample ring instead.
     if (cfg.kind === 'events') { cfg.mouseX = e.clientX - r.left; drawChart(cfg); return; }
     if (!hist.length) return;
     var pw = r.width - AXIS_W - (cfg.rightNow ? AXIS_W : PAD_R);
@@ -292,8 +246,7 @@ CHARTS.forEach(function (cfg) {
   });
 });
 
-// Restore the saved price/currency and redraw on every edit, so the cost axis
-// appears the moment a price is typed rather than at the next 2s poll.
+// Redraw on every keystroke, so the cost axis appears before the next 2s poll.
 (function () {
   var p = document.getElementById('kwhPrice'), c = document.getElementById('curSym');
   if (!p || !c) return;
@@ -303,26 +256,18 @@ CHARTS.forEach(function (cfg) {
   function changed() {
     store('mxbm.kwh', p.value);
     store('mxbm.cur', c.value);
-    // Re-render WITHOUT sampling: this is a settings edit, not a poll, and
-    // pushing another point here would plant a duplicate sample in the
-    // history at whatever moment the user happened to type. render() redraws
-    // every chart, so the cost axis appears on the keystroke.
+    // Re-render WITHOUT sampling: a settings edit is not a poll, and pushing a
+    // point here would plant a duplicate sample at whatever moment the user typed.
     if (lastData) render(lastData, false);
   }
   p.addEventListener('input', changed);
   c.addEventListener('input', changed);
 })();
 
-// Download the sample ring as CSV. This history exists ONLY in this tab -- the
-// miner keeps windowed rates and counters, not a series -- so a reload or a
-// miner restart loses it, and the ring itself drops its oldest sample after
-// ~30 minutes. This is the escape hatch for the numbers you decide, part way
-// through a session, that you want to keep. For a durable record, start the
-// miner with --log, which writes a timestamped transcript from the beginning.
-//
-// Columns are the ring's own fields, plus both a readable timestamp and an
-// epoch one: spreadsheets want the first, scripts want the second, and deriving
-// either from the other is a nuisance neither should have to do.
+// Download the sample ring as CSV -- the escape hatch for a history that lives
+// only in this tab and drops its oldest sample after ~30 minutes; --log records
+// the whole run instead. Both an ISO and an epoch timestamp: spreadsheets want
+// the first, scripts the second.
 var CSV_COLS = ['s15', 's60', 'pool', 'acc', 'stale', 'rej', 'diff',
                 'pw', 'cclk', 'mclk', 'temp', 'fan'];
 function saveCsv() {
@@ -332,8 +277,8 @@ function saveCsv() {
     var h = hist[i], row = [h.time.toISOString(), h.time.getTime()];
     for (var c = 0; c < CSV_COLS.length; c++) {
       var v = h[CSV_COLS[c]];
-      // Empty, not 0: a card that reports no fan must not read as a stopped one
-      // once the numbers are in a spreadsheet, same rule the API's nulls follow.
+      // Empty, not 0: a card reporting no fan must not read as a stopped one
+      // once the numbers are in a spreadsheet.
       row.push((v === null || v === undefined || !isFinite(v)) ? '' : v);
     }
     rows.push(row.join(','));
@@ -347,16 +292,12 @@ function saveCsv() {
 }
 document.getElementById('save').addEventListener('click', saveCsv);
 
-// Scatter of found shares. Its data does NOT come from the polled ring the
-// other charts use: /summary carries the miner's own last-N share log, so this
-// is replaced wholesale each poll rather than accumulated. That means it is
-// populated the instant the page opens and survives a reload -- the one chart
-// here with real history behind it.
+// Scatter of found shares. Reads `shares`, not the polled ring, so it is
+// populated the instant the page opens and survives a reload.
 function drawEvents(cfg) {
   var cv = cfg.el;
-  // Whether there is anything to plot decides visibility, and it has to be
-  // decided BEFORE the canvas is measured: a hidden wrapper has zero width, so
-  // a chart that unhid itself after the size check below would never draw.
+  // Visibility must be decided BEFORE the canvas is measured: a hidden wrapper
+  // has zero width, so a chart unhidden after the size check never draws.
   document.getElementById('wrap_' + cfg.id).hidden = !shares.length;
   if (!shares.length) return;
 
@@ -371,17 +312,11 @@ function drawEvents(cfg) {
 
   var pw = w - AXIS_W - PAD_R, ph = h - PAD_T - PAD_B;
 
-  // The target as it CHANGED, not just where it stands now. Pool vardiff steps
-  // the target up and down through a session, and a single line at the current
-  // value would slide the whole bar -- making shares found against an old,
-  // lower target look as if they had cleared today's higher one.
-  //
-  // Built from TWO sources so it spans everything on screen: each share log
-  // entry carries the target it was actually found against (so the line reaches
-  // as far back as the dots do, even shares from before this page opened), and
-  // the polled ring fills in up to now for stretches where no share was found.
-  // Consecutive duplicates are dropped so the step only turns where the pool
-  // really moved.
+  // The target as it CHANGED, not where it stands now: vardiff steps it through
+  // a session, and one line at the current value would make old shares look as
+  // if they had cleared today's target. Two sources, so the line spans the whole
+  // window: each share carries the target it was found against (reaching back as
+  // far as the dots do), and the polled ring fills in up to now.
   var targets = [];
   shares.forEach(function (s) { if (s.target > 0) targets.push({ t: s.t, v: s.target }); });
   for (var ti = 0; ti < hist.length; ti++) {
@@ -393,8 +328,8 @@ function drawEvents(cfg) {
   targets.sort(function (a, b) { return a.t - b.t; });
   targets = targets.filter(function (p, i) { return i === 0 || p.v !== targets[i - 1].v; });
 
-  // Include every target in the vertical range: seeing the shares sit above the
-  // bar they had to clear is most of the point of the chart.
+  // Every target joins the vertical range: seeing the shares sit above the bar
+  // they had to clear is most of the point of the chart.
   var vals = shares.map(function (s) { return s.units; });
   targets.forEach(function (p) { vals.push(p.v); });
   if (!targets.length && jobDiff > 0) vals.push(jobDiff);
@@ -418,9 +353,8 @@ function drawEvents(cfg) {
     g.fillText(fmtDiff(v), AXIS_W - 4, y + 3);
   }
 
-  // Pool target, drawn as a STEP: a difficulty holds until the pool issues a
-  // new job, so sloping between samples would imply a gradual drift that never
-  // happened.
+  // Pool target, drawn as a STEP: a difficulty holds until the pool issues a new
+  // job, so sloping between samples would imply a drift that never happened.
   if (targets.length) {
     g.strokeStyle = '#0a7f5f'; g.setLineDash([4, 3]); g.lineWidth = 1.2;
     g.beginPath();
@@ -457,9 +391,6 @@ function drawEvents(cfg) {
     g.strokeStyle = '#aaa'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(hx + 0.5, PAD_T); g.lineTo(hx + 0.5, PAD_T + ph); g.stroke();
 
-    // The share carries the target it was actually found against, so no
-    // lookup and no guessing -- and it stays right for shares older than
-    // this page.
     var segs = [{ t: clock(new Date(s.t)), c: '#555' },
                 { t: 'difficulty ' + n(s.units, 0), c: s.dev ? '#c084fc' : '#0645ad' }];
     if (s.target > 0) {
@@ -485,8 +416,6 @@ function drawEvents(cfg) {
     });
   }
 
-  // Legend prints difficulties in full (see fmtDiff): this is where you come to
-  // read the actual numbers.
   var devN = shares.filter(function (s) { return s.dev; }).length;
   var mx = Math.max.apply(null, shares.map(function (s) { return s.units; }));
   var mn = Math.min.apply(null, shares.map(function (s) { return s.units; }));
@@ -508,11 +437,8 @@ function drawChart(cfg) {
   if (cfg.kind === 'events') { drawEvents(cfg); return; }
   var cv = cfg.el;
 
-  // Which series carry data answers both questions this function has -- is
-  // this chart worth showing, and how does it scale -- so it is computed once,
-  // here. Before the canvas is measured, because a hidden wrapper has zero
-  // width: a chart that unhid itself later would never get drawn. A machine
-  // with no telemetry source simply has no device charts.
+  // Which series carry data decides both visibility and scaling. Computed before
+  // the canvas is measured, since a hidden wrapper has zero width.
   var live = [];
   cfg.series.forEach(function (s) {
     var r = rangeOf(s.k);
@@ -559,15 +485,13 @@ function drawChart(cfg) {
       g.fillText((dec !== undefined) ? vv.toFixed(dec) : vv.toFixed(vv < 10 ? 1 : 0), x, yy + 3);
     }
   }
-  // An axis owned by exactly one series is drawn in that series' colour, so
-  // which scale belongs to which line needs no legend lookup. A shared one
+  // An axis owned by exactly one series takes that series' colour; a shared one
   // stays neutral grey, since no single colour would be truthful.
   axisLabels(scaleL, AXIS_W - 4, 'right', L.length === 1 ? L[0].s.color : '#777');
   if (Rt.length) {
     axisLabels(scaleR, w - padR + 4, 'left', Rt.length === 1 ? Rt[0].s.color : '#777');
   } else if (alt) {
-    // Same scale multiplied through, so the right numbers land on exactly the
-    // same gridlines as the left.
+    // Same scale multiplied through, so both axes land on the same gridlines.
     axisLabels(scaleL, w - padR + 4, 'left', alt.color, alt.factor, alt.dec);
   }
 
@@ -588,11 +512,8 @@ function drawChart(cfg) {
     g.stroke();
   });
 
-  // Hover readout: crosshair at the sampled point, a dot per series, and a
-  // boxed label whose numbers are drawn in each series' own colour, so a value
-  // ties to its line without a legend lookup. Values come from the stored
-  // sample, not from re-reading pixels, so the number shown is the number that
-  // was recorded.
+  // Hover readout. Values come from the stored sample, not from re-reading
+  // pixels, so the number shown is the number that was recorded.
   var idx = cfg.hover;
   if (idx !== null && idx !== undefined && idx >= 0 && idx < hist.length) {
     var p = hist[idx], hx = xOf(idx);
@@ -608,8 +529,7 @@ function drawChart(cfg) {
         g.beginPath(); g.arc(hx, yOf(v, e.scale), 2.5, 0, 6.284); g.fill();
       }
     });
-    // The alt axis reads off the same point, so the cost at this instant joins
-    // the box next to the watts that produced it.
+    // The alt axis reads off the same point, so cost sits next to its watts.
     if (alt) {
       var av = p[L[0].s.k];
       segs.push({ t: n(av == null ? null : av * alt.factor, alt.dec) + alt.unit, c: alt.color });
@@ -634,10 +554,8 @@ function drawChart(cfg) {
     });
   }
 
-  // Legend: current value plus the min-max seen over the window, on every
-  // chart. The range is what turns a wiggling line into a judgement -- whether
-  // a core clock dipped, whether hashrate is steady -- without hovering to
-  // hunt for the extremes.
+  // Legend: current value plus the min-max over the window. The range is what
+  // turns a wiggling line into a judgement without hovering for the extremes.
   var kh = '';
   function legend(e, side) {
     var cur = hist.length ? hist[hist.length - 1][e.s.k] : null;
@@ -668,9 +586,8 @@ function render(d, push) {
   document.getElementById('ver').textContent = (d.Software || '').replace('MXBM ', '');
   document.getElementById('algo').textContent = (d.Mining && d.Mining.Algorithm) || '';
 
-  // Sample first, so the tables and charts below all describe the same poll --
-  // the energy accumulator in particular has to see this reading before the
-  // cost rows are built, or every figure would trail by one poll.
+  // Sample first, so tables and charts all describe the same poll: the energy
+  // accumulator must see this reading before the cost rows are built.
   if (push !== false) {
     var sample = { time: new Date(),
                    s15: s.Speed_15s, s60: s.Speed_60s, pool: s.Pool_Speed_Session,
@@ -686,14 +603,12 @@ function render(d, push) {
   rows('tSession', [
     ['speed 15s', withRange(s.Speed_15s, ' sol/s', ss.Speed_15s, 2)],
     ['speed 60s', withRange(s.Speed_60s, ' sol/s', ss.Speed_60s, 2)],
-    // Mean and spread of every 60s window the miner has sampled this session --
-    // the figure to quote, where the instantaneous rate above is one draw from
-    // a noisy distribution and the peak of it means nothing.
+    // Mean and spread over every 60s window this session -- the figure to
+    // quote; the rates above are single draws from a noisy distribution.
     ['60s mean', s60.N >= 2 ? n(s60.Mean) + ' ± ' + n(s60.Stddev) + ' sol/s (n=' + s60.N + ')' : '--'],
     ['session', n(s.Speed_Session) + ' sol/s'],
     ['pool rate', n(s.Pool_Speed_Session) + ' sol/s'],
     ['iterations', n(w.Iterations_s, 1) + ' it/s'],
-    // Uptime arrives already formatted; no need to rebuild it from Uptime_s.
     ['uptime', s.Uptime_Human || '--']
   ]);
   rows('tPool', [
@@ -710,18 +625,14 @@ function render(d, push) {
 
   var dev = [
     ['device', w.Name || '--'],
-    // Each carries the session range alongside the current reading, so the
-    // extremes survive both the chart ring and a page reload.
     ['power', withRange(w.Power_W, ' W', ss.Power_W, 0)],
     ['core clock', withRange(w.Core_Clock_MHz, ' MHz', ss.Core_Clock_MHz, 0)],
     ['mem clock', withRange(w.Mem_Clock_MHz, ' MHz', ss.Mem_Clock_MHz, 0)],
     ['temp', withRange(w.Temp_C, ' C', ss.Temp_C, 0)],
     ['fan', withRange(w.Fan_Pct, ' %', ss.Fan_Pct, 0)]
   ];
-  // Energy cost, once a price is entered. The per-hour/day/month figures are
-  // PROJECTIONS from the current draw, labelled as rates; only the "(page)"
-  // pair is measured -- accumulated over every reading since this page loaded,
-  // including ones the sample ring has since dropped (see accrueEnergy).
+  // The per-hour/day/month figures are PROJECTIONS from the current draw; only
+  // the "(page)" pair is measured (see accrueEnergy).
   var price = kwhPrice();
   if (price > 0 && w.Power_W != null) {
     var cur = curSym(), perH = w.Power_W / 1000.0 * price, kwh = energyKWh;
@@ -731,9 +642,9 @@ function render(d, push) {
     dev.push(['energy (page)', n(kwh, 4) + ' kWh']);
     dev.push(['cost (page)', cur + n(kwh * price, 4)]);
   }
-  // Dev-fee rows appear only when a fee is actually charged, mirroring the
-  // console table: a no-fee build shows no fee UI rather than a row of
-  // zeroes implying one is being taken.
+  // Only when a fee is actually charged, mirroring the console table: a build
+  // with no fee configured shows no fee UI rather than zeroes implying one is
+  // taken.
   if (f.Rate > 0) {
     dev.push(['dev fee', (f.Rate * 100).toFixed(4).replace(/\.?0+$/, '') + '%' + (f.Active ? ' (active)' : '')]);
     dev.push(['fee rounds', f.Rounds]);
@@ -742,9 +653,8 @@ function render(d, push) {
   }
   rows('tDev', dev);
 
-  // Found-share log: replaced wholesale, not accumulated -- the miner keeps it,
-  // so it is complete from the first poll and survives a page reload. Ages are
-  // relative to when the snapshot was taken, so convert against now.
+  // Ages in the share log are relative to when the snapshot was taken, so
+  // convert against now.
   jobDiff = (typeof s.Job_Difficulty === 'number') ? s.Job_Difficulty : 0;
   if (Array.isArray(d.Recent_Shares)) {
     var now = Date.now();
@@ -754,7 +664,7 @@ function render(d, push) {
     }).sort(function (a, b) { return a.t - b.t; });
   }
 
-  // Each chart hides or shows itself from its own data -- see drawChart.
+  // Each chart hides or shows itself from its own data.
   CHARTS.forEach(drawChart);
 
   document.getElementById('foot').textContent =
@@ -777,8 +687,7 @@ function tick() {
     })
     .catch(function () {
       // Say so rather than freezing on the last good sample: a dashboard that
-      // looks alive while the miner is down is worse than one that admits it
-      // lost contact.
+      // looks alive while the miner is down is worse than one that admits it.
       fails++;
       document.getElementById('conn').textContent = 'no response';
       document.getElementById('conn').style.color = fails > 1 ? '#c00' : '#c60';

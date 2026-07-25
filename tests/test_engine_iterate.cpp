@@ -1,22 +1,8 @@
-// Engine continuous-iteration + abort-wiring test (M3 Phase C, Task 3).
-//
-// Uses a CountingSolver fake (host-only, no real BeamHash search) whose
-// solve() BLOCKS on a condition_variable until the test explicitly releases
-// it -- or its abort flag gets set -- so the test can drive Engine's real
-// worker thread (start()/on_job()/stop(), actual std::thread) through each
-// step deterministically via a CV handshake. No bare sleeps and no
-// wall-clock races are used as synchronization anywhere below; the only
-// timeouts present are bounded backstops that turn an unexpected hang into
-// a clean test FAILURE instead of blocking the test process forever (see
-// CountingSolver::wait_parked_at_least and the stop() section at the
-// bottom) -- never the primary synchronization mechanism.
-//
-// Covers all three Task 3 changes:
-//   (a) worker_main() mines one posted job CONTINUOUSLY -- many solve()
-//       calls, not one -- until a newer job or stop preempts it.
-//   (b) on_job() of a new job calls Solver::request_abort(), and the
-//       worker's very next solve() call carries the new job's input.
-//   (c) stop() calls Solver::request_abort() and joins without hanging.
+// Engine continuous-iteration + abort-wiring test, over the real worker thread.
+// CountingSolver's solve() BLOCKS until the test releases it or its abort flag
+// is set, so the worker can be driven one step at a time. Nothing below
+// synchronizes on a sleep or a wall clock: every timeout is a bounded backstop
+// that turns an unexpected hang into a clean FAILURE rather than a wedged run.
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -42,22 +28,17 @@ using namespace mxbm::miner;
 
 namespace {
 
-// Independent hex decoder (deliberately not shared with engine.cpp), like
-// test_engine.cpp's, so the byte comparisons below pin what process_job()
-// actually decoded against a second implementation.
+// Independent hex decoder, deliberately not shared with engine.cpp, so the
+// byte comparisons below pin what process_job() actually decoded.
 void from_hex(const std::string& hex, uint8_t* out) {
     auto nibble = [](char c) { return (c <= '9') ? c - '0' : c - 'a' + 10; };
     for (size_t i = 0; i < hex.size() / 2; ++i)
         out[i] = (uint8_t)((nibble(hex[i * 2]) << 4) | nibble(hex[i * 2 + 1]));
 }
 
-// A Solver whose solve() parks on a condition_variable until the test hands
-// it a release token (release_one()/flood_release()) or Engine calls
-// request_abort() -- so the test controls exactly how far the worker thread
-// advances, one solve() call at a time. All mutable state is guarded by
-// `mtx`; `waiting_cv` announces "a call just started and is parked" to the
-// test thread, `release_cv` is how the test (or request_abort()) tells a
-// parked call "return now".
+// A Solver whose solve() parks until the test hands it a release token or
+// Engine calls request_abort(). `waiting_cv` announces "a call just started and
+// is parked" to the test thread; `release_cv` tells a parked call "return now".
 struct CountingSolver : Solver {
     std::mutex mtx;
     std::condition_variable waiting_cv;
@@ -72,10 +53,8 @@ struct CountingSolver : Solver {
 
     std::vector<std::array<uint8_t, 104>> solve(const uint8_t input[32], const uint8_t[8]) override {
         std::unique_lock<std::mutex> lock(mtx);
-        // Mirrors GpuSolver::solve()'s contract (src/gpu/gpu_solver.cpp):
-        // reset the abort flag at ENTRY, so Engine never has to reset it
-        // itself and a freshly-switched-to job's first solve() always runs
-        // clean.
+        // Mirrors GpuSolver::solve()'s contract: reset the abort flag at ENTRY,
+        // so a freshly-switched-to job's first solve() always runs clean.
         abort_requested.store(false, std::memory_order_relaxed);
         std::memcpy(last_input.data(), input, 32);
         ++call_count;
@@ -96,11 +75,9 @@ struct CountingSolver : Solver {
         release_cv.notify_all();
     }
 
-    // -- Test-thread helpers: every access goes through mtx, never races
-    //    solve()'s own access to the same fields. --
+    // -- Test-thread helpers: every access goes through mtx. --
 
-    // Waits until a solve() call is currently parked with call_count >= n.
-    // The timeout is a backstop only (see file header): the real
+    // Waits until a solve() call is parked with call_count >= n. The real
     // synchronization is waiting_cv, notified exactly when solve() parks.
     bool wait_parked_at_least(int n, std::chrono::milliseconds timeout) {
         std::unique_lock<std::mutex> lock(mtx);
@@ -114,13 +91,9 @@ struct CountingSolver : Solver {
         release_cv.notify_all();
     }
 
-    // Used only right before the stop() section below: makes every current
-    // or future solve() call return immediately, so stop()'s join() can
-    // never block on THIS FAKE regardless of scheduling. (The real
-    // GpuSolver is self-bounding via its own pipeline runtime instead of an
-    // external token -- see gpu_solver.cpp -- so it doesn't need this; this
-    // fake does, since nothing else ever hands out a release token once
-    // we've stopped tracking call-by-call state.)
+    // Makes every current or future solve() call return immediately, so stop()'s
+    // join() can never block on THIS FAKE. The real GpuSolver is self-bounding
+    // via its own pipeline runtime and needs no such token.
     void flood_release() {
         std::lock_guard<std::mutex> lock(mtx);
         release_budget += 1000000;
@@ -147,15 +120,13 @@ int main() {
     using namespace std::chrono_literals;
     const auto backstop = 2000ms;   // failure-only backstop, see file header
 
-    // job1's input: the same 64-lowercase-hex-char (32-byte) fixture bytes
-    // as test_engine.cpp's valid_input.
+    // The same 32-byte fixture bytes as test_engine.cpp's valid_input.
     const std::string job1_input =
         "636b90cc38bc7a347f074d9ca97c3a2158330f6844f8f52075a38a15ab483223";
     check(job1_input.size() == 64, "job1 fixture input is 64 hex chars");
 
-    // job2's input: built programmatically (not hand-typed) so its length
-    // can't be miscounted -- 64 lowercase hex chars, distinct from job1's
-    // from the very first byte.
+    // Built programmatically rather than hand-typed, so its length cannot be
+    // miscounted; it differs from job1's from the very first byte.
     std::string job2_input(64, 'a');
     job2_input[0] = 'b';
     check(job2_input.size() == 64 && job2_input != job1_input,
@@ -190,9 +161,8 @@ int main() {
         solver.release_one();
     }
 
-    // One further job1 call, deliberately left blocked (not released) so
-    // its exact call_count can be pinned right before triggering the switch
-    // below.
+    // Deliberately left blocked, so its exact call_count can be pinned right
+    // before the switch below is triggered.
     bool parked_last_job1 = solver.wait_parked_at_least(kIterations + 1, backstop);
     check(parked_last_job1, "one further job1 solve() call parked, ready for the abort/switch test");
     if (!parked_last_job1) { engine.stop(); return summary("engine_iterate"); }
@@ -206,15 +176,13 @@ int main() {
                         "the parked call is still for job1's input (no premature switch)");
     }
 
-    // ---- (b) on_job() of a new job triggers request_abort(); the worker's
-    //          very next solve() call carries the new job's input ----
+    // ---- (b) a new job aborts the current call and switches the input ----
     int aborts_before_switch = solver.snapshot_abort_call_count();
     engine.on_job(job2);
 
-    // Strictly greater than calls_before_switch: only a solve() call that
-    // STARTED after the snapshot above can satisfy this, so whatever input
-    // we read next is causally the result of on_job(job2) -- not a stale
-    // read of the still-parked job1 call from before the trigger.
+    // Strictly greater than calls_before_switch: only a call that STARTED after
+    // the snapshot satisfies this, so the input read next cannot be a stale read
+    // of the still-parked job1 call.
     bool parked_job2 = solver.wait_parked_at_least(calls_before_switch + 1, backstop);
     check(parked_job2, "worker started a new solve() call after on_job(job2) (switch happened, no hang)");
     if (!parked_job2) { engine.stop(); return summary("engine_iterate"); }
@@ -227,24 +195,15 @@ int main() {
                         "the worker's very next solve() call after on_job(job2) carries job2's input");
     }
     // ---- (c) stop() triggers request_abort() and joins without hanging ----
-    // From here on exact call counts no longer matter, only that stop()
-    // cannot block forever: flood the release budget so every current-or-
-    // future solve() call on this fake returns immediately, no matter how
-    // Engine's internal stop_requested_/has_job_ check happens to interleave
-    // with the currently-parked call's wakeup. (The real GpuSolver is
-    // self-bounding via its own pipeline runtime instead of an external
-    // token; this flood reproduces that same "always eventually returns"
-    // property for this fake, so a benign extra solve() iteration racing
-    // stop()'s flag-set can never turn into an infinite block.)
+    // Flooding the release budget gives this fake the "always eventually
+    // returns" property the real GpuSolver has, so a benign extra solve()
+    // iteration racing stop()'s flag-set cannot become an infinite block.
     solver.flood_release();
 
     int aborts_before_stop = solver.snapshot_abort_call_count();
 
-    // Run stop() on a helper thread with a bounded watchdog: the primary
-    // guarantee that this can't hang is the flood above (plus
-    // request_abort()); the watchdog is purely the backstop the file header
-    // describes, turning an unexpected hang into a clean FAIL instead of
-    // wedging the test process.
+    // stop() runs on a helper thread only so the watchdog below can turn an
+    // unexpected hang into a clean FAIL rather than a wedged process.
     std::mutex stop_mtx;
     std::condition_variable stop_cv;
     bool stop_done = false;
@@ -273,12 +232,9 @@ int main() {
           "stop() called Solver::request_abort()");
 
     // ---- (d) a throwing solver must not take the process down ----
-    //
-    // solve() runs on the worker thread, and an exception escaping a thread
-    // entry function calls std::terminate(). Before the guard in worker_main()
-    // this test binary itself would abort here -- a GPU losing its VRAM to
-    // another process core-dumped the whole miner. The engine must instead
-    // report, back off, retry, and carry on once the solver recovers.
+    // An exception escaping a thread entry function calls std::terminate().
+    // Before the guard in worker_main() this test binary itself would abort
+    // here -- a GPU losing its VRAM to another process core-dumped the miner.
     {
         struct FlakySolver : Solver {
             std::mutex m;
@@ -299,8 +255,8 @@ int main() {
         c2.handle_line(wire::kResultLoginOk);
         Engine e2(c2, flaky);
         e2.submit_fn = [](const Solution&, Origin) {};
-        // Without this seam the three backoffs would be 1s + 2s + 4s; the
-        // retry path is what is under test, not the wall-clock duration.
+        // Without this seam the three backoffs would be 1s + 2s + 4s; the retry
+        // path is what is under test, not the wall-clock duration.
         e2.retry_base_delay = std::chrono::milliseconds(1);
 
         std::mutex em;
@@ -315,7 +271,6 @@ int main() {
         e2.start();
         e2.on_job(Job{"flaky-1", job1_input, 0u, 1});
 
-        // The worker survives the throws and resumes solving.
         bool recovered = false;
         {
             std::unique_lock<std::mutex> lock(flaky.m);
@@ -335,10 +290,8 @@ int main() {
     }
 
     // ---- (e) stop() stays prompt DURING a retry backoff ----
-    //
-    // The backoff waits on the mailbox condition rather than sleeping, so a
-    // shutdown cuts it short. With a plain sleep this would take the full
-    // backoff -- trading a crash for a hang, which is barely a fix.
+    // The backoff waits on the mailbox condition rather than sleeping: a plain
+    // sleep would trade the crash for a hang, which is barely a fix.
     {
         struct AlwaysThrows : Solver {
             std::vector<std::array<uint8_t, 104>> solve(const uint8_t*, const uint8_t*) override {

@@ -1,8 +1,6 @@
-// Console v2 pure-format tests: format_units, format_speed_line, and the
-// full format_stats_block golden. Golden strings below are LITERALS --
-// never built by calling the functions under test -- so a regression in
-// format.cpp's field widths/wording shows up as a byte-for-byte mismatch
-// against a fixed expectation, not a self-consistent-but-wrong pass.
+// Pure-format tests. The golden strings below are LITERALS -- never built by
+// calling the functions under test -- so a regression in field widths or
+// wording shows up as a mismatch, not a self-consistent-but-wrong pass.
 #include <chrono>
 #include <cstdio>
 #include <string>
@@ -29,9 +27,8 @@ std::vector<std::string> split_lines(const std::string& s) {
     return out;
 }
 
-// Wraps check() for the multi-line golden so a mismatch prints exactly
-// which line(s) differ -- eyeballing a 12-line blob diff otherwise is
-// impractical.
+// Wraps check() for the multi-line golden so a mismatch prints exactly which
+// line(s) differ -- eyeballing a 12-line blob diff is impractical.
 void check_golden_block(const std::string& got, const std::string& want, const char* msg) {
     check(got == want, msg);
     if (got == want) return;
@@ -49,7 +46,6 @@ void check_golden_block(const std::string& got, const std::string& want, const c
 } // namespace
 
 int main() {
-    // -- format_units: k below 1e6 (always one decimal), M at/above 1e6 --
     check(format_units(512.0) == "0.5k", "format_units(512) == 0.5k");
     check(format_units(8012.0) == "8.0k", "format_units(8012) == 8.0k");
     check(format_units(239500.0) == "239.5k", "format_units(239500) == 239.5k");
@@ -58,11 +54,8 @@ int main() {
           "format_units(999999) == 1000.0k (still below the 1e6 M-threshold)");
 
     // -- format_speed_line: the --shortstats one-liner, sol15-driven --
-    //
-    // Two decimals by default, matching the stats table's Speed column: the
-    // line and the table report the same quantity, and printing it to
-    // different precisions in the two places was an inconsistency, not a
-    // feature. --digits moves both together.
+    // Two decimals by default, matching the stats table's Speed column: the two
+    // report the same quantity, so --digits has to move both together.
     {
         miner::Stats::Snapshot s{};
         s.sol15 = 53.4712;
@@ -75,10 +68,6 @@ int main() {
     }
 
     // -- format_stats_block: full --longstats table, golden byte-for-byte --
-    // Fixture per the task brief: sol15=sol60=sol_session=0.01, iter60=0.3,
-    // 1 accepted/0 stale/0 rejected, best share 1234.0 units (-> "1.2k"),
-    // last_latency_ms=12 (so connect_ms below must be ignored), pool
-    // "pool.example.com:1130", uptime 8130s (-> "2h 15m 30s").
     {
         miner::Stats::Snapshot s{};
         s.sol15 = 0.01;
@@ -91,7 +80,7 @@ int main() {
         s.best_share_units = 1234.0;
         s.last_latency_ms = 12;
         s.pool = "pool.example.com:1130";
-        s.device_label = "CPU 0 reference";   // the stats row's worker name is now snapshot-driven
+        s.device_label = "CPU 0 reference";
         s.connect_ms = 999;   // must be ignored: last_latency_ms >= 0 takes priority
         s.uptime = std::chrono::seconds(8130);
         s.last_job_id = "";
@@ -117,10 +106,10 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
     }
 
     // -- the Name column must not shift the other columns --
-    // A full NVIDIA device string is 32 chars and used to overflow the 17-wide Name
-    // field, pushing every following column right and breaking the header alignment
-    // (reported from a live run). Assert on COLUMN POSITIONS against the header rather
-    // than a golden, so this keeps testing the actual invariant if the table changes.
+    // A full NVIDIA device string is 32 chars and used to overflow the 17-wide
+    // Name field, pushing every following column right (reported from a live
+    // run). Asserted on COLUMN POSITIONS rather than a golden, so it survives
+    // unrelated table changes.
     {
         miner::Stats::Snapshot s{};
         s.sol60 = 57.08;
@@ -149,7 +138,6 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
               "device row strips the vendor prefix to fit the 17-wide Name column");
         check(device.find("NVIDIA") == std::string::npos,
               "the redundant vendor prefix is gone from the table");
-        // Right-aligned numeric columns must end where their header ends.
         check(header.find("Speed") + 5 == device.find("57.08") + 5,
               "Speed column value ends flush with its header");
         check(header.find("Pool") + 4 == device.find("54.30") + 5,
@@ -161,12 +149,8 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
     }
 
     // -- the dev-fee row: present when a fee is charged, absent when none is --
-    //
-    // The golden block above is a no-fee snapshot (devfee_rate 0), which is
-    // what pins the "absent" half: adding an unconditional row would have
-    // broken it. This pins the other half -- that a build which DOES charge
-    // says so on the table, with the numbers a user needs to check the rate
-    // against their own uptime rather than take it on trust.
+    // The golden block above is a no-fee snapshot, which pins the "absent"
+    // half: adding an unconditional row would have broken it.
     {
         miner::Stats::Snapshot s{};
         s.pool = "de.beam.herominers.com:1130";
@@ -191,8 +175,6 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
         check(got.find("(active now)") == std::string::npos,
               "no round is marked active when none is running");
 
-        // The user's own Shares column must still read 40/0/0 -- the fee's
-        // single accepted share must not have leaked into their count.
         check(got.find("40/0/0") != std::string::npos,
               "the user's share counters exclude dev-fee shares");
 
@@ -206,9 +188,8 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
     }
 
     // -- the identity line: version, driver, API port --
-    //
     // Both extras are omitted rather than faked when unknown, which is what
-    // keeps the golden above (a fixture with neither) valid.
+    // keeps the golden above -- a fixture with neither -- valid.
     {
         miner::Stats::Snapshot s{};
         s.pool = "pool.example.com:1130";
@@ -229,12 +210,8 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
     }
 
     // -- --digits keeps the whole table in lockstep --
-    //
-    // Speed and Pool each widen by (digits - 2), so the two header lines and
-    // the two value rows must ALL grow by exactly 2*(digits-2) characters. If
-    // the headers ever drift from the values, every column to the right of
-    // Pool is silently misaligned -- which a test that only checks the numbers
-    // would never notice.
+    // If the headers ever drift from the values, every column right of Pool is
+    // silently misaligned -- which a test on the numbers alone would not notice.
     {
         miner::Stats::Snapshot s{};
         s.sol60 = 53.4712;
@@ -264,7 +241,6 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
         check(widened == 4,
               "the two header lines and the two value rows all widen together");
 
-        // And the values really are at the new precision.
         check(format_stats_block(s, "1.0.0", "12:00:00", 4).find("53.4712") != std::string::npos,
               "--digits 4 renders the Speed column to four decimals");
     }

@@ -26,16 +26,14 @@ void nvml_shutdown();
 Telemetry nvml_sample();
 
 // The installed NVIDIA driver version ("610.43.03"), or "" when NVML is not
-// available. Shown on the statistics block's header line, where the reference miner shows
-// the same thing: the driver is the single component most likely to explain a
-// hashrate that moved without the miner changing, so a log that records it
-// answers "what changed?" on its own.
+// available. Shown on the statistics block's header line: a driver change is
+// the likeliest explanation for a hashrate that moved on its own, so a log
+// that records it answers "what changed?" by itself.
 std::string nvml_driver_version();
 
-// Device 0's PCI address as "bus:device" ("1:0"), or "" when unavailable.
-// Matches the short form the reference miner prints rather than NVML's full
-// "00000000:01:00.0" -- on a multi-GPU rig this is what tells two identical
-// cards apart.
+// Device 0's PCI address as "bus:device" ("1:0"), or "" when unavailable --
+// the short form the reference miner prints, not NVML's full "00000000:01:00.0". On a
+// multi-GPU rig this is what tells two identical cards apart.
 std::string nvml_pci_address();
 
 }} // namespace mxbm::gpu

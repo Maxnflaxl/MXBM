@@ -51,8 +51,7 @@ std::string usage_text() {
         "  --help                 show this help text\n";
 }
 
-// Strict decimal port parse in 1..65535; false on empty, any non-digit, or
-// out-of-range input. Never touches `out` on failure.
+// Strict decimal port parse in 1..65535. Never touches `out` on failure.
 bool parse_port(const std::string& s, uint16_t& out) {
     if (s.empty()) return false;
     for (char c : s) {
@@ -65,10 +64,7 @@ bool parse_port(const std::string& s, uint16_t& out) {
     return true;
 }
 
-// Strict decimal integer parse in [lo, hi]; false on empty, any non-digit,
-// out-of-range, or overflowing input. Never touches `out` on failure. Used
-// for --apiport (lo=0) and --shortstats/--longstats (lo=1); unlike
-// parse_port these are plain `int`, not a 16-bit port.
+// Strict decimal integer parse in [lo, hi]. Never touches `out` on failure.
 bool parse_int(const std::string& s, long lo, long hi, int& out) {
     if (s.empty()) return false;
     for (char c : s) {
@@ -82,11 +78,8 @@ bool parse_int(const std::string& s, long lo, long hi, int& out) {
     return true;
 }
 
-// The value bound to pool index `i`: the i-th entry of `vals` if it exists,
-// otherwise its last entry (so a shorter list's final value carries forward
-// to any remaining pools -- one value with N pools is the case where the
-// list has exactly one entry, reused for all of them), otherwise `def` when
-// the flag never appeared at all.
+// The value bound to pool index `i`: the i-th entry of `vals`, else its last
+// (a short list's final value carries forward), else `def` if it was empty.
 template <typename T>
 T bound_value(const std::vector<T>& vals, size_t i, const T& def) {
     if (vals.empty()) return def;
@@ -138,9 +131,8 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             continue;
         }
         if (arg == "--tls") {
-            // Optional value: only consumed when it's actually one of the
-            // recognized tls tokens, so a bare "--tls" followed by the next
-            // flag doesn't accidentally swallow that flag.
+            // Optional value: consumed only when it really is one of the
+            // recognized tokens, so a bare --tls doesn't swallow the next flag.
             if (i + 1 < argc) {
                 std::string v = argv[i + 1];
                 if (v == "0" || v == "off") { tls_args.push_back(false); ++i; continue; }
@@ -155,9 +147,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             continue;
         }
         if (arg == "--log" || arg == "--timeprint") {
-            // Optional value, handled exactly like --tls above: the on/off
-            // token is consumed only when it really is one, so a bare "--log"
-            // followed by another flag does not swallow that flag.
+            // Optional value, handled exactly like --tls above.
             bool value = true;
             if (i + 1 < argc) {
                 std::string v = argv[i + 1];
@@ -173,8 +163,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.log_path = argv[++i];
             out.seen.logfile = true;
             // The "a log path means logging" rule lives in
-            // resolve_implied_options(), not here: a config file may supply
-            // either half, and this parser cannot see it.
+            // resolve_implied_options(); a config may supply either half.
             continue;
         }
         if (arg == "--digits") {
@@ -235,10 +224,8 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             }
             out.benchmark = "BEAM-III";
             out.seen.benchmark = true;
-            // --benchmark names the algorithm itself, exactly as the reference miner's does,
-            // so it satisfies the --algo requirement rather than duplicating it.
-            // An explicit --algo may still be given; a conflicting one is caught
-            // by the BEAM-III check below, since both write the same variable.
+            // --benchmark names the algorithm itself, so it satisfies --algo.
+            // A conflicting --algo is caught below: both write this variable.
             algo = "BEAM-III";
             continue;
         }
@@ -255,13 +242,8 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             continue;
         }
         if (arg == "--dev-fee") {
-            // Raise-only. The flag exists so a user who wants to support the
-            // project can send more than the built-in rate; it deliberately
-            // cannot be used to send less, which is what makes it a tip
-            // rather than an opt-out. Anyone who wants a lower rate has the
-            // source and the licence (docs/devfee.md) -- rejecting the value
-            // here says so plainly instead of silently clamping it, which
-            // would leave the user believing they had lowered it.
+            // Raise-only: main() rejects a value below the built-in rate rather
+            // than clamping it silently. See docs/devfee.md.
             if (i + 1 >= argc) { err = "missing value for --dev-fee\n\n" + usage_text(); return false; }
             const std::string v = argv[++i];
             char* end = nullptr;
@@ -288,10 +270,8 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             continue;
         }
         if (arg == "--json") {
-            // Optional value, same pattern as --tls above: only consumed
-            // when the next token doesn't itself look like a flag, so a
-            // bare "--json" followed by e.g. "--profile" doesn't swallow
-            // it. the reference miner's own default filename when no path is given.
+            // Optional value: consumed only when the next token doesn't itself
+            // look like a flag. "user_config.json" is the reference miner's own default.
             out.use_json_config = true;
             if (i + 1 < argc) {
                 std::string v = argv[i + 1];
@@ -319,23 +299,16 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         return false;
     }
 
-    // MXBM mines exactly one algorithm. A MISMATCHED --algo is rejected right
-    // here -- no later source can make "ETHASH" valid. A MISSING one is not,
-    // for exactly the reason the --pool note below gives: a config file may
-    // carry ALGO, and both loaders already validate it (config.cpp). Rejecting
-    // it here made that config key unreachable dead surface -- the loader
-    // could never run, because parse_args had already bailed. main() enforces
-    // "an algorithm came from somewhere" after the config merge.
+    // A MISMATCHED --algo is rejected right here -- no later source can make
+    // "ETHASH" valid. A MISSING one is not, for the reason below.
     if (!algo.empty() && algo != "BEAM-III") {
         err = "unsupported algo\n\n" + usage_text();
         return false;
     }
     out.seen.algo = !algo.empty();
-    // Unlike a missing/mismatched --algo, an empty --pool list is NOT
-    // rejected here: Task 5's config-file loaders (mxbm::config) may supply
-    // pools instead when opts.use_json_config/config_path is set. main()
-    // enforces "at least one pool, from CLI or config" AFTER the
-    // config-merge step, once it's clear no further source can add one.
+    // A missing algo and an empty --pool list are both left to main(): a config
+    // file may still supply either, so those requirements are enforced AFTER
+    // the merge, once it is clear no further source can add one.
     out.seen.pools = !pool_args.empty();
     out.seen.user  = !user_args.empty();
     out.seen.pass  = !pass_args.empty();
@@ -371,13 +344,11 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
 }
 
 void resolve_implied_options(Options& opts) {
-    // A log path, from either source, means logging -- unless something said
-    // otherwise explicitly, which is exactly what seen.log records.
+    // A log path, from either source, means logging -- unless seen.log records
+    // that something said otherwise explicitly.
     if (!opts.seen.log && !opts.log_path.empty()) opts.log_enabled = true;
 
-    // --benchmark/BENCHMARK names the algorithm itself, as the reference miner's does, so
-    // it satisfies main()'s "some source supplied an algorithm" requirement
-    // without --algo being repeated alongside it.
+    // A benchmark algorithm satisfies main()'s post-merge --algo requirement.
     if (!opts.benchmark.empty()) opts.seen.algo = true;
 }
 

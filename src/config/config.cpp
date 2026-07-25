@@ -1,6 +1,4 @@
-// the reference miner-shaped config-file loaders. See config.h for the merge contract
-// shared with cli::parse_args (Task 4) and for the real user_config.json
-// shape this mirrors.
+// the reference miner-shaped config-file loaders. See config.h for the merge contract.
 #include "config/config.h"
 
 #include <cctype>
@@ -31,11 +29,7 @@ std::string to_upper(std::string s) {
 }
 
 // Splits "host:port" on the LAST ':' (tolerates a bare IPv6 literal host),
-// port strictly 1..65535 digits-only. Intentionally duplicated from
-// cli::parse_args's identical rule (options.cpp keeps parse_port/the split
-// file-local in an anonymous namespace, so there's no header symbol to
-// share without widening options.h/.cpp beyond Task 5's scope -- see the
-// Task 5 report) rather than sharing a helper across the two source files.
+// port strictly 1..65535. options.cpp keeps its identical copy file-local.
 bool split_host_port(const std::string& s, std::string& host, uint16_t& port) {
     size_t colon = s.rfind(':');
     if (colon == std::string::npos || colon == 0) return false;
@@ -52,9 +46,7 @@ bool split_host_port(const std::string& s, std::string& host, uint16_t& port) {
     return true;
 }
 
-// Strict decimal integer parse in [lo, hi] for the flat-file loader --
-// same contract as cli::parse_args's file-local parse_int, duplicated for
-// the same reason as split_host_port above.
+// Strict decimal integer parse in [lo, hi]; twin of options.cpp's parse_int.
 bool parse_flat_int(const std::string& s, long lo, long hi, int& out) {
     if (s.empty()) return false;
     for (char c : s) {
@@ -68,8 +60,7 @@ bool parse_flat_int(const std::string& s, long lo, long hi, int& out) {
     return true;
 }
 
-// Accepts the handful of boolean spellings a hand-edited flat config is
-// likely to use: 1/0, true/false, on/off, case-insensitive.
+// The boolean spellings a hand-edited flat config is likely to use.
 bool parse_flat_bool(const std::string& s, bool& out) {
     std::string u = to_upper(s);
     if (u == "1" || u == "TRUE" || u == "ON")  { out = true;  return true; }
@@ -77,9 +68,7 @@ bool parse_flat_bool(const std::string& s, bool& out) {
     return false;
 }
 
-// Same idea for a JSON value: the reference miner's own examples use bare 0/1
-// (e.g. "LOG" : 1), so a JSON boolean literal and a 0/1 integer are both
-// accepted.
+// the reference miner's examples use bare 0/1 (e.g. "LOG" : 1), so accept both forms.
 bool parse_json_bool(const nlohmann::ordered_json& j, bool& out) {
     if (j.is_boolean()) { out = j.get<bool>(); return true; }
     if (j.is_number_integer()) { out = j.get<long long>() != 0; return true; }
@@ -88,23 +77,14 @@ bool parse_json_bool(const nlohmann::ordered_json& j, bool& out) {
 
 // --- the option tables ---------------------------------------------------
 //
-// One row per configurable option: the config key, where the value lands in
-// cli::Options, which Seen flag guards it, and the range or domain it must
-// satisfy. BOTH loaders below walk these same tables, so a row added here is
-// understood by the flat and the JSON format at once, validated identically in
-// each, and cannot drift between them -- which is what the previous
-// hand-written blocks could not promise. The bounds themselves come from
-// cli/options.h, shared with the command-line parser for the same reason.
+// One row per option: the config key, where the value lands in cli::Options,
+// which Seen flag guards it, and the range or domain it must satisfy. BOTH
+// loaders walk these same tables, so a row cannot drift between the flat and
+// the JSON format. The bounds come from cli/options.h, shared with the
+// command-line parser so a config cannot set what the CLI rejects.
 //
-// Only the structural keys still need bespoke code below: ALGO (a pure guard --
-// Options has nowhere to store it), and POOL/POOLS with the USER/PASS/TLS that
-// bind to them.
-//
-// Every option carries a Seen flag and is skipped when it is already set: that
-// is the CLI-wins-over-config rule, applied uniformly. Rules that span two
-// options -- LOGFILE implying LOG, BENCHMARK satisfying ALGO -- deliberately
-// live nowhere near here; they cannot be settled until both sources have been
-// merged, so cli::resolve_implied_options() owns them.
+// Only the structural keys need bespoke code below: ALGO (a pure guard --
+// Options has nowhere to store it) and POOL/POOLS with their USER/PASS/TLS.
 
 struct IntOpt {
     const char* key;
@@ -124,13 +104,11 @@ struct StrOpt {
     const char* key;
     std::string cli::Options::*field;
     bool cli::Options::Seen::*seen;
-    // nullptr-terminated list of accepted values, or nullptr for free-form
-    // text. Matching is case-insensitive: config values are hand-typed, and
-    // this file already accepts TRUE/on/OFF for booleans on the same grounds.
+    // Accepted values, nullptr-terminated (case-insensitive), or nullptr for
+    // free-form text.
     const char* const* domain;
-    // When non-null, the value stored on a domain hit -- so the spelling
-    // variants BENCHMARK accepts all normalise to one canonical form, exactly
-    // as --benchmark does on the command line.
+    // When non-null, the value stored on a domain hit, so spelling variants
+    // normalise to one canonical form.
     const char* canonical;
     bool join_array;                      // JSON only: accept an array, join with commas
 };
@@ -168,14 +146,12 @@ constexpr StrOpt kStrOpts[] = {
 };
 
 constexpr DblOpt kDblOpts[] = {
-    // Raise-only is not enforced here: main() compares against the built-in
-    // rate and rejects a lower one, so a config file gets the same refusal --
-    // and the same explanation -- as a command line would.
+    // Raise-only is enforced by main(), not here, so a config file gets the
+    // same refusal a command line would.
     {"DEVFEE", &cli::Options::devfee_pct, &cli::Options::Seen::devfee, cli::kDevFeePctMin, cli::kDevFeePctMax},
 };
 
-// Case-insensitive lookup of `v` in a nullptr-terminated domain. Returns the
-// matching entry (so a caller can use its canonical spelling) or nullptr.
+// Case-insensitive domain lookup; returns the matching entry, or nullptr.
 const char* domain_find(const char* const* domain, const std::string& v) {
     const std::string u = to_upper(v);
     for (const char* const* p = domain; *p; ++p) {
@@ -186,11 +162,8 @@ const char* domain_find(const char* const* domain, const std::string& v) {
 
 // --- JSON profile application -------------------------------------------
 
-// ALGO/APIPORT/NOCOLOR/SHORTSTATS/LONGSTATS/DEVICES. ALGO is validated
-// whenever present regardless of any Seen flag (Options has nowhere to
-// store it -- this is a pure guard, mirroring cli::parse_args's --algo
-// check); the rest only fill their cli::Options twin when its Seen flag is
-// still false.
+// ALGO is validated whenever present, regardless of any Seen flag (a pure
+// guard); every other key fills its twin only while its Seen flag is false.
 bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& profile_name,
                          cli::Options& opts, std::string& err) {
     auto ait = prof.find("ALGO");
@@ -199,9 +172,7 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
             err = "unsupported ALGO in profile '" + profile_name + "' (only BEAM-III is supported)";
             return false;
         }
-        // Record that an algorithm was supplied from SOME source, so a profile
-        // carrying ALGO satisfies main()'s post-merge requirement on its own
-        // and the user need not repeat --algo on every command line.
+        // A profile's ALGO satisfies main()'s post-merge requirement on its own.
         opts.seen.algo = true;
     }
 
@@ -210,9 +181,8 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
         return false;
     };
 
-    // Integers. The INT_MAX upper bound is not decoration: a JSON value >= 2^31
-    // would wrap when narrowed to int, and a zero or negative stats interval
-    // sends the ticker's wake deadline into the past, busy-looping it.
+    // The INT_MAX bound is not decoration: a value >= 2^31 wraps when narrowed
+    // to int, and a non-positive stats interval busy-loops the ticker.
     for (const IntOpt& o : kIntOpts) {
         if (opts.seen.*(o.seen)) continue;
         auto it = prof.find(o.key);
@@ -261,8 +231,7 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
         if (it->is_string()) {
             value = it->get<std::string>();
         } else if (o.join_array && it->is_array()) {
-            // the reference miner accepts DEVICES as an array; join into the same
-            // comma-separated form --devices takes on the command line.
+            // the reference miner accepts DEVICES as an array; join into --devices' form.
             for (size_t i = 0; i < it->size(); ++i) {
                 if (!(*it)[i].is_string()) return bad(o.key);
                 if (i) value += ",";
@@ -285,11 +254,8 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
 }
 
 // The profile's POOLS array -> opts.pools, only ever called when
-// !opts.seen.pools. Each entry is {POOL:"host:port", USER, PASS?, TLS?};
-// TLS can also be given once at profile level as a scalar-for-all fallback
-// when a given entry omits its own TLS key. Replaces opts.pools wholesale
-// (it is guaranteed empty on entry: seen.pools false means parse_args never
-// populated it, and this is the only place that ever fills it from config).
+// !opts.seen.pools, which guarantees opts.pools is empty on entry. TLS may also
+// be given once at profile level, for entries that omit their own.
 bool apply_json_pools(const nlohmann::ordered_json& prof, const std::string& profile_name,
                        cli::Options& opts, std::string& err) {
     auto pit = prof.find("POOLS");
@@ -383,10 +349,8 @@ bool load_json_config(const std::string& path, const std::string& profile,
         return false;
     }
 
-    // ordered_json preserves file order (default nlohmann::json's object
-    // type is a std::map and would silently reorder to alphabetical --
-    // "first profile" needs to mean first-in-file, so this is deliberate,
-    // not incidental).
+    // ordered_json preserves file order; the default nlohmann::json's object
+    // type is a std::map, so "first profile" would stop meaning first-in-file.
     std::string want = profile.empty() ? root.begin().key() : profile;
     auto it = root.find(want);
     if (it == root.end()) {
@@ -415,9 +379,7 @@ bool load_flat_config(const std::string& path, cli::Options& opts, std::string& 
     }
 
     // Collected first, applied after: POOL needs the USER/PASS/TLS bound to it
-    // whatever order the file lists them in. A repeated key keeps its LAST
-    // value, which is what a hand-edited file commenting-out-and-retrying
-    // expects.
+    // whatever order the file lists them in. A repeated key keeps its LAST value.
     std::map<std::string, std::string> kv;
 
     std::string line;
@@ -426,8 +388,6 @@ bool load_flat_config(const std::string& path, cli::Options& opts, std::string& 
         if (t.empty() || t[0] == '#') continue;
         size_t eq = t.find('=');
         if (eq == std::string::npos) continue;   // no '=' on the line: ignore (forward-compat)
-        // Unknown keys are simply never looked up below -- ignored, for
-        // forward compatibility with a file written for a later MXBM.
         kv[to_upper(trim(t.substr(0, eq)))] = trim(t.substr(eq + 1));
     }
 

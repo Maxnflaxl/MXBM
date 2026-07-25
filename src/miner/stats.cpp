@@ -9,14 +9,12 @@ constexpr std::chrono::minutes kPruneAge{15};
 constexpr std::chrono::seconds kWindow15{15};
 constexpr std::chrono::seconds kWindow60{60};
 constexpr size_t kSubmitCap = 64;
-// Shortest gap between two folds into Snapshot::series. Rate-limits the
-// accumulation so that a second dashboard polling the API cannot double the
-// sample count and reweight the mean -- see snapshot().
+// Shortest gap between two folds into Snapshot::series, so a second dashboard
+// polling the API cannot double the sample count and reweight the mean.
 constexpr std::chrono::seconds kSeriesInterval{1};
 }
 
-// Welford's online update: keep the running mean, and accumulate squared
-// deviations against it rather than squaring the values themselves.
+// Welford's online update: squared deviations against the running mean.
 void Stats::Series::add(double v) {
     if (n == 0) { min = max = v; }
     else { if (v < min) min = v; if (v > max) max = v; }
@@ -73,19 +71,15 @@ void Stats::record_submit(const std::string& job_id, Origin origin) {
 void Stats::record_share_found(double achieved_units, Origin origin) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // The ring records EVERY found share, both origins, tagged -- it is a log
-    // of what happened, not a scoreboard, so excluding fee shares here would
-    // leave unexplained gaps in it. (Note this runs before the Main-only
-    // early return below; that return guards the best-share record, not this.)
-    // The target is captured HERE, not left for the consumer to pair up later:
-    // Stats already knows each origin's current job target, and by the time
-    // anyone reads this share the pool may well have stepped it.
+    // The ring records EVERY found share, both origins, tagged -- a log, not a
+    // scoreboard, so it runs before the Main-only return below. The target is
+    // captured here because the pool may have stepped it by the time anyone
+    // reads the share.
     const double target = (origin == Origin::Dev) ? devfee_last_job_units_ : last_job_units_;
     found_.push_back(FoundShare{now_fn(), achieved_units, target, origin == Origin::Dev});
     while (found_.size() > kRecentShares) found_.pop_front();
 
-    // Best-share is the user's session record. A share found during a fee
-    // slice belongs to the developer, so it does not compete for that slot.
+    // Best-share is the user's record; a fee slice's share is the developer's.
     if (origin != Origin::Main) return;
     if (achieved_units > best_share_units_) best_share_units_ = achieved_units;
 }
@@ -99,24 +93,20 @@ void Stats::record_result(int code, Origin origin) {
     } else {
         if (code == 1) ++accepted_;
         else if (code == 3) ++stale_;
-        else ++rejected_;   // any other code, including defensively-handled 0: rejected bucket
+        else ++rejected_;   // any other code, including a defensive 0
     }
 
-    // Match the oldest STILL-PENDING submit of this same origin, rather than
-    // simply the oldest overall: both connections can have a submit in flight
-    // across a fee-slice boundary, and popping the other one's would both
-    // bank the wrong difficulty and report the wrong round trip.
+    // The oldest still-pending submit of this same origin, not the oldest
+    // overall: both connections can have one in flight across a fee-slice
+    // boundary, and popping the other's would bank the wrong difficulty.
     for (auto it = submits_.begin(); it != submits_.end(); ++it) {
         if (it->origin != origin) continue;
-        // Bank the pool-credited work only on ACCEPT: stale and rejected shares pay
-        // nothing, and counting them would inflate the pool rate exactly when
-        // something is going wrong. Dev-fee shares never bank at all --
-        // pool_sol_session is what the USER's pool credited them.
+        // Only on ACCEPT: stale and rejected shares pay nothing, and dev-fee
+        // shares never bank at all.
         if (code == 1 && origin == Origin::Main) accepted_units_ += it->units;
         const auto t0 = it->t;
         submits_.erase(it);
-        // Likewise the displayed latency is the user's pool round trip; a fee
-        // slice must not overwrite it with a different pool's timing.
+        // Likewise the displayed latency is the user's pool round trip.
         if (origin == Origin::Main) {
             last_latency_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now_fn() - t0).count();
@@ -212,37 +202,28 @@ Stats::Snapshot Stats::snapshot() const {
             RecentShare{std::chrono::duration<double>(now - f.t).count(), f.units, f.target, f.dev});
     }
 
-    // Fold this observation into the session-long summaries. Sampled HERE, on
-    // the read path, rather than from a producer on the mining thread: the
-    // telemetry source is only queried while building a snapshot, so this is
-    // where a power/clock/temperature reading exists at all, and adding a
-    // per-second NVML query to the worker thread would perturb the very rate
-    // being measured.
-    //
-    // The cost of that choice: the sample count follows how often the miner is
-    // OBSERVED, not a fixed schedule. The console ticker alone yields a sample
-    // per tick; an open dashboard adds one per poll, up to the rate limit
-    // below. So Series::n is "samples taken", never "seconds elapsed", and the
-    // mean is a mean over observations rather than a time-weighted average.
-    // For a rate that is already a moving average over a fixed window, those
-    // coincide as long as observations don't correlate with the value, which
-    // ticker and poll timers don't.
+    // Fold this observation into the session-long summaries. Sampled on the
+    // read path, not from the mining thread: telemetry is only queried while
+    // building a snapshot, and a per-second NVML query on the worker would
+    // perturb the rate being measured. The cost is that Series::n counts
+    // SAMPLES TAKEN, never seconds elapsed -- the ticker yields one per tick
+    // and an open dashboard one per poll, up to kSeriesInterval -- so the mean
+    // is over observations rather than time-weighted. The two coincide as long
+    // as observation times don't correlate with the value.
     if (!series_sampled_ || now - last_series_sample_ >= kSeriesInterval) {
         series_sampled_ = true;
         last_series_sample_ = now;
-        // A windowed rate reads far below the truth until its window has
-        // actually filled -- sol15 is 0.0 for the first 15 seconds of any
-        // session -- so a window is only sampled once it is full. Without this
-        // guard every speed series would have its minimum pinned at 0.0 for
-        // the whole run, and its mean quietly dragged down by startup.
+        // A windowed rate reads far below the truth until its window has filled
+        // -- sol15 is 0.0 for the first 15 seconds -- so a window is only
+        // sampled once full. Otherwise every speed series would have its
+        // minimum pinned at 0.0 and its mean dragged down by startup.
         if (now - start_ >= kWindow15) series_.sol15.add(s.sol15);
         if (now - start_ >= kWindow60) {
             series_.sol60.add(s.sol60);
             series_.iter60.add(s.iter60);
         }
-        // Telemetry is sampled only when the platform actually supplied it, so
-        // a card that reports power but not fan builds a power series and
-        // leaves the fan one empty rather than filling it with zeroes.
+        // Only where the platform supplied a reading: a card reporting power
+        // but not fan leaves the fan series empty rather than full of zeroes.
         if (s.has_power)     series_.power_w.add(s.power_w);
         if (s.has_sm_clock)  series_.sm_clock_mhz.add((double)s.sm_clock_mhz);
         if (s.has_mem_clock) series_.mem_clock_mhz.add((double)s.mem_clock_mhz);

@@ -1,7 +1,5 @@
-// Stats metrics-core test: fake clock for deterministic window/latency math
-// (same documented-seam pattern as Client::handle_line / Engine::submit_fn;
-// see miner/stats.h). No threads -- record_*()/snapshot() are called
-// directly.
+// Stats metrics-core test: a fake clock (the seam miner/stats.h documents) makes
+// the window and latency math deterministic. No threads.
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -15,14 +13,9 @@ using namespace mxbm::miner;
 
 namespace {
 
-// Installs a fake now_fn on `s`, driven by an integer-millisecond offset
-// from a real steady_clock::now() captured when this helper runs (AFTER
-// Stats's own construction -- so it never touches Stats's construction-time
-// start_ capture; see the "uptime sanity" checks below, which only assert
-// non-negativity for exactly that reason). `fake_ms` is owned by the
-// caller and mutated directly to move the fake clock; deliberately integer
-// milliseconds rather than fractional seconds so latency/window comparisons
-// below are exact -- no double-rounding on the time axis.
+// Installs a fake now_fn on `s`, offset in integer milliseconds (kept integer so
+// the comparisons stay exact) from a real now() captured when this helper runs
+// -- AFTER construction, so Stats's own start_ capture is untouched.
 void install_fake_clock(Stats& s, long long& fake_ms) {
     auto base = std::chrono::steady_clock::now();
     s.now_fn = [&fake_ms, base]() {
@@ -33,7 +26,6 @@ void install_fake_clock(Stats& s, long long& fake_ms) {
 } // namespace
 
 int main() {
-    // -- default-constructed snapshot: all-zero/empty baseline --
     {
         Stats s;
         Stats::Snapshot snap = s.snapshot();
@@ -63,13 +55,10 @@ int main() {
         fake_ms = 5000;  s.record_attempt(2);
         fake_ms = 10000; s.record_attempt(2);
 
-        // t=12s: all three events are within the last 15s (ages 12,7,2s).
         fake_ms = 12000;
         Stats::Snapshot at12 = s.snapshot();
         check(at12.sol15 == 6.0 / 15.0, "t=12s: sol15 == 6/15.0 (all 3 events in window)");
 
-        // t=30s: the t=0,5,10s events (ages 30,25,20s) have all aged out of
-        // the 15s window, but remain within the 60s window.
         fake_ms = 30000;
         Stats::Snapshot at30 = s.snapshot();
         check(at30.sol15 == 0.0, "t=30s: sol15 == 0 (all 3 events aged out of 15s window)");
@@ -78,7 +67,6 @@ int main() {
               "t=30s: iter60 == 3/60.0 (counts attempts, not candidates)");
     }
 
-    // -- latency + accepted: submit at t=1s, accepted result at t=1.012s --
     {
         Stats s;
         long long fake_ms = 0;
@@ -93,16 +81,14 @@ int main() {
         check(snap.stale == 0 && snap.rejected == 0, "code 1 does not touch stale/rejected");
     }
 
-    // -- record_result with no pending submit: no crash, latency untouched --
     {
         Stats s;
-        s.record_result(1);   // nothing was ever record_submit()'d
+        s.record_result(1);
         Stats::Snapshot snap = s.snapshot();
         check(snap.accepted == 1, "counter still increments with no pending submit");
         check(snap.last_latency_ms == -1, "latency stays -1 with no matching submit to pop");
     }
 
-    // -- best share: max across multiple record_share_found calls --
     {
         Stats s;
         s.record_share_found(5.0);
@@ -113,16 +99,13 @@ int main() {
         check(snap.best_share_units == 9.0, "best_share_units tracks the max, not the latest");
     }
 
-    // -- result-code -> counter mapping (per task context): 1=accepted,
-    // 3=stale, any other code (including the never-in-practice 0)=rejected --
+    // -- result-code -> counter mapping: 1=accepted, 3=stale, anything else=rejected --
     {
         Stats s;
         s.record_result(3);   // stale
         s.record_result(2);   // rejected (a real "not accepted, not stale" share-verdict code)
-        s.record_result(0);   // rejected -- defensive only: wire code 0 (id "login") never
-                               // actually reaches record_result (main filters login results
-                               // before forwarding to Stats), but the mapping must still be
-                               // well-defined and not UB for it.
+        s.record_result(0);   // defensive only: main filters login results out before they
+                               // reach Stats, but the mapping must still be defined for 0.
         s.record_result(1);   // accepted
         Stats::Snapshot snap = s.snapshot();
         check(snap.stale == 1, "code 3 -> stale");
@@ -130,7 +113,6 @@ int main() {
         check(snap.accepted == 1, "code 1 -> accepted");
     }
 
-    // -- record_job / record_connect / record_disconnect: plain field wiring --
     {
         Stats s;
         s.record_job("51550", 512.0);
@@ -148,13 +130,11 @@ int main() {
     // -- pool_sol_session: pool-credited work rate --
     // Regression: this column rendered a hardcoded 0.0 for its entire life. The
     // numerator is the job's TARGET difficulty at submit time, not the share's
-    // achieved difficulty (which averages ~2x target and would overstate the rate),
-    // and only ACCEPTED shares pay.
+    // achieved difficulty, and only ACCEPTED shares pay.
     //
-    // The fake clock is installed after construction, so start_ was captured from
-    // the real clock and `elapsed` carries a sub-millisecond real offset. The
-    // timestamps below are therefore kilosecond-scale, making that offset a <1e-6
-    // relative error, and the checks use a tolerance rather than equality.
+    // The fake clock is installed after construction, so `elapsed` carries a
+    // sub-millisecond real offset; the kilosecond-scale timestamps below make
+    // that a <1e-6 relative error, hence a tolerance rather than equality.
     {
         Stats s;
         long long fake_ms = 0;
@@ -185,10 +165,8 @@ int main() {
     }
 
     // -- Series: Welford against a two-pass reference --
-    //
-    // The online form is only worth having if it agrees with the textbook
-    // two-pass computation, so compute both over the same values. Numbers are
-    // the live-session 60 s samples from docs/performance.md, outlier included.
+    // The values are the live-session 60 s samples from docs/performance.md,
+    // outlier included.
     {
         const double vals[] = { 56.1, 55.9, 58.9, 39.7, 54.2, 57.0, 56.4, 55.1 };
         const size_t n = sizeof vals / sizeof vals[0];
@@ -252,9 +230,8 @@ int main() {
         check(std::fabs(three.series.power_w.mean - 300.0) < 1e-9,
               "telemetry mean averages the folded samples only (the 999 was skipped)");
 
-        // A windowed rate must not be sampled before its window has filled:
-        // sol15 reads 0.0 for the first 15 s, which would pin the minimum at
-        // zero for the entire session.
+        // sol15 reads 0.0 for the first 15 s, and sampling that would pin the
+        // session minimum at zero forever.
         check(three.series.sol15.n == 0, "sol15 is not sampled before 15 s of uptime");
         check(three.series.sol60.n == 0, "sol60 is not sampled before 60 s of uptime");
 

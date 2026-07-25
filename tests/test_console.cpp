@@ -1,12 +1,10 @@
-// Console colour tests. console.cpp is a thin print layer, but the --nocolor
-// contract is a real one: miners are commonly watched through `tee` into a log,
-// and escape codes leaking into a log the user asked to be plain is a silent
-// regression that no other test would catch. stdout is redirected to a temp
-// file so the emitted bytes -- escapes included -- can be asserted exactly.
+// Console colour tests. The --nocolor contract matters: miners are watched
+// through `tee` into a log, and leaked escape codes are a silent regression no
+// other test would catch. stdout is redirected so the bytes can be asserted.
 #include <cstdio>
 #include <string>
 #include <vector>
-#include <unistd.h>   // dup/dup2 for the stdout capture
+#include <unistd.h>
 
 #include "check.h"
 #include "ui/console.h"
@@ -86,9 +84,8 @@ int main() {
     check(colored.find(kBlue) != std::string::npos,
           "stats_block emits blue when colour is enabled");
 
-    // Every line carries its own colour/reset pair. A single pair wrapping the
-    // whole block would leave the colour in effect across newlines, so anything
-    // printed mid-block by another thread would come out blue too.
+    // A single pair wrapping the whole block would leave the colour in effect
+    // across newlines, so a mid-block print from another thread would be blue.
     std::vector<std::string> lines = split_lines(colored);
     check(!lines.empty(), "stats_block produced output");
     bool every_line_paired = true;
@@ -99,14 +96,11 @@ int main() {
     check(every_line_paired,
           "every line of the block is independently colour-wrapped and reset");
 
-    // --nocolor must produce bytes a log can hold verbatim.
     check(plain.find('\033') == std::string::npos,
           "init(true) suppresses every escape code");
     check(plain == ui::format_stats_block(fixture(), "0.4", "02:33:14") + "\n",
           "the --nocolor block is exactly the formatted table plus a newline");
 
-    // Stripping the escapes from the coloured form must give back the plain form:
-    // colour must not alter content, spacing or the column alignment.
     std::string stripped;
     for (size_t i = 0; i < colored.size(); ++i) {
         if (colored[i] == '\033') { i = colored.find('m', i); continue; }
@@ -115,21 +109,16 @@ int main() {
     check(stripped == plain, "colour changes only the escapes, never the table content");
 
     // -- share_found: the achieved/target multiple --
-    //
-    // Difficulty alone means nothing without the bar it had to clear, and pool
-    // vardiff moves that bar all session, so the share line carries the ratio.
     // Pinned as literal text: this is the line users grep their logs for.
     {
         std::string out = capture([] {
-            ui::console::init(true);                        // plain: no escapes to strip
+            ui::console::init(true);
             ui::console::share_found("GPU 0", 8000.0, 2048.0);
             ui::console::share_found("GPU 0", 8000.0);       // no target known
             ui::console::share_found("GPU 0", 8000.0, 0.0);  // target not yet received
         });
         check(out.find("GPU 0: Found a share of difficulty 8.0k (3.9x target of 2048)") != std::string::npos,
               "share line reports the multiple AND the target it cleared, on one line");
-        // Both the unknown and the zero target must take the omission path --
-        // a zero must never reach the division.
         size_t plain_lines = 0, from = 0;
         while ((from = out.find("difficulty 8.0k\n", from)) != std::string::npos) { ++plain_lines; ++from; }
         check(plain_lines == 2,
@@ -139,10 +128,8 @@ int main() {
     }
 
     // -- the job line is dark yellow --
-    //
-    // SGR 33 with NO bold attribute: bright yellow is close to unreadable on a
-    // light terminal, and this line arrives often enough that it should sit
-    // behind the share lines rather than compete with them.
+    // Bright yellow is close to unreadable on a light terminal, and this line
+    // arrives often enough that it should not compete with the share lines.
     {
         std::string out = capture([] {
             ui::console::init(false);
@@ -158,7 +145,7 @@ int main() {
     // -- the startup block, in the reference miner's order and shape --
     {
         std::string out = capture([] {
-            ui::console::init(true);   // plain, so the text can be asserted directly
+            ui::console::init(true);
             ui::console::setup_miner();
             ui::console::driver_detected("Cuda", 1);
             ui::console::device_block(0, "NVIDIA GeForce RTX 4070 Ti SUPER", "1:0",
@@ -201,12 +188,8 @@ int main() {
     }
 
     // -- the transcript log (--log / --logfile) --
-    //
-    // What must hold for a file that gets read hours later: no escape codes,
-    // every line timestamped whatever --timeprint says, the multi-line stats
-    // block split so each of its lines is stamped too, and an append that
-    // continues an existing file rather than truncating it -- a rig that
-    // watchdog-restarts overnight must not wake up having erased the evidence.
+    // The append rule matters most: a rig that watchdog-restarts overnight must
+    // not wake up having erased the evidence.
     {
         std::string path = std::string(std::tmpnam(nullptr));
 
@@ -236,7 +219,6 @@ int main() {
               logged.find("Found a share of difficulty 8.0k (3.9x target of 2048)") != std::string::npos,
               "event lines land in the transcript verbatim");
 
-        // Every line, including each line of the block, carries its own stamp.
         std::vector<std::string> log_lines = split_lines(logged);
         bool all_stamped = !log_lines.empty();
         for (const std::string& ln : log_lines) {
@@ -247,7 +229,6 @@ int main() {
         check(log_lines.size() > 3,
               "the multi-line stats block is split into stamped lines, not written as one");
 
-        // Reopening must append: the first session's lines survive.
         ui::console::open_log(path);
         capture([] {
             ui::console::init(true);
@@ -267,8 +248,6 @@ int main() {
 
         std::remove(path.c_str());
 
-        // A path that cannot be opened must fail loudly to the caller and
-        // leave logging off, not abort the miner.
         check(!ui::console::open_log("/nonexistent-dir-mxbm/deep/er/x.log"),
               "an unopenable path reports failure rather than throwing or aborting");
         ui::console::close_log();

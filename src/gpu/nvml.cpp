@@ -23,8 +23,7 @@ nvmlReturn_t (*p_clock)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_temp)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_fan)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_driver)(char*, unsigned) = nullptr;
-// nvmlPciInfo_t's first member is the "domain:bus:device.function" string; the
-// struct is larger, so a generous buffer is passed and only that prefix read.
+// Takes an nvmlPciInfo_t*; see nvml_pci_address() for how it is passed.
 nvmlReturn_t (*p_pci)(nvmlDevice_t, void*) = nullptr;
 
 template<class F> void bind(F& fn, const char* name) { fn = (F)dlsym(g_lib, name); }
@@ -89,10 +88,9 @@ std::string nvml_driver_version() {
 
 std::string nvml_pci_address() {
     if (!g_ready || !p_pci) return std::string();
-    // Oversized and zeroed: nvmlPciInfo_t has grown across NVML versions and
-    // we deliberately do not declare it, so give the driver more room than any
-    // known version needs and read only the leading busId string it starts
-    // with. Under-sizing this would let NVML write past the buffer.
+    // nvmlPciInfo_t is not declared here and has grown across NVML versions, so
+    // pass more room than any known version needs -- under-sizing it would let
+    // NVML write past the buffer -- and read only the leading busId string.
     char info[512] = {0};
     if (p_pci(g_dev, info) != NVML_SUCCESS) return std::string();
     info[sizeof info - 1] = 0;

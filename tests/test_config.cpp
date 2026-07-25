@@ -13,16 +13,14 @@ using namespace mxbm::config;
 
 namespace {
 
-// MXBM_FIXTURES is injected by CMake as the absolute path to
-// tests/fixtures/, so the test binary finds its fixtures regardless of the
-// directory ctest runs it from.
+// MXBM_FIXTURES is injected by CMake as the absolute path to tests/fixtures/,
+// so the binary finds them whatever directory ctest runs it from.
 std::string fixture(const char* name) {
     return std::string(MXBM_FIXTURES) + "/" + name;
 }
 
-// Writes `contents` to a fresh file under the OS temp dir and returns its
-// path -- used for the malformed-JSON case, which (unlike the two pinned
-// fixtures) isn't a tracked fixture file.
+// Writes `contents` to a fresh file under the OS temp dir and returns its path
+// -- for the malformed cases, which are not worth tracking as fixture files.
 std::string write_temp(const char* basename, const std::string& contents) {
     const char* dir = std::getenv("TMPDIR");
     std::string path = (dir && *dir ? std::string(dir) : std::string("/tmp"));
@@ -37,7 +35,6 @@ std::string write_temp(const char* basename, const std::string& contents) {
 } // namespace
 
 int main() {
-    // --- JSON: RIG1 -> 2 pools with bound users, apiport 8080 ---
     {
         Options o; std::string err;
         check(load_json_config(fixture("user_config.json"), "RIG1", o, err), "RIG1 loads ok");
@@ -52,7 +49,6 @@ int main() {
         check(o.seen.pools, "RIG1 sets seen.pools true after filling from config");
     }
 
-    // --- JSON: profile RIG2 selects the other profile ---
     {
         Options o; std::string err;
         check(load_json_config(fixture("user_config.json"), "RIG2", o, err), "RIG2 loads ok");
@@ -62,28 +58,24 @@ int main() {
         check(o.apiport == 0 && !o.seen.apiport, "RIG2 has no APIPORT key -> apiport stays default, seen.apiport false");
     }
 
-    // --- JSON: empty profile arg -> first profile (RIG1, file order) ---
     {
         Options o; std::string err;
         check(load_json_config(fixture("user_config.json"), "", o, err), "empty profile arg loads ok");
         check(o.pools.size() == 2 && o.apiport == 8080, "empty profile arg defaults to RIG1 (first in file)");
     }
 
-    // --- JSON: missing profile -> false, err names it ---
     {
         Options o; std::string err;
         check(!load_json_config(fixture("user_config.json"), "NOSUCHRIG", o, err), "unknown profile rejected");
         check(err.find("NOSUCHRIG") != std::string::npos, "unknown-profile error names the profile");
     }
 
-    // --- JSON: missing file -> false ---
     {
         Options o; std::string err;
         check(!load_json_config(fixture("does_not_exist.json"), "RIG1", o, err), "missing config file rejected");
         check(!err.empty(), "missing config file error message non-empty");
     }
 
-    // --- JSON: malformed JSON -> false ---
     {
         std::string bad = write_temp("mxbm_test_config_malformed.json", "{ this is not valid json ");
         Options o; std::string err;
@@ -92,7 +84,6 @@ int main() {
         std::remove(bad.c_str());
     }
 
-    // --- JSON: ALGO mismatch in profile -> false ---
     {
         std::string bad = write_temp("mxbm_test_config_wrongalgo.json",
             R"({"RIG1": {"ALGO": "ETHASH", "POOLS": [{"POOL":"pool.example.com:1130","USER":"addr123"}]}})");
@@ -102,8 +93,7 @@ int main() {
         std::remove(bad.c_str());
     }
 
-    // --- JSON precedence: seen.pools already true -> loader must not touch
-    //     pools, but still fills apiport (the merge rule under test) ---
+    // --- the merge rule: an already-seen option is left alone, the rest fill ---
     {
         Options o; std::string err;
         o.seen.pools = true;
@@ -115,7 +105,7 @@ int main() {
         check(o.apiport == 8080 && o.seen.apiport, "apiport still filled even though pools were skipped");
     }
 
-    // --- Flat: pools/user/apiport/nocolor land ---
+    // --- the same rules, the other format ---
     {
         Options o; std::string err;
         check(load_flat_config(fixture("flat.cfg"), o, err), "flat.cfg loads ok");
@@ -129,14 +119,13 @@ int main() {
         check(o.seen.pools, "flat.cfg sets seen.pools true after filling from config");
     }
 
-    // --- Flat: missing file -> false ---
     {
         Options o; std::string err;
         check(!load_flat_config(fixture("does_not_exist.cfg"), o, err), "missing flat config file rejected");
         check(!err.empty(), "missing flat config file error message non-empty");
     }
 
-    // --- Flat: unknown keys ignored (forward-compat) ---
+    // Unknown keys are ignored rather than rejected, for forward compatibility.
     {
         std::string p = write_temp("mxbm_test_config_unknownkey.cfg",
             "ALGO = BEAM-III\nPOOL = pool.example.com:1130\nUSER = addr123\nFUTUREKEY = whatever\n");
@@ -146,8 +135,6 @@ int main() {
         std::remove(p.c_str());
     }
 
-    // --- Flat precedence: seen.pools already true -> loader must not touch
-    //     pools, but still fills apiport ---
     {
         Options o; std::string err;
         o.seen.pools = true;
@@ -159,7 +146,6 @@ int main() {
         check(o.apiport == 8080 && o.seen.apiport, "apiport still filled even though pools were skipped (flat)");
     }
 
-    // --- Precedence beyond pools: an already-seen scalar is left alone too ---
     {
         Options o; std::string err;
         o.seen.apiport = true;
@@ -169,8 +155,8 @@ int main() {
         check(o.pools.size() == 2, "pools still filled since seen.pools was false");
     }
 
-    // --- JSON: SHORTSTATS >= 2^31 rejected (would wrap to negative/zero on
-    //     the static_cast<int> below and busy-loop the ticker) ---
+    // An oversized interval would wrap to negative/zero on the static_cast<int>
+    // and busy-loop the ticker.
     {
         std::string bad = write_temp("mxbm_test_config_shortstats_overflow.json",
             R"({"RIG1": {"SHORTSTATS": 2147483648, "POOLS": [{"POOL":"pool.example.com:1130","USER":"addr123"}]}})");
@@ -180,7 +166,6 @@ int main() {
         std::remove(bad.c_str());
     }
 
-    // --- JSON: LONGSTATS well past INT_MAX rejected, same reason ---
     {
         std::string bad = write_temp("mxbm_test_config_longstats_overflow.json",
             R"({"RIG1": {"LONGSTATS": 3000000000, "POOLS": [{"POOL":"pool.example.com:1130","USER":"addr123"}]}})");
@@ -190,7 +175,6 @@ int main() {
         std::remove(bad.c_str());
     }
 
-    // --- JSON: NOCOLOUR (British spelling) accepted as a NOCOLOR alias ---
     {
         std::string p = write_temp("mxbm_test_config_nocolour.json",
             R"({"RIG1": {"NOCOLOUR": true, "POOLS": [{"POOL":"pool.example.com:1130","USER":"addr123"}]}})");
@@ -201,11 +185,8 @@ int main() {
     }
 
     // --- the whole option table, both formats ---
-    //
     // Both loaders walk the same table (config.cpp), so what matters is that
-    // every row really is reachable from each format and validated the same
-    // way. These two cases cover the rows added when the hand-written blocks
-    // were replaced -- previously a config file could not set any of them.
+    // every row really is reachable from each format.
     {
         std::string p = write_temp("mxbm_test_config_alloptions.cfg",
             "POOL = pool.example.com:1130\n"
@@ -240,10 +221,8 @@ int main() {
     }
 
     // --- ranges and domains are enforced identically in both formats ---
-    //
     // The point of sharing one table with the CLI: a config file must never be
-    // able to set a value the command line would reject. DIGITS is bounded
-    // 0..6 in cli/options.h, and SOLVER's domain is the same five words.
+    // able to set a value the command line would reject.
     {
         std::string p = write_temp("mxbm_test_config_baddigits.cfg", "DIGITS = 40\n");
         Options o; std::string err;
@@ -272,7 +251,7 @@ int main() {
         std::remove(p.c_str());
     }
 
-    // --- CLI still wins over the config, for the new options too ---
+    // --- CLI still wins over the config ---
     {
         std::string p = write_temp("mxbm_test_config_precedence.cfg",
             "DIGITS = 5\nLOG = on\nSOLVER = ref\n");
@@ -286,9 +265,8 @@ int main() {
     }
 
     // --- the cross-source rules (cli::resolve_implied_options) ---
-    //
-    // These cannot live in either the parser or the loader: each sees only
-    // half the picture. The interesting case is a path from one source and the
+    // These cannot live in either the parser or the loader: each sees only half
+    // the picture. The interesting case is a path from one source and the
     // switch from the other.
     {
         Options o;                       // LOGFILE from a config, nothing from the CLI

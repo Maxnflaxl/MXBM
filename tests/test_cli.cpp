@@ -18,11 +18,9 @@ int main() {
           !o.seen.devices && !o.seen.nocolor && !o.seen.solver,
           "seen flags reflect exactly what was passed");
 
-    // missing --pool no longer fails parse_args itself -- a config file
-    // (--json/--config, Task 5) may supply pools instead. parse_args just
-    // leaves out.pools empty and seen.pools false; main() enforces "at
-    // least one pool, from CLI or config" AFTER the config-file merge. See
-    // tests/test_config.cpp for the config-merge coverage.
+    // Missing --pool does not fail parse_args: a config file may supply pools
+    // instead, so main() enforces "at least one pool" AFTER the config merge.
+    // See tests/test_config.cpp for the merge coverage.
     {
         const char* av2[] = {"mxbm","--algo","BEAM-III","--user","addr.rig1"};
         Options o2; std::string err2;
@@ -30,7 +28,6 @@ int main() {
         check(o2.pools.empty() && !o2.seen.pools, "no --pool leaves pools empty, seen.pools false");
     }
 
-    // --tls 0 -> tls false
     {
         const char* av3[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1","--tls","0"};
         Options o3; std::string err3;
@@ -39,14 +36,12 @@ int main() {
         check(o3.seen.tls, "seen.tls true when --tls was passed");
     }
 
-    // --algo ETHASH -> false (wrong algo rejected)
     {
         const char* av4[] = {"mxbm","--algo","ETHASH","--pool","beam.2miners.com:5252","--user","addr.rig1"};
         Options o4; std::string err4;
         check(!parse_args((int)(sizeof(av4)/sizeof(av4[0])),(char**)av4,o4,err4), "unsupported algo rejected");
     }
 
-    // --help -> false, help_requested true, usage text in err
     {
         const char* av5[] = {"mxbm","--help"};
         Options o5; std::string err5;
@@ -55,7 +50,6 @@ int main() {
         check(!err5.empty(), "--help produces usage text");
     }
 
-    // unknown flag --frobnicate -> false
     {
         const char* av6[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1","--frobnicate"};
         Options o6; std::string err6;
@@ -63,7 +57,6 @@ int main() {
         check(!err6.empty(), "unknown flag error message non-empty");
     }
 
-    // two pools with two users bind positionally
     {
         const char* av7[] = {"mxbm","--algo","BEAM-III",
             "--pool","poolA.example.com:1111","--pool","poolB.example.com:2222",
@@ -77,7 +70,6 @@ int main() {
               "pool 2 bound to user 2");
     }
 
-    // one user + two pools applies to both
     {
         const char* av8[] = {"mxbm","--algo","BEAM-III",
             "--pool","poolA.example.com:1111","--pool","poolB.example.com:2222",
@@ -89,7 +81,6 @@ int main() {
               "single --user applies to all pools");
     }
 
-    // --pool/--user need not be adjacent -- still bound by occurrence order
     {
         const char* av9[] = {"mxbm","--algo","BEAM-III",
             "--user","firstUser","--pool","poolA.example.com:1111",
@@ -100,7 +91,6 @@ int main() {
               "interleaved --user/--pool still bind by occurrence order");
     }
 
-    // --version -> false, version_requested, empty err
     {
         const char* av10[] = {"mxbm","--version"};
         Options o10; std::string err10;
@@ -109,7 +99,6 @@ int main() {
         check(err10.empty(), "--version leaves err empty");
     }
 
-    // --apiport 8080 parses; --apiport 99999 (out of range) errors
     {
         const char* av11[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1","--apiport","8080"};
         Options o11; std::string err11;
@@ -121,14 +110,12 @@ int main() {
         check(!parse_args((int)(sizeof(av12)/sizeof(av12[0])),(char**)av12,o12,err12), "--apiport 99999 rejected");
     }
 
-    // --shortstats 0 errors (must be >=1)
     {
         const char* av13[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1","--shortstats","0"};
         Options o13; std::string err13;
         check(!parse_args((int)(sizeof(av13)/sizeof(av13[0])),(char**)av13,o13,err13), "--shortstats 0 rejected");
     }
 
-    // --nocolour (British spelling) aliases --nocolor
     {
         const char* av14[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1","--nocolour"};
         Options o14; std::string err14;
@@ -136,7 +123,6 @@ int main() {
         check(o14.nocolor && o14.seen.nocolor, "--nocolour alias sets nocolor + seen.nocolor");
     }
 
-    // bare --json -> use_json_config + default ./user_config.json path
     {
         const char* av15[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1","--json"};
         Options o15; std::string err15;
@@ -145,7 +131,6 @@ int main() {
               "bare --json defaults to user_config.json");
     }
 
-    // --json my.json --profile rig1 captures both
     {
         const char* av16[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
             "--json","my.json","--profile","rig1"};
@@ -155,7 +140,6 @@ int main() {
               "--json PATH + --profile NAME both captured");
     }
 
-    // --config PATH captures a flat-config path, leaves use_json_config false
     {
         const char* av17[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
             "--config","mxbm.cfg"};
@@ -165,7 +149,6 @@ int main() {
               "--config sets config_path, leaves use_json_config false");
     }
 
-    // --devices is stored verbatim as a string, even a bare "0"
     {
         const char* av18[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
             "--devices","0"};
@@ -174,7 +157,6 @@ int main() {
         check(o18.devices=="0" && o18.seen.devices, "--devices stores the raw string + sets seen.devices");
     }
 
-    // positive paths for the stats/watchdog flags (Seen fields feed Task 5's config merge)
     {
         const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",
                             "--shortstats","5","--longstats","120","--watchdog"};
@@ -185,7 +167,6 @@ int main() {
         check(o.watchdog_requested, "--watchdog sets watchdog_requested");
         check(!o.seen.apiport && !o.seen.devices, "unrelated seen flags stay false");
     }
-    // --solver gpu/ref/auto accepted (value stored, seen set); --solver bogus rejected
     {
         const char* avG[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252","--user","addr.rig1",
                               "--solver","gpu"};
@@ -212,7 +193,6 @@ int main() {
         check(!eB.empty(), "--solver bogus error message non-empty");
     }
 
-    // bare --json immediately followed by another flag must not swallow it
     {
         const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",
                             "--json","--profile","rig1"};
@@ -222,9 +202,8 @@ int main() {
         check(o.json_profile == "rig1", "--profile survives after bare --json");
     }
 
-    // --dev-fee: a percentage the user opts into paying. Parsing accepts any
-    // 0..100 value; the raise-only rule (a value below the built-in rate is
-    // refused outright) lives in main(), which is where that rate is known.
+    // Parsing accepts any 0..100 value; the raise-only rule lives in main(),
+    // which is where the built-in rate is known, and is not covered here.
     {
         const char* av[] = {"mxbm","--algo","BEAM-III","--pool","pool.example.com:1130","--user","addr123.rig1",
                             "--dev-fee","2.5"};
@@ -262,8 +241,6 @@ int main() {
               "defaults: no log, no stamp on the short line, two decimals");
     }
     {
-        // A bare --log/--timeprint must not swallow the flag that follows --
-        // the same trap --tls's optional value avoids.
         const char* av[] = {"mxbm","--algo","BEAM-III","--log","--timeprint","--pool","p:1130","--user","a.r1"};
         Options o; std::string e;
         check(parse_args(9,(char**)av,o,e), "bare --log/--timeprint parse");
@@ -279,10 +256,9 @@ int main() {
         check(!o.log_enabled && !o.timeprint, "off/0 turn them back off");
     }
     {
-        // Naming a file is itself the request to log to it -- but that rule is
-        // resolved AFTER any config merge (a config may supply either half), so
-        // parse_args only records the path and the Seen flag. See
-        // cli::resolve_implied_options.
+        // Naming a file is itself the request to log to it, but that rule is
+        // resolved after any config merge (either source may supply either
+        // half), so parse_args only records the path and the Seen flag.
         const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
                             "--logfile","/tmp/x.log"};
         Options o; std::string e;
@@ -293,7 +269,6 @@ int main() {
         check(o.log_enabled, "--logfile implies --log once the sources are merged");
     }
     {
-        // ...but an explicit --log off still wins, wherever it appears.
         const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
                             "--log","off","--logfile","/tmp/x.log"};
         Options o; std::string e;

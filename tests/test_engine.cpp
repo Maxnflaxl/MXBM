@@ -1,8 +1,7 @@
-// Engine pipeline test: job -> solve -> difficulty filter -> submit. Uses a
-// FakeSolver (canned candidate, no real BeamHash search) and overrides
-// Engine::submit_fn to capture submissions -- no threads, no real transport;
-// see miner/engine.h for why process_job() alone is enough to test this
-// deterministically.
+// Engine pipeline test: job -> solve -> difficulty filter -> submit. A
+// FakeSolver returns a canned candidate and Engine::submit_fn captures the
+// submissions, so there are no threads and no transport; see miner/engine.h
+// for why process_job() alone is enough to test this deterministically.
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -29,10 +28,9 @@ std::array<uint8_t, 104> fixture_candidate() {
     return cand;
 }
 
-// Returns the fixed candidate regardless of input/nonce, but records the
-// last (input, nonce) it was called with so the test can independently pin
-// down process_job()'s hex-decode and nonce-construction byte layout --
-// not just the hex format of the Solution it eventually submits.
+// Records the last (input, nonce) it was called with, so the test can pin
+// process_job()'s decode and nonce-construction byte layout, not just the hex
+// format of the Solution it eventually submits.
 struct FakeSolver : Solver {
     std::array<uint8_t, 32> last_input{};
     std::array<uint8_t, 8> last_nonce{};
@@ -63,20 +61,16 @@ bool is_lowercase_hex(const std::string& s) {
     return true;
 }
 
-// Independent hex decoder (deliberately not shared with engine.cpp) so the
-// byte-level checks below pin process_job()'s actual decode/nonce-layout
-// behavior against a second implementation, not against itself.
+// Independent hex decoder, deliberately not shared with engine.cpp, so the
+// byte checks below pin process_job() against a second implementation.
 void from_hex(const std::string& hex, uint8_t* out) {
     auto nibble = [](char c) { return (c <= '9') ? c - '0' : c - 'a' + 10; };
     for (size_t i = 0; i < hex.size() / 2; ++i)
         out[i] = (uint8_t)((nibble(hex[i * 2]) << 4) | nibble(hex[i * 2 + 1]));
 }
 
-// Deterministically simulates "a newer job for a different id lands in the
-// mailbox while solve() is in flight" -- without any real thread -- by
-// calling Engine::on_job() from inside solve() itself, right before
-// returning a normally-clearing candidate. Exercises process_job()'s
-// post-solve staleness check with nothing but synchronous calls.
+// Simulates "a newer job lands in the mailbox while solve() is in flight"
+// without a real thread, by calling on_job() from inside solve() itself.
 struct StaleInjectingSolver : Solver {
     Engine* engine = nullptr;
     Job newer_job;
@@ -90,17 +84,14 @@ struct StaleInjectingSolver : Solver {
 } // namespace
 
 int main() {
-    // 64 lowercase hex chars = 32 bytes; the same input bytes as
-    // tests/vectors/stratum_wire.h's kJob fixture.
+    // The same 32 input bytes as tests/vectors/stratum_wire.h's kJob fixture.
     const std::string valid_input =
         "636b90cc38bc7a347f074d9ca97c3a2158330f6844f8f52075a38a15ab483223";
     check(valid_input.size() == 64, "fixture input is 64 hex chars");
 
-    // packed=0 -> mantissa=2^24, order=0: hash*mantissa < 2^280 always holds
-    // (hash < 2^256), so this difficulty clears for ANY candidate -- no
-    // hand-computed SHA-256 needed. packed=(200<<24)|0xFFFFFF is about as
-    // hard as the format allows, so the fixed fixture candidate practically
-    // never clears it; asserted below rather than assumed.
+    // packed=0 clears for ANY candidate (hash*2^24 < 2^280 always holds), so no
+    // hand-computed SHA-256 is needed; (200<<24)|0xFFFFFF is about as hard as
+    // the format allows. Both are asserted below rather than assumed.
     const uint32_t easy_difficulty = 0u;
     const uint32_t hard_difficulty = (200u << 24) | 0xFFFFFFu;
 
@@ -119,17 +110,9 @@ int main() {
     std::vector<Solution> submits;
     engine.submit_fn = [&](const Solution& s, Origin) { submits.push_back(s); };
 
-    // Stats hook coverage: on_attempt must fire once per solve() return with
-    // the candidate count, BEFORE any difficulty filtering -- set it here so
-    // Case 1 below (which the FakeSolver always answers with exactly one
-    // candidate) exercises it. Every case from here on reuses `engine`, so
-    // this stays installed for Cases 2/3/5 too, which is fine: FakeSolver's
-    // answer never changes, so got_attempts simply keeps growing and only
-    // the entry pushed by Case 1 is asserted on below. Case 4 below builds
-    // its own separate `stale_engine` that never sets on_attempt, which is
-    // this test file's existing coverage for "no crash when the hook is
-    // unset" (an unset std::function<void(uint32_t)> would throw
-    // std::bad_function_call if process_job() called it unguarded).
+    // on_attempt must fire once per solve() return, BEFORE difficulty filtering.
+    // Case 4's separate `stale_engine` never installs the hook, which is this
+    // file's coverage for the unset case (an unset std::function would throw).
     std::vector<uint32_t> got_attempts;
     engine.on_attempt = [&](uint32_t c) { got_attempts.push_back(c); };
 
@@ -151,10 +134,8 @@ int main() {
         check(s.output == to_hex(cand.data(), 104), "output hex matches the candidate bytes exactly");
     }
 
-    // Pin the raw bytes solver.solve() actually received -- decode
-    // correctness of job.input, and the "a1f" prefix -> nonce byte layout
-    // (odd-length prefix's last nibble is the HIGH nibble of its byte),
-    // independently of the Solution hex the pipeline happens to emit.
+    // The raw bytes solve() received. The expected nonce encodes the layout
+    // rule: an odd-length prefix's last nibble is the HIGH nibble of its byte.
     {
         uint8_t expected_input[32];
         from_hex(valid_input, expected_input);
@@ -182,10 +163,8 @@ int main() {
     engine.process_job(bad_len, "");
     check(submits.empty(), "wrong-length input produces no submit");
 
-    // -- Case 4: stale-share avoidance -- a newer, different-id job lands in
-    // the mailbox while solve() is "in flight" (simulated from inside the
-    // fake solver, see StaleInjectingSolver) -> the now-superseded job's
-    // clearing candidate must NOT be submitted, even though it does clear.
+    // -- Case 4: stale-share avoidance -- a newer job lands mid-solve, so the
+    // superseded job's candidate must not be submitted even though it clears.
     {
         StaleInjectingSolver stale_solver;
         Job newer{"job-newer", valid_input, easy_difficulty, 3000000};
@@ -202,69 +181,48 @@ int main() {
               "job superseded mid-solve by a different job id produces no submit");
     }
 
-    // -- Case 5: staleness predicate, pinned directly via on_job() as a
-    // mailbox preload -- on_job() only stores state (job, nonceprefix,
-    // has_job_), so it's safe to call directly here with no thread and no
-    // fake-solver trick, to check superseded_by_newer_job()'s has_job_-aware
-    // logic from both sides. The mailbox is a single slot, so each check
-    // below calls on_job() with exactly the entry it needs immediately
-    // before its process_job() call -- neither depends on the other's
-    // leftover mailbox state, so their order doesn't matter.
+    // -- Case 5: the staleness predicate from both sides, driven by preloading
+    // the mailbox. on_job() only stores state, so it is safe to call directly.
+    // The single slot means each check re-arms it before its own process_job().
 
-    // Same-id refresh: the mailbox's pending entry is for the SAME job id
-    // as the one about to be processed -- not stale, so the submit must
-    // still happen.
     submits.clear();
     engine.on_job(easy);
     engine.process_job(easy, "");
     check(submits.size() == 1, "same-id mailbox refresh still submits");
 
-    // Newer different-id job: the mailbox's pending entry is for a
-    // DIFFERENT job id than the one about to be processed -- stale, so the
-    // submit must be suppressed.
     submits.clear();
     engine.on_job(hard);
     engine.process_job(easy, "");
     check(submits.empty(), "different-id mailbox entry suppresses the submit");
 
     // -- Case 6: Origin travels with the job, all the way to submit_fn.
-    //
-    // This is what stops a dev-fee round from misrouting shares. main.cpp
-    // picks the connection to submit on from the Origin handed back here,
-    // so if the tag were dropped -- or read from "which pool is active now"
-    // instead of from the job -- every share solved across a round boundary
-    // would go to the wrong pool and be rejected as an unknown job id. See
-    // miner/origin.h.
+    // main.cpp picks the connection to submit on from the Origin handed back
+    // here, so a tag that was dropped -- or read from "which pool is active now"
+    // -- would misroute every share solved across a fee-round boundary.
     std::vector<Origin> origins;
     engine.submit_fn = [&](const Solution& s, Origin o) {
         submits.push_back(s);
         origins.push_back(o);
     };
 
-    // Each case below re-arms the mailbox with the SAME job id it is about
-    // to process, exactly as the same-id-refresh case above does: Case 5
-    // left a different-id entry pending, and leaving it there would suppress
-    // these submits as stale before submit_fn ever ran.
+    // Case 5 left a different-id entry pending, so each case below re-arms the
+    // mailbox with its own job id -- otherwise its submit is suppressed as stale
+    // before submit_fn ever runs.
 
-    // Direct call: the default is the user's pool, so single-pool callers
-    // (the benchmark harness, the unit tests above) need not name it.
     submits.clear(); origins.clear();
     engine.on_job(easy);
     engine.process_job(easy, "");
     check(origins.size() == 1 && origins[0] == Origin::Main,
           "process_job defaults to the user's pool");
 
-    // Explicitly tagged as fee work: the tag must reach submit_fn unchanged.
     submits.clear(); origins.clear();
     engine.on_job(easy);
     engine.process_job(easy, "", Origin::Dev);
     check(origins.size() == 1 && origins[0] == Origin::Dev,
           "an explicitly dev-tagged job submits as dev work");
 
-    // ...and it must survive the mailbox, which is the path live mining
-    // actually takes: on_job() stores the tag, worker_main() takes it back
-    // out. Preload the mailbox with a Dev-tagged entry, then drain it the
-    // same way the worker does.
+    // The mailbox round trip is the path live mining takes: on_job() stores the
+    // tag, worker_main() takes it back out.
     submits.clear(); origins.clear();
     engine.on_job(easy, "", Origin::Dev);
     engine.process_job(easy, "", Origin::Dev);

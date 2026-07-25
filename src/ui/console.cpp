@@ -27,15 +27,11 @@ const char* const kGreen = "\033[1;32m";
 const char* const kRed   = "\033[1;31m";
 const char* const kBlue  = "\033[1;34m";
 // Dark yellow: SGR 33 WITHOUT the bold/bright attribute the others carry --
-// bright yellow on a light terminal is close to unreadable, and the job line
-// is frequent enough that it should sit quietly behind the share lines rather
-// than compete with them.
+// bright yellow on a light terminal is close to unreadable.
 const char* const kYellow = "\033[33m";
 const char* const kReset = "\033[0m";
 
-// localtime, not gmtime: a log is read by the person standing next to the rig,
-// who is comparing it against their own wall clock. localtime_r for thread
-// safety -- std::localtime returns a shared static buffer.
+// localtime_r, not std::localtime: the latter returns a shared static buffer.
 std::tm local_now() {
     std::time_t t = std::time(nullptr);
     std::tm out{};
@@ -44,9 +40,8 @@ std::tm local_now() {
 }
 
 // One "[YYYY-MM-DD HH:MM:SS] text" line into the transcript. Caller holds
-// g_mutex. Flushed per line: a rig that loses power mid-session should still
-// have everything up to the last second, and one flush per line at a handful
-// of lines a minute costs nothing.
+// g_mutex. Flushed per line so a rig that loses power mid-session still has
+// everything up to the last second.
 void log_line(const char* text, size_t len) {
     if (!g_log) return;
     std::tm tm = local_now();
@@ -60,9 +55,8 @@ void log_line(const char* text, size_t len) {
     std::fflush(g_log);
 }
 
-// Splits an already-assembled multi-line block and logs each line with its own
-// timestamp -- the same reason stats_block colours per line rather than
-// wrapping the whole block: every line has to stand on its own.
+// Every line of a block gets its own timestamp -- same reason stats_block
+// colours per line: each line has to stand on its own.
 void log_block(const std::string& block) {
     if (!g_log) return;
     size_t i = 0;
@@ -107,11 +101,8 @@ bool open_log(const std::string& path, std::string* resolved_path) {
 
     std::string target = path;
     if (target.empty()) {
-        // Default location. mkdir failing is not checked separately: if the
-        // directory could not be created AND does not already exist, the fopen
-        // below fails and reports the whole thing as one failure -- while an
-        // EEXIST from a directory that was already there is exactly what we
-        // want and is not an error at all.
+        // mkdir failing is not checked separately: if the directory is neither
+        // created nor already there, the fopen below fails and reports it.
         ::mkdir("logs", 0755);
         std::tm tm = local_now();
         char name[64];
@@ -201,9 +192,8 @@ void start_mining() {
 
 void job(const std::string& id, uint32_t difficulty, uint64_t height) {
     (void)height;   // signature stability only -- see doc comment in console.h
-    // Difficulty in Beam display units (the reference miner parity), not the raw packed
-    // uint32; unabbreviated (plain integer), unlike format_units()'s k/M
-    // share/best-share notation.
+    // Beam display units, not the raw packed uint32, and unabbreviated --
+    // unlike format_units()'s k/M share notation.
     char units[32];
     std::snprintf(units, sizeof units, "%.0f", pow::to_display_units(difficulty));
     print_colored(kYellow, "New job received: " + id + " Difficulty: " + units);
@@ -212,14 +202,9 @@ void job(const std::string& id, uint32_t difficulty, uint64_t height) {
 void share_found(const std::string& device, double units, double target_units) {
     std::string text = device + ": Found a share of difficulty " + format_units(units);
     if (target_units > 0.0) {
-        // Plain ASCII "x", not the "×" the dashboard uses: this line is
-        // routinely piped through tee, grep and log shippers, and an ASCII
-        // multiplier stays greppable everywhere.
-        // "(3.9x target of 2048)": the multiple AND the bar it cleared, on the
-        // one line. The multiple alone leaves you hunting back through the log
-        // for whatever the job difficulty was at the time, and vardiff moves it
-        // all session. Target unabbreviated -- it is the number you compare
-        // against, so throwing away digits to save four columns is a bad trade.
+        // "(3.9x target of 2048)": the multiple AND the bar it cleared, so the
+        // line stands alone in a log, with the target unabbreviated. Plain ASCII
+        // "x", not the "×" the dashboard uses -- this line gets grepped.
         char mult[64];
         std::snprintf(mult, sizeof mult, " (%.1fx target of %.0f)",
                       units / target_units, target_units);
@@ -246,14 +231,9 @@ void disconnected() {
 
 void devfee_notice(double rate, std::chrono::seconds slice,
                    std::chrono::seconds cycle, const std::string& pool) {
-    // Plain white, deliberately: this is neither good news nor an error, and
-    // colouring it either way would editorialise. Everything a user needs to
-    // check the arithmetic themselves is on the line -- rate, round length,
-    // cadence and destination.
     // The cadence reads in minutes for the hour-scale cycle that ships, but
-    // falls back to seconds rather than rounding a short cycle down to
-    // "per 0min" -- which is what a test build with a compressed cycle would
-    // otherwise print.
+    // falls back to seconds rather than rounding a compressed test cycle down
+    // to "per 0min".
     char cadence[32];
     const long long secs = (long long)cycle.count();
     if (secs >= 60 && secs % 60 == 0) std::snprintf(cadence, sizeof cadence, "%lldmin", secs / 60);

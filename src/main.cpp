@@ -1,10 +1,7 @@
-// mxbm: the runnable miner binary. Wires the Phase A + Phase B pieces
-// together -- parse argv -> merge a config file -> connect+login to the pool
-// -> (if the Beam oracle is available) solve jobs and submit shares -> track
-// stats and report them via the console ticker and the /summary API -> block
-// forever reading the stratum socket. Ctrl+C exits; see
-// stratum::Client::run()'s doc comment for why there's no return path or
-// cleanup here (the reference miner-style).
+// mxbm: the runnable miner binary. Parse argv -> merge a config file ->
+// connect+login to the pool -> solve jobs and submit shares -> report stats
+// via the ticker and the /summary API -> block forever on the stratum socket.
+// Ctrl+C exits; stratum::Client::run() explains why there is no cleanup here.
 #include <chrono>
 #include <atomic>
 #include <csignal>
@@ -44,18 +41,9 @@ using namespace mxbm;
 namespace {
 
 // Strict hex decode: `hex` must be exactly out_len*2 lowercase-hex-digit
-// characters. Any other character (including uppercase) or a length
-// mismatch fails without touching `out`. Same contract as
-// miner::Engine's file-local helper of the same name (each TU keeps its
-// own copy); used below to recover the 104-byte solution bytes from a
-// stratum::Solution's hex `output` field so its achieved difficulty can be
-// computed for the "Found a share" console line and the Stats best-share/
-// share-found bookkeeping. Solver-agnostic (plain hex decoding, no
-// GPU/oracle dependency) and so, unlike the includes above, unconditional:
-// its only call site is the submit_fn lambda below, which is itself
-// runtime-guarded on `if (solver)` rather than compile-time-guarded, since
-// which solver backend (if any) compiled in is now a build-time question
-// separate from whether one was actually selected/available at runtime.
+// characters. Any other character (including uppercase) or a length mismatch
+// fails without touching `out`. Used by submit_fn below to recover a
+// solution's 104 bytes so its achieved difficulty can be computed.
 bool from_hex_strict(const std::string& hex, uint8_t* out, size_t out_len) {
     if (hex.size() != out_len * 2) return false;
     for (size_t i = 0; i < out_len; ++i) {
@@ -80,9 +68,7 @@ int main(int argc, char** argv) {
     if (!cli::parse_args(argc, argv, opts, err)) {
         if (opts.version_requested) {
             // The one flag whose false return carries an empty err (see
-            // options.h): print the version string ourselves and exit,
-            // before any of the rest of main() (signal setup, console
-            // init/banner) ever runs.
+            // options.h), so the version string is printed here.
             std::fputs(("MXBM " + std::string(mxbm::version()) + "\n").c_str(), stdout);
             return 0;
         }
@@ -94,19 +80,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Config-file merge (Task 5): fills in only the fields the CLI itself
-    // left unseen (cli::Options::Seen) -- CLI-supplied values always win.
-    // Precedence when both --json and --config appear on the same command
-    // line: --json wins. opts.use_json_config latches true the instant
-    // --json is seen and nothing ever clears it, so checking it first here
-    // already gives "--json wins" regardless of argv order -- even though
-    // the two flags share opts.config_path, so a --config appearing AFTER
-    // --json can still overwrite the path text itself (see config/config.h
-    // and the Task 5 report for the full nuance around that shared field).
-    //
-    // Captured before the merge below can flip opts.seen.pools true, so the
-    // dropped-CLI-credentials warning further down can tell "the CLI gave
-    // no --pool at all" apart from "the config file supplied the pools".
+    // Config-file merge: fills in only the fields the CLI left unseen, so CLI
+    // values always win; --json beats --config when both appear. cli_pools is
+    // read first because the merge can flip opts.seen.pools true.
     bool cli_pools = opts.seen.pools;
     if (opts.use_json_config) {
         if (!config::load_json_config(opts.config_path, opts.json_profile, opts, err)) {
@@ -120,21 +96,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Every source has now spoken, so the rules that span two options can be
-    // settled -- a log path implying logging, a benchmark algorithm standing in
-    // for --algo. See cli::resolve_implied_options; it must run before the
-    // algo/pool checks below, which one of those rules feeds.
+    // Rules spanning two options settle once every source has spoken (a log
+    // path implies logging). Must run before the algo/pool checks below.
     cli::resolve_implied_options(opts);
 
-    // The CLI no longer requires --pool by itself (a config file may supply
-    // POOLS/POOL instead -- see cli::parse_args's doc comment) -- so the
-    // "at least one pool" check moved here, after the config-merge above
-    // has had its chance to fill opts.pools in.
     const bool benchmark_mode = !opts.benchmark.empty();
-    // Same post-merge placement, and for the same reason, as the pool check
-    // below: parse_args no longer rejects a bare command line that a config
-    // file was about to complete. Both loaders set seen.algo when they accept
-    // an ALGO key, so this fires only when NO source supplied one.
+    // Checked here rather than in parse_args: a config file may supply ALGO
+    // and POOLS, so these fire only when no source supplied them.
     if (!opts.seen.algo && !benchmark_mode) {
         std::fputs("unsupported algo (pass --algo BEAM-III, or set ALGO in your config)\n", stderr);
         return 1;
@@ -153,9 +121,7 @@ int main(int argc, char** argv) {
 
     // Open the transcript BEFORE the banner, so the log starts with the same
     // first line the screen does rather than joining part-way through. A log
-    // that cannot be opened is reported and mining continues: refusing to mine
-    // because a file could not be written would be a far worse failure than
-    // the missing log.
+    // that cannot be opened is reported and mining continues regardless.
     if (opts.log_enabled) {
         std::string log_path;
         if (ui::console::open_log(opts.log_path, &log_path)) {
@@ -169,38 +135,28 @@ int main(int argc, char** argv) {
 
     ui::console::banner();
 
-    // Out-of-scope-for-this-phase flags still get a console acknowledgment
-    // rather than silently doing nothing: failover past pool 1, GPU device
-    // SELECTION (which specific device -- the GPU solver itself now exists
-    // and always uses the runtime's default device), and the watchdog are
-    // none of them implemented yet.
+    // Flags that are accepted but not yet implemented get a console
+    // acknowledgment rather than silently doing nothing.
     if (opts.pools.size() > 1) {
         ui::console::info("Failover pools configured - failover across pools is not implemented yet; using pool 1");
     }
     if (!opts.devices.empty()) {
-        ui::console::info("--devices noted - device selection arrives in Phase D; currently ignored");
+        ui::console::info("--devices noted - device selection is not implemented yet; currently ignored");
     }
     if (opts.watchdog_requested) {
         ui::console::info("--watchdog noted - watchdog monitoring is not implemented yet");
     }
 
-    // A config file's own POOLS/POOL entries carry their own USER/PASS/TLS.
-    // When the CLI supplied --user/--pass/--tls but no --pool at all, those
-    // CLI credentials never bind to anything and the config's own USER wins
-    // silently -- surface that instead of leaving it silent (cheap
-    // mitigation; see the Task 5 report for the fuller Phase C redesign
-    // this stands in for).
+    // A config file's POOLS entries carry their own USER/PASS/TLS, so CLI
+    // --user/--pass/--tls given without any --pool bind to nothing. Say so.
     if ((opts.seen.user || opts.seen.pass || opts.seen.tls) && !cli_pools && !opts.pools.empty()) {
         ui::console::info("Note: command-line --user/--pass/--tls were ignored; using pool credentials from the config file.");
     }
 
     miner::Stats stats;
 
-    // Hardware first, pool second -- the reference miner's order, and the more useful
-    // one: a device that failed to initialise is the reason a pool connection
-    // would be pointless, so it belongs above rather than below. The
-    // solver-selection block further down prints the device section; the pool
-    // connection follows it (see "Connecting to pool..." below).
+    // Hardware first, pool second: a device that failed to initialise is the
+    // reason a pool connection would be pointless.
     ui::console::setup_miner();
 #ifdef MXBM_HAVE_CUDA
     if (gpu::CudaSolver::available()) ui::console::driver_detected("Cuda", 1);
@@ -209,41 +165,20 @@ int main(int argc, char** argv) {
     if (gpu::GpuSolver::available()) ui::console::driver_detected("OpenCL", 1);
 #endif
 
-    // Solver selection (Phase C Task 4): pick a backend for opts.solver
-    // ("gpu" | "ref" | "auto" -- validated by cli::parse_args, so no other
-    // value can reach here) into a std::unique_ptr<miner::Solver>. Declared
-    // BEFORE `engine` below so `engine` (which only ever borrows a
-    // `Solver&` into *solver) is torn down first at scope exit -- C++
-    // destroys locals in reverse declaration order, so this ordering alone
-    // guarantees the reference never dangles.
-    //
-    // Selection order, matching the brief exactly:
-    //   1. "gpu" (explicit) or "auto": gpu::GpuSolver, but ONLY when built
-    //      with OpenCL AND a device is actually present
-    //      (GpuSolver::available()) -- its constructor throws ClError with
-    //      no device, so availability is checked first and never relied on
-    //      to fail safely by itself. A construction failure that slips
-    //      through anyway (e.g. alloc_pipeline exceeding a memory-starved
-    //      device's headroom even though a device is present) is caught
-    //      and reported rather than crashing the whole binary.
-    //   2. "ref" (explicit) or "auto" falling back because step 1 didn't
-    //      claim it: miner::SolverRef, only when built with the Beam oracle.
-    //   3. Neither claimed it: `solver` stays null -- monitor-only, exactly
-    //      like today's no-oracle build, with a reason printed below.
+    // Solver selection for opts.solver ("cuda" | "opencl" | "gpu" | "ref" |
+    // "auto"; validated by cli::parse_args, so no other value reaches here).
+    // Declared BEFORE `engine` below so `engine`, which only borrows a
+    // `Solver&` into *solver, is torn down first -- locals are destroyed in
+    // reverse declaration order, so the reference can never dangle.
+    // A GPU backend is tried only when built in and available(); construction
+    // can throw anyway on a memory-starved device, so it is guarded too.
     std::unique_ptr<miner::Solver> solver;
-    // Set only if a GPU construction attempt was actually made and threw
-    // (available() said yes, alloc_pipeline said no -- e.g. a memory-
-    // starved device) -- distinguishes that case below from "never even
-    // attempted", so the fallback message doesn't claim "no GPU is
-    // available" right under a console line that just said otherwise.
+    // Set when a construction attempt was actually made and threw, so the
+    // fallback below need not claim "no GPU available" when one was found.
     bool gpu_attempt_failed = false;
-    // Worker/device label shown in the stats table, the /summary API, and the
-    // "Found a share" line. Defaults to the GPU (the default backend); set to
-    // the CPU reference below only when SolverRef is actually chosen.
+    // Shown in the stats table, the /summary API and the "Found a share" line.
     std::string worker_label = "GPU 0";
-    // What the device block below reports. Filled by whichever backend claims
-    // the device; left empty when none does, in which case no block is printed
-    // rather than one full of blanks.
+    // Left empty when no backend claims the device: then no block is printed.
     std::string dev_name, dev_driver;
     unsigned long long dev_mem = 0;
 
@@ -254,7 +189,7 @@ int main(int argc, char** argv) {
         && gpu::CudaSolver::available()) {
         try {
             auto cs = std::make_unique<gpu::CudaSolver>();
-            worker_label = cs->device().name;   // the table showed "GPU 0" for both backends
+            worker_label = cs->device().name;   // the real name, not a bare "GPU 0"
             dev_name = cs->device().name;
             dev_mem = cs->device().global_mem;
             dev_driver = "Cuda";
@@ -289,18 +224,15 @@ int main(int argc, char** argv) {
 #endif
     stats.set_device_label(worker_label);
 
-    // NVML before the device block, not after: it is what supplies the PCI
-    // address and the driver version the block and the stats header report.
-    // dlopen'd, ships with the NVIDIA driver rather than the toolkit, and is
-    // independent of which backend was chosen -- so an OpenCL run on an
-    // NVIDIA card gets it too.
+    // NVML before the device block, not after: it supplies the PCI address and
+    // the driver version that block and the stats header report. Independent
+    // of the chosen backend, so an OpenCL run on an NVIDIA card gets it too.
     const bool have_nvml = solver && gpu::nvml_init();
     if (have_nvml) stats.set_driver_version(gpu::nvml_driver_version());
 
     if (!dev_name.empty()) {
-        // Vendor is only claimed when NVML answered, which is itself the proof
-        // this is an NVIDIA card; an OpenCL device on another vendor's driver
-        // gets no Vendor line rather than a guessed one.
+        // Vendor is claimed only when NVML answered, itself proof of an NVIDIA
+        // card; other vendors get no Vendor line rather than a guessed one.
         ui::console::device_block(
             0, dev_name,
             have_nvml ? gpu::nvml_pci_address() : std::string(),
@@ -341,12 +273,9 @@ int main(int argc, char** argv) {
 
     stratum::Client client;
 
-    // The pool, AFTER the hardware section above -- see setup_miner()'s note
-    // on the ordering. connect -> if ok, report the host with the address it
-    // actually resolved to; if not, note it and let client.run()'s own
-    // reconnect loop keep retrying below. login() runs unconditionally to
-    // store the api_key credential even on initial connection failure, so the
-    // reconnect loop has valid credentials for its re-login attempts.
+    // A failed connect is not fatal: client.run()'s reconnect loop keeps
+    // retrying below. login() runs unconditionally so the api_key credential
+    // is stored even then, giving that loop something to re-login with.
     if (!benchmark_mode) {
         ui::console::connecting_to_pool();
         auto connect_t0 = std::chrono::steady_clock::now();
@@ -358,8 +287,6 @@ int main(int argc, char** argv) {
         if (up) {
             ui::console::connected_to(opts.pools[0].host, client.peer_ip(),
                                       opts.pools[0].port, opts.pools[0].tls);
-            // Only meaningful for a TLS connection, and only after connect()
-            // returned true -- which is exactly when the handshake completed.
             if (opts.pools[0].tls) ui::console::tls_handshake_ok();
         } else {
             ui::console::error("Initial connection failed — will keep retrying");
@@ -367,11 +294,9 @@ int main(int argc, char** argv) {
         client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
     }
 
-    // --benchmark: solve synthetic jobs and report, then exit. Placed AFTER
-    // solver selection and telemetry so a benchmark run reports the same
-    // device line, the same ticker cadence and the same stats table as mining
-    // -- the whole value of this mode is that its sol/s is comparable to the
-    // mining figure, which only holds if it comes from the same code.
+    // --benchmark: solve synthetic jobs, report, exit. After solver selection
+    // and telemetry so it runs the same code as mining, or its sol/s would not
+    // be comparable to the mining figure.
     if (benchmark_mode) {
         if (!solver) {
             ui::console::error("--benchmark needs a working solver backend; none is available");
@@ -389,10 +314,8 @@ int main(int argc, char** argv) {
         }
         ui::console::info(line);
 
-        // Ctrl+C ends the run and still prints the summary, rather than
-        // killing the process and losing it. The flag is checked between
-        // solves; request_abort() additionally cuts short a solve already in
-        // flight, so the wait is bounded by a round, not a whole solve.
+        // Ctrl+C ends the run and still prints the summary. request_abort()
+        // cuts short a solve in flight, bounding the wait by a round.
         static std::atomic<bool>* s_stop = nullptr;
         static miner::Solver* s_solver = nullptr;
         std::atomic<bool> stop{false};
@@ -409,11 +332,9 @@ int main(int argc, char** argv) {
         try {
             r = miner::run_benchmark(*solver, stats, opts.benchmark_seconds, stop);
         } catch (const std::exception& e) {
-            // A backend can construct successfully and still fail on first
-            // launch -- most commonly out of memory, because available() sees
-            // free VRAM at startup that another process has taken by the time
-            // a kernel runs. Report it; do not let it reach the runtime and
-            // core-dump, which reads like a solver bug rather than contention.
+            // A backend can construct and still fail on first launch, most
+            // often out of memory: available() saw free VRAM that another
+            // process has since taken. Report it rather than core-dumping.
             ticker.stop();
             std::signal(SIGINT, SIG_DFL);
             ui::console::error(std::string("Benchmark failed: ") + e.what());
@@ -424,10 +345,8 @@ int main(int argc, char** argv) {
         ticker.stop();
         std::signal(SIGINT, SIG_DFL);
 
-        // Quote sol/s as the headline (what pools and other miners report) but
-        // print solves and solutions-per-solve alongside, because sol/s is the
-        // product of the two and a change in either moves it. p5/p95 are there
-        // so a run can be judged stable or not without a second run.
+        // sol/s is the headline pools quote, but it is the product of solves
+        // and solutions-per-solve, so print both; p5/p95 show run stability.
         std::snprintf(line, sizeof line, "Benchmark: %llu solves in %.1fs",
                       (unsigned long long)r.solves, r.elapsed_s);
         ui::console::info(line);
@@ -446,18 +365,11 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Engine, submit_fn, and on_attempt are all solver-agnostic (Engine
-    // takes any miner::Solver&) and so, like from_hex_strict above, are
-    // compiled unconditionally and simply skipped at runtime when no
-    // backend claimed a solver -- rather than compile-time-guarded, since
-    // "was a solver built in" and "was one actually selected/available"
-    // are now two separate questions.
+    // Null when no backend claimed a solver: jobs are monitored, not solved.
     std::unique_ptr<miner::Engine> engine;
 
-    // Which pool's job the solver works on at any moment. With no fee
-    // configured the router only ever holds Main and is a pass-through to
-    // Engine::on_job; with the fee configured it is what DevFee switches
-    // across each round. One code path either way. See miner/devfee.h.
+    // Which pool's job the solver works on: a pass-through to Engine::on_job
+    // with no fee configured, and what DevFee switches each round with one.
     miner::JobRouter router(
         [&engine](const stratum::Job& j, const std::string& prefix, miner::Origin origin) {
             if (engine) engine->on_job(j, prefix, origin);
@@ -472,31 +384,20 @@ int main(int argc, char** argv) {
         engine = std::make_unique<miner::Engine>(client, *solver);
         engine->submit_fn = [&client, &stats, &devfee, worker_label](
                 const stratum::Solution& s, miner::Origin origin) {
-            // Achieved difficulty for the "Found a share" line and the best-share
-            // stat: decode the 104-byte solution back out of its hex `output`
-            // field, SHA-256 it (same predicate Engine's own clears_difficulty()
-            // used to decide this was worth submitting), and convert to display
-            // units. A decode failure "can't happen" (output is always Engine's
-            // own to_hex() of a fresh 104-byte candidate) but is handled
-            // defensively: skip the console line and the best-share update, still
-            // record the submit and still send it -- the actual submission must
-            // never be gated on cosmetic/stat reporting.
+            // Achieved difficulty for the "Found a share" line and the
+            // best-share stat, from the same SHA-256 predicate Engine's
+            // clears_difficulty() used. A decode failure skips the reporting
+            // but still sends the share: submission is never gated on it.
             uint8_t soln[104];
             if (from_hex_strict(s.output, soln, sizeof soln)) {
                 uint8_t hash[32];
                 sha256(soln, sizeof soln, hash);
                 double units = pow::achieved_units(hash);
-                // Only the user's own shares get a console line. A dev-fee
-                // share announced the same way would read as theirs and
-                // inflate what they think they found; the round's start/end
-                // lines and the stats table's dev-fee row report those
-                // instead, under their own heading.
+                // Only the user's own shares get a console line: a dev-fee one
+                // would read as theirs. The round lines report those instead.
                 if (origin == miner::Origin::Main) {
-                    // Report the share against the bar it had to clear. The
-                    // target is read at submit time, which is the same instant
-                    // record_submit() banks it -- and process_job() has already
-                    // refused to submit a job a newer one superseded, so the
-                    // current target is the one this share was found against.
+                    // The current target is the bar this share had to clear:
+                    // process_job() never submits a superseded job.
                     ui::console::share_found(worker_label.c_str(), units,
                                              stats.current_job_units(origin));
                 }
@@ -504,9 +405,8 @@ int main(int argc, char** argv) {
             }
             stats.record_submit(s.id, origin);
             // Route by the Origin the JOB carried, never by which pool is
-            // active now: a fee round can end while this solve is still
-            // running, and sending its solution to the other pool would
-            // just earn an unknown-job-id rejection (miner/origin.h).
+            // active now: a fee round can end mid-solve, and the other pool
+            // would reject the solution as an unknown job id (miner/origin.h).
             if (origin == miner::Origin::Dev) {
                 if (devfee) devfee->submit(s);
             } else {
@@ -553,21 +453,15 @@ int main(int argc, char** argv) {
         stats.record_disconnect();
     };
 
-    // Developer fee. Announced at startup either way -- a build that takes
-    // one says so before it takes it, and a build that takes none says that
-    // too, so "does this binary charge me?" is answerable from the console
-    // and never has to be inferred. The mechanism, and why it is documented
-    // rather than defended, is in miner/devfee.h; the user-facing terms are
-    // in docs/devfee.md.
+    // Developer fee. Announced at startup either way, so "does this binary
+    // charge me?" is answerable from the console. Mechanism in miner/devfee.h;
+    // user-facing terms in docs/devfee.md.
     if (miner::devfee_configured() && engine) {
         miner::DevFeePool pool = miner::devfee_pool();
         miner::DevFeeSchedule sched = miner::devfee_schedule();
 
-        // --dev-fee raises the rate; it cannot lower it. A request below the
-        // built-in rate is refused outright rather than clamped: clamping
-        // would let the user walk away believing they had lowered it. The
-        // error names the real way to do that, which this project does not
-        // pretend is unavailable.
+        // --dev-fee raises the rate, never lowers it. A lower request is
+        // refused rather than clamped, so it cannot pass for having worked.
         if (opts.devfee_pct >= 0.0) {
             const double want = opts.devfee_pct / 100.0;
             if (want < sched.rate) {
@@ -582,9 +476,8 @@ int main(int argc, char** argv) {
             sched.rate = want;
         }
 
-        // The fee round logs in under the user's own worker name plus the
-        // rate, so it is identifiable on the fee pool as theirs rather than
-        // anonymous hashrate -- and so a raised rate is visible there too.
+        // The fee round logs in under the user's own worker name plus the rate,
+        // so it is identifiable on the fee pool as theirs, raised rate and all.
         pool.user = miner::devfee_login(pool.user, opts.pools[0].user, sched.rate);
 
         stats.set_devfee_rate(sched.rate);
@@ -597,21 +490,18 @@ int main(int argc, char** argv) {
     } else if (engine) {
         ui::console::info("Dev fee: none - this build mines entirely for you");
         if (opts.devfee_pct > 0.0) {
-            // Honouring --dev-fee here is impossible, not merely declined:
-            // with no developer address compiled in there is nowhere to send
-            // the rounds. Say so rather than accepting the flag silently and
-            // charging nothing, which would look like the fee was taken.
+            // With no developer address compiled in there is nowhere to send
+            // the rounds, so say so rather than accepting the flag silently.
             ui::console::error("--dev-fee was given, but this build has no developer address "
                                "compiled in - no fee can be taken. See docs/devfee.md.");
         }
     }
 
-    // The API starts BEFORE the ticker so the stats block can report the port
-    // it actually bound rather than the one that was asked for: a port already
-    // in use leaves the server down, and a header line claiming "API port 8080"
-    // over a dead listener sends you looking for a network fault that is not
-    // there. bound_port() is 0 when the server never came up, which is exactly
-    // what the header treats as "no API".
+    // The API starts BEFORE the ticker so the stats block reports the port it
+    // actually bound rather than the one asked for: a port already in use
+    // leaves the server down, and a header claiming "API port 8080" over a dead
+    // listener sends you hunting a network fault that is not there.
+    // bound_port() is then 0, which the header treats as "no API".
     api::HttpSummary http_api;
     if (opts.apiport) {
         if (!http_api.start(static_cast<uint16_t>(opts.apiport), stats, mxbm::version())) {
@@ -626,9 +516,9 @@ int main(int argc, char** argv) {
                  http_api.bound_port());
 
     if (engine) engine->start();
-    // Started after the engine so the fee's first job never arrives before
-    // there is a worker to mine it, and after the API/ticker so a fee round
-    // is already reportable the moment it can happen.
+    // After the engine so the fee's first job never arrives before there is a
+    // worker to mine it, and after the API/ticker so a fee round is reportable
+    // the moment it can happen.
     if (devfee) devfee->start();
 
     client.run();   // blocks forever, reconnecting on drop; Ctrl+C exits

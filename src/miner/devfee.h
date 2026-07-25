@@ -15,21 +15,16 @@
 namespace mxbm { namespace miner {
 
 // The developer fee: MXBM spends a small, fixed fraction of mining time
-// solving for the developer's wallet instead of the user's.
-//
-// This file is the whole mechanism, and it is deliberately readable. The fee
-// is reported rather than buried: announced at startup, announced again as
-// each round starts and ends, reported on its own row of the statistics table
-// and in /summary, and specified in docs/devfee.md. See that file for the
-// user-facing terms, and docs/architecture.md for where this sits in the
-// miner.
-//
-// Shape of the mechanism (the same time-slicing the closed-source miners
-// use): a second stratum connection to the
-// fee pool is held open alongside the user's, and once the accrued fee debt
-// reaches one slice the JobRouter below switches the solver over to the fee
-// pool's job for that slice, then switches it straight back. There is only
+// solving for the developer's wallet instead of the user's. The mechanism is
+// time-slicing -- a second stratum connection to the fee pool is held open
+// alongside the user's, and once the debt reaches one slice the JobRouter
+// below switches the solver to that pool's job and straight back. There is
 // one GPU and one Engine; only the job it is fed changes.
+//
+// The fee is reported rather than hidden: announced at startup and at each
+// round, shown on its own row of the statistics table and in /summary, and
+// specified in docs/devfee.md. Charging in time rather than in shares is what
+// keeps the user's counters clean -- see the Origin note on JobRouter below.
 
 // Where fee slices mine to.
 struct DevFeePool {
@@ -40,62 +35,41 @@ struct DevFeePool {
     std::string pass;
 };
 
-// How much, and how often.
 struct DevFeeSchedule {
     double rate = 0.0;                        // fraction of mining time, 0.01 == 1.0%
     std::chrono::seconds cycle{3600};         // the window `rate` is expressed over
 
-    // Length of one fee round: rate * cycle, e.g. 1% of an hour == 36 s.
-    // The fee is charged in whole slices of this length rather than
-    // continuously, because switching pools costs a job change either way
-    // and doing it once an hour is cheaper than doing it constantly.
+    // Length of one fee round: rate * cycle, e.g. 1% of an hour == 36 s. Whole
+    // slices rather than continuously: a switch costs a job change either way.
     std::chrono::seconds slice() const;
 };
 
-// The fee MXBM ships with, and the pool it goes to. Defined in devfee.cpp
-// next to the address constant.
+// The fee MXBM ships with, and the pool it goes to.
 DevFeePool devfee_pool();
 DevFeeSchedule devfee_schedule();
 
-// False when this build has no developer address compiled in (the constant
-// in devfee.cpp is empty). The fee is then genuinely inert: no second
-// connection is opened and no slice ever runs, rather than mining to an
-// address that does not exist. Checked by main.cpp before any fee wiring.
+// False when this build has no developer address compiled in; the fee is then
+// genuinely inert -- no second connection, no slice. Checked before any wiring.
 bool devfee_configured();
 
-// Builds the credential the fee connection logs in with:
+// Builds the fee connection's login credential:
 //
 //     <developer address>.<user's worker name>_<fee percent>
 //
-// e.g. "<devaddr>.rig1_1" for a user mining as "<useraddr>.rig1" at the
-// built-in 1% rate, or "<devaddr>.rig1_2.5" for one who raised it with
-// --dev-fee 2.5. Naming the round after the user's own worker means a fee
-// round shows up on the fee pool's dashboard as identifiably theirs rather
-// than as anonymous hashrate, and carrying the rate means a raised fee is
-// visible as such.
-//
-// `user_credential` is the user's own "address[.worker]" exactly as they
-// configured it; only the worker part is used, and it is sanitised to
-// [A-Za-z0-9_-] and capped at 32 characters -- both because pools reject
-// exotic worker names and because the credential goes onto the wire inside
-// a JSON login line, where an unescaped quote or newline would corrupt it.
-// A user mining with no worker suffix, or one that sanitises away to
-// nothing, gets "mxbm".
+// e.g. "<devaddr>.rig1_2.5" for a user mining as "<useraddr>.rig1" who raised
+// the fee with --dev-fee 2.5, so the round is identifiably theirs on the fee
+// pool's dashboard. Only the worker part of `user_credential` is used,
+// sanitised to [A-Za-z0-9_-] and capped at 32 characters since it goes onto
+// the wire inside a JSON login line; absent or sanitised away it is "mxbm".
 std::string devfee_login(const std::string& dev_address,
                          const std::string& user_credential,
                          double rate);
 
 // Accrual clock: turns time spent mining into fee debt, in seconds owed.
-//
 // Pure and thread-free so the arithmetic can be tested without waiting an
-// hour (tests/test_devfee.cpp). Debt accrues against time ACTUALLY spent
-// mining -- the caller only feeds it ticks during which the user's pool had
-// a job to work on -- so a session that spends twenty minutes waiting for a
-// dead pool is not charged for those twenty minutes.
-//
-// Debt carries across slices instead of being reset: settling subtracts
-// only what was really spent, so a round cut short by a disconnect leaves
-// the remainder owed rather than silently forgiven or silently doubled.
+// hour (tests/test_devfee.cpp). The caller only feeds it ticks during which
+// the user's pool had a job, so a session waiting on a dead pool is not
+// charged. Debt carries across slices: a round cut short stays owed.
 class FeeAccrual {
 public:
     explicit FeeAccrual(DevFeeSchedule schedule);
@@ -111,32 +85,23 @@ private:
     double debt_s_ = 0.0;
 };
 
-// Decides which pool's job the solver is working on.
-//
-// Holds the latest job from each connection and dispatches whichever one
-// belongs to the currently active origin. Pure of sockets and threads (the
-// dispatch target is injected), so the switching logic -- which is where
-// the bugs in a mechanism like this actually live -- is unit-testable.
-//
-// Both connections keep feeding it the whole time; only one of them is
-// dispatched onward at any moment. That is what makes the switch in either
-// direction instant and lossless: switching back to the user's pool
-// re-dispatches the job that arrived while the fee round was running,
-// rather than idling until that pool happens to send the next one.
+// Decides which pool's job the solver is working on. Pure of sockets and
+// threads (the dispatch target is injected), so the switching logic is
+// unit-testable. Both connections keep feeding it the whole time and only one
+// is dispatched onward at any moment, which is what makes the switch
+// lossless: switching back re-dispatches the job that arrived during the fee
+// round, rather than idling until that pool sends the next.
 class JobRouter {
 public:
-    // Called with (job, nonceprefix, origin) whenever the solver should
-    // change what it is working on. Wired to Engine::on_job in main.cpp.
+    // Wired to Engine::on_job in main.cpp.
     using DispatchFn = std::function<void(const stratum::Job&, const std::string&, Origin)>;
 
     explicit JobRouter(DispatchFn dispatch);
 
-    // Record `origin`'s newest job. Dispatched onward only if that origin
-    // is the active one; otherwise it is cached, ready for the switch.
+    // Dispatched onward only if `origin` is the active one; otherwise cached.
     void offer(const stratum::Job& job, const std::string& nonceprefix, Origin origin);
 
-    // Switch the solver to `origin`, re-dispatching that origin's latest
-    // cached job if it has one. No-op if already active.
+    // Re-dispatches `origin`'s latest cached job. No-op if already active.
     void set_active(Origin origin);
 
     Origin active() const;
@@ -160,16 +125,13 @@ private:
 };
 
 // The fee's network side and its clock: owns the second stratum connection,
-// accrues debt while the user is mining, and drives JobRouter across each
-// round.
+// accrues debt while the user is mining, and drives JobRouter across a round.
 //
-// THREADING / LIFETIME. start() spawns two threads: the fee Client's own
-// run() loop, and the scheduler. stratum::Client::run() never returns by
-// design (see client.h), so the network thread cannot be joined -- stop()
-// detaches it. A DevFee that has been start()ed must therefore live until
-// the process exits, which is exactly how main.cpp holds it. Do not
-// start() one with a shorter lifetime; the tests exercise JobRouter and
-// FeeAccrual directly and never call start() for this reason.
+// THREADING / LIFETIME. start() spawns two threads: the fee Client's run()
+// loop and the scheduler. stratum::Client::run() never returns by design
+// (see client.h), so the network thread cannot be joined -- stop() detaches
+// it, and a started DevFee must live until the process exits. The tests
+// exercise JobRouter and FeeAccrual directly and never call start().
 class DevFee {
 public:
     DevFee(JobRouter& router, Stats& stats, DevFeePool pool, DevFeeSchedule schedule);
@@ -184,16 +146,14 @@ public:
     // Signals both threads to finish; see the lifetime note above.
     void stop();
 
-    // Sends a solution on the fee connection. main.cpp's submit_fn routes
-    // here for Origin::Dev work -- never by "is a round running now", but
-    // by the Origin the solved job itself carried, so a round ending
-    // mid-solve still submits to the pool that issued the job.
+    // main.cpp's submit_fn routes here by the Origin the solved job carried,
+    // never by "is a round running now", so a round ending mid-solve still
+    // submits to the pool that issued the job.
     void submit(const stratum::Solution& solution);
 
-    // Console hooks, empty by default and guarded at the call site --
-    // mxbm_ui links mxbm_miner, not the other way round, so this layer
-    // reports upward through callbacks rather than printing. main.cpp wires
-    // these to ui::console. on_slice_begin/end carry the round's length.
+    // Empty by default and guarded at the call site: mxbm_ui links mxbm_miner,
+    // not the reverse, so this layer reports upward rather than printing. The
+    // slice hooks carry the round's length.
     std::function<void(std::chrono::seconds)> on_slice_begin;
     std::function<void(std::chrono::seconds)> on_slice_end;
     std::function<void(const std::string&)> on_note;

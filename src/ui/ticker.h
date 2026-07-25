@@ -10,31 +10,22 @@ namespace mxbm { namespace ui {
 // Background reporter mirroring the reference miner's --shortstats/--longstats cadence:
 // prints format_speed_line() every short_s seconds and format_stats_block()
 // every long_s seconds, both built from stats.snapshot() at the moment they
-// fire, via console::info(). Lifecycle mirrors miner::Engine exactly (see
-// engine.h's class comment): start() spawns a worker thread, stop() signals
-// it and joins, both are no-ops if already in that state, and the
-// destructor calls stop() so a Ticker going out of scope always cleans up.
+// fire. The destructor calls stop().
 //
-// Unlike Engine's mailbox wait (indefinite, woken only by a new job or
-// stop()), this worker wakes on a wall-clock deadline (condition_variable::
-// wait_until), recomputed independently for each cadence after it fires --
-// so short_s and long_s need not evenly divide one another, and a stop()
-// during the wait interrupts immediately rather than waiting out the
-// remainder of the current period.
+// The worker wakes on a wall-clock deadline (condition_variable::wait_until),
+// recomputed independently for each cadence after it fires -- so short_s and
+// long_s need not evenly divide one another, and a stop() during the wait
+// interrupts immediately rather than waiting out the current period.
 class Ticker {
 public:
     ~Ticker();
 
-    // Spawns the worker thread reporting from `stats` (which must outlive
-    // the Ticker, or at least until stop()/the destructor returns) on the
-    // given cadences. No-op if already started.
+    // Spawns the worker thread reporting from `stats`, which must outlive the
+    // Ticker (or at least stop()/the destructor). No-op if already started.
     //
-    // `digits` (--digits) is the decimal count for the speed figures on both
-    // lines. `timeprint` (--timeprint) prefixes the SHORT line with an
-    // "[HH:MM:SS]" stamp; off by default, matching the reference miner. It affects only
-    // that line and only on screen -- the long block already carries a clock in
-    // its own header, and the transcript log timestamps every line regardless
-    // (see console::open_log).
+    // `timeprint` (--timeprint) prefixes the SHORT line with an "[HH:MM:SS]"
+    // stamp -- only that line, since the long block carries a clock in its own
+    // header and the transcript log timestamps every line regardless.
     void start(const miner::Stats& stats, int short_s, int long_s,
                int digits = 2, bool timeprint = false, int api_port = 0);
 

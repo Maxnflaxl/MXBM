@@ -12,10 +12,8 @@ namespace mxbm { namespace ui {
 
 namespace {
 
-// "HH:MM:SS" for the current wall-clock time in the local time zone --
-// matches the reference miner's own "Statistics (HH:MM:SS)" header (see the golden in
-// tests/test_format.cpp). format_stats_block itself is pure and never reads
-// the clock -- this is the one place that does, on the ticker's own thread.
+// "HH:MM:SS" local wall-clock time for the stats block's header --
+// format_stats_block is pure and never reads the clock itself.
 std::string clock_hhmmss() {
     std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::tm tm_buf{};
@@ -60,9 +58,8 @@ void Ticker::stop() {
 
 void Ticker::worker_main() {
     using clock = std::chrono::steady_clock;
-    // First fire of each line is short_s_/long_s_ seconds after start (not
-    // immediately at t=0) -- matches the reference miner's own shortstats/longstats
-    // cadence semantics ("interval for the ... line", not "also on start").
+    // First fire of each line is one interval after start, not at t=0 --
+    // matching the reference miner's shortstats/longstats cadence semantics.
     clock::time_point next_short = clock::now() + std::chrono::seconds(short_s_);
     clock::time_point next_long  = clock::now() + std::chrono::seconds(long_s_);
 
@@ -71,9 +68,8 @@ void Ticker::worker_main() {
         {
             std::unique_lock<std::mutex> lock(mutex_);
             clock::time_point deadline = next_short < next_long ? next_short : next_long;
-            // Predicate-form wait_until loops internally until either the
-            // deadline passes or stop_requested_ becomes true, returning
-            // the predicate's final value -- true means stop won.
+            // Predicate-form wait_until returns the predicate's final value:
+            // true means stop won, not the deadline.
             if (cv_.wait_until(lock, deadline, [this] { return stop_requested_; })) return;
 
             clock::time_point now = clock::now();
@@ -82,15 +78,11 @@ void Ticker::worker_main() {
             if (fire_short) next_short = now + std::chrono::seconds(short_s_);
             if (fire_long) next_long = now + std::chrono::seconds(long_s_);
         }
-        // Snapshot + print OUTSIDE the ticker's own mutex_ (mirrors
-        // Engine::worker_main extracting the mailbox then processing
-        // unlocked) -- stats_->snapshot() takes Stats's own, separate
-        // mutex, and console I/O should never hold up stop().
+        // Snapshot + print OUTSIDE the ticker's own mutex_: stats_->snapshot()
+        // takes Stats's own, separate mutex, and console I/O should never hold
+        // up stop().
         if (fire_short) {
             std::string line = format_speed_line(stats_->snapshot(), digits_);
-            // --timeprint stamps the SHORT line only: the long block already
-            // carries a clock in its own header, and the transcript log
-            // timestamps every line regardless (see console::open_log).
             if (timeprint_) line = "[" + clock_hhmmss() + "] " + line;
             console::info(line);
         }

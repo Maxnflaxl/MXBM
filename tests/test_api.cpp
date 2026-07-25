@@ -1,12 +1,7 @@
-// Loopback test for api::HttpSummary's hand-rolled GET /summary endpoint.
-// Mirrors tests/test_transport_loopback.cpp's raw-socket pattern, just
-// with the roles swapped: there the test drives a tiny hand-rolled server
-// against the Transport client under test; here HttpSummary itself IS the
-// server under test, so this file plays the client -- connect to the
-// ephemeral port HttpSummary bound, send raw request bytes, read the raw
-// response. Same SO_RCVTIMEO-bounded-read discipline either way, so a
-// server-side bug (hang, never-close, busy-spin) fails the test instead of
-// wedging the suite.
+// Loopback test for api::HttpSummary. HttpSummary is the server under test, so
+// this file plays the client against the ephemeral port it bound. Reads are
+// SO_RCVTIMEO-bounded throughout, so a server-side bug (hang, never-close,
+// busy-spin) fails the test rather than wedging the suite.
 #include "check.h"
 #include "api/http_summary.h"
 #include "miner/stats.h"
@@ -25,11 +20,9 @@ using nlohmann::json;
 
 namespace {
 
-// Connects to 127.0.0.1:port, sends `request` verbatim, then reads until
-// the peer closes the connection (HttpSummary always answers with
-// Connection: close, so EOF is the normal end-of-response signal) or a 5s
-// SO_RCVTIMEO fires. Returns "" if the connect itself fails (e.g. after
-// stop() has closed the listener).
+// Sends `request` verbatim, then reads until the peer closes (HttpSummary always
+// answers Connection: close, so EOF ends the response) or a 5s SO_RCVTIMEO
+// fires. Returns "" if the connect fails, e.g. after stop() closed the listener.
 std::string http_get(uint16_t port, const std::string& request) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return "";
@@ -69,7 +62,7 @@ bool starts_with(const std::string& s, const char* prefix) {
 
 int main() {
     miner::Stats stats;
-    stats.record_attempt(4);   // one recorded attempt, per task brief
+    stats.record_attempt(4);
 
     HttpSummary srv;
     check(srv.start(0, stats, "0.2.0-test"), "start() succeeds on port 0");
@@ -98,9 +91,8 @@ int main() {
             check(j["Workers"].is_array() && j["Workers"].size() == 1,
                   "Workers is a one-element array");
 
-            // The fields the built-in dashboard plots. The chart needs
-            // numbers, so every speed is served as one -- never as prose a
-            // consumer would have to scrape back apart.
+            // The dashboard plots these, so every speed is served as a number,
+            // never as prose a consumer would have to scrape apart.
             const json& sess = j["Session"];
             check(sess.contains("Speed_15s") && sess["Speed_15s"].is_number(),
                   "Session.Speed_15s is a number the chart can plot");
@@ -113,10 +105,8 @@ int main() {
             check(j.contains("DevFee") && j["DevFee"].contains("Rate"),
                   "DevFee is always present, so 'no fee' is distinguishable from too-old");
 
-            // Telemetry: null -- not 0, not absent -- when the platform
-            // supplies nothing. This fixture installs no telemetry source, so
-            // every field must read as unknown rather than as a real zero,
-            // which would render as "fan stopped" on the dashboard.
+            // This fixture installs no telemetry source. A real 0 would render
+            // as "fan stopped" on the dashboard, so unknown must read as null.
             const json& w0 = j["Workers"][0];
             check(w0.contains("Temp_C") && w0["Temp_C"].is_null(),
                   "absent telemetry reports null, not a misleading 0");
@@ -126,15 +116,11 @@ int main() {
     }
 
     // -- Recent_Shares: the per-share log the difficulty scatter plots --
-    //
-    // Every other share field is an aggregate, so this is the only thing that
-    // can answer "what did the last few shares look like". Recorded here
-    // AFTER the server is already up, which also pins that the endpoint
+    // Recorded AFTER the server is up, which also pins that the endpoint
     // reflects live state rather than a snapshot taken at start().
     {
-        // Each share must capture the target in force AT THAT MOMENT. Step the
-        // job difficulty between shares, exactly as pool vardiff does, so a
-        // share paired with the merely-current target would be caught.
+        // The difficulty steps between shares, as pool vardiff does, so a share
+        // paired with the merely-current target would be caught.
         stats.record_job("j1", 2048.0, miner::Origin::Main);
         stats.record_share_found(4096.0, miner::Origin::Main);
         stats.record_job("j2", 8192.0, miner::Origin::Main);   // vardiff steps up
@@ -155,23 +141,18 @@ int main() {
                 // Oldest first, so the scatter can be drawn without sorting.
                 check(rs[0]["Difficulty"] == 4096.0 && rs[1]["Difficulty"] == 70000.0,
                       "shares are logged oldest-first at their achieved difficulty");
-                // Origin must survive: a fee round's share is the developer's,
-                // and the chart colours them apart.
                 check(rs[0]["Dev"] == false && rs[2]["Dev"] == true,
                       "the dev-fee tag survives into the share log");
                 check(rs[0]["Age_s"].is_number() && rs[0]["Age_s"] >= 0.0,
                       "each share carries a non-negative age in seconds");
-                // The whole point: share 0 kept 2048 even though the target has
-                // since stepped to 8192. Pairing it with the current target
-                // would have reported it as 0.5x rather than 2.0x.
+                // Pairing share 0 with the current 8192 would report 0.5x, not 2.0x.
                 check(rs[0]["Target"] == 2048.0,
                       "a share keeps the target it cleared, not the current one");
                 check(rs[1]["Target"] == 8192.0, "the next share carries the stepped-up target");
                 check(rs[2]["Target"] == 512.0,
                       "a fee-round share carries the FEE pool's target, not the user's");
             }
-            // The user's best-share stat must still ignore the dev share --
-            // 70000 is the max of the two Main shares, not the Dev one.
+            // 70000 is the max of the two Main shares, not of the Dev one.
             check(j["Session"]["Best_Share"] == 70000.0,
                   "best share stays the user's own, excluding fee-round shares");
         }
@@ -185,10 +166,8 @@ int main() {
               "GET / is served as HTML");
         check(resp.find("<!doctype html") != std::string::npos, "GET / returns a document");
 
-        // The page must depend on nothing but this miner. Rigs sit on
-        // isolated networks and MXBM's whole dependency story is "a vendored
-        // JSON header and system OpenSSL" -- a dashboard quietly needing a
-        // CDN would render blank exactly where it is most needed.
+        // Rigs sit on isolated networks: a dashboard quietly needing a CDN
+        // would render blank exactly where it is most needed.
         size_t body_start = resp.find("\r\n\r\n");
         std::string html = (body_start != std::string::npos) ? resp.substr(body_start + 4) : "";
         check(html.find("http://") == std::string::npos &&
@@ -200,8 +179,7 @@ int main() {
         check(starts_with(resp, "HTTP/1.1 200"), "GET /index.html returns 200");
     }
     {
-        // A browser arriving from a bookmark can carry a query or fragment;
-        // routing on the raw target rather than the path would 404 those.
+        // A bookmark can carry a query; routing on the raw target would 404 it.
         std::string resp = http_get(port, "GET /?v=1 HTTP/1.1\r\nHost: x\r\n\r\n");
         check(starts_with(resp, "HTTP/1.1 200"), "GET / with a query string still returns 200");
         std::string r2 = http_get(port, "GET /summary?x=1 HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -209,19 +187,15 @@ int main() {
     }
 
     // -- Session_Stats: the session-long spread, over HTTP --
-    //
-    // The point of this block is that the numbers outlive any consumer's own
-    // history, so it is worth pinning that they arrive populated rather than
-    // as a shape full of nulls. Driven through a fake clock (the same seam
-    // miner/stats.h documents) because the windows only start being sampled
+    // Driven through a fake clock because the windows only start being sampled
     // once 15 s / 60 s of uptime have passed, and a test cannot wait a minute.
     {
         auto base = std::chrono::steady_clock::now();
         long long fake_ms = 0;
         stats.now_fn = [&fake_ms, base] { return base + std::chrono::milliseconds(fake_ms); };
 
-        // Two folds a second apart, at rates that differ, so mean/min/max and a
-        // nonzero stddev are all distinguishable from a stuck value.
+        // Two folds at differing rates, so mean/min/max and a nonzero stddev are
+        // all distinguishable from a stuck value.
         fake_ms = 61000; stats.record_attempt(60);
         stats.snapshot();
         fake_ms = 62000; stats.record_attempt(120);
@@ -241,9 +215,6 @@ int main() {
                   "min <= mean <= max, as any real distribution must be");
             check(st["Speed_60s"]["Stddev"] > 0.0,
                   "a spread of differing samples reports a nonzero stddev");
-            // Same null-not-zero rule the telemetry fields follow: this fixture
-            // installs no telemetry source, so "never measured" must not read
-            // as a real 0 W.
             check(st["Power_W"]["N"] == 0 && st["Power_W"]["Mean"].is_null(),
                   "an unsampled series reports N 0 and null, not a misleading 0.0");
         }
@@ -255,8 +226,7 @@ int main() {
         check(starts_with(resp, "HTTP/1.1 404"), "GET /nope returns 404");
     }
 
-    // -- malformed request line (no space at all -- unparseable, not just
-    // an unknown target): 400 --
+    // -- unparseable request line (no space at all), not just an unknown target --
     {
         std::string resp = http_get(port, "GARBAGE\r\n\r\n");
         check(starts_with(resp, "HTTP/1.1 400"), "malformed request line returns 400");
@@ -264,7 +234,7 @@ int main() {
 
     srv.stop();
 
-    // -- stop() closes the port: a fresh connect attempt must fail --
+    // -- stop() closes the port --
     {
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in addr{};
