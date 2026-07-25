@@ -35,13 +35,17 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 
 | | MXBM (CUDA) | lolMiner 1.98a | |
 |---|---|---|---|
-| Throughput | **56.1 sol/s** | 53.27 sol/s | **+5.5 %** |
+| Throughput | **56.2 sol/s** | 53.27 sol/s | **+5.5 %** |
 | Board power | 284.0 W | 238.7 W | +19 % |
 | Efficiency | 0.198 sol/s/W | **0.223 sol/s/W** | −11 % |
 | Core clock | 2700 MHz | 2745 MHz | |
 | Memory clock | 10251 MHz | 10251 MHz | |
 | Temperature | 65 °C | 60 °C | |
 | VRAM for a full search | 7.46 GiB | ~4 GiB[^4g] | |
+
+Both figures are 15 s-window medians from the head-to-head session. MXBM's own
+long-run benchmark on the current build measures **56.4 sol/s at 35.1 ms/solve**
+over 8,494 solves, so the margin above is unchanged by anything since.
 
 **Read that efficiency row carefully — it compares two different operating points.** MXBM
 runs pinned at the card's 285 W board limit in every kernel (verified: the driver reports
@@ -86,6 +90,13 @@ against it. Measured with `benchmarks/power_sweep.sh`, 90 s per point:
 | 255 W | 56.3 | 35.6 | 254.4 W | 2625 MHz | 0.2213 | 4.52 |
 | 270 W | 57.1 | 35.1 | 269.2 W | 2670 MHz | 0.2121 | 4.71 |
 | 285 W *(stock)* | **57.5** | **34.8** | 284.1 W | 2700 MHz | 0.2024 | 4.94 |
+
+Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
+factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
+about 1 % high in absolute terms** — stock reads 57.5 here and 56.4 over a long run.
+Every point was measured the same way, so the curve's shape, its peak and the crossings
+against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
+observed.
 
 Two things worth knowing before you cap your own card:
 
@@ -146,7 +157,9 @@ Run on an **idle GPU**. A benchmark taken while something else is using the card
 contention, not the miner — a lolMiner run taken while MXBM was mining read 25–27 sol/s
 instead of 53.
 
-Quote a **median over at least a couple of thousand solves**, not a peak. Individual 15 s
+Quote a **median over several thousand solves**, not a peak. Under a few thousand, the
+solutions-per-solve factor alone moves the headline by more than a sol/s — this project
+published 57.5 from a 90 s run and measured 56.4 from a 300 s one, same build. Individual 15 s
 windows on this card reach 61.5 sol/s, and that figure is noise: for the observed spread,
 the expected maximum of 304 samples is about 67. The median moves by less than 1 %
 between runs; peaks move by 10 %.
@@ -207,4 +220,4 @@ broken on your GPU, that is a bug report we want, not a disappointment to manage
 
 | GPU | VRAM | Driver | Backend | sol/s | W | sol/s/W | Reported by |
 |---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB | 610.43.03 | CUDA | 57.5 | 284 | 0.202 | reference card |
+| RTX 4070 Ti SUPER | 16 GiB | 610.43.03 | CUDA | 56.4 | 284 | 0.198 | reference card |

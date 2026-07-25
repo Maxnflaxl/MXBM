@@ -100,15 +100,24 @@ rather than being given a fabricated one.
 | 2026-07-25 | CUDA port, algorithm unchanged | 41.0 | 41.6 | **47.6** | +0.6 | +1.5 % | [CUDA backend](#the-cuda-backend) | — |
 | 2026-07-25 | 128-bit access on the round-2/3 records | 41.6 | 38.4 | **51.6** | −3.2 | −7.7 % | [CUDA backend](#the-cuda-backend) | — |
 | 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1 ± 2.3** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](#levers-tried-after-the-mio-fix--all-null) |
-| 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.2 | 35.0 | **56.5** | −0.2 | −0.6 % | [Alignment pad](#the-round-2-alignment-pad) *(also −0.36 GiB)* | — |
+| 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.16 | 35.0 | **56.4** | −0.2 | −0.6 % | [Alignment pad](#the-round-2-alignment-pad) *(the win is −0.36 GiB; the speed is noise-level)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 48.2 | 41.0 | fallback / `--solver opencl` |
-| **CUDA** | **56.1** | **35.2** | **shipping** — default when a CUDA device is present |
+| **CUDA** | **56.4** | **35.1** | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-Both backends measured end-to-end over **300 distinct nonces**, ±4.1 % (1σ).
+The CUDA row is **8,494 solves over 300 s** (`mxbm --benchmark BEAM-III`), at 1.99
+verified solutions per solve. OpenCL is the older 300-nonce measurement, ±4.1 % (1σ).
+
+> **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
+> and only the first factor is a property of the solver. The second is a property of
+> BeamHash III (~1.98) that a short run estimates badly: across four runs of this same
+> build, ms/solve held at 34.9–35.1 while the measured solutions/solve wandered
+> 1.99–2.04, moving the headline by more than a full sol/s. Runs under a few thousand
+> solves read **high**. Anything quoted here as a speed *change* is an ms/solve
+> comparison for that reason.
 
 **Independently confirmed by live mining.** A 2.5-hour session against HeroMiners was
 logged and its reported rate tallied — a completely separate measurement from the
@@ -234,11 +243,14 @@ Two consequences, and they matter more than the table:
 ### The equal-power comparison
 
 `benchmarks/power_sweep.sh`, 90 s per point, board limit set with
-`nvidia-smi -pl`, restored afterwards. sol/s here is `mxbm --benchmark`'s own
-figure over ~2 500 solves, which counts 2.01 verified solutions per solve rather
-than the 1.975 the progress log converts with — hence 57.5 at stock where the
-table above says 56.5. Same solver, same milliseconds; only the conversion
-differs, and it is applied identically at every row:
+`nvidia-smi -pl`, restored afterwards.
+
+**On the sol/s column:** each point is a 90 s run, ~2 000–2 500 solves, and at that
+sample size the solutions-per-solve factor reads 2.01 against the 1.99 an 8 500-solve
+run measures. Every row is therefore about **1 % high in absolute terms** — the 285 W
+row says 57.5 where a long run of the same build says 56.4. The ms/solve column and the
+*shape* of the curve are unaffected, since every point was measured identically, and the
+shape is what the section is about. They are left as measured rather than rescaled:
 
 | board limit | sol/s | ms/solve | measured | SM clock | sol/s/W | J/solution | Δ speed | Δ efficiency |
 |---|---|---|---|---|---|---|---|---|
@@ -815,6 +827,13 @@ ST.64, and the matching loads.
 | round 3 | 9.99 ms | **9.55 ms** | **−4.4 %** |
 | round 2 | 10.56 ms | 10.68 ms | +1.2 % |
 | end-to-end | 35.16 ms | **34.96 ms** | −0.20 ms, −0.6 % |
+
+**Do not read this as a throughput win.** −0.6 % is at the edge of what the
+whole-solve harness resolves: `mxbm --benchmark` measures 35.1 ms/solve both
+before and after. The A/B above is believable only because it was run as four
+alternating pairs of 700 solves and the new build won all four, and because the
+round-level figures explain it. **The reason to keep the change is the 0.36 GiB**,
+which is not marginal and is what lowers the CUDA backend's VRAM threshold.
 
 Round-level figures are from `MXBM_ROUND_REPS=R:9` (`benchmarks/stage_power.sh`), which
 replays one round nine times inside the solve that produced its input and so measures a

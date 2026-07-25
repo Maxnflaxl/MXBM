@@ -101,8 +101,8 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **56.5 sol/s** | 48.2 sol/s |
-| End-to-end solve | **35.0 ms** | 41.0 ms |
+| Throughput | **56.4 sol/s** | 48.2 sol/s |
+| End-to-end solve | **35.1 ms** | 41.0 ms |
 | Board power | 284 W — the card's 285 W limit, hit continuously | — |
 | Efficiency | 0.202 sol/s/W stock, **0.245 at 220 W**, peak 0.253 at 200 W | — |
 
