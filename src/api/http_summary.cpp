@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #include "nlohmann/json.hpp"
+
+#include "api/dashboard_html.h"
 using nlohmann::json;
 
 namespace mxbm { namespace api {
@@ -37,16 +39,17 @@ std::string format_uptime_human(std::chrono::seconds uptime) {
     return buf;
 }
 
-// One-line rollup of the three windowed candidate rates Stats tracks --
-// this API's analog of the reference miner's periodic "Average speed (Ns): X sol/s"
-// short-stats line, just carrying all three windows at once instead of
-// picking one.
-std::string format_performance_summary(const miner::Stats::Snapshot& s) {
-    char buf[160];
-    std::snprintf(buf, sizeof buf,
-        "15s: %.2f sol/s | 60s: %.2f sol/s | session: %.2f sol/s",
-        s.sol15, s.sol60, s.sol_session);
-    return buf;
+// One miner::Stats::Series as JSON. An unsampled series reports N: 0 with the
+// rest null -- not 0.0, which would read as "measured, and it was zero" for a
+// power or clock figure, exactly the confusion the telemetry fields below
+// already avoid the same way.
+json series_json(const miner::Stats::Series& s) {
+    if (s.n == 0) {
+        return json{{"N", 0}, {"Mean", nullptr}, {"Stddev", nullptr},
+                    {"Min", nullptr}, {"Max", nullptr}};
+    }
+    return json{{"N", s.n}, {"Mean", s.mean}, {"Stddev", s.stddev()},
+                {"Min", s.min}, {"Max", s.max}};
 }
 
 std::string http_response(int code, const char* reason,
@@ -138,7 +141,7 @@ bool HttpSummary::start(uint16_t port, const miner::Stats& stats, const char* ve
     // all -- the only writes to them after this point are stop()'s
     // close-then-clear, on the caller's thread, with nothing else reading
     // those members concurrently.
-    accept_thread_ = std::thread(&HttpSummary::accept_loop, this, fd, stop_pipe_[0]);
+    accept_thread_ = std::thread([this, fd] { try { accept_loop(fd, stop_pipe_[0]); } catch (...) {} });
     started_ = true;
     return true;
 }
@@ -240,10 +243,20 @@ void HttpSummary::handle_connection(int conn_fd) const {
         std::string response;
         if (!parse_request_line(line, method, target)) {
             response = http_response(400, "Bad Request", nullptr, "");
-        } else if (method == "GET" && target == "/summary") {
-            response = http_response(200, "OK", "application/json", build_body());
         } else {
-            response = http_response(404, "Not Found", nullptr, "");
+            // Route on the path alone. A browser opening the dashboard will
+            // append things this server does not use -- a "?" query from a
+            // bookmark, a "#" fragment -- and matching the raw target would
+            // 404 them.
+            const std::string path = target.substr(0, target.find_first_of("?#"));
+            if (method == "GET" && path == "/summary") {
+                response = http_response(200, "OK", "application/json", build_body());
+            } else if (method == "GET" && (path == "/" || path == "/index.html")) {
+                response = http_response(200, "OK", "text/html; charset=utf-8",
+                                         dashboard_html());
+            } else {
+                response = http_response(404, "Not Found", nullptr, "");
+            }
         }
         send_all(conn_fd, response);
     }
@@ -272,14 +285,29 @@ void HttpSummary::handle_connection(int conn_fd) const {
 //     "Session": {
 //       "Uptime_Human": "0h 4m 5s",        // uptime, human-formatted (see note)
 //       "Uptime_s": 245,                   // uptime, raw seconds
-//       "Performance_Summary": "15s: .. | 60s: .. | session: ..",
+//       "Speed_15s": 0.0, "Speed_60s": 0.0, "Speed_Session": 0.0,
+//       "Pool_Speed_Session": 0.0,
 //       "Accepted": 0, "Stale": 0, "Rejected": 0,
-//       "Best_Share": 0.0
+//       "Best_Share": 0.0,
+//       "Job_Difficulty": 0.0, "Job_Id": ""
 //     },
 //     "Workers": [
-//       { "Index": 0, "Name": "CPU 0 reference", "Performance": 0.0, "Iterations_s": 0.0 }
+//       { "Index": 0, "Name": "GPU 0", "Performance": 0.0, "Iterations_s": 0.0,
+//         "Power_W": null, "Core_Clock_MHz": null, "Mem_Clock_MHz": null,
+//         "Temp_C": null, "Fan_Pct": null }
 //     ],
-//     "Stratum": { "Current_Pool": "", "Latency_ms": -1, "Reconnects": 0 }
+//     "Stratum": { "Current_Pool": "", "Latency_ms": -1, "Reconnects": 0 },
+//     "DevFee": {                        // MXBM-specific; no the reference miner counterpart
+//       "Rate": 0.01, "Active": false, "Rounds": 0, "Seconds": 0.0,
+//       "Accepted": 0, "Stale": 0, "Rejected": 0
+//     },
+//     "Session_Stats": {                 // session-long, one per sampled field
+//       "Speed_60s": { "N": 65, "Mean": 55.89, "Stddev": 2.30,
+//                      "Min": 39.7, "Max": 58.9 }, ...
+//     },
+//     "Recent_Shares": [                 // oldest first, at most kRecentShares
+//       { "Age_s": 3.4, "Difficulty": 0.0, "Target": 0.0, "Dev": false }
+//     ]
 //   }
 //
 // Notes on specific fields (why they're not more the reference miner-literal):
@@ -314,12 +342,13 @@ void HttpSummary::handle_connection(int conn_fd) const {
 //   itself documents ("no share round-trip measured yet", stats.h) --
 //   not remapped to null/0, so a consumer can distinguish "never
 //   measured" from "measured, 0ms".
-// - Single worker row: Phase B has exactly one "device", the CPU
-//   reference solver (same "CPU 0 reference" label ui::format_stats_block
-//   uses for its console table row) -- no GPU fields (power/clock/temp)
-//   are included at all, rather than populated with fake numbers. M3's
-//   GPU backend is what will eventually turn Workers into a real
-//   per-device array.
+// - Single worker row: there is exactly one device today, so Workers holds
+//   one entry, named for whatever backend is running (the GPU's model, or
+//   the "CPU 0 reference" label ui::format_stats_block also uses for the
+//   reference solver's console row). Its telemetry fields report null
+//   rather than a fake number when the platform cannot supply them -- see
+//   the comment on them in the code below. Multi-GPU support is what will
+//   eventually turn Workers into a genuinely per-device array.
 // ---------------------------------------------------------------------
 std::string HttpSummary::build_body() const {
     miner::Stats::Snapshot s = stats_->snapshot();
@@ -330,18 +359,47 @@ std::string HttpSummary::build_body() const {
     j["Session"] = {
         {"Uptime_Human", format_uptime_human(s.uptime)},
         {"Uptime_s", static_cast<int64_t>(s.uptime.count())},
-        {"Performance_Summary", format_performance_summary(s)},
+        // The three windowed rates Stats tracks, as numbers a consumer can
+        // plot. An earlier schema also carried them rolled into a single
+        // "Performance_Summary" string ("15s: .. | 60s: .. | session: ..");
+        // that field is gone -- prose a consumer has to scrape back apart is
+        // not an API, and the built-in dashboard always read these instead.
+        {"Speed_15s", s.sol15},
+        {"Speed_60s", s.sol60},
+        {"Speed_Session", s.sol_session},
+        {"Pool_Speed_Session", s.pool_sol_session},
         {"Accepted", s.accepted},
         {"Stale", s.stale},
         {"Rejected", s.rejected},
         {"Best_Share", s.best_share_units},
+        // The pool's CURRENT target difficulty, in the same display units as
+        // Best_Share. Already on the console job line; exposed here so the
+        // dashboard can chart share counts against the difficulty they were
+        // found at -- vardiff moves this around a lot over a session, and a
+        // share count means little without it.
+        {"Job_Difficulty", s.last_job_units},
+        {"Job_Id", s.last_job_id},
     };
 
     json worker;
     worker["Index"] = 0;
     worker["Name"] = s.device_label;
+    // THIS DEVICE's 60 s rate. Numerically equal to Session.Speed_60s today and
+    // deliberately not folded into it: the session field is the whole miner's
+    // total, this one is the per-device breakdown, and they coincide only
+    // while there is exactly one device.
     worker["Performance"] = s.sol60;
     worker["Iterations_s"] = s.iter60;
+    // Device telemetry, previously visible only in the console table. null --
+    // not 0 and not omitted -- when the platform could not supply that
+    // particular field: a laptop that reports power but not fan should read
+    // as "fan unknown", which 0 would misreport as "fan stopped", and which
+    // an absent key would make indistinguishable from an older MXBM.
+    worker["Power_W"]        = s.has_power     ? json(s.power_w)                : json(nullptr);
+    worker["Core_Clock_MHz"] = s.has_sm_clock  ? json(s.sm_clock_mhz)           : json(nullptr);
+    worker["Mem_Clock_MHz"]  = s.has_mem_clock ? json(s.mem_clock_mhz)          : json(nullptr);
+    worker["Temp_C"]         = s.has_temp      ? json(s.temp_c)                 : json(nullptr);
+    worker["Fan_Pct"]        = s.has_fan       ? json(s.fan_pct)                : json(nullptr);
     j["Workers"] = json::array();
     j["Workers"].push_back(worker);
 
@@ -350,6 +408,71 @@ std::string HttpSummary::build_body() const {
         {"Latency_ms", s.last_latency_ms},
         {"Reconnects", s.reconnects},
     };
+
+    // "DevFee" is always present, including as an all-zero object in a build
+    // with no fee configured. An absent key would make "does this build take
+    // a fee?" indistinguishable from "is this an older MXBM whose API predates
+    // the field?", and a monitoring consumer should be able to answer that
+    // from the response alone. Session.Accepted/Stale/Rejected above exclude
+    // these deliberately -- they are the user's own share counts (miner/stats.h).
+    j["DevFee"] = {
+        {"Rate", s.devfee_rate},                 // fraction: 0.01 == 1.0%
+        {"Active", s.devfee_active},             // a fee round is running right now
+        {"Rounds", s.devfee_slices},
+        {"Seconds", s.devfee_seconds},
+        {"Accepted", s.devfee_accepted},
+        {"Stale", s.devfee_stale},
+        {"Rejected", s.devfee_rejected},
+    };
+
+    // Session-long summary of every sampled quantity: how many samples, mean,
+    // standard deviation, and the extremes. The rest of this response is
+    // instantaneous -- what the miner is doing at the moment you asked -- and
+    // an instant cannot answer "how steady has it been", which for a miner is
+    // most of the question. A consumer that wants the spread otherwise has to
+    // poll and accumulate, and then it only knows about the stretch it was
+    // watching: the built-in dashboard's own chart ring holds ~30 minutes and
+    // is lost on reload, so an hour-old thermal spike or clock dip is simply
+    // gone from it. These cover the whole run.
+    //
+    // Keys mirror the field each one summarises (Session.Speed_60s ->
+    // Session_Stats.Speed_60s). Sampling rules -- when a window starts being
+    // sampled, and what N actually counts -- are in miner::Stats::snapshot().
+    // No median: that needs the samples kept, and these are constant-memory
+    // accumulators (see miner::Stats::Series).
+    j["Session_Stats"] = {
+        {"Speed_15s", series_json(s.series.sol15)},
+        {"Speed_60s", series_json(s.series.sol60)},
+        {"Iterations_s", series_json(s.series.iter60)},
+        {"Power_W", series_json(s.series.power_w)},
+        {"Core_Clock_MHz", series_json(s.series.sm_clock_mhz)},
+        {"Mem_Clock_MHz", series_json(s.series.mem_clock_mhz)},
+        {"Temp_C", series_json(s.series.temp_c)},
+        {"Fan_Pct", series_json(s.series.fan_pct)},
+    };
+
+    // Per-share log, oldest first: the achieved difficulty of each of the last
+    // shares found, with its age in seconds at the moment this snapshot was
+    // taken. Everything else here is an aggregate -- a count, a maximum, a
+    // rate -- and none of them can answer "what did the last twenty shares
+    // look like", which is what the dashboard's difficulty scatter plots.
+    //
+    // Age rather than a timestamp because miner::Stats never reads wall-clock
+    // time (see the Uptime_Human note above for why); a consumer with a clock
+    // converts trivially, and the relative figure survives clock skew.
+    j["Recent_Shares"] = json::array();
+    for (const auto& sh : s.recent_shares) {
+        j["Recent_Shares"].push_back(json{
+            {"Age_s", sh.age_s},
+            {"Difficulty", sh.units},
+            // The target THIS share cleared, captured when it was found -- not
+            // Session.Job_Difficulty, which is only the current one. 0 when
+            // unknown. Pairing a share with a target the pool has since changed
+            // would misreport how hard it actually was.
+            {"Target", sh.target},
+            {"Dev", sh.dev},
+        });
+    }
 
     return j.dump();
 }
