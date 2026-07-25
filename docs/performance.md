@@ -45,9 +45,11 @@ sharply — the pipeline benched at 245 ms (≈ 7.9 sol/s equivalent) while the 
 actually delivered ~1.8 sol/s, i.e. most of a solve was spent *outside* the measured
 pipeline. That overhead is gone; bench and end-to-end now track each other.
 
-![Throughput and solve time across every optimization](progress.svg)
+![Throughput and solve time, log scale](progress.svg)
 
-The chart is generated from the table below by `python3 docs/tools/plot_progress.py`
+![Throughput and solve time, linear scale](progress-linear.svg)
+
+Both charts are generated from the table below by `python3 docs/tools/plot_progress.py`
 (no dependencies), so the two cannot drift — add a row, re-run it. Two things it is
 deliberately explicit about:
 
@@ -60,8 +62,16 @@ deliberately explicit about:
   stricter measurement, so the line is continuous but the two halves are not
   interchangeable.
 
-Both axes are log-scaled — the range is ~30× on each — so equal vertical distance means
-equal *ratio*, matching the Δ % column.
+The two scales answer different questions and neither is sufficient alone. **Log** makes
+equal vertical distance mean equal *ratio*, matching the Δ % column, and is the only way
+to see the early changes at all next to a 30× range. **Linear** starts both axes at zero,
+so equal height means equal *absolute* change — which is what makes it obvious that
+almost all of the ms won was won early, while almost all of the sol/s gained came late.
+Both are true; the log chart alone would understate how flat the recent ms curve is.
+
+Error bars are ±1σ, drawn only where a spread was actually measured — the parser reads
+`56.1 ± 2.3` out of the table, so a row without a measured spread stays a bare point
+rather than being given a fabricated one.
 
 | Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
 |---|---|---|---|---|---|---|---|---|
@@ -89,7 +99,7 @@ equal *ratio*, matching the Δ % column.
 | | ↓ *backend switches to CUDA; rows below are **end-to-end**, incl. recover + CPU verify* | | | | | | | |
 | 2026-07-25 | CUDA port, algorithm unchanged | 41.0 | 41.6 | **47.6** | +0.6 | +1.5 % | [CUDA backend](#the-cuda-backend) | — |
 | 2026-07-25 | 128-bit access on the round-2/3 records | 41.6 | 38.4 | **51.6** | −3.2 | −7.7 % | [CUDA backend](#the-cuda-backend) | — |
-| 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](#levers-tried-after-the-mio-fix--all-null) |
+| 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1 ± 2.3** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](#levers-tried-after-the-mio-fix--all-null) |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
@@ -97,7 +107,30 @@ equal *ratio*, matching the Δ % column.
 | **CUDA** | **56.1** | **35.2** | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-Both backends measured end-to-end over **300 distinct nonces**, ±4.1 % (1σ). The CUDA
+Both backends measured end-to-end over **300 distinct nonces**, ±4.1 % (1σ).
+
+**Independently confirmed by live mining.** A 2.5-hour session against HeroMiners was
+logged and its reported rate tallied — a completely separate measurement from the
+benchmark, through the stratum path, on real jobs:
+
+| window | samples | median | mean | σ | min | max |
+|---|---|---|---|---|---|---|
+| 60 s | 65 | **56.1** | 55.89 | **2.30** | 39.7 | 58.9 |
+| 15 s | 304 | **56.1** | 55.94 | 3.27 | 24.9 | 61.5 |
+
+The live median is **56.1 on both windows, matching the 300-nonce benchmark median
+exactly**, and the 60 s σ of 2.30 matches the benchmark's ±2.3. Two independent
+measurements agreeing to three significant figures is the strongest evidence available
+that the figure is real.
+
+It also shows why **the peak must not be quoted**. Individual 15 s windows reached
+**61.5 sol/s**, which is tempting and wrong: it is the maximum of 304 draws from a noisy
+distribution, and for σ = 3.27 the expected maximum of 304 draws is ≈ 67 — so 61.5 is
+unremarkable rather than evidence of a higher true rate. Narrowing the window inflates
+the peak (61.5 at 15 s vs 58.9 at 60 s) while leaving the median untouched, which is the
+signature of noise rather than throughput. The three samples below 45 sol/s are likewise
+artefacts: they are consecutive, and coincide with a lolMiner benchmark and an MXBM
+benchmark being run against the same GPU. The CUDA
 backend is **~6 % past the target** and the OpenCL path 1.12× short — read
 [the caveats](#the-cuda-backend) before treating the target as beaten.
 
