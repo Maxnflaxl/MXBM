@@ -240,14 +240,14 @@ int main(int argc, char** argv) {
         try {
             auto gs = std::make_unique<gpu::GpuSolver>();
             char line[160];
-            std::snprintf(line, sizeof line, "GPU solver ready: %s (%.1f GiB, %u compute units)",
+            std::snprintf(line, sizeof line, "OpenCL solver ready: %s (%.1f GiB, %u compute units)",
                           gs->device().name.c_str(),
                           gs->device().global_mem / 1073741824.0,
                           gs->device().compute_units);
             ui::console::info(line);
             solver = std::move(gs);
         } catch (const std::exception& e) {
-            ui::console::error(std::string("GPU solver initialization failed: ") + e.what());
+            ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
             gpu_attempt_failed = true;
         }
     }
@@ -263,11 +263,19 @@ int main(int argc, char** argv) {
         ui::console::info("Falling back to monitoring jobs only (no solving)");
     } else if (!solver) {
         if (opts.solver == "gpu") {
-            ui::console::error("--solver gpu requested but no GPU is available (no OpenCL device, or built without OpenCL support) - monitoring jobs only (no solving)");
+            ui::console::error("--solver gpu requested but no usable GPU backend is available "
+                               "(no CUDA or OpenCL device, or built without either) - monitoring jobs only (no solving)");
+        } else if (opts.solver == "cuda") {
+            ui::console::error("--solver cuda requested but no usable CUDA device is available "
+                               "(needs Ampere or newer with room for the full 2^25 seed layer, "
+                               "or this build has no CUDA support) - monitoring jobs only (no solving)");
+        } else if (opts.solver == "opencl") {
+            ui::console::error("--solver opencl requested but no OpenCL device is available "
+                               "(or built without OpenCL support) - monitoring jobs only (no solving)");
         } else if (opts.solver == "ref") {
             ui::console::error("--solver ref requested but this build has no Beam reference oracle - monitoring jobs only (no solving)");
         } else {
-            ui::console::info("No solver backend available (no OpenCL device and no Beam oracle build) - monitoring jobs only (no solving)");
+            ui::console::info("No solver backend available (no CUDA or OpenCL device, and no Beam oracle build) - monitoring jobs only (no solving)");
         }
     }
 
