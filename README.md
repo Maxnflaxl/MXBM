@@ -18,10 +18,11 @@ implementation.
 >
 > **Cap the board power.** MXBM runs pinned at the card's power limit in every
 > kernel, so at stock it looks less efficient than the reference miner purely
-> because it uses watts the other cannot reach. Measured at **equal power** it is
-> ahead on both axes — 55.5 sol/s at 239 W against 53.3 at 239 W, +3.9 % on
-> sol/s/W — and dropping the limit 285 → 240 W costs only 3.5 % of throughput.
-> See [Power and efficiency](docs/performance.md#power-and-efficiency).
+> because it spends watts the other cannot reach. The measured speed/power curve
+> says otherwise: **at 220 W it does 53.8 sol/s drawing 219.6 W, against the
+> reference miner's 53.27 at 238.7 W** — the same throughput for 19 W less, and
+> ~10 % better sol/s/W. Efficiency peaks around 200 W. See
+> [Power and efficiency](docs/performance.md#the-equal-power-comparison).
 
 Licensed under the [Apache License 2.0](LICENSE).
 

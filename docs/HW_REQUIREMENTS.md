@@ -104,11 +104,12 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 | Throughput | **56.5 sol/s** | 48.2 sol/s |
 | End-to-end solve | **35.0 ms** | 41.0 ms |
 | Board power | 284 W — the card's 285 W limit, hit continuously | — |
-| Efficiency | 0.202 sol/s/W stock, **0.232 capped to 240 W** | — |
+| Efficiency | 0.202 sol/s/W stock, **0.245 at 220 W**, peak 0.253 at 200 W | — |
 
-The card is power-limited, not thermally limited, in every kernel. Capping the
-board to 240 W costs 3.5 % of throughput and buys 15.8 % of the power, so a capped
-rig is both faster and more efficient than the reference miner — see
+The card is power-limited, not thermally limited, in every kernel, so the board
+power limit is the most valuable knob on it: **at 220 W the solver still does
+53.8 sol/s while drawing 19 W less than the reference miner does for 53.27**.
+The full curve, its interior efficiency optimum and the caveats are in
 [Power and efficiency](performance.md#the-equal-power-comparison).
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
@@ -199,9 +200,9 @@ measured rather than suspected. A solve moves **13.0 GB** of DRAM traffic, which
 within **1 %** of the compulsory minimum for these record widths — there is no waste
 left to reclaim, only records to narrow. Meanwhile the card runs pinned at its 285 W
 board limit in every kernel, so joules per solution are set by how long a solve takes:
-4.94 J/solution at stock, 4.31 capped to 240 W, against lolMiner's 4.48 at its own
-uncapped 239 W. MXBM is therefore ahead on energy *when capped* and behind when not,
-and the margin either way is set by the bytes. An implementation holding 3 GB instead
+4.94 J/solution at stock, 4.08 capped to 220 W and 3.95 at the ~200 W efficiency peak,
+against lolMiner's 4.48 at its own uncapped 239 W. MXBM is therefore ahead on energy
+when capped and behind when not, and the margin either way is set by the bytes. An implementation holding 3 GB instead
 of 7.46 would move proportionally fewer of them. See
 ["Power and efficiency"](performance.md#power-and-efficiency). Reducing the per-element
 footprint remains the highest-value open work item — it is now the lever that widens a
