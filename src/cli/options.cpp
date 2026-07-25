@@ -28,7 +28,9 @@ std::string usage_text() {
         "  --longstats N          long-stats interval in seconds, >=1 (default: 60)\n"
         "  --devices LIST         device selector (accepted, stored; device selection is a later phase)\n"
         "  --watchdog             enable the watchdog (accepted; arrives in a later phase)\n"
-        "  --solver gpu|ref|auto  solver backend: GPU, CPU reference, or auto-pick (default: auto)\n"
+        "  --solver cuda|opencl|gpu|ref|auto\n"
+        "                         solver backend. gpu = any GPU (CUDA preferred), cuda/opencl\n"
+        "                         pin one, ref = CPU reference. Default: auto\n"
         "  --json [PATH]          load a JSON config file (default: user_config.json)\n"
         "  --profile NAME         select a profile from the --json config\n"
         "  --config PATH          load a flat KEY = VALUE config file\n"
@@ -177,8 +179,8 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         if (arg == "--solver") {
             if (i + 1 >= argc) { err = "missing value for --solver\n\n" + usage_text(); return false; }
             std::string v = argv[++i];
-            if (v != "gpu" && v != "ref" && v != "auto") {
-                err = "invalid --solver (must be gpu, ref, or auto)\n\n" + usage_text();
+            if (v != "gpu" && v != "cuda" && v != "opencl" && v != "ref" && v != "auto") {
+                err = "invalid --solver (must be cuda, opencl, gpu, ref, or auto)\n\n" + usage_text();
                 return false;
             }
             out.solver = v;

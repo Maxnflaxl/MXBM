@@ -28,6 +28,9 @@
 #ifdef MXBM_HAVE_OPENCL
 #include "gpu/gpu_solver.h"
 #endif
+#ifdef MXBM_HAVE_CUDA
+#include "gpu/cuda_solver.h"
+#endif
 #ifdef MXBM_HAVE_BEAM_ORACLE
 #include "miner/solver_ref.h"
 #endif
@@ -211,8 +214,29 @@ int main(int argc, char** argv) {
     // the CPU reference below only when SolverRef is actually chosen.
     std::string worker_label = "GPU 0";
 
+#ifdef MXBM_HAVE_CUDA
+    // CUDA first when both are built: it measures ~1.16x the OpenCL path's rate on the
+    // same card (docs/performance.md). --solver opencl forces the portable path.
+    if ((opts.solver == "cuda" || opts.solver == "gpu" || opts.solver == "auto")
+        && gpu::CudaSolver::available()) {
+        try {
+            auto cs = std::make_unique<gpu::CudaSolver>();
+            char line[160];
+            std::snprintf(line, sizeof line, "CUDA solver ready: %s (%.1f GiB, %u SMs)",
+                          cs->device().name.c_str(),
+                          cs->device().global_mem / 1073741824.0,
+                          cs->device().compute_units);
+            ui::console::info(line);
+            solver = std::move(cs);
+        } catch (const std::exception& e) {
+            ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
+            gpu_attempt_failed = true;
+        }
+    }
+#endif
 #ifdef MXBM_HAVE_OPENCL
-    if ((opts.solver == "gpu" || opts.solver == "auto") && gpu::GpuSolver::available()) {
+    if (!solver && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
+        && gpu::GpuSolver::available()) {
         try {
             auto gs = std::make_unique<gpu::GpuSolver>();
             char line[160];

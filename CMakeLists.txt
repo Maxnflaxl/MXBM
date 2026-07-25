@@ -169,6 +169,38 @@ target_include_directories(test_version PRIVATE tests src)
 target_link_libraries(test_version PRIVATE mxbm_version)
 add_test(NAME version COMMAND test_version)
 
+# ---- CUDA GPU solver (optional component) ----
+# Optional in exactly the same way OpenCL is: if nvcc is absent the build proceeds
+# without it and the OpenCL path remains the default. Kept separate so an incomplete or
+# broken CUDA toolchain cannot break a build that only wants OpenCL.
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+  enable_language(CUDA)
+  if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES native)
+  endif()
+  message(STATUS "CUDA found: CUDA solver enabled (arch ${CMAKE_CUDA_ARCHITECTURES})")
+  add_library(mxbm_cuda STATIC src/gpu/cuda_solver.cu)
+  target_include_directories(mxbm_cuda PUBLIC src PRIVATE kernels/cuda)
+  target_link_libraries(mxbm_cuda PUBLIC mxbm_beamhash)
+  set_target_properties(mxbm_cuda PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
+  # 186 = "pointless comparison of unsigned integer with zero", from template
+  # instantiations where a leaf count is 0 and the loop compiles away.
+  target_compile_options(mxbm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=186>)
+  target_compile_features(mxbm_cuda PRIVATE cuda_std_17)
+  target_link_libraries(mxbm PRIVATE mxbm_cuda)
+  target_compile_definitions(mxbm PRIVATE MXBM_HAVE_CUDA)
+
+  add_executable(test_cuda_solver tests/test_cuda_solver.cu)
+  target_include_directories(test_cuda_solver PRIVATE tests src)
+  target_link_libraries(test_cuda_solver PRIVATE mxbm_cuda)
+  target_compile_features(test_cuda_solver PRIVATE cuda_std_17)
+  add_test(NAME cuda_solver COMMAND test_cuda_solver)
+else()
+  message(STATUS "CUDA not found: CUDA solver disabled (OpenCL path unaffected)")
+endif()
+
 # ---- M3: OpenCL GPU solver (optional component) ----
 find_package(OpenCL)
 if(OpenCL_FOUND)
