@@ -38,3 +38,7 @@ Testing/
 # Live miner run logs -- these echo the authorized worker (wallet address)
 *.log
 mxbm-run.log
+
+# Python bytecode
+__pycache__/
+*.pyc

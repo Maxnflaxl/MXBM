@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Regenerate docs/progress.svg from the progress table in docs/performance.md.
+"""Regenerate the progress charts from the progress table in docs/performance.md.
+
+Both SVGs are written next to this script, in docs/tools/, so the generated
+output lives with the generator that produces it; docs/performance.md links to
+them from there.
 
 The chart is generated FROM the table rather than maintained beside it, so the
 two cannot drift: add a row to performance.md, re-run this, and the chart
@@ -30,10 +34,11 @@ import os
 import re
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(HERE))
 SRC = os.path.join(REPO, "docs", "performance.md")
-OUT_LOG = os.path.join(REPO, "docs", "progress.svg")
-OUT_LIN = os.path.join(REPO, "docs", "progress-linear.svg")
+OUT_LOG = os.path.join(HERE, "progress.svg")
+OUT_LIN = os.path.join(HERE, "progress-linear.svg")
 
 TARGET_SOL = 53.0          # lolMiner, stock, user-measured
 W, H = 1000, 460

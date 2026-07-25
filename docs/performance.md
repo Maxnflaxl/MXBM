@@ -45,9 +45,9 @@ sharply — the pipeline benched at 245 ms (≈ 7.9 sol/s equivalent) while the 
 actually delivered ~1.8 sol/s, i.e. most of a solve was spent *outside* the measured
 pipeline. That overhead is gone; bench and end-to-end now track each other.
 
-![Throughput and solve time, log scale](progress.svg)
+![Throughput and solve time, log scale](tools/progress.svg)
 
-![Throughput and solve time, linear scale](progress-linear.svg)
+![Throughput and solve time, linear scale](tools/progress-linear.svg)
 
 Both charts are generated from the table below by `python3 docs/tools/plot_progress.py`
 (no dependencies), so the two cannot drift — add a row, re-run it. Two things it is
