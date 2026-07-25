@@ -149,7 +149,7 @@ static uint32_t fb_cap_for(uint32_t mean) {
 
 // Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
 // lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
-static void rowbucket_footprint(uint32_t capacity, uint32_t bb, size_t& total, size_t& single) {
+void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single) {
     const uint32_t nb = 1u << bb;
     const uint32_t cap = fb_cap_for(capacity / nb);
     const size_t nslots = (size_t)nb * cap;
@@ -175,18 +175,23 @@ static void rowbucket_footprint(uint32_t capacity, uint32_t bb, size_t& total, s
 // A card that cannot host (16,1) should therefore drop one step -- 5% slower -- rather
 // than fall back to the sort path, which measures 215 ms. MXBM_BB / MXBM_SM override.
 struct RbGeom { uint32_t bb, sm; };
+RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem) {
+    for (uint32_t bb = 16; bb >= 14; --bb) {
+        size_t total = 0, single = 0;
+        rowbucket_bytes(capacity, bb, total, single);
+        if (max_alloc && single > (size_t)max_alloc) continue;
+        if (global_mem && total + (size_t)(1ull << 30) > (size_t)global_mem) continue;
+        return { bb, 17u - bb, true };
+    }
+    return { 14u, 3u, false };   // nothing fits; callers fall back to the sort path
+}
+
 static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
     if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM"))
         return { rb_bucket_bits(), rb_submask_bits() };
     const DeviceInfo& d = rt.device();
-    for (uint32_t bb = 16; bb >= 14; --bb) {
-        size_t total = 0, single = 0;
-        rowbucket_footprint(capacity, bb, total, single);
-        if (d.max_alloc && single > (size_t)d.max_alloc) continue;
-        if (d.global_mem && total + (size_t)(1ull << 30) > (size_t)d.global_mem) continue;
-        return { bb, 17u - bb };
-    }
-    return { 14u, 3u };   // caller's viability check rejects if even this will not fit
+    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, d.global_mem);
+    return { g.bb, g.sm };
 }
 
 bool rowbucket_viable(Runtime& rt, const Budget& b) {
@@ -202,7 +207,7 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
     const RbGeom g = rb_pick_geometry(rt, capacity);
     size_t total = 0, single = 0;
-    rowbucket_footprint(capacity, g.bb, total, single);
+    rowbucket_bytes(capacity, g.bb, total, single);
     if (single > (size_t)d.max_alloc) return false;
     if (total + (size_t)(1ull << 30) > (size_t)d.global_mem) return false;
     return true;

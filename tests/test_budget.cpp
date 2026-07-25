@@ -1,4 +1,5 @@
 #include "gpu/budget.h"
+#include "gpu/round_pipeline.h"
 #include "check.h"
 #include <cstdint>
 using namespace mxbm;
@@ -89,6 +90,69 @@ int main() {
           "row-bucket seed layer needs ~9.4 GiB reported VRAM");
     check(sort_need > 10.1 && sort_need < 10.8,
           "sort-path seed layer needs ~10.4 GiB reported VRAM");
+
+    // The geometry step-down, which is what ACTUALLY decides whether a card gets
+    // the fast path: the seed-layer budget above says yes well below 12 GB, but
+    // NVIDIA's OpenCL caps a single allocation at 1/4 of VRAM and the coarsest
+    // row-bucket layout still wants 2.76 GiB. This is the half of
+    // HW_REQUIREMENTS.md's table that the budget checks cannot see.
+    section("row-bucket geometry step-down");
+    {
+        const uint32_t cap = (1u<<25) + (1u<<25)/32;   // the shipping capacity
+        struct { const char* name; double gib; uint32_t bb; bool viable; } cards[] = {
+            { "16 GB", 15.59, 16, true  },   // finest geometry, fastest
+            { "12 GB", 11.60, 14, true  },   // steps down twice, ~5 % slower
+            { "11 GB", 10.60, 14, false },   // no geometry fits -> sort path
+            { "10 GB",  9.70, 14, false },
+        };
+        for (const auto& c : cards) {
+            const uint64_t gm = (uint64_t)(c.gib * (double)GiB);
+            const RbGeometry g = rb_geometry_for(cap, gm/4, gm);   // NVIDIA: max_alloc = VRAM/4
+            char msg[128];
+            std::snprintf(msg, sizeof msg, "%s: row-bucket viable = %s",
+                          c.name, c.viable ? "yes" : "no");
+            check(g.viable == c.viable, msg);
+            if (c.viable) {
+                std::snprintf(msg, sizeof msg, "%s: geometry (%u, %u)", c.name, c.bb, 17u - c.bb);
+                check(g.bb == c.bb && g.sm == 17u - c.bb, msg);
+            }
+        }
+        // bucket_bits + submask_bits == 17 is the constraint the whole geometry
+        // family sits on -- see docs/performance.md, "Row-bucket geometry".
+        for (double gib : {15.59, 11.60}) {
+            const uint64_t gm = (uint64_t)(gib * (double)GiB);
+            const RbGeometry g = rb_geometry_for(cap, gm/4, gm);
+            check(g.bb + g.sm == 17u, "geometry stays on the bb + sm == 17 line");
+        }
+        // The single allocation is what binds, not the total: give a 12 GB card
+        // an unlimited max_alloc and it takes the finest geometry after all.
+        const RbGeometry unlimited = rb_geometry_for(cap, 0, (uint64_t)(11.60 * (double)GiB));
+        check(unlimited.viable && unlimited.bb == 16,
+              "with no single-allocation cap, 12 GB takes the finest geometry (this is CUDA)");
+        // Total VRAM is a SEPARATE gate from the single-allocation one, and on
+        // every card above the single-alloc check happens to fire first -- so
+        // without this case the total check could be deleted unnoticed. A card
+        // with no allocation cap but only 8 GiB (the CUDA-style situation) must
+        // still be refused: 7.46 GiB of footprint plus a GiB of headroom does
+        // not fit.
+        {
+            const RbGeometry g8 = rb_geometry_for(cap, 0, (uint64_t)(8.0 * (double)GiB));
+            check(g8.viable && g8.bb == 15,
+                  "8 GiB total steps down to (15,2) on total size alone, not max_alloc");
+            check(!rb_geometry_for(cap, 0, (uint64_t)(7.4 * (double)GiB)).viable,
+                  "7.4 GiB is below even (14,3)'s 6.50 GiB + 1 GiB headroom");
+            check(rb_geometry_for(cap, 0, (uint64_t)(7.6 * (double)GiB)).viable,
+                  "7.6 GiB clears (14,3) -- the true floor for the fast path");
+        }
+
+        // And the footprint figures the docs quote.
+        size_t total = 0, single = 0;
+        rowbucket_bytes(cap, 16, total, single);
+        check(single > 3.2*GiB && single < 3.35*GiB, "geometry (16,1) largest alloc ~3.27 GiB");
+        check(total  > 7.4*GiB && total  < 7.55*GiB, "geometry (16,1) total ~7.46 GiB");
+        rowbucket_bytes(cap, 14, total, single);
+        check(single > 2.7*GiB && single < 2.85*GiB, "geometry (14,3) largest alloc ~2.76 GiB");
+    }
 
     // Apple M3 Max-like: huge unified memory, generous everything.
     Budget bm = compute_budget(110ull*GiB, 27ull*GiB);

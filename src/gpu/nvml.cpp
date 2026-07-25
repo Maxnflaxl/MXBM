@@ -122,25 +122,21 @@ std::string nvml_pci_address() {
     return strip(bus) + ":" + strip(dev);
 }
 
-// mW -> W, rounded to nearest: the driver reports 285000 for a 285 W card but
-// 284999 would truncate to 284 and make a no-op write look like a change.
-static unsigned mw_to_w(unsigned mw) { return (mw + 500u) / 1000u; }
-
 PowerLimit nvml_power_limit() {
     PowerLimit p;
     if (!g_ready || !p_pl_get) return p;
     unsigned v = 0;
     if (p_pl_get(g_dev, &v) != NVML_SUCCESS) return p;
-    p.current_w = mw_to_w(v);
+    p.current_w = nvml_mw_to_w(v);
     p.valid = true;
     // The default and the constraints are separately optional: a card can
     // report its current limit and refuse the rest. Leaving them 0 lets the
     // caller tell "unknown" from "known and equal to the current value".
-    if (p_pl_default && p_pl_default(g_dev, &v) == NVML_SUCCESS) p.default_w = mw_to_w(v);
+    if (p_pl_default && p_pl_default(g_dev, &v) == NVML_SUCCESS) p.default_w = nvml_mw_to_w(v);
     unsigned lo = 0, hi = 0;
     if (p_pl_constraints && p_pl_constraints(g_dev, &lo, &hi) == NVML_SUCCESS) {
-        p.min_w = mw_to_w(lo);
-        p.max_w = mw_to_w(hi);
+        p.min_w = nvml_mw_to_w(lo);
+        p.max_w = nvml_mw_to_w(hi);
     }
     return p;
 }

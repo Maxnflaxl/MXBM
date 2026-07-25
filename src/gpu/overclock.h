@@ -12,6 +12,7 @@
 // implemented; the clock/fan knobs from that document are deliberately not, and
 // the list-parsing and restore machinery here is shaped to take them.
 #include <string>
+#include "gpu/nvml.h"
 
 namespace mxbm { namespace gpu {
 
@@ -65,5 +66,23 @@ void oc_set_restore_enabled(bool enabled);
 // caller that temporarily owns SIGINT (the benchmark's graceful-stop handler)
 // know whether to hand it back to us or to SIG_DFL.
 bool oc_has_pending_restore();
+
+// --- test seam -----------------------------------------------------------
+//
+// Everything above talks to the card through these two calls and nothing else.
+// Without the seam the clamping, the status mapping and the restore bookkeeping
+// could only be exercised on a machine with an NVIDIA GPU *and* root, which in
+// practice meant they were not exercised at all -- mutation testing found nine
+// separate breakages that no test noticed. Injecting a fake is what makes those
+// testable on any machine; production leaves the defaults in place.
+struct PowerOps {
+    PowerLimit (*read)();
+    NvmlWrite  (*write)(unsigned watts);
+};
+void oc_set_power_ops(const PowerOps& ops);   // tests only
+void oc_reset_power_ops();                    // back to NVML
+// Clears the recorded previous limit and re-enables restore, so one test case
+// cannot leak state into the next.
+void oc_reset_state_for_test();
 
 }} // namespace mxbm::gpu

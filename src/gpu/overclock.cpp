@@ -17,6 +17,9 @@ std::atomic<unsigned> g_prev_pl_w{0};        // 0 => nothing to restore
 std::atomic<bool>     g_restore_enabled{true};
 std::atomic<bool>     g_atexit_installed{false};
 
+// The only two calls that touch the card. Defaults are NVML; tests swap them.
+PowerOps g_ops = { &nvml_power_limit, &nvml_set_power_limit };
+
 // Restore-then-default: the handler re-raises with the default disposition so
 // the exit status still reads as "killed by SIGINT" rather than a clean 0.
 // oc_restore() is idempotent, so the atexit hook running afterwards is fine.
@@ -90,7 +93,7 @@ OcResult oc_apply_power_limit(const std::string& spec) {
     if (!found) return r;                         // '*' -- this GPU opted out
     r.requested_w = (unsigned)want;
 
-    const PowerLimit pl = nvml_power_limit();
+    const PowerLimit pl = g_ops.read();
     if (!pl.valid) {
         r.status  = OcStatus::Unsupported;
         r.message = "--pl: this device does not report a power limit; continuing at stock";
@@ -110,7 +113,7 @@ OcResult oc_apply_power_limit(const std::string& spec) {
     r.applied_w = target;
 
     char buf[256];
-    const NvmlWrite w = nvml_set_power_limit(target);
+    const NvmlWrite w = g_ops.write(target);
     switch (w) {
     case NvmlWrite::Ok:
         // Only now is there something to undo. Recording the PREVIOUS value
@@ -154,6 +157,10 @@ OcResult oc_apply_power_limit(const std::string& spec) {
 
 void oc_set_restore_enabled(bool enabled) { g_restore_enabled.store(enabled); }
 
+void oc_set_power_ops(const PowerOps& ops) { g_ops = ops; }
+void oc_reset_power_ops() { g_ops = PowerOps{ &nvml_power_limit, &nvml_set_power_limit }; }
+void oc_reset_state_for_test() { g_prev_pl_w.store(0); g_restore_enabled.store(true); }
+
 void oc_install_restore_hooks() {
     // atexit once -- it cannot be unregistered, and running the same handler
     // twice would be harmless but pointless. The signal handlers are re-armable
@@ -173,7 +180,7 @@ void oc_restore() {
     // exchange, not load-then-store: makes the whole thing idempotent even if
     // a signal arrives while atexit is already running it.
     const unsigned prev = g_prev_pl_w.exchange(0);
-    if (prev) (void)nvml_set_power_limit(prev);
+    if (prev) (void)g_ops.write(prev);
 }
 
 }} // namespace mxbm::gpu

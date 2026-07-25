@@ -56,6 +56,11 @@ struct PowerLimit {
 // docs/overclocking.md ("Clamps") was waiting on.
 PowerLimit nvml_power_limit();
 
+// NVML speaks milliwatts. Rounding rather than truncating matters: a card whose
+// limit reads 284999 mW must report 285 W, or a no-op write looks like a change
+// and the restore-on-exit bookkeeping puts back a value that was never set.
+inline unsigned nvml_mw_to_w(unsigned mw) { return (mw + 500u) / 1000u; }
+
 enum class NvmlWrite { Ok, NoPermission, Unsupported, Failed };
 
 // Sets device 0's limit. Every NVML write needs root (verified: called as uid
