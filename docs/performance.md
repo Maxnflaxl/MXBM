@@ -959,66 +959,80 @@ the target. What is left is not more solver micro-optimization:
    settings without a pool.
 4. **Per-path VRAM budget on the CUDA side.** The OpenCL path got this; the CUDA one
    hardcodes its geometry. Reach, not speed.
-5. **Overlap the phases — measured, and the profile is genuinely complementary.**
+5. **Overlap the phases — profile is complementary, but concurrency CANNOT reach it.
+   Built, measured, null. Do not retry with streams.**
 
-   Profiled 2026-07-25 (`sudo ./cuda/profile.sh`). The question was whether any round is
-   simultaneously compute- and bandwidth-saturated, because that is the only case where
-   running work concurrently cannot help. None is:
+   The profile said this should work. Profiled 2026-07-25 (`sudo ./cuda/profile.sh`):
 
    | kernel | ms | SM %peak | DRAM %peak | SM-busy | DRAM-busy | bottleneck |
    |---|---|---|---|---|---|---|
    | entry | 2.57 | **98.0** | 15.9 | 2.52 | 0.41 | compute-saturated |
-   | r1 | 5.80 | 65.0 | 28.2 | 3.77 | 1.63 | **neither — latency-bound** |
-   | r2 | 10.21 | 65.8 | 53.0 | 6.72 | 5.41 | **neither — latency-bound** |
+   | r1 | 5.80 | 65.0 | 28.2 | 3.77 | 1.63 | neither — latency-bound |
+   | r2 | 10.21 | 65.8 | 53.0 | 6.72 | 5.41 | neither — latency-bound |
    | r3 | 9.94 | 21.1 | 78.1 | 2.10 | 7.77 | DRAM-saturated |
    | r4 | 5.63 | 28.8 | 79.9 | 1.62 | 4.50 | DRAM-saturated |
    | terminal | 1.04 | 70.1 | 80.3 | 0.73 | 0.84 | DRAM-saturated |
    | **total** | **35.20** | | | **17.46** | **20.56** | |
 
-   Across the whole solve the **SM is busy 50 % of the wall clock and DRAM 58 %** — so
-   both sit idle roughly half the time, just not at the same moments. `entry` is the
-   extreme: 98 % SM against 16 % DRAM, i.e. it saturates compute while the memory system
-   is nearly idle, and r3/r4 are its mirror image at 21–29 % SM against 78–80 % DRAM.
+   The **SM is busy 50 % of the wall clock and DRAM 58 %** — both idle about half the
+   time, at different moments. No round saturates both. `entry` is the extreme (98 % SM
+   against 16 % DRAM) and r3/r4 are its mirror (21–29 % SM, 78–80 % DRAM). Taking
+   `max(SM-busy, DRAM-busy)` = 20.6 ms suggests a **1.71× ceiling, ~96 sol/s**.
 
-   This also settles the r1/r2 question. They are at 65 % SM and 28–53 % DRAM —
-   **neither** resource saturated, which is the signature of latency-bound code. That is
-   the favourable case: more concurrent warps give the scheduler more to hide latency
-   with. (An earlier note in this repo had that backwards and called latency-bound the
-   weak case; it is the strong one. Contention for the *same* saturated unit is the weak
-   case, and no pair of rounds here shares one.)
+   **That ceiling is not reachable by running kernels concurrently, and this was measured,
+   not argued.** `cuda/pipeline.cu --overlap` implements it: `entry` gets its own dense
+   stride-1 buffer (0.363 GiB, double-buffered), a second stream, and events ordering the
+   write-after-read hazard, so `entry(i+1)` is issued right after `r1(i)` and runs against
+   r2–r4 of nonce *i*. Both paths live in one binary, so they share a compilation, the
+   allocations and the kernels — only the scheduling differs. Over 100 distinct nonces:
 
-   **Ceiling: 1.71×.** With perfect overlap the floor is `max(SM-busy, DRAM-busy)` =
-   20.6 ms, i.e. 35.2 → 20.6 ms, ~96 sol/s. Treat that as an upper bound only — it
-   assumes zero interference and perfect phase alignment, and two independently scheduled
-   solves will drift into phase as often as out of it. Note also that DRAM is the binding
-   constraint at 58 %, so nothing beyond 1.71× is available from scheduling alone; past
-   that it is again a bytes-moved problem.
+   | | ms/solve | sol/s | KAT | drops |
+   |---|---|---|---|---|
+   | sequential | 35.22 | 56.7 | PASS | 0 |
+   | `--overlap` | 35.30 | 56.6 | PASS | 0 |
 
-   **Cheap first step — overlap `entry` alone, ~0.36 GiB.** `entry_scatter` writes exactly
-   one `u64` per element (`(idx<<32)|key`), densely, and only the first `nslots` words of
-   `elem[0]`. So `entry` for nonce N+1 can run on a second stream against r3/r4 of nonce N
-   — which have 71–79 % of SM idle — if it is given its own dense stride-1 output buffer
-   (`nslots × 8 B` = **0.363 GiB**, against 8.1 GiB free) plus its own `counts` (256 KB).
-   Today it cannot, because the ping-pong is `entry→[0]`, `r1:[0]→[1]`, `r2:[1]→[0]`,
-   `r3:[0]→[1]`, `r4:[1]→[0]`, so `entry(N+1)` would collide with `r4(N)`. If `entry`
-   hides completely: 35.2 → 32.6 ms, **~60.7 sol/s (+8 %)** for one buffer and one stream.
-   Worth doing first regardless, because it measures the real interference cost before
-   anything expensive is built.
+   **Positive control, because a null result must be shown to be capable of moving.**
+   `MXBM_ENTRY_REPS=4` makes `entry` four times as expensive (re-zeroing between reps so
+   each is a correct pass). If the overlap were hiding `entry`, the extra work would cost
+   far less under `--overlap`:
 
-   **Full version — two solves in flight — needs the capacity work.** Exact allocator
-   arithmetic: `elem[0]` 3.628 + `elem[1]` 2.902 + back-refs 1.289 = **7.820 GiB** per
-   pipeline, so two plus a ~0.4 GiB context is **16.04 GiB against a 15.99 GiB card** —
-   short by ~48 MiB, 0.3 %. The slack that would close it looks unnecessary: bucket
-   capacity is `mean + 8σ + 32` = 743 against a mean of 528 (41 % slack), while the
-   Poisson maximum over 65 536 buckets is ~636. At 6σ the cap is 697 — still 61 above that
-   expected maximum — one pipeline is 7.416 GiB and two fit with 0.76 GiB spare. **Gated
-   on `bucketDrops == 0` across many nonces**; the capacity is deliberately generous and
-   this must be demonstrated, not reasoned.
+   | | entry ×1 | entry ×4 | cost of 3 extra passes |
+   |---|---|---|---|
+   | sequential | 35.07 | 43.01 | **+7.94 ms** |
+   | `--overlap` | 35.15 | 43.11 | **+7.96 ms** |
 
-   Nothing overlaps today: the CUDA backend uses no `cudaStream` at all, so every kernel
-   runs in issue order on the default stream. That is why the headroom is untouched, and
-   why this is real work rather than a tuning knob. (An earlier plan item called
-   "nonce-pipeline the round-5 tail" was never implemented; do not treat it as precedent.)
+   3 × 2.57 = 7.71 ms predicted, ~7.95 measured, and **identical in both modes**. The
+   harness is live and the overlap hides exactly nothing.
+
+   **Why: the grids saturate the machine.** Concurrent kernels only run when the first
+   kernel has no blocks left to schedule — the work distributor fills every freed slot
+   from the running kernel first. Measured on this card (66 SMs):
+
+   | kernel | blocks/SM | resident | grid | **waves** |
+   |---|---|---|---|---|
+   | entry | 6 | 396 | 131 072 | 331 |
+   | r1–r4 | 3 | 198 | 131 072 | **662** |
+
+   Every round is **662 waves deep**. A second stream's kernel can only start in the last
+   wave's tail, so the reachable overlap is ~1/662 of a kernel — indistinguishable from
+   zero, which is exactly what was measured. Utilization percentages describe *how busy a
+   unit was*, not whether *scheduling slots were free*; the roofline above conflates the
+   two, which is why it was unreachable.
+
+   **This also retires the two-full-pipelines idea, and the capacity work it needed.**
+   Two concurrent solves would launch the same grid-saturating kernels on two streams and
+   hit the same wall, so the 48 MiB shortfall (7.820 GiB per pipeline; two plus a ~0.4 GiB
+   context is 16.04 GiB against a 15.99 GiB card) and the 8σ→6σ bucket-capacity reduction
+   that would have closed it are both moot. Worth noting that the capacity slack is still
+   real if it is ever wanted for another reason: cap is `mean + 8σ + 32` = 743 against a
+   mean of 528, while the Poisson maximum over 65 536 buckets is ~636.
+
+   **What would actually work, if this is revisited:** the work has to be *co-resident in
+   one launch*, not in two launches — e.g. a heterogeneous grid where some blocks run
+   `entry(N+1)` while others run `r3(N)`, so their warps interleave on the same SMs. That
+   is a real design and the profile still says the headroom is there; it is simply not
+   reachable with streams, events, or buffer plumbing. Nothing short of restructuring the
+   launches will get at it.
 
 **Where the remaining time is, for anyone picking it up.** Of the CUDA backend's 35.2 ms:
 r3, r4 and terminal (16.6 ms) sit at **78–80 % of theoretical DRAM peak** and are
