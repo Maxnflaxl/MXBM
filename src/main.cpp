@@ -26,6 +26,7 @@
 #include "miner/benchmark.h"
 #include "version.h"
 #include "gpu/nvml.h"
+#include "gpu/overclock.h"
 #ifdef MXBM_HAVE_OPENCL
 #include "gpu/gpu_solver.h"
 #endif
@@ -251,6 +252,38 @@ int main(int argc, char** argv) {
             s.has_fan = t.have_fan;             s.fan_pct       = t.fan_pct;
         });
     }
+    // Board power limit. After device enumeration so the console has already
+    // said which card this is, and before ANY solving -- benchmark and mining
+    // alike -- because the limit selects the operating point both of them
+    // measure. A card that cannot be set still mines, at stock: a miner that
+    // failed to apply OC is degraded, not wrong (docs/overclocking.md).
+    if (!opts.power_limit.empty()) {
+        long w = 0; bool found = false; std::string perr;
+        if (!gpu::oc_parse_list(opts.power_limit, 0, w, found, perr)) {
+            // Malformed input is an error wherever it came from. The CLI
+            // rejects it at parse time; this catches the config-file path,
+            // which stores strings without a syntax check.
+            ui::console::error("Invalid power limit \"" + opts.power_limit + "\": " + perr);
+            return 1;
+        }
+        gpu::oc_set_restore_enabled(!opts.no_oc_reset);
+        if (!have_nvml) {
+            ui::console::error("--pl needs NVML (an NVIDIA driver), which is not available here; "
+                               "continuing at the card's current limit");
+        } else {
+            const gpu::OcResult r = gpu::oc_apply_power_limit(opts.power_limit);
+            if (r.status == gpu::OcStatus::Applied) {
+                ui::console::info(r.message);
+                if (opts.no_oc_reset)
+                    ui::console::info("--no-oc-reset: this limit will be left on the card at exit");
+            } else if (r.status != gpu::OcStatus::NotRequested) {
+                ui::console::error(r.message);
+            }
+        }
+    } else if (opts.no_oc_reset) {
+        ui::console::info("--no-oc-reset noted, but no --pl was given - nothing to reset");
+    }
+
     if (!solver && gpu_attempt_failed) {
         ui::console::info("Falling back to monitoring jobs only (no solving)");
     } else if (!solver) {
@@ -336,14 +369,24 @@ int main(int argc, char** argv) {
             // often out of memory: available() saw free VRAM that another
             // process has since taken. Report it rather than core-dumping.
             ticker.stop();
-            std::signal(SIGINT, SIG_DFL);
+            // Hand SIGINT back to whoever should own it: the OC restore hook while a
+            // power limit is still on the card, else the default disposition. Without
+            // this the window between here and process exit would drop a Ctrl+C and
+            // leave the card capped.
+            if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
+            else                               std::signal(SIGINT, SIG_DFL);
             ui::console::error(std::string("Benchmark failed: ") + e.what());
             ui::console::info("If another process is using the GPU, stop it and retry: "
                               "a full BeamHash III search needs ~7.5 GiB free.");
             return 1;
         }
         ticker.stop();
-        std::signal(SIGINT, SIG_DFL);
+        // Hand SIGINT back to whoever should own it: the OC restore hook while a
+        // power limit is still on the card, else the default disposition. Without
+        // this the window between here and process exit would drop a Ctrl+C and
+        // leave the card capped.
+        if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
+        else                               std::signal(SIGINT, SIG_DFL);
 
         // sol/s is the headline pools quote, but it is the product of solves
         // and solutions-per-solve, so print both; p5/p95 show run stability.

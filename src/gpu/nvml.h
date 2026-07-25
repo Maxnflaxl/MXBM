@@ -36,4 +36,32 @@ std::string nvml_driver_version();
 // multi-GPU rig this is what tells two identical cards apart.
 std::string nvml_pci_address();
 
+// --- board power limit ---------------------------------------------------
+//
+// The most valuable knob on this card: MXBM runs pinned at the limit in every
+// kernel, so the limit sets the operating point outright. See
+// docs/performance.md "Power and efficiency" for the measured curve.
+
+struct PowerLimit {
+    bool     valid       = false;   // false => the device does not report one
+    unsigned current_w   = 0;
+    unsigned default_w   = 0;       // the card's own default, restored on exit
+    unsigned min_w       = 0;       // driver-reported constraints, not our guess
+    unsigned max_w       = 0;
+};
+
+// Reads device 0's limit and the band the DRIVER permits. Clamping against
+// these is a fact about the installed card rather than an assumption about
+// someone else's silicon, which is what the open question in
+// docs/overclocking.md ("Clamps") was waiting on.
+PowerLimit nvml_power_limit();
+
+enum class NvmlWrite { Ok, NoPermission, Unsupported, Failed };
+
+// Sets device 0's limit. Every NVML write needs root (verified: called as uid
+// 1000 with the value the card already had, a true no-op, it still returns
+// NVML_ERROR_NO_PERMISSION), so NoPermission is the expected outcome for an
+// ordinary user and callers must report it as a cause, not a crash.
+NvmlWrite nvml_set_power_limit(unsigned watts);
+
 }} // namespace mxbm::gpu

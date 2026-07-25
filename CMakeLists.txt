@@ -117,6 +117,7 @@ add_test(NAME devfee COMMAND test_devfee)
 
 add_executable(test_cli tests/test_cli.cpp src/cli/options.cpp)
 target_include_directories(test_cli PRIVATE tests src)
+target_link_libraries(test_cli PRIVATE mxbm_nvml)
 add_test(NAME cli COMMAND test_cli)
 
 add_library(mxbm_config STATIC src/config/config.cpp)
@@ -128,7 +129,7 @@ target_link_libraries(mxbm_config PUBLIC mxbm_json)
 # sources are tested here against the real merge.
 add_executable(test_config tests/test_config.cpp src/cli/options.cpp)
 target_include_directories(test_config PRIVATE tests src)
-target_link_libraries(test_config PRIVATE mxbm_config)
+target_link_libraries(test_config PRIVATE mxbm_config mxbm_nvml)
 target_compile_definitions(test_config PRIVATE MXBM_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
 add_test(NAME config COMMAND test_config)
 
@@ -160,11 +161,17 @@ target_include_directories(test_api PRIVATE tests src)
 target_link_libraries(test_api PRIVATE mxbm_api Threads::Threads)
 add_test(NAME api COMMAND test_api)
 
-# NVML telemetry: dlopen'd at runtime, so no build-time NVIDIA dependency. Compiled
-# unconditionally -- it reports nothing on a machine without the driver.
-add_library(mxbm_nvml STATIC src/gpu/nvml.cpp)
+# NVML telemetry and the board power limit: dlopen'd at runtime, so no build-time
+# NVIDIA dependency. Compiled unconditionally -- it reports nothing, and applies
+# nothing, on a machine without the driver.
+add_library(mxbm_nvml STATIC src/gpu/nvml.cpp src/gpu/overclock.cpp)
 target_include_directories(mxbm_nvml PUBLIC src)
 target_link_libraries(mxbm_nvml PUBLIC ${CMAKE_DL_LIBS})
+
+add_executable(test_overclock tests/test_overclock.cpp)
+target_include_directories(test_overclock PRIVATE tests src)
+target_link_libraries(test_overclock PRIVATE mxbm_nvml)
+add_test(NAME overclock COMMAND test_overclock)
 
 add_executable(mxbm src/main.cpp src/cli/options.cpp)
 target_link_libraries(mxbm PRIVATE mxbm_nvml)

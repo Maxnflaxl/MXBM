@@ -43,6 +43,8 @@ immediately; only a *missing* one defers to the config.
 | `--logfile PATH` | Where the transcript goes. Implies `--log`. | `logs/mxbm_<date>_<time>.log` |
 | `--timeprint [0\|1]` | Stamp the average-speed line with `[HH:MM:SS]`. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
+| `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one). Needs root. | card default |
+| `--no-oc-reset [0\|1]` | Leave `--pl` applied at exit instead of restoring the previous limit. | off |
 | `--devices LIST` | Device selector. Accepted and stored; selection is not implemented yet. | all |
 | `--watchdog` | Enable the watchdog. Accepted; not implemented yet. | off |
 | `--version` | Print the version and exit. | |
@@ -153,6 +155,8 @@ never set a value the command line would reject.
 | `LOGFILE` | `--logfile` | path; implies `LOG` unless `LOG` says otherwise |
 | `SOLVER` | `--solver` | `cuda`, `opencl`, `gpu`, `ref`, `auto` |
 | `DEVICES` | `--devices` | list (JSON also accepts an array) |
+| `PL` | `--pl` | watts per GPU (JSON also accepts an array: `[220, "*", 260]`) |
+| `NO_OC_RESET` | `--no-oc-reset` | `1`/`0`, `true`/`false`, `on`/`off` |
 | `DEVFEE` | `--dev-fee` | percentage, raise-only |
 | `BENCHMARK`, `BENCHMARK_SECONDS` | `--benchmark`, `--benchmark-seconds` | `BEAM-III`; seconds ≥ 1 |
 
@@ -370,6 +374,42 @@ grep -o 'Average speed (15s): [0-9.]*' logs/mxbm_*.log | awk '{print $NF}' | sor
 ```
 
 `--digits` raises the precision of those figures if two decimals is not enough.
+
+### Power limit
+
+The single most valuable setting on an NVIDIA card, and the reason it exists here:
+**MXBM runs pinned at the board power limit in every kernel**, so the limit does not just
+bound the miner, it picks its operating point. On the reference RTX 4070 Ti SUPER,
+measured:
+
+| `--pl` | sol/s | draw | sol/s/W |
+|---|---|---|---|
+| 200 | 50.6 | 199.8 W | **0.253** — most efficient |
+| **220** | **53.8** | **219.6 W** | 0.245 — recommended |
+| 285 (stock) | 57.5 | 284.1 W | 0.202 — fastest |
+
+Dropping the limit from 285 W to 220 W costs 6 % of throughput and saves 23 % of the
+power. Going below ~200 W makes things *worse* on both counts, because by then the core
+clock has fallen far enough that the parts of the board which do not scale with it are
+being paid for out of less work. The full curve is in
+[performance.md](performance.md#the-equal-power-comparison).
+
+```
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
+```
+
+**It needs root** — every NVML write does. Without it MXBM says so by name and mines on
+at the card's current limit rather than failing:
+
+```
+Power limit 240 W not applied: insufficient permission - re-run under sudo.
+Mining continues at the card's current 285 W.
+```
+
+The value is clamped to the band the driver reports for your card (100–366 W on the
+reference one) and the clamp is announced, so a limit your card will not take is never
+silently ignored. The previous limit is restored when MXBM exits, including on Ctrl+C;
+`--no-oc-reset` leaves it applied instead.
 For mean and standard deviation without any parsing, the API reports them
 directly — see `Session_Stats` above.
 

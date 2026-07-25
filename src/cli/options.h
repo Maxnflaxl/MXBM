@@ -38,6 +38,18 @@ struct Options {
     // --digits: decimals on the speed figures, 0..6.
     int digits = 2;
 
+    // --pl: board power limit in watts, as the reference miner's per-GPU list ("240",
+    // "240,*,260", "*" to skip). Empty = leave the card alone. This is the
+    // highest-value knob on the reference card -- MXBM runs pinned at the
+    // limit in every kernel, so the limit picks the operating point. See
+    // docs/performance.md "Power and efficiency" and docs/overclocking.md.
+    std::string power_limit;
+
+    // --no-oc-reset: leave applied settings on the card at exit instead of
+    // putting the previous ones back. Defaults to false (restore), matching
+    // the reference miner's own default of 0.
+    bool no_oc_reset = false;
+
     // --dev-fee PCT: the fee the user WANTS to pay, as a percentage. Raise-only
     // -- main() rejects a value below the built-in rate rather than clamping
     // it. Negative means "not given"; the built-in rate applies. docs/devfee.md.
@@ -61,6 +73,7 @@ struct Options {
         bool solver = false, devfee = false;
         bool log = false, logfile = false, timeprint = false, digits = false;
         bool watchdog = false, benchmark = false, benchmark_seconds = false;
+        bool power_limit = false, no_oc_reset = false;
         // Not precedence (there is only one legal value): it records that SOME
         // source supplied an algorithm, for main() to enforce after the merge.
         bool algo = false;

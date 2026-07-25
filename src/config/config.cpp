@@ -136,6 +136,7 @@ constexpr BoolOpt kBoolOpts[] = {
     {"LOG",       nullptr,    &cli::Options::log_enabled,        &cli::Options::Seen::log},
     {"TIMEPRINT", nullptr,    &cli::Options::timeprint,          &cli::Options::Seen::timeprint},
     {"WATCHDOG",  nullptr,    &cli::Options::watchdog_requested, &cli::Options::Seen::watchdog},
+    {"NO_OC_RESET", "NOOCRESET", &cli::Options::no_oc_reset,      &cli::Options::Seen::no_oc_reset},
 };
 
 constexpr StrOpt kStrOpts[] = {
@@ -143,6 +144,7 @@ constexpr StrOpt kStrOpts[] = {
     {"LOGFILE",   &cli::Options::log_path,  &cli::Options::Seen::logfile,   nullptr,          nullptr,    false},
     {"SOLVER",    &cli::Options::solver,    &cli::Options::Seen::solver,    kSolverDomain,    nullptr,    false},
     {"BENCHMARK", &cli::Options::benchmark, &cli::Options::Seen::benchmark, kBenchmarkDomain, "BEAM-III", false},
+    {"PL",        &cli::Options::power_limit, &cli::Options::Seen::power_limit, nullptr,        nullptr,    true},
 };
 
 constexpr DblOpt kDblOpts[] = {
@@ -232,10 +234,16 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
             value = it->get<std::string>();
         } else if (o.join_array && it->is_array()) {
             // the reference miner accepts DEVICES as an array; join into --devices' form.
+            // Entries may be numbers as well as strings, because the per-GPU
+            // lists this serves are not all textual: "PL": [220, "*", 260] is
+            // the natural way to write watts, and quoting them to satisfy the
+            // parser would be a papercut with nothing behind it.
             for (size_t i = 0; i < it->size(); ++i) {
-                if (!(*it)[i].is_string()) return bad(o.key);
+                const auto& e = (*it)[i];
                 if (i) value += ",";
-                value += (*it)[i].get<std::string>();
+                if (e.is_string())            value += e.get<std::string>();
+                else if (e.is_number_integer()) value += std::to_string(e.get<long long>());
+                else                          return bad(o.key);
             }
         } else {
             return bad(o.key);

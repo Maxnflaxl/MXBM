@@ -1,4 +1,5 @@
 #include "cli/options.h"
+#include "gpu/overclock.h"
 
 #include <cctype>
 #include <cerrno>
@@ -47,6 +48,10 @@ std::string usage_text() {
         "                         given alone: logs/mxbm_<date>_<time>.log\n"
         "  --timeprint [0|1]      stamp the short-stats line with [HH:MM:SS] (default: off)\n"
         "  --digits N             decimals on the speed figures, 0..6 (default: 2)\n"
+        "  --pl W                 board power limit in watts, per GPU (\"240\", \"240,*,260\";\n"
+        "                         * skips a GPU). Needs root. Restored on exit unless\n"
+        "                         --no-oc-reset. See docs/overclocking.md\n"
+        "  --no-oc-reset [0|1]    leave --pl applied at exit instead of restoring (default: off)\n"
         "  --version              print the version string and exit\n"
         "  --help                 show this help text\n";
 }
@@ -146,7 +151,21 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.seen.nocolor = true;
             continue;
         }
-        if (arg == "--log" || arg == "--timeprint") {
+        if (arg == "--pl") {
+            if (i + 1 >= argc) { err = "missing value for --pl\n\n" + usage_text(); return false; }
+            // Syntax only here; the WATTS are validated against the band the
+            // driver reports for the actual card, which the CLI cannot see.
+            const std::string spec = argv[++i];
+            long v = 0; bool found = false; std::string perr;
+            if (!gpu::oc_parse_list(spec, 0, v, found, perr)) {
+                err = "invalid --pl (" + perr + ")\n\n" + usage_text();
+                return false;
+            }
+            out.power_limit = spec;
+            out.seen.power_limit = true;
+            continue;
+        }
+        if (arg == "--log" || arg == "--timeprint" || arg == "--no-oc-reset") {
             // Optional value, handled exactly like --tls above.
             bool value = true;
             if (i + 1 < argc) {
@@ -154,8 +173,9 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
                 if (v == "0" || v == "off")     { value = false; ++i; }
                 else if (v == "1" || v == "on") { value = true;  ++i; }
             }
-            if (arg == "--log") { out.log_enabled = value; out.seen.log = true; }
-            else                { out.timeprint = value;   out.seen.timeprint = true; }
+            if (arg == "--log")              { out.log_enabled = value; out.seen.log = true; }
+            else if (arg == "--timeprint")   { out.timeprint = value;   out.seen.timeprint = true; }
+            else                             { out.no_oc_reset = value; out.seen.no_oc_reset = true; }
             continue;
         }
         if (arg == "--logfile") {

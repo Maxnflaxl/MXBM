@@ -1,6 +1,23 @@
 # Overclocking — design decisions
 
-Status: **design agreed, not implemented.** This is the handoff for the implementation.
+Status: **`--pl` implemented (2026-07-25); the clock and fan knobs are not.**
+Everything below is the design both halves follow; the "To determine" section is what
+still gates the rest.
+
+`--pl` was taken first because it is the only knob whose value is
+[measured](performance.md#the-equal-power-comparison) rather than assumed: the card runs
+pinned at its limit in every kernel, so the limit picks the operating point outright, and
+220 W matches the reference miner's throughput while drawing 19 W less. The clock offsets
+remain hypotheses — see "Whether the community's recommended OC is right *for MXBM*".
+
+```
+--pl W               board power limit in watts, per GPU ("240", "240,*,260"; * skips)
+--no-oc-reset [0|1]  leave it applied at exit instead of restoring (default: off)
+```
+
+Config-file keys `PL` and `NO_OC_RESET` set the same things; `PL` also accepts a JSON
+array (`"PL": [220, "*", 260]`). Applied after device enumeration and before any solving,
+so a benchmark measures the same operating point mining will use.
 
 Everything in the "Verified" sections below was measured on this machine on 2026-07-25,
 not taken from documentation or recollection. Everything in "To determine" is explicitly
@@ -110,12 +127,20 @@ Including on `SIGINT`/`SIGTERM`. `--no-oc-reset` opts out, matching lolMiner's d
 of `0`. Restore must be idempotent and must not itself require the miner to have exited
 cleanly.
 
-### 5. Clamps — **open, decide at implementation time**
+### 5. Clamps — settled for `--pl`: use the band the driver reports
 
-Not settled. The argument for clamping is that the driver reports `+6000` for memory,
-and a typo'd `--moff 12000` should not reach the card. The argument against is that any
-clamp we pick is a guess about someone else's silicon. Leaning toward: clamp to a
-conservative band, with an explicit override flag to exceed it.
+The tension was that any constant we pick is a guess about someone else's silicon. For
+the power limit there is no need to guess: `nvmlDeviceGetPowerManagementLimitConstraints`
+reports the card's own permitted band (**100–366 W** on the reference card, default 285),
+so MXBM clamps to that and *says* it clamped. A value outside the band is reported at the
+value actually applied, never silently accepted — a clamped setting that looked applied
+would misattribute every measurement taken after it.
+
+The CLI checks only the *syntax* of `--pl`, since the legal range is a property of the
+installed card and the parser cannot see it. Watts are validated at apply time.
+
+This does not settle clamps for the clock offsets, where the driver's `+6000` memory
+range genuinely is register width rather than a recommendation.
 
 ---
 

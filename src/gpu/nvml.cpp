@@ -8,7 +8,9 @@ namespace {
 
 // Minimal NVML surface, declared here so we need no CUDA headers at build time.
 using nvmlReturn_t = int;
-constexpr nvmlReturn_t NVML_SUCCESS = 0;
+constexpr nvmlReturn_t NVML_SUCCESS        = 0;
+constexpr nvmlReturn_t NVML_ERROR_NOT_SUPPORTED = 3;
+constexpr nvmlReturn_t NVML_ERROR_NO_PERMISSION = 4;
 using nvmlDevice_t = void*;
 
 void*        g_lib = nullptr;
@@ -25,6 +27,11 @@ nvmlReturn_t (*p_fan)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_driver)(char*, unsigned) = nullptr;
 // Takes an nvmlPciInfo_t*; see nvml_pci_address() for how it is passed.
 nvmlReturn_t (*p_pci)(nvmlDevice_t, void*) = nullptr;
+// Power limit: values are milliwatts throughout NVML's interface.
+nvmlReturn_t (*p_pl_get)(nvmlDevice_t, unsigned*) = nullptr;
+nvmlReturn_t (*p_pl_default)(nvmlDevice_t, unsigned*) = nullptr;
+nvmlReturn_t (*p_pl_constraints)(nvmlDevice_t, unsigned*, unsigned*) = nullptr;
+nvmlReturn_t (*p_pl_set)(nvmlDevice_t, unsigned) = nullptr;
 
 template<class F> void bind(F& fn, const char* name) { fn = (F)dlsym(g_lib, name); }
 
@@ -50,6 +57,10 @@ bool nvml_init() {
     bind(p_driver,   "nvmlSystemGetDriverVersion");
     bind(p_pci,      "nvmlDeviceGetPciInfo_v3");
     if (!p_pci) bind(p_pci, "nvmlDeviceGetPciInfo_v2");
+    bind(p_pl_get,         "nvmlDeviceGetPowerManagementLimit");
+    bind(p_pl_default,     "nvmlDeviceGetPowerManagementDefaultLimit");
+    bind(p_pl_constraints, "nvmlDeviceGetPowerManagementLimitConstraints");
+    bind(p_pl_set,         "nvmlDeviceSetPowerManagementLimit");
     if (!p_init || !p_handle) { dlclose(g_lib); g_lib = nullptr; return false; }
 
     if (p_init() != NVML_SUCCESS)              { dlclose(g_lib); g_lib = nullptr; return false; }
@@ -109,6 +120,38 @@ std::string nvml_pci_address() {
         return i == std::string::npos ? std::string("0") : v.substr(i);
     };
     return strip(bus) + ":" + strip(dev);
+}
+
+// mW -> W, rounded to nearest: the driver reports 285000 for a 285 W card but
+// 284999 would truncate to 284 and make a no-op write look like a change.
+static unsigned mw_to_w(unsigned mw) { return (mw + 500u) / 1000u; }
+
+PowerLimit nvml_power_limit() {
+    PowerLimit p;
+    if (!g_ready || !p_pl_get) return p;
+    unsigned v = 0;
+    if (p_pl_get(g_dev, &v) != NVML_SUCCESS) return p;
+    p.current_w = mw_to_w(v);
+    p.valid = true;
+    // The default and the constraints are separately optional: a card can
+    // report its current limit and refuse the rest. Leaving them 0 lets the
+    // caller tell "unknown" from "known and equal to the current value".
+    if (p_pl_default && p_pl_default(g_dev, &v) == NVML_SUCCESS) p.default_w = mw_to_w(v);
+    unsigned lo = 0, hi = 0;
+    if (p_pl_constraints && p_pl_constraints(g_dev, &lo, &hi) == NVML_SUCCESS) {
+        p.min_w = mw_to_w(lo);
+        p.max_w = mw_to_w(hi);
+    }
+    return p;
+}
+
+NvmlWrite nvml_set_power_limit(unsigned watts) {
+    if (!g_ready || !p_pl_set) return NvmlWrite::Unsupported;
+    const nvmlReturn_t rc = p_pl_set(g_dev, watts * 1000u);
+    if (rc == NVML_SUCCESS)                 return NvmlWrite::Ok;
+    if (rc == NVML_ERROR_NO_PERMISSION)     return NvmlWrite::NoPermission;
+    if (rc == NVML_ERROR_NOT_SUPPORTED)     return NvmlWrite::Unsupported;
+    return NvmlWrite::Failed;
 }
 
 }} // namespace mxbm::gpu

@@ -21,8 +21,10 @@ implementation.
 > because it spends watts the other cannot reach. The measured speed/power curve
 > says otherwise: **at 220 W it does 53.8 sol/s drawing 219.6 W, against the
 > reference miner's 53.27 at 238.7 W** — the same throughput for 19 W less, and
-> ~10 % better sol/s/W. Efficiency peaks around 200 W. See
-> [Power and efficiency](docs/performance.md#the-equal-power-comparison).
+> ~10 % better sol/s/W. Efficiency peaks around 200 W. Set it with `--pl 220`
+> (needs root; restored on exit). See
+> [Power and efficiency](docs/performance.md#the-equal-power-comparison) and
+> [usage.md](docs/usage.md#power-limit).
 
 Licensed under the [Apache License 2.0](LICENSE).
 
@@ -99,7 +101,7 @@ files, and API.
 | GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
 | Solver performance | Close the gap to the fastest closed-source miners | ✅ done (CUDA, +6 %) |
 | Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
-| Overclocking | NVML clock/power/fan control (see [overclocking.md](docs/overclocking.md)) | designed |
+| Overclocking | NVML power limit (`--pl`) ✅ done; clock/fan control (see [overclocking.md](docs/overclocking.md)) | in progress |
 | Optimized backends | Tuned CUDA (NVIDIA) ✅ done; HIP (AMD) | in progress |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline (runs on both), then

@@ -294,5 +294,61 @@ int main() {
         check(!parse_args(8,(char**)av,o,e), "--logfile with no value is rejected");
     }
 
+    // -- --pl / --no-oc-reset --
+    // The WATTS are not range-checked here: the legal band is what the driver
+    // reports for the actual card (100-366 W on the reference one), which the
+    // CLI cannot see. Syntax is checked here, the value at apply time.
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1"};
+        Options o; std::string e;
+        check(parse_args(7,(char**)av,o,e), "no --pl parses");
+        check(o.power_limit.empty() && !o.seen.power_limit, "--pl defaults to unset (card untouched)");
+        check(!o.no_oc_reset && !o.seen.no_oc_reset, "--no-oc-reset defaults to off (restore on exit)");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--pl","220"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "--pl parses");
+        check(o.power_limit == "220" && o.seen.power_limit, "--pl is recorded verbatim");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--pl","240,*,260"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "--pl accepts the per-GPU list form");
+        check(o.power_limit == "240,*,260", "the whole list is kept for the apply step");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--pl","abc"};
+        Options o; std::string e;
+        check(!parse_args(9,(char**)av,o,e), "--pl rejects a non-numeric value");
+        check(!e.empty(), "the --pl rejection carries a message");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--pl"};
+        Options o; std::string e;
+        check(!parse_args(8,(char**)av,o,e), "--pl with no value is rejected");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--no-oc-reset"};
+        Options o; std::string e;
+        check(parse_args(8,(char**)av,o,e), "bare --no-oc-reset parses");
+        check(o.no_oc_reset && o.seen.no_oc_reset, "bare --no-oc-reset means on");
+    }
+    {
+        // Optional value, like --log/--timeprint: a bare flag must not swallow
+        // the next flag as its argument.
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
+                            "--no-oc-reset","--pl","220"};
+        Options o; std::string e;
+        check(parse_args(10,(char**)av,o,e), "--no-oc-reset does not swallow the next flag");
+        check(o.no_oc_reset && o.power_limit == "220", "both flags land");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--no-oc-reset","0"};
+        Options o; std::string e;
+        check(parse_args(9,(char**)av,o,e), "--no-oc-reset 0 parses");
+        check(!o.no_oc_reset && o.seen.no_oc_reset, "--no-oc-reset 0 means off, but is seen");
+    }
+
     return summary("cli");
 }

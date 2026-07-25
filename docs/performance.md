@@ -1199,15 +1199,15 @@ ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.
 **Leads.** Both backends are now close to their measured floors, and the CUDA one is past
 the target. What is left is not more solver micro-optimization:
 
-0. **Ship the power cap as a setting.** The full curve is
-   [measured](#the-equal-power-comparison): efficiency peaks at ~200 W, and between
-   ~217 W and ~252 W MXBM beats the reference miner on speed *and* efficiency at once.
-   **220 W is the operating point to recommend** — 53.8 sol/s against its 53.27, for
-   19 W less. MXBM cannot set this today; [overclocking.md](overclocking.md) has the
-   `--pl` design and it is unimplemented, which makes this a small change with the
-   largest measured payoff on the list. Follow-up: **re-measure the reference miner
-   under a cap of its own**, since it has only been compared at its uncapped draw and
-   its own curve is unknown.
+0. ~~**Ship the power cap as a setting.**~~ **Done 2026-07-25** — `--pl W` and
+   `--no-oc-reset`, per-GPU list syntax, clamped to the band the driver reports,
+   restored on exit including on Ctrl+C. See [usage.md](usage.md#power-limit) and
+   [overclocking.md](overclocking.md). **220 W is the operating point to recommend**:
+   53.8 sol/s against the reference miner's 53.27, for 19 W less. Two follow-ups:
+   **re-measure the reference miner under a cap of its own**, since it has only been
+   compared at its uncapped draw and its own curve is unknown; and decide whether to
+   *default* to a cap rather than only offering one, which is a product question about
+   what a miner should do to hardware it was not explicitly told to change.
 0b. **The footprint is still the structural lever.** 13.0 GB of compulsory traffic per
    solve from a 7.46 GiB footprint, against a 3 GB design target. It now buys margin
    rather than closing a deficit, but it is the same work item HW_REQUIREMENTS.md has

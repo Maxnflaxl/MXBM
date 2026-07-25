@@ -197,6 +197,8 @@ int main() {
             "DIGITS = 4\n"
             "SOLVER = cuda\n"
             "WATCHDOG = 1\n"
+            "PL = 220\n"
+            "NO_OC_RESET = 1\n"
             "DEVFEE = 2.5\n");
         Options o; std::string err;
         check(load_flat_config(p, o, err), "flat config with the full option set loads");
@@ -204,12 +206,14 @@ int main() {
         check(o.timeprint && o.digits == 4, "flat TIMEPRINT/DIGITS apply");
         check(o.solver == "cuda" && o.watchdog_requested, "flat SOLVER/WATCHDOG apply");
         check(o.devfee_pct == 2.5 && o.seen.devfee, "flat DEVFEE applies");
+        check(o.power_limit == "220" && o.no_oc_reset, "flat PL/NO_OC_RESET apply");
         std::remove(p.c_str());
     }
     {
         std::string p = write_temp("mxbm_test_config_alloptions.json",
             R"({"RIG1": {"LOG": 1, "LOGFILE": "/tmp/mxbm-json.log", "TIMEPRINT": true,
                          "DIGITS": 3, "SOLVER": "opencl", "WATCHDOG": true, "DEVFEE": 1.5,
+                         "PL": [220, "*", 260], "NO_OC_RESET": true,
                          "POOLS": [{"POOL":"pool.example.com:1130","USER":"addr123"}]}})");
         Options o; std::string err;
         check(load_json_config(p, "RIG1", o, err), "JSON profile with the full option set loads");
@@ -217,6 +221,10 @@ int main() {
         check(o.timeprint && o.digits == 3, "JSON TIMEPRINT/DIGITS apply");
         check(o.solver == "opencl" && o.watchdog_requested, "JSON SOLVER/WATCHDOG apply");
         check(o.devfee_pct == 1.5, "JSON DEVFEE applies");
+        // A per-GPU knob is natural to write as a JSON array; the loader joins
+        // it into the same comma list the CLI accepts, so one apply path serves
+        // both formats.
+        check(o.power_limit == "220,*,260" && o.no_oc_reset, "JSON PL array joins, NO_OC_RESET applies");
         std::remove(p.c_str());
     }
 
