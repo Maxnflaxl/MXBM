@@ -120,6 +120,12 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Every source has now spoken, so the rules that span two options can be
+    // settled -- a log path implying logging, a benchmark algorithm standing in
+    // for --algo. See cli::resolve_implied_options; it must run before the
+    // algo/pool checks below, which one of those rules feeds.
+    cli::resolve_implied_options(opts);
+
     // The CLI no longer requires --pool by itself (a config file may supply
     // POOLS/POOL instead -- see cli::parse_args's doc comment) -- so the
     // "at least one pool" check moved here, after the config-merge above
@@ -144,6 +150,23 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
     ui::console::init(opts.nocolor);
+
+    // Open the transcript BEFORE the banner, so the log starts with the same
+    // first line the screen does rather than joining part-way through. A log
+    // that cannot be opened is reported and mining continues: refusing to mine
+    // because a file could not be written would be a far worse failure than
+    // the missing log.
+    if (opts.log_enabled) {
+        std::string log_path;
+        if (ui::console::open_log(opts.log_path, &log_path)) {
+            ui::console::info("Logging to " + log_path);
+        } else {
+            ui::console::error("Could not open log file" +
+                               (opts.log_path.empty() ? std::string() : " " + opts.log_path) +
+                               " - continuing without a log");
+        }
+    }
+
     ui::console::banner();
 
     // Out-of-scope-for-this-phase flags still get a console acknowledgment
@@ -173,30 +196,18 @@ int main(int argc, char** argv) {
 
     miner::Stats stats;
 
-    if (!benchmark_mode) {
-        ui::console::connecting(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
-    }
-
-    stratum::Client client;
-
-    // connect -> if ok: connected(); if not, note it and let client.run()'s
-    // own reconnect loop keep retrying below. login() runs unconditionally to
-    // store the api_key credential even on initial connection failure, so the
-    // reconnect loop has valid credentials for its re-login attempts.
-    if (!benchmark_mode) {
-        auto connect_t0 = std::chrono::steady_clock::now();
-        bool up = client.connect(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
-        auto connect_t1 = std::chrono::steady_clock::now();
-        stats.record_connect(
-            opts.pools[0].host + ":" + std::to_string(opts.pools[0].port),
-            std::chrono::duration_cast<std::chrono::milliseconds>(connect_t1 - connect_t0).count());
-        if (up) {
-            ui::console::connected(opts.pools[0].tls);
-        } else {
-            ui::console::error("Initial connection failed — will keep retrying");
-        }
-        client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
-    }
+    // Hardware first, pool second -- the reference miner's order, and the more useful
+    // one: a device that failed to initialise is the reason a pool connection
+    // would be pointless, so it belongs above rather than below. The
+    // solver-selection block further down prints the device section; the pool
+    // connection follows it (see "Connecting to pool..." below).
+    ui::console::setup_miner();
+#ifdef MXBM_HAVE_CUDA
+    if (gpu::CudaSolver::available()) ui::console::driver_detected("Cuda", 1);
+#endif
+#ifdef MXBM_HAVE_OPENCL
+    if (gpu::GpuSolver::available()) ui::console::driver_detected("OpenCL", 1);
+#endif
 
     // Solver selection (Phase C Task 4): pick a backend for opts.solver
     // ("gpu" | "ref" | "auto" -- validated by cli::parse_args, so no other
@@ -230,6 +241,11 @@ int main(int argc, char** argv) {
     // "Found a share" line. Defaults to the GPU (the default backend); set to
     // the CPU reference below only when SolverRef is actually chosen.
     std::string worker_label = "GPU 0";
+    // What the device block below reports. Filled by whichever backend claims
+    // the device; left empty when none does, in which case no block is printed
+    // rather than one full of blanks.
+    std::string dev_name, dev_driver;
+    unsigned long long dev_mem = 0;
 
 #ifdef MXBM_HAVE_CUDA
     // CUDA first when both are built: it measures ~1.16x the OpenCL path's rate on the
@@ -238,13 +254,10 @@ int main(int argc, char** argv) {
         && gpu::CudaSolver::available()) {
         try {
             auto cs = std::make_unique<gpu::CudaSolver>();
-            char line[160];
-            std::snprintf(line, sizeof line, "CUDA solver ready: %s (%.1f GiB, %u SMs)",
-                          cs->device().name.c_str(),
-                          cs->device().global_mem / 1073741824.0,
-                          cs->device().compute_units);
-            ui::console::info(line);
             worker_label = cs->device().name;   // the table showed "GPU 0" for both backends
+            dev_name = cs->device().name;
+            dev_mem = cs->device().global_mem;
+            dev_driver = "Cuda";
             solver = std::move(cs);
         } catch (const std::exception& e) {
             ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
@@ -257,13 +270,10 @@ int main(int argc, char** argv) {
         && gpu::GpuSolver::available()) {
         try {
             auto gs = std::make_unique<gpu::GpuSolver>();
-            char line[160];
-            std::snprintf(line, sizeof line, "OpenCL solver ready: %s (%.1f GiB, %u compute units)",
-                          gs->device().name.c_str(),
-                          gs->device().global_mem / 1073741824.0,
-                          gs->device().compute_units);
-            ui::console::info(line);
             worker_label = gs->device().name;
+            dev_name = gs->device().name;
+            dev_mem = gs->device().global_mem;
+            dev_driver = "OpenCL";
             solver = std::move(gs);
         } catch (const std::exception& e) {
             ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
@@ -279,10 +289,27 @@ int main(int argc, char** argv) {
 #endif
     stats.set_device_label(worker_label);
 
-    // Device telemetry, if the platform can supply it. NVML is dlopen'd, ships with the
-    // NVIDIA driver rather than the toolkit, and is independent of which solver backend
-    // was chosen -- so an OpenCL run on an NVIDIA card gets it too.
-    if (solver && gpu::nvml_init()) {
+    // NVML before the device block, not after: it is what supplies the PCI
+    // address and the driver version the block and the stats header report.
+    // dlopen'd, ships with the NVIDIA driver rather than the toolkit, and is
+    // independent of which backend was chosen -- so an OpenCL run on an
+    // NVIDIA card gets it too.
+    const bool have_nvml = solver && gpu::nvml_init();
+    if (have_nvml) stats.set_driver_version(gpu::nvml_driver_version());
+
+    if (!dev_name.empty()) {
+        // Vendor is only claimed when NVML answered, which is itself the proof
+        // this is an NVIDIA card; an OpenCL device on another vendor's driver
+        // gets no Vendor line rather than a guessed one.
+        ui::console::device_block(
+            0, dev_name,
+            have_nvml ? gpu::nvml_pci_address() : std::string(),
+            have_nvml ? "NVIDIA Corporation" : std::string(),
+            dev_driver, dev_mem,
+            "Selected Algorithm: BeamHash III (" + dev_driver + ")");
+    }
+
+    if (have_nvml) {
         stats.set_telemetry_source([](miner::Stats::Snapshot& s) {
             const gpu::Telemetry t = gpu::nvml_sample();
             s.has_power = t.have_power;         s.power_w       = t.power_w;
@@ -310,6 +337,34 @@ int main(int argc, char** argv) {
         } else {
             ui::console::info("No solver backend available (no CUDA or OpenCL device, and no Beam oracle build) - monitoring jobs only (no solving)");
         }
+    }
+
+    stratum::Client client;
+
+    // The pool, AFTER the hardware section above -- see setup_miner()'s note
+    // on the ordering. connect -> if ok, report the host with the address it
+    // actually resolved to; if not, note it and let client.run()'s own
+    // reconnect loop keep retrying below. login() runs unconditionally to
+    // store the api_key credential even on initial connection failure, so the
+    // reconnect loop has valid credentials for its re-login attempts.
+    if (!benchmark_mode) {
+        ui::console::connecting_to_pool();
+        auto connect_t0 = std::chrono::steady_clock::now();
+        bool up = client.connect(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
+        auto connect_t1 = std::chrono::steady_clock::now();
+        stats.record_connect(
+            opts.pools[0].host + ":" + std::to_string(opts.pools[0].port),
+            std::chrono::duration_cast<std::chrono::milliseconds>(connect_t1 - connect_t0).count());
+        if (up) {
+            ui::console::connected_to(opts.pools[0].host, client.peer_ip(),
+                                      opts.pools[0].port, opts.pools[0].tls);
+            // Only meaningful for a TLS connection, and only after connect()
+            // returned true -- which is exactly when the handshake completed.
+            if (opts.pools[0].tls) ui::console::tls_handshake_ok();
+        } else {
+            ui::console::error("Initial connection failed — will keep retrying");
+        }
+        client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
     }
 
     // --benchmark: solve synthetic jobs and report, then exit. Placed AFTER
@@ -349,7 +404,7 @@ int main(int argc, char** argv) {
         });
 
         ui::Ticker ticker;
-        ticker.start(stats, opts.shortstats, opts.longstats);
+        ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint, opts.apiport);
         miner::BenchmarkResult r;
         try {
             r = miner::run_benchmark(*solver, stats, opts.benchmark_seconds, stop);
@@ -551,9 +606,12 @@ int main(int argc, char** argv) {
         }
     }
 
-    ui::Ticker ticker;
-    ticker.start(stats, opts.shortstats, opts.longstats);
-
+    // The API starts BEFORE the ticker so the stats block can report the port
+    // it actually bound rather than the one that was asked for: a port already
+    // in use leaves the server down, and a header line claiming "API port 8080"
+    // over a dead listener sends you looking for a network fault that is not
+    // there. bound_port() is 0 when the server never came up, which is exactly
+    // what the header treats as "no API".
     api::HttpSummary http_api;
     if (opts.apiport) {
         if (!http_api.start(static_cast<uint16_t>(opts.apiport), stats, mxbm::version())) {
@@ -562,6 +620,10 @@ int main(int argc, char** argv) {
         // Either way, mining continues below -- the API is a convenience,
         // never a mining precondition.
     }
+
+    ui::Ticker ticker;
+    ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint,
+                 http_api.bound_port());
 
     if (engine) engine->start();
     // Started after the engine so the fee's first job never arrives before
