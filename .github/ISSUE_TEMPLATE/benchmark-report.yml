@@ -1,0 +1,71 @@
+name: Benchmark report
+description: Share how MXBM performs on your GPU — especially if it is slow, or refuses to start
+title: "[benchmark] "
+labels: ["benchmark"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks — this is genuinely useful. MXBM is developed against a single
+        RTX 4070 Ti SUPER, so every result from other hardware tells us something we
+        cannot measure ourselves.
+
+        The quickest way to fill this in:
+
+        ```sh
+        benchmarks/collect_report.sh
+        ```
+
+        It runs a two-minute benchmark, samples telemetry, and prints a paste-ready
+        block. Nothing is uploaded. If you would rather not run it, fill in what you
+        have — a partial report still helps.
+
+        **A report where MXBM is slow, or refuses to start, is the most valuable kind.**
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: Paste the output of `benchmarks/collect_report.sh`, or your own figures.
+      placeholder: |
+        ### Hardware
+        | GPU | ... |
+        | VRAM | ... |
+        | Driver | ... |
+
+        ### Result
+        | Throughput | ... sol/s |
+        | Board power | ... W |
+      render: markdown
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: "e.g. RTX 3080 10 GB, RX 7900 XTX, A4000"
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: ["CUDA", "OpenCL", "it refused to start", "not sure"]
+    validations:
+      required: true
+  - type: textarea
+    id: comparison
+    attributes:
+      label: Another miner on the same card (optional)
+      description: >
+        If you have a figure for another BeamHash III miner on this GPU, include it and
+        say which miner and version. Please note whether the two runs were back to back
+        and whether the GPU was otherwise idle — a run taken while something else used
+        the card measures contention, not the miner.
+      placeholder: "lolMiner 1.98a: 53.3 sol/s at 239 W, run immediately after, GPU idle"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything unusual
+      description: >
+        Overclock or undervolt, a power limit, laptop/eGPU/risers, other GPU load,
+        an unusual driver. Leave blank if it was a clean stock run.

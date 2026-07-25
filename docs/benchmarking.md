@@ -1,5 +1,10 @@
 # Benchmarking and comparing miners
 
+> Looking for the **numbers**? They are in
+> **[benchmarks.md](benchmarks.md)** — MXBM against lolMiner on the reference card,
+> the power curve, and how to submit results from your own GPU. This page is the
+> *method* behind them.
+
 Reported `sol/s` is **implementation-defined**. Two miners doing identical work can
 display figures 17 % apart, legitimately, because they count different things. This page
 documents how MXBM measures itself, why the obvious comparison is unreliable, and the

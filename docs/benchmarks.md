@@ -1,0 +1,210 @@
+# Benchmark results
+
+Measured numbers for MXBM, and for lolMiner on the same card, so the comparison is
+like-for-like. Everything here is reproducible with the scripts in `benchmarks/` — the
+commands are given under each table.
+
+**MXBM has been measured on exactly one GPU.** That is the honest state of things, and it
+is the reason for [the second half of this page](#send-us-your-numbers): a solver tuned
+against one card is tuned against one card. If you run MXBM, a two-minute benchmark from
+you is worth more to the project than any amount of speculation from us.
+
+For *why* comparing miners is harder than reading two numbers off two screens, see
+[benchmarking.md](benchmarking.md). This page is the results; that page is the method.
+
+---
+
+## Reference card
+
+| | |
+|---|---|
+| GPU | NVIDIA GeForce RTX 4070 Ti SUPER (Ada, sm_89, 66 SMs) |
+| VRAM | 16 GiB GDDR6X, 10251 MHz, 256-bit (~672 GB/s peak, ~510 GB/s achievable) |
+| Board power limit | 285 W default, 100–366 W permitted by the driver |
+| Driver | 610.43.03 · CUDA 13.3 |
+| OS | Linux 7.1.4 (Arch) |
+
+All figures below are on this card at **stock clocks**, no overclock or undervolt, unless
+the row says otherwise.
+
+---
+
+## MXBM vs lolMiner 1.98a
+
+Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock settings.
+
+| | MXBM (CUDA) | lolMiner 1.98a | |
+|---|---|---|---|
+| Throughput | **56.1 sol/s** | 53.27 sol/s | **+5.5 %** |
+| Board power | 284.0 W | 238.7 W | +19 % |
+| Efficiency | 0.198 sol/s/W | **0.223 sol/s/W** | −11 % |
+| Core clock | 2700 MHz | 2745 MHz | |
+| Memory clock | 10251 MHz | 10251 MHz | |
+| Temperature | 65 °C | 60 °C | |
+| VRAM for a full search | 7.46 GiB | ~4 GiB[^4g] | |
+
+**Read that efficiency row carefully — it compares two different operating points.** MXBM
+runs pinned at the card's 285 W board limit in every kernel (verified: the driver reports
+`sw_power_cap` active continuously, at 63 °C, so it is a power ceiling and not a thermal
+one). lolMiner draws 239 W and is *not* capped — it leaves 46 W unused. Comparing sol/s/W
+at stock therefore rewards whichever miner fails to fill the card.
+
+At **equal power** the ranking reverses:
+
+| | MXBM at `--pl 220` | lolMiner (uncapped) | |
+|---|---|---|---|
+| Throughput | **53.8 sol/s** | 53.27 sol/s | **+1.0 %** |
+| Board power | **219.6 W** | 238.7 W | **−8 %** |
+| Efficiency | **0.245 sol/s/W** | 0.223 sol/s/W | **+9.8 %** |
+
+Same throughput, 19 W less. Across the curve MXBM is ahead of lolMiner on speed *and*
+efficiency simultaneously anywhere between roughly **217 W and 252 W**.
+
+**What this does not show.** lolMiner was measured only at its own uncapped draw, so this
+is MXBM's *curve* against lolMiner's single *point*. Capping lolMiner would very likely
+improve its efficiency too, and nobody has measured its curve. The claim is bounded to
+"against lolMiner as it ships", which is how people run it — not "MXBM's curve dominates".
+The two runs were also not simultaneous, and lolMiner's sol/s is its own counter whose
+definition relative to ours is [an open question](benchmarking.md#1-the-problem-with-comparing-reported-sols).
+
+[^4g]: lolMiner selects "BeamHash III **4G** (CUDA)" on this card. MXBM needing 7.46 GiB
+is a known gap — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target).
+
+---
+
+## MXBM power curve
+
+The board power limit is the most valuable setting on this card, because MXBM is pinned
+against it. Measured with `benchmarks/power_sweep.sh`, 90 s per point:
+
+| `--pl` | sol/s | ms/solve | measured | core clock | sol/s/W | J/solution |
+|---|---|---|---|---|---|---|
+| 180 W | 45.2 | 44.6 | 180.2 W | 1905 MHz | 0.2508 | 3.99 |
+| 200 W | 50.6 | 39.6 | 199.8 W | 2220 MHz | **0.2533** | **3.95** |
+| **220 W** | **53.8** | 37.2 | 219.6 W | 2460 MHz | 0.2450 | 4.08 |
+| 240 W | 55.2 | 36.3 | 239.5 W | 2550 MHz | 0.2305 | 4.34 |
+| 255 W | 56.3 | 35.6 | 254.4 W | 2625 MHz | 0.2213 | 4.52 |
+| 270 W | 57.1 | 35.1 | 269.2 W | 2670 MHz | 0.2121 | 4.71 |
+| 285 W *(stock)* | **57.5** | **34.8** | 284.1 W | 2700 MHz | 0.2024 | 4.94 |
+
+Two things worth knowing before you cap your own card:
+
+- **Efficiency peaks around 200 W and gets *worse* below it.** At 180 W the core clock has
+  fallen to 1905 MHz and the parts of the board that do not scale with it — memory,
+  uncore, leakage — are being paid for out of less work. Lower is not always better.
+- **The last watts are the worst value.** Going 240 → 285 W buys 2.3 sol/s for 45 W; the
+  first 20 W above 180 buys 5.4. Where to sit is an economic choice about your power
+  price, not a technical one.
+
+```sh
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
+```
+
+`--pl` needs root. Without it MXBM says so by name and mines on at the card's current
+limit. The previous limit is restored on exit, including on Ctrl+C. See
+[usage.md](usage.md#power-limit).
+
+---
+
+## Where the time and energy go
+
+Per solve, from `benchmarks/stage_power.sh` (which replays one stage many times inside a
+real solve and solves for its own time and power) and from Nsight Compute:
+
+| stage | ms | % of solve | power | DRAM traffic | bound by |
+|---|---|---|---|---|---|
+| `entry_scatter` | 2.68 | 7.7 % | 284.0 W | 0.26 GB | compute (BLAKE2b) |
+| round 1 | 5.79 | 16.5 % | 284.5 W | 1.07 GB | latency |
+| round 2 | 10.68 | 30.5 % | 283.6 W | 3.35 GB | latency |
+| round 3 | 9.54 | 27.2 % | **270.9 W** | 4.83 GB | **DRAM** |
+| round 4 | 5.65 | 16.1 % | 282.9 W | 2.95 GB | **DRAM** |
+| terminal | 1.05 | 3.0 % | 284.1 W | 0.54 GB | DRAM |
+| **total** | **35.0** | | 284 W | **13.0 GB** | |
+
+Every stage draws the board limit, which is why there is no single kernel to "fix" for
+power. Total DRAM traffic is within **1 %** of the compulsory minimum for the record
+widths — there is no waste to reclaim, only records to narrow, which is the same problem
+as the 7.46 GiB footprint. Full analysis in
+[performance.md](performance.md#power-and-efficiency).
+
+---
+
+## Reproducing any of this
+
+Build first — see [building.md](building.md).
+
+| What | Command | Needs root |
+|---|---|---|
+| Throughput | `mxbm --benchmark BEAM-III --benchmark-seconds 120` | no |
+| Throughput + power + J/sol | `benchmarks/power_bench.sh 120 myrun -- --solver cuda` | no |
+| Power/speed curve | `benchmarks/power_sweep.sh` | yes (`nvidia-smi -pl`) |
+| Per-stage time and power | `benchmarks/stage_power.sh` | no |
+| Kernel counters (DRAM bytes, stalls) | `sudo ./cuda/profile.sh` | yes (Nsight) |
+| Pipeline A/B for a code change | `./cuda/pipeline 700` | no |
+
+Run on an **idle GPU**. A benchmark taken while something else is using the card measures
+contention, not the miner — a lolMiner run taken while MXBM was mining read 25–27 sol/s
+instead of 53.
+
+Quote a **median over at least a couple of thousand solves**, not a peak. Individual 15 s
+windows on this card reach 61.5 sol/s, and that figure is noise: for the observed spread,
+the expected maximum of 304 samples is about 67. The median moves by less than 1 %
+between runs; peaks move by 10 %.
+
+---
+
+## Send us your numbers
+
+**This is the part we actually need.** MXBM is developed against one RTX 4070 Ti SUPER.
+Everything above — the geometry choices, the power curve, the record layout, the claim
+that rounds 3 and 4 are bandwidth-bound — is measured on Ada, at one memory bandwidth,
+with one shared-memory budget. Some of it will not transfer. We would rather find that out
+from your data than assume.
+
+Particularly wanted:
+
+- **Anything that is not Ada** — Ampere (30-series, A-series), Turing, Blackwell.
+- **Smaller cards**: 8–12 GB. MXBM refuses to start below its threshold rather than mine
+  nothing, so a refusal is itself a useful report — tell us what it said.
+- **AMD**, via the OpenCL backend. It is completely untested there.
+- **Anything where MXBM is slower than another miner on your hardware.** That is the most
+  useful report of all, and it will not offend anyone.
+
+### One command
+
+```sh
+benchmarks/collect_report.sh
+```
+
+It runs a two-minute benchmark, samples telemetry while it runs, and prints a
+paste-ready markdown block — hardware, driver, sol/s, power, efficiency. Nothing is
+uploaded; it only writes to your terminal. Add the power curve with:
+
+```sh
+SWEEP=1 benchmarks/collect_report.sh      # needs sudo for nvidia-smi -pl
+```
+
+Then open an issue with the **Benchmark report** template and paste it in.
+
+### If you would rather not run a script
+
+Paste whatever you have. The minimum that makes a report usable:
+
+- GPU model, VRAM, driver version, OS
+- `mxbm --benchmark BEAM-III --benchmark-seconds 120` output in full
+- whether anything else was using the GPU
+- any overclock, undervolt or power limit applied
+
+### What happens to it
+
+Results get added to the table below with attribution, and hardware that behaves
+differently from the reference card becomes a work item. If MXBM turns out to be slow or
+broken on your GPU, that is a bug report we want, not a disappointment to manage.
+
+### Community results
+
+*Empty so far — yours would be the first.*
+
+| GPU | VRAM | Driver | Backend | sol/s | W | sol/s/W | Reported by |
+|---|---|---|---|---|---|---|---|
+| RTX 4070 Ti SUPER | 16 GiB | 610.43.03 | CUDA | 57.5 | 284 | 0.202 | reference card |

@@ -17,10 +17,10 @@ implementation.
 > miners: **[docs/performance.md](docs/performance.md)**.
 >
 > **Cap the board power.** MXBM runs pinned at the card's power limit in every
-> kernel, so at stock it looks less efficient than the reference miner purely
+> kernel, so at stock it looks less efficient than lolMiner purely
 > because it spends watts the other cannot reach. The measured speed/power curve
 > says otherwise: **at 220 W it does 53.8 sol/s drawing 219.6 W, against the
-> reference miner's 53.27 at 238.7 W** — the same throughput for 19 W less, and
+> lolMiner's 53.27 at 238.7 W** — the same throughput for 19 W less, and
 > ~10 % better sol/s/W. Efficiency peaks around 200 W. Set it with `--pl 220`
 > (needs root; restored on exit). See
 > [Power and efficiency](docs/performance.md#the-equal-power-comparison) and
@@ -134,9 +134,17 @@ along with the measured hardware limits that bound further work. Hardware
 requirements, including the per-backend VRAM thresholds, are in
 **[HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)**.
 
-`benchmarks/` holds the energy harnesses: `power_bench.sh` (sol/s and J/sol),
-`stage_power.sh` (per-kernel time and power attribution) and `power_sweep.sh`
-(the speed/power curve across board power limits; needs root).
+**[docs/benchmarks.md](docs/benchmarks.md)** publishes the measured results —
+MXBM against lolMiner 1.98a on the same card, the power/efficiency curve, and
+where each millisecond goes — plus how to reproduce any of it. `benchmarks/`
+holds the harnesses: `power_bench.sh` (sol/s and J/sol), `stage_power.sh`
+(per-kernel time and power attribution), `power_sweep.sh` (the speed/power
+curve; needs root) and `collect_report.sh` (a paste-ready report).
+
+**MXBM has only ever been measured on one GPU.** If you run it on anything else,
+`benchmarks/collect_report.sh` produces a report in one command and there is an
+issue template waiting for it — results from hardware we do not have are the
+single most useful contribution to the project right now.
 
 Comparing miners is harder than it looks: reported `sol/s` is implementation-defined,
 and MXBM measures a 17 % spread between "solutions found" and "solutions that verify"

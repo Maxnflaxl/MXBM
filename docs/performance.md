@@ -156,11 +156,14 @@ yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
 
 ## Power and efficiency
 
-Every figure above measures **speed**. A run against the reference miner on the
+*(User-facing summary of these results, plus how to reproduce them on your own
+card: [benchmarks.md](benchmarks.md).)*
+
+Every figure above measures **speed**. A run against lolMiner on the
 same card measured **power** for the first time, and it does not point the same
 way:
 
-| | MXBM | reference miner | ratio |
+| | MXBM | lolMiner 1.98a | ratio |
 |---|---|---|---|
 | speed (15 s median) | 56.20 sol/s | 53.27 sol/s | **1.055×** |
 | power (median) | 284.0 W | 238.7 W | **1.190×** |
@@ -182,7 +185,7 @@ now been measured; the rest of this section is what they said. Reproduce with
 `clocks_throttle_reasons.sw_power_cap` reads **Active** continuously under MXBM,
 while `hw_slowdown` and `sw_thermal_slowdown` never fire and the GPU sits at
 62–65 °C — far from its throttle point. The 285 W is a **board limit being hit**,
-not heat, and the 5 °C gap to the reference miner is the *consequence* of drawing
+not heat, and the 5 °C gap to lolMiner is the *consequence* of drawing
 45 W more, not an independent symptom.
 
 That is not a property of one hot kernel. `benchmarks/stage_power.sh` replays a
@@ -219,11 +222,11 @@ Two consequences, and they matter more than the table:
    sol/s ÷ 285. Every speed optimization in this document is an efficiency
    optimization of the same size, and no amount of watt-shaving *inside* the
    workload is available independently of it — there is no slack kernel to
-   quieten. Matching the reference miner's 0.223 sol/s/W while still drawing
+   quieten. Matching lolMiner's 0.223 sol/s/W while still drawing
    285 W would need **63.5 sol/s**. Moving the cap itself is the other lever, and
    it turns out to be the cheap one.
 2. **The published comparison is between two different operating points.** The
-   reference miner draws 238.7 W with σ 4.05: it is *not* at the cap, and leaves
+   lolMiner draws 238.7 W with σ 4.05: it is *not* at the cap, and leaves
    46 W unused. Comparing sol/s/W at stock rewards whichever miner fails to fill
    the machine — see [the equal-power comparison](#the-equal-power-comparison),
    which is the one that decides a power-limited rig.
@@ -247,18 +250,18 @@ differs, and it is applied identically at every row:
 | 270 W | 57.1 | 35.1 | 269.2 W | 2670 MHz | 0.2121 | 4.71 | +7.2 % | −5.0 % |
 | 285 W *(stock)* | **57.5** | **34.8** | 284.1 W | 2700 MHz | 0.2024 | 4.94 | +7.9 % | −9.3 % |
 
-Δ columns are against the reference miner at *its* operating point — 53.27 sol/s
+Δ columns are against lolMiner at *its* operating point — 53.27 sol/s
 at 238.7 W = 0.2232 sol/s/W, uncapped, which is how people actually run it.
 Interpolating the crossings: MXBM overtakes it on **speed at ~217 W** and falls
 behind it on **efficiency at ~252 W**, so
 
-> **between roughly 217 W and 252 W MXBM is ahead of the reference miner on
+> **between roughly 217 W and 252 W MXBM is ahead of lolMiner on
 > speed and efficiency at the same time.** At 220 W: 53.8 sol/s against 53.27,
 > drawing 219.6 W against 238.7 — the same throughput for **19 W less**.
 
 The 11 % deficit reported at stock was an operating-point artefact and nothing
 else. MXBM spends every watt the board allows and converts it into throughput;
-the reference miner cannot reach the limit in the first place. The asymmetry is
+lolMiner cannot reach the limit in the first place. The asymmetry is
 one-directional and worth stating plainly — *we* can choose to draw less, *it*
 cannot choose to draw more.
 
@@ -283,10 +286,10 @@ the right cap is an economic choice, not a technical one: **220 W for a rig that
 pays for electricity, 285 W only where power is free.** Whichever is chosen, the
 knob does not exist yet — see [lead 0](#current-focus-and-open-leads).
 
-**What this does not show.** The reference miner was measured only at its own
+**What this does not show.** lolMiner was measured only at its own
 uncapped draw, so this compares MXBM's *curve* against one *point*. Capping it
 would very likely improve its efficiency too, and its curve is unmeasured — the
-honest claim is bounded to "against the reference miner as it ships," not
+honest claim is bounded to "against lolMiner as it ships," not
 "MXBM's curve dominates." Two further caveats inherited from
 `docs-internal/MINER_COMP_RESULTS.md`: the two miners' runs were not
 simultaneous, and its sol/s is its own counter, whose definition relative to ours
@@ -333,7 +336,7 @@ streaming / in-place layer reuse.
 ### What the footprint still costs
 
 The sweep settles the *ranking*, not the *margin*. At its own operating point the
-reference miner spends **4.48 J per solution**; MXBM spends **4.94** at stock and
+lolMiner spends **4.48 J per solution**; MXBM spends **4.94** at stock and
 only undercuts it by capping — 4.08 at 220 W, 3.95 at the ~200 W peak. Winning by
 11 % on energy while giving up 12 % of throughput to get there is a real lead but
 a bought one, and where the rest of it went is not mysterious: 13.0 GB of
@@ -344,7 +347,7 @@ was measured — the difference now is that it is a lead to extend rather than a
 deficit to erase.
 
 Full data, method and caveats for the head-to-head: `docs-internal/MINER_COMP_RESULTS.md`.
-The two runs were not simultaneous, so the reference miner's power figure still
+The two runs were not simultaneous, so lolMiner's power figure still
 wants a back-to-back rerun before it is quoted outside that document.
 
 ---
@@ -1206,8 +1209,8 @@ the target. What is left is not more solver micro-optimization:
    `--no-oc-reset`, per-GPU list syntax, clamped to the band the driver reports,
    restored on exit including on Ctrl+C. See [usage.md](usage.md#power-limit) and
    [overclocking.md](overclocking.md). **220 W is the operating point to recommend**:
-   53.8 sol/s against the reference miner's 53.27, for 19 W less. Two follow-ups:
-   **re-measure the reference miner under a cap of its own**, since it has only been
+   53.8 sol/s against lolMiner's 53.27, for 19 W less. Two follow-ups:
+   **re-measure lolMiner under a cap of its own**, since it has only been
    compared at its uncapped draw and its own curve is unknown; and whether MXBM should
    *default* to a cap rather than only offering one, which is a release decision rather
    than a technical one and is parked with the other pre-release questions. Note the

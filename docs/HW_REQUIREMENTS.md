@@ -108,7 +108,7 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 The card is power-limited, not thermally limited, in every kernel, so the board
 power limit is the most valuable knob on it: **at 220 W the solver still does
-53.8 sol/s while drawing 19 W less than the reference miner does for 53.27**.
+53.8 sol/s while drawing 19 W less than lolMiner does for 53.27**.
 The full curve, its interior efficiency optimum and the caveats are in
 [Power and efficiency](performance.md#the-equal-power-comparison).
 
