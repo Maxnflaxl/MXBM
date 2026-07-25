@@ -266,7 +266,10 @@ cannot choose to draw more.
 again* at 180 W is the informative part: below ~200 W the core clock has dropped
 far enough (2220 → 1905 MHz) that the parts of the board which do not scale with
 it — memory, uncore, leakage — are being paid for out of less work. There is a
-floor, and the sweep found it rather than assuming monotonicity.
+floor, and the sweep found it rather than assuming monotonicity. Pushed to the
+driver's own 100 W minimum the collapse is unmistakable: 16.3 sol/s, 0.163
+sol/s/W, well under half the peak — too small a sample (48 solves) to be a curve
+point, but the direction is not in question.
 
 **Marginal return collapses well before stock.** Extra sol/s bought per extra
 watt, walking up the curve:
@@ -1205,9 +1208,12 @@ the target. What is left is not more solver micro-optimization:
    [overclocking.md](overclocking.md). **220 W is the operating point to recommend**:
    53.8 sol/s against the reference miner's 53.27, for 19 W less. Two follow-ups:
    **re-measure the reference miner under a cap of its own**, since it has only been
-   compared at its uncapped draw and its own curve is unknown; and decide whether to
-   *default* to a cap rather than only offering one, which is a product question about
-   what a miner should do to hardware it was not explicitly told to change.
+   compared at its uncapped draw and its own curve is unknown; and whether MXBM should
+   *default* to a cap rather than only offering one, which is a release decision rather
+   than a technical one and is parked with the other pre-release questions. Note the
+   general case is not settled by one card: a default derived from an RTX 4070 Ti SUPER
+   has no standing on hardware whose curve nobody has swept, so `--pl auto` would need
+   MXBM to find the knee itself.
 0b. **The footprint is still the structural lever.** 13.0 GB of compulsory traffic per
    solve from a 7.46 GiB footprint, against a 3 GB design target. It now buys margin
    rather than closing a deficit, but it is the same work item HW_REQUIREMENTS.md has

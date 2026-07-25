@@ -52,6 +52,27 @@ Observed under MXBM load (from the stats table): core 2670 MHz, memory 10251 MHz
 had (a true no-op), returns `NVML_ERROR_NO_PERMISSION` (rc=4). Reads are unprivileged;
 writes are not.
 
+## Verified: `--pl` end to end, under sudo
+
+Run 2026-07-25 on the reference card. Each case is one the implementation could plausibly
+get wrong, and the card was read back with `nvidia-smi` afterwards:
+
+| case | console | result |
+|---|---|---|
+| `--pl 220` | `Power limit: 220 W (was 285 W, device allows 100-366 W)` | 53.8 sol/s at 220 W — matches the sweep's 53.8 exactly |
+| `--pl 50` | `50 W requested, applied 100 W (device allows 100-366 W)` | clamped to the driver's floor and said so; 16.3 sol/s |
+| `--pl 220`, then Ctrl+C | — | card read back at **285 W**: restore fires on signal |
+| unprivileged `--pl 240` | `not applied: insufficient permission - re-run under sudo` | mined on at 285 W; card untouched |
+
+The live statistics block reports the applied limit and its efficiency directly
+(`Power 220`, `Eff. 0.243 sol/s/W`), so the setting is visible while mining rather than
+only at startup.
+
+At the clamped floor of 100 W throughput collapses to 16.3 sol/s — 0.163 sol/s/W, far
+below the 0.253 peak at 200 W. That is only a 48-solve sample and not quotable as a curve
+point, but it is the same story the sweep tells: there is a floor, and undervolting past
+it costs efficiency rather than buying it.
+
 ## Verified: what lolMiner actually does
 
 Checked against the installed lolMiner 1.98a binary, not from documentation.
