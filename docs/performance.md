@@ -45,6 +45,24 @@ sharply — the pipeline benched at 245 ms (≈ 7.9 sol/s equivalent) while the 
 actually delivered ~1.8 sol/s, i.e. most of a solve was spent *outside* the measured
 pipeline. That overhead is gone; bench and end-to-end now track each other.
 
+![Throughput and solve time across every optimization](progress.svg)
+
+The chart is generated from the table below by `python3 docs/tools/plot_progress.py`
+(no dependencies), so the two cannot drift — add a row, re-run it. Two things it is
+deliberately explicit about:
+
+- **The x axis is optimization step, not calendar time.** Only three dates exist and 16
+  of the rows fall on one of them, so a literal date axis would collapse into three
+  vertical stacks. Dates are drawn as bands instead.
+- **The dashed divider is a change of measurement, not just of backend.** Everything left
+  of it is a `bench_rounds` pipeline median; everything right of it is an end-to-end
+  `solve()` median including recovery and CPU verification. The right-hand points are the
+  stricter measurement, so the line is continuous but the two halves are not
+  interchangeable.
+
+Both axes are log-scaled — the range is ~30× on each — so equal vertical distance means
+equal *ratio*, matching the Δ % column.
+
 | Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
 |---|---|---|---|---|---|---|---|---|
 | 2026-07-23 | **First working GPU solver** (first share found) | — | ~1050 | **1.8** | — | — | — | — |
