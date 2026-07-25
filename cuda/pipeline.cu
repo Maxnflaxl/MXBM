@@ -60,7 +60,9 @@ struct CudaSolver {
         const uint32_t mean = capacity / nb;
         cap    = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
         nslots = (size_t)nb * cap;
-        const uint32_t setStride[2] = { 10u, MXBM_R2_FULL ? 10u : 8u };
+        // set 0: 8-u64 records + the 9th-word plane behind them (see kSetStride in
+        // src/gpu/cuda_solver.cu). MXBM_R2_FULL keeps the old padded 10-u64 record.
+        const uint32_t setStride[2] = { MXBM_R2_FULL ? 10u : 9u, MXBM_R2_FULL ? 10u : 8u };
         elem[0] = dalloc<uint64_t>(nslots*setStride[0]);
         elem[1] = dalloc<uint64_t>(nslots*setStride[1]);
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
@@ -115,6 +117,19 @@ struct CudaSolver {
         cudaEventRecord(entryDone[slot], st);
     }
 
+    // MXBM_ROUND_REPS="R:N" replays round R (1..4, or 5 = terminal) N times inside the
+    // solve that produced its input, so an external NVML sampler can attribute BOARD
+    // POWER to one stage. Replaying in place is what makes it honest: the input bytes,
+    // the bucket occupancies and the output addresses are the ones the round really
+    // sees, so the memory traffic per rep is identical to the real thing. Each rep
+    // re-zeros the output counters first, exactly as MXBM_ENTRY_REPS does, so every rep
+    // is a complete correct pass and the last leaves valid state for the next round.
+    static int rep_round() { static const int v = []{ const char* e=getenv("MXBM_ROUND_REPS");
+                                 return e ? atoi(e) : 0; }(); return v; }
+    static int rep_count() { static const int v = []{ const char* e=getenv("MXBM_ROUND_REPS");
+                                 const char* c = e ? strchr(e,':') : nullptr;
+                                 int n = c ? atoi(c+1) : 1; return n<1?1:n; }(); return v; }
+
     // Rounds 1..terminal + recover + CPU verify, consuming entry's output from `slot`.
     // `after_r1` is invoked once r1 has been ISSUED (not completed), which is the point at
     // which the next nonce's entry may be queued on the other stream.
@@ -133,14 +148,16 @@ struct CudaSolver {
         // round ping-pongs exactly as before, so the only change is r1's input pointer.
         #define ROUND(R, INW,OUTW,LEAFW,MODE, LOUT,PADN,SIN,SOUT,SBUILD, INSTR,OUTSTR)   \
             { const int o = inSet ^ 1;                                                   \
-              cudaMemsetAsync(counts[o], 0, (size_t)nb*4, st);                           \
-              cudaMemsetAsync(gictr, 0, 4, st);                                          \
               const uint32_t* inC = ((R)==1) ? entryCounts[slot] : counts[inSet];        \
               const uint64_t* inE = ((R)==1) ? entryOut[slot]    : elem[inSet];          \
-              fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>    \
-                <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity, \
-                    (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],                  \
-                    left, right, gictr, drops, dpp);                                     \
+              const int reps = (rep_round() == (R)) ? rep_count() : 1;                   \
+              for (int rp = 0; rp < reps; ++rp) {                                         \
+                cudaMemsetAsync(counts[o], 0, (size_t)nb*4, st);                         \
+                cudaMemsetAsync(gictr, 0, 4, st);                                        \
+                fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>  \
+                  <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
+                      (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],                \
+                      left, right, gictr, drops, dpp); }                                 \
               if ((R)==1) { cudaEventRecord(r1Done[slot], st); r1Ever[slot] = true;       \
                             after_r1(); }                                                \
               inSet = o; }
@@ -149,14 +166,17 @@ struct CudaSolver {
         ROUND(2, 7,7,2,LM_RAW,  400u,4u,2u,4u,4u, 10u,10u)
 #else
         ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
-        ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,10u)
+        ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,8u)
 #endif
-        ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u)
+        ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, MXBM_R2_FULL ? 10u : 8u, 8u)
         ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
         #undef ROUND
-        terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
-                                          elem[inSet], left, right, survSlots, survCount,
-                                          survCap, drops);
+        for (int rp = 0, treps = (rep_round() == 5) ? rep_count() : 1; rp < treps; ++rp) {
+            cudaMemsetAsync(survCount, 0, 4, st);
+            terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
+                                              elem[inSet], left, right, survSlots, survCount,
+                                              survCap, drops);
+        }
 
         cudaError_t le = cudaGetLastError();
         if (le != cudaSuccess) {
@@ -199,7 +219,8 @@ int main(int argc, char** argv) {
     if (!s.init()) { printf("FAIL: allocation\n"); return 1; }
     printf("geometry : bb=%u sm=%u nb=%u cap=%u\n", s.bb, s.sm, s.nb, s.cap);
     printf("footprint: %.2f GiB\n",
-           ((double)s.nslots*18*8 + (double)5*s.capacity*4*2)/(double)(1u<<30));
+           ((double)s.nslots*(MXBM_R2_FULL ? 20 : 17)*8
+            + (double)5*s.capacity*4*2)/(double)(1u<<30));
 
     // Why a second stream cannot overlap these kernels: concurrent execution needs the
     // FIRST kernel to run out of blocks before the work distributor will schedule the

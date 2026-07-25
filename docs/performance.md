@@ -100,6 +100,7 @@ rather than being given a fabricated one.
 | 2026-07-25 | CUDA port, algorithm unchanged | 41.0 | 41.6 | **47.6** | +0.6 | +1.5 % | [CUDA backend](#the-cuda-backend) | — |
 | 2026-07-25 | 128-bit access on the round-2/3 records | 41.6 | 38.4 | **51.6** | −3.2 | −7.7 % | [CUDA backend](#the-cuda-backend) | — |
 | 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1 ± 2.3** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](#levers-tried-after-the-mio-fix--all-null) |
+| 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.2 | 35.0 | **56.5** | −0.2 | −0.6 % | [Alignment pad](#the-round-2-alignment-pad) *(also −0.36 GiB)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
@@ -153,7 +154,7 @@ yields ~1.9 solutions per solve, so sol/s ≈ 1900 / (ms per solve).*
 
 ---
 
-## Power and efficiency — an open lead
+## Power and efficiency
 
 Every figure above measures **speed**. A run against the reference miner on the
 same card measured **power** for the first time, and it does not point the same
@@ -167,34 +168,105 @@ way:
 | temperature | 65 °C | 60 °C | |
 | core clock | 2700 MHz | 2745 MHz | |
 
-**We are ~5 % faster and ~11 % less efficient** — 45 W more for 3 sol/s more. On
-a power-limited rig, which is most rigs, that trade is a loss, and nothing in
-this document has been optimized against it.
+**~5 % faster, ~11 % less efficient** — 45 W more for 3 sol/s more. On a
+power-limited rig, which is most rigs, that trade is a loss. Four leads were
+listed when this was first recorded; three are now measured and one still needs
+root. Reproduce with `benchmarks/power_bench.sh`, `benchmarks/stage_power.sh` and
+`benchmarks/power_sweep.sh`.
 
-What makes it a lead rather than merely bad news: the **clocks are the same**
-(identical memory clock, ours slightly lower on core), so the extra 45 W is work
-being done, not a higher operating point. Something in the pipeline is doing more
-per solve — DRAM traffic the obvious suspect, given the emit scatter already runs
-at the hardware floor, and the 5 °C gap suggesting sustained rather than bursty
-draw.
+### The card is at its power limit, in every kernel
 
-Worth measuring, roughly in order of expected value:
+`clocks_throttle_reasons.sw_power_cap` reads **Active** continuously under MXBM,
+while `hw_slowdown` and `sw_thermal_slowdown` never fire and the GPU sits at
+62–65 °C — far from its throttle point. The 285 W is a **board limit being hit**,
+not heat, and the 5 °C gap to the reference miner is the *consequence* of drawing
+45 W more, not an independent symptom.
 
-1. **Joules per solve, not watts.** Integrate NVML power over a fixed nonce count
-   for both miners. Watts alone conflate "faster" with "hungrier".
-2. **DRAM bytes per solve.** `dram__bytes.sum` from Nsight Compute against the
-   theoretical minimum for the round schedule. Moving significantly more bytes
-   than the algorithm requires would be the 45 W.
-3. **Does a power cap cost us the lead?** Re-measure sol/s at `nvidia-smi -pl 240`
-   — the reference miner's draw. If we still clear 53, the gap is a tuning
-   artefact rather than a structural one, and the headline should be quoted at
-   that cap.
-4. **Idle spin between rounds.** Cheap to rule out, and a busy-wait shows up as
-   power without throughput.
+That is not a property of one hot kernel. `benchmarks/stage_power.sh` replays a
+single stage N times inside the solve that produced its input — so its input
+bytes, bucket occupancies and output addresses are the real ones — and solves for
+that stage's own time and power from the shift it causes:
 
-Full data, method and caveats: `docs-internal/MINER_COMP_RESULTS.md`. The two
-runs were not simultaneous, so the power figure wants a back-to-back rerun before
-it is quoted outside that document.
+    t_s = (T_N - T_1) / (N-1)        P_s = (P_N*T_N - P_1*T_1) / (T_N - T_1)
+
+| stage | ms | % of solve | power | J/solve | % of energy |
+|---|---|---|---|---|---|
+| `entry_scatter` | 2.68 | 7.7 | 284.0 W | 0.76 | 7.7 |
+| round 1 | 5.79 | 16.5 | 284.5 W | 1.65 | 16.6 |
+| round 2 | 10.68 | 30.5 | 283.6 W | 3.03 | 30.5 |
+| round 3 | 9.54 | 27.2 | **270.9 W** | 2.58 | 26.1 |
+| round 4 | 5.65 | 16.1 | 282.9 W | 1.60 | 16.1 |
+| terminal | 1.05 | 3.0 | 284.1 W | 0.30 | 3.0 |
+| **sum** | **35.39** | **101 %** | 280.3 W | **9.92** | |
+
+Solve is 35.03 ms, so the stages account for 101 % of it — the 1 % overshoot is the
+measurement's own error, and it bounds anything unattributed (memsets, launch
+gaps, readback, CPU verify) at essentially zero. 9.92 J per solve ÷ 1.98 verified
+solutions = **4.96 J per solution**.
+
+Every stage draws the cap. There is no power-hog kernel to fix: the workload
+saturates the board limit from `entry_scatter` through the terminal round, and
+the driver pulls the core clock down (2625–2760 MHz) to hold 285 W. Only round 3
+sits measurably below it, and round 3 is the DRAM-bound round — moving bytes
+costs this board less than working the SM does.
+
+Two consequences, and they matter more than the table:
+
+1. **Energy per solve tracks time per solve.** At a fixed cap, sol/s/W is just
+   sol/s ÷ 285. Every speed optimization in this document is an efficiency
+   optimization of the same size, and no amount of watt-shaving is available
+   independently of it. Matching the reference miner's 0.223 sol/s/W *at stock*
+   therefore needs **63.5 sol/s** — there is no way to get there by drawing less.
+2. **The published comparison is between two different operating points.** The
+   reference miner draws 238.7 W with σ 4.05: it is *not* at the cap, and leaves
+   46 W unused. Comparing sol/s/W at stock rewards whichever miner fails to fill
+   the machine. The comparison that decides a power-limited rig is at **equal
+   power**, and it is the one lead still unmeasured — `benchmarks/power_sweep.sh`
+   runs it and needs root for `nvidia-smi -pl`.
+
+### The memory traffic is compulsory
+
+Per solve, against the minimum the round schedule and record widths require —
+each round reading its input layer once and writing its output layer once:
+
+| stage | compulsory rd | wr | measured rd | wr | excess |
+|---|---|---|---|---|---|
+| entry | — | 268 MB | 0 | 265 MB | −1.3 % |
+| r1 | 268 | 805 | 271 | 798 | −0.5 % |
+| r2 | 537 | 2953 | 539 | 3015 | +1.9 % |
+| r3 | 2684 | 2416 | 2695 | 2410 | +0.1 % |
+| r4 | 2147 | 805 | 2157 | 802 | +0.2 % |
+| terminal | 537 | — | 539 | 19 | +3.9 % |
+| **total** | | | **13.51 GB** | | **+0.7 %** |
+
+Measured traffic is within **0.7 %** of compulsory: no write amplification, no
+redundant re-reads, nothing left for the cache to save. The 13.5 GB is not waste
+— it is what a 72–80 B element costs when five rounds each consume a layer and
+produce one. The kernel times sum to **101 %** of the solve, which also rules out
+the fourth lead: there is no idle spin between rounds to reclaim.
+
+*(Both columns are the pre-pad-fix layout, so that the excess column compares
+like with like. Removing the pad took the total to **12.97 GB**; the compulsory
+figures for r2's write and r3's read fall by 268 MB each with it.)*
+
+So the byte count can only fall by making records narrower, and one place was
+found where a record was wider than its own contents ([the round-2 alignment
+pad](#the-round-2-alignment-pad)). Everything else needs the structural change in
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target):
+streaming / in-place layer reuse.
+
+### Where the 11 % actually is
+
+The reference miner spends **4.48 J per solution** (238.7 W ÷ 53.27 sol/s); MXBM
+spends **4.97** (284.1 ÷ 57.2). Since MXBM's watts are pinned by the board and its
+traffic is within 0.7 % of compulsory, that gap is not tuning slack — it is the
+2.4× memory-footprint gap showing up as joules, exactly as HW_REQUIREMENTS
+predicted before it was measured. Memory efficiency and energy efficiency are one
+problem.
+
+Full data, method and caveats for the head-to-head: `docs-internal/MINER_COMP_RESULTS.md`.
+The two runs were not simultaneous, so the reference miner's power figure still
+wants a back-to-back rerun before it is quoted outside that document.
 
 ---
 
@@ -256,6 +328,11 @@ was later [measured to be a loss](#retiring-the-round-3-quad-record).
 
 Seed indices are 25-bit (2^25 seeds) and `gi` is 26-bit, so the pair and quad records
 pack exactly with bits to spare.
+
+Round 3's 9 u64 are **not** stored as a 9-u64 stride: 8 of them sit at a 16 B-aligned
+stride and the 9th lives in a plane behind the records, which is what keeps the 128-bit
+accesses legal without paying for a padding word — see
+[the round-2 alignment pad](#the-round-2-alignment-pad).
 
 ---
 
@@ -628,6 +705,55 @@ The rest of the sort path is clean, with one deliberate exception: `leaves[2]` i
 holds round 5's 9-leaf prefix and `leaves[0]` round 4's 8. Left alone — it complicates the
 ping-pong for little gain on a path that measures 214.6 ms against row-bucket's 47.5.
 
+The audit was of *contents*, though, and one record was wider than its contents for a
+reason the audit could not see — see [the round-2 alignment pad](#the-round-2-alignment-pad).
+
+### The round-2 alignment pad
+
+The audit above put round 3's input record at its 9-u64 information floor. The CUDA port
+then stored it in a **10**-u64 stride, so that `od*8` is always 16 B aligned and the
+[128-bit accesses](#the-cuda-backend) are legal. That pad is not free. Round 2 writes it
+and round 3 reads it back, and because records are contiguous the pad's bytes fall inside
+sectors that are fetched anyway: **8 B × 2^25 × 2 = 537 MB per solve, 4.0 % of all DRAM
+traffic, carrying nothing.** It was invisible to a contents audit and invisible to a
+per-kernel profile — only the [compulsory-traffic table](#the-memory-traffic-is-compulsory)
+made it show up, as the one line where measured exceeded compulsory.
+
+Both properties are obtainable at once. The record is stored as 8 u64 — a stride that is
+16 B aligned for *every* slot, not every other one — and the 9th word moves to its own
+plane laid out after all the records. The kernel derives that plane's offset from the
+geometry it already has (`nb = 1 << bucket_bits`, times the bucket capacity), so no
+parameter changes, and the instruction count is identical either way: 4 × ST.128 plus one
+ST.64, and the matching loads.
+
+| | before | after | |
+|---|---|---|---|
+| stored record | 80 B | **72 B** | its actual contents |
+| CUDA footprint | 7.82 GiB | **7.46 GiB** | now identical to the OpenCL path |
+| round 3 | 9.99 ms | **9.55 ms** | **−4.4 %** |
+| round 2 | 10.56 ms | 10.68 ms | +1.2 % |
+| end-to-end | 35.16 ms | **34.96 ms** | −0.20 ms, −0.6 % |
+
+Round-level figures are from `MXBM_ROUND_REPS=R:9` (`benchmarks/stage_power.sh`), which
+replays one round nine times inside the solve that produced its input and so measures a
+0.4 ms change as a 3.5 ms one; both A/Bs reproduced to ±0.05 ms. End-to-end is the median
+of 700 solves, and the new build won all four alternating pairs.
+
+**Why round 2 loses what round 3 gains — most of it.** Round 2's children land in any of
+65 536 output buckets, so its stores are already scattered across the whole array; the
+split makes each thread write two distant destinations instead of one, doubling the
+distinct sectors in flight. The first version cost round 2 **+3.5 %**, and hoisting the
+duplicated `cb * out_bucket_cap + cpos` multiply out of the two address computations
+recovered two thirds of that.
+
+The asymmetry is the part worth keeping. Round 3 moves 5.1 GB in 10 ms = **511 GB/s**,
+which is the card's ~510 GB/s achievable ceiling, so it converts bytes saved into time
+saved nearly 1:1. Round 2 runs at 53 % of peak bandwidth and is limited by something else,
+so it pays for the extra stream and is not repaid in bytes. **Removing bytes only buys
+time in the rounds that are actually bandwidth-bound** — which, per the
+[stage table](#the-card-is-at-its-power-limit-in-every-kernel), is rounds 3 and 4 and not
+rounds 1 and 2.
+
 ### Row-bucket geometry
 
 `bucketBits = 14`, `submaskBits = 3` was chosen when the fused path was built and never
@@ -987,7 +1113,7 @@ ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.
 
 | lever | status |
 |---|---|
-| fewer bytes | every record is `ceil(bits/64)` ([audit](#the-record-redundancy-audit)) |
+| fewer bytes | every record is `ceil(bits/64)` ([audit](#the-record-redundancy-audit)) — except one that was *stored* wider than that, [since fixed](#the-round-2-alignment-pad) |
 | redundant rescan | removing it entirely buys nothing over halving it ([geometry](#row-bucket-geometry)) |
 | occupancy | `lwork` alone exceeds the per-element LDS budget ([details](#occupancy-again)) |
 | coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](#two-level-bucketing)) |
@@ -997,6 +1123,15 @@ ablated and totals ~2.2 ms: `apply_mix` 0.9, back-refs 1.1, round 2's rebuild 0.
 **Leads.** Both backends are now close to their measured floors, and the CUDA one is past
 the target. What is left is not more solver micro-optimization:
 
+0. **Efficiency, not speed, is the open problem.** MXBM wins on sol/s and loses on
+   sol/s/W, and [the measurements](#power-and-efficiency) say the watts cannot be
+   attacked directly — the board limit is saturated in every kernel, so joules per
+   solution are set by time per solution and by nothing else. Two things follow. The
+   immediate one is the **equal-power comparison** (`benchmarks/power_sweep.sh`, needs
+   root), which may show MXBM already ahead at 240 W and would change what the headline
+   should say. The structural one is the **footprint**: 13 GB of compulsory traffic per
+   solve against a design target that implies far less, which is the same work item
+   HW_REQUIREMENTS.md has carried all along, now with a second reason to do it.
 1. **Settle the comparison.** Accepted pool shares over a fixed interval, the only metric
    independent of either miner's counters. `docs-internal/MINER_COMP.md` has the protocol
    and the sample-size arithmetic. The margin (56.1 ± 2.3 against 53) is real but thin

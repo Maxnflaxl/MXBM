@@ -82,6 +82,26 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
     __syncthreads();
 
+    // Round 2's record is 9 u64, and a 9-u64 stride puts every odd slot on an 8 B
+    // boundary, which the 128-bit accesses below cannot use. Padding the stride to 10
+    // bought the alignment at 8 B/element of DRAM traffic in BOTH directions -- round 2
+    // writes it and round 3 reads it back -- which measured 537 MB per solve, 4.0 % of
+    // all traffic, carrying nothing. Instead the 9th word lives in its own plane after
+    // the records, so the record stride is 8 (always 16 B aligned) and the odd word is
+    // one coalesced u64 per element. Same instruction count, 72 B/element instead of 80.
+    // The plane offset is derived from the geometry rather than passed: nb = 1<<bb.
+    const size_t side_in  = ((size_t)1u << bucket_bits) * in_bucket_cap  * INSTR;
+    const size_t side_out = ((size_t)1u << bucket_bits) * out_bucket_cap * OUTSTR;
+    // The 9-word record needs INW work words + 2 meta, so a stride of INW+1 means the
+    // last one is in the plane and anything wider means it is still inline. Reader and
+    // writer must agree, and only the stride tells them apart -- MXBM_R2_FULL's LM_RAW
+    // producer keeps the old padded 10-u64 record with no plane behind it.
+    auto r3_word8 = [&](const uint64_t* __restrict__ src, size_t inline_d, size_t plane_i)
+                        -> uint64_t {
+        if constexpr (INSTR >= INW + 2) return src[inline_d + INW + 1];
+        else                            return src[plane_i];
+    };
+
     uint32_t cnt = in_counts[bucket];
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
     const size_t base = (size_t)bucket * in_bucket_cap;
@@ -103,12 +123,11 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             lgi[pos] = pair_gi(rec1); lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;   // leaf 0 IS the lead
         } else if constexpr (LMODE == LM_EMIT) {
-            // 128-bit loads. The record stride is padded to an even number of u64, so
-            // d*8 is 16 B aligned and cudaMalloc's base is 256 B aligned -- but the
-            // compiler cannot prove either, and emitted 9 x LD.64 where 5 x LD.128 do.
-            // Round 3 stalls 22% of its warp-active cycles on the MIO queue, which is
-            // memory-INSTRUCTION issue rather than bandwidth, so instruction count is
-            // the thing to cut here.
+            // 128-bit loads. The record stride is an even number of u64, so d*8 is 16 B
+            // aligned and cudaMalloc's base is 256 B aligned -- but the compiler cannot
+            // prove either, and emitted 9 x LD.64 where 5 x LD.128 do. Round 3 stalls
+            // 22% of its warp-active cycles on the MIO queue, which is memory-INSTRUCTION
+            // issue rather than bandwidth, so instruction count is the thing to cut here.
             static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
 #if MXBM_CPASYNC
             // cp.async: global -> shared without a register round-trip, and without the
@@ -120,7 +139,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             for (int w = 0; w < INW; ++w)
                 __pipeline_memcpy_async(&lwork[pos*INW + w], &in_belem[d + w], 8);
             __pipeline_commit();
-            const uint64_t p0 = in_belem[d + INW], p1 = in_belem[d + INW + 1];
+            const uint64_t p0 = in_belem[d + INW], p1 = r3_word8(in_belem, d, side_in + base + p);
 #else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
@@ -128,7 +147,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             lwork[pos*INW + 2] = q1.x; lwork[pos*INW + 3] = q1.y;
             lwork[pos*INW + 4] = q2.x; lwork[pos*INW + 5] = q2.y;
             lwork[pos*INW + 6] = q3.x;
-            const uint64_t p0 = q3.y, p1 = in_belem[d + INW + 1];
+            const uint64_t p0 = q3.y, p1 = r3_word8(in_belem, d, side_in + base + p);
 #endif
             const uint32_t l0 = r3_l0(p0);
             lgi[pos] = r3_gi(p1); lkey[pos] = key;
@@ -232,21 +251,27 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 const uint32_t cpos = atomicAdd(&out_counts[cb], 1u);
                 if (cpos < out_bucket_cap) {
                     const uint32_t cgi = atomicAdd(gi_counter, 1u);
-                    const size_t od = ((size_t)cb * out_bucket_cap + cpos) * OUTSTR;
+                    const size_t oslot = (size_t)cb * out_bucket_cap + cpos;
+                    const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == LM_SEED) {
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         *reinterpret_cast<ulonglong2*>(out_belem + od) =
                             make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi));
                     } else if constexpr (LMODE == LM_RD2 || LMODE == LM_RAW) {
-                        // Matching 128-bit stores; the padded stride makes od*8 16 B
-                        // aligned. 5 x ST.128 instead of 9 x ST.64.
+                        // Matching 128-bit stores; the even stride makes od*8 16 B
+                        // aligned. 4 x ST.128 + 1 x ST.64 instead of 9 x ST.64.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
                         v[0] = make_ulonglong2(c.w[0], c.w[1]);
                         v[1] = make_ulonglong2(c.w[2], c.w[3]);
                         v[2] = make_ulonglong2(c.w[4], c.w[5]);
                         v[3] = make_ulonglong2(c.w[6], r3_p0(ctree[0], ctree[1], ctree[2]));
-                        out_belem[od + OUTW + 1] = r3_p1(ctree[2], ctree[3], cgi);
+                        // LM_RAW is the MXBM_R2_FULL experiment, which keeps the padded
+                        // 10-u64 record and so has no side plane allocated behind it.
+                        if constexpr (LMODE == LM_RD2)
+                            out_belem[side_out + oslot] = r3_p1(ctree[2], ctree[3], cgi);
+                        else
+                            out_belem[od + OUTW + 1] = r3_p1(ctree[2], ctree[3], cgi);
                     } else if constexpr (LMODE == LM_SEEDF) {
                         // Full packed record: 7 work + meta + 1 leaf u64 (sOut = 2).
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");

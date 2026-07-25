@@ -11,13 +11,17 @@ implementation.
 
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
 > Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
-> RTX 4070 Ti SUPER the CUDA backend does **56.1 sol/s** and the portable OpenCL
+> RTX 4070 Ti SUPER the CUDA backend does **56.5 sol/s** and the portable OpenCL
 > one 48.2. `--solver auto` prefers CUDA, falls back to OpenCL, then to a CPU
 > reference solver. Measured history, hardware limits and the caveats on comparing
 > miners: **[docs/performance.md](docs/performance.md)**.
 >
-> **VRAM is the current constraint** — a search that finds solutions wants ~16 GB
-> against a real footprint of 7.46 GiB. See
+> **Energy is the current constraint, not speed.** The card runs pinned at its
+> board power limit in every kernel, so joules per solution are set by how long a
+> solve takes — and MXBM's 7.46 GiB footprint against BeamHash III's 3 GB design
+> target costs it ~11 % against the reference miner on sol/s per watt even while
+> it wins on sol/s. See
+> [Power and efficiency](docs/performance.md#power-and-efficiency) and
 > [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md).
 
 Licensed under the [Apache License 2.0](LICENSE).
@@ -125,8 +129,12 @@ shell. See **[docs/architecture.md](docs/architecture.md)** for the full map.
 The GPU solver's optimization history — every change, its measured effect, and the
 experiments that failed — is tracked in **[docs/performance.md](docs/performance.md)**,
 along with the measured hardware limits that bound further work. Hardware
-requirements, including the current VRAM limitations, are in
+requirements, including the per-backend VRAM thresholds, are in
 **[HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)**.
+
+`benchmarks/` holds the energy harnesses: `power_bench.sh` (sol/s and J/sol),
+`stage_power.sh` (per-kernel time and power attribution) and `power_sweep.sh`
+(the speed/power curve across board power limits; needs root).
 
 Comparing miners is harder than it looks: reported `sol/s` is implementation-defined,
 and MXBM measures a 17 % spread between "solutions found" and "solutions that verify"

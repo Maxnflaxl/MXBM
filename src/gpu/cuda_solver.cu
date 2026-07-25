@@ -22,9 +22,12 @@ constexpr uint32_t kCapacity = kElems + kElems/32;      // 34,603,008
 constexpr uint32_t kBB = 16, kSM = 1, kNB = 1u << kBB;
 constexpr uint32_t kSurvCap = 1024;
 // set 0 carries the round-2 and round-4 outputs, set 1 the round-1 and round-3 outputs.
-// Round 2's record is padded to 10 u64 so every stride is an even number of u64 and the
-// 128-bit accesses in the kernels are legal -- see docs/performance.md.
-constexpr uint32_t kSetStride[2] = { 10u, 8u };
+// Round 2's record is 9 u64: an 8-u64 record at a 16 B-aligned stride, plus a 9th-word
+// plane laid out after all the records (fused_round derives its offset from the same
+// geometry). Set 0 is therefore sized 8 + 1 rather than the 10 it took when the record
+// was padded to keep the 128-bit accesses aligned -- see docs/performance.md.
+constexpr uint32_t kSetStride[2] = { 9u, 8u };
+constexpr uint32_t kR2RecStride  = 8u;   // round 2's record; the 9th word is the plane
 
 // Total device memory the solver needs, so available() can refuse a device that would
 // only fit a reduced seed layer.
@@ -122,8 +125,8 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
                 I.left, I.right, I.gictr, I.drops, I.dpp);                            \
           inSet = o; }
     ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
-    ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,10u)
-    ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u)
+    ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,kR2RecStride)
+    ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u)
     ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
     #undef ROUND
     terminal_round<<<kNB << kSM, kWG>>>(kBB, kSM, I.cap, 4u*kCapacity, I.counts[inSet],

@@ -49,6 +49,47 @@ int main() {
     // room for headroom -- capacity pins to elems_per_round (no worse than before).
     check(b8.capacity == b8.elems_per_round, "8GB has no headroom room (capacity == elems_per_round)");
 
+    // The per-device thresholds published in HW_REQUIREMENTS.md. Real callers pass the
+    // path's own per-element figure (gpu_solver.cpp tries row-bucket, then sort), so
+    // pinning the DEFAULT divisor alone would not catch the table going stale -- which
+    // it did: the summary claimed "~16 GB today" for months after the budget was fixed.
+    //
+    // These are the SEED-LAYER thresholds only. Whether the row-bucket path actually
+    // runs is a second question answered by rb_pick_geometry(), which needs a real
+    // device and so lives in the gpu_rounds tests: below ~12 GB, NVIDIA's OpenCL
+    // max_alloc of 1/4 VRAM rejects every row-bucket geometry even though the budget
+    // here would grant a full layer, and the sort budget is what the device ends up
+    // sized by. That is exactly why a 10 GB card refuses under OpenCL but runs under
+    // CUDA, which has no max_alloc ceiling.
+    section("per-path VRAM thresholds");
+    struct { const char* name; double gib; bool rb_full, sort_full; } cards[] = {
+        { "16 GB", 15.59, true,  true  },
+        { "12 GB", 11.60, true,  true  },
+        { "11 GB", 10.60, true,  true  },
+        { "10 GB",  9.70, true,  false },   // row-bucket budget fits, sort budget does not
+        { "8 GB",   7.70, false, false },   // neither -> the miner refuses to start
+    };
+    for (const auto& c : cards) {
+        const uint64_t gm = (uint64_t)(c.gib * (double)GiB);
+        Budget rb = compute_budget(gm, gm/4, 0.85, kBytesPerElementRowbucket);
+        Budget so = compute_budget(gm, gm/4, 0.85, kBytesPerElementSort);
+        char msg[128];
+        std::snprintf(msg, sizeof msg, "%s: row-bucket hosts a full seed layer = %s",
+                      c.name, c.rb_full ? "yes" : "no");
+        check(budget_can_find_solutions(rb.elems_per_round) == c.rb_full, msg);
+        std::snprintf(msg, sizeof msg, "%s: sort path hosts a full seed layer = %s",
+                      c.name, c.sort_full ? "yes" : "no");
+        check(budget_can_find_solutions(so.elems_per_round) == c.sort_full, msg);
+    }
+    // The thresholds themselves, so a change to either constant shows up as a size class
+    // rather than as a silently different table.
+    const double rb_need   = kBytesPerElementRowbucket * (double)(1u<<25) / 0.85 / (double)GiB;
+    const double sort_need = kBytesPerElementSort      * (double)(1u<<25) / 0.85 / (double)GiB;
+    check(rb_need > 9.0 && rb_need < 9.8,
+          "row-bucket seed layer needs ~9.4 GiB reported VRAM");
+    check(sort_need > 10.1 && sort_need < 10.8,
+          "sort-path seed layer needs ~10.4 GiB reported VRAM");
+
     // Apple M3 Max-like: huge unified memory, generous everything.
     Budget bm = compute_budget(110ull*GiB, 27ull*GiB);
     check(bm.elems_per_round == (1u<<25), "M3Max keeps full 2^25");

@@ -16,16 +16,15 @@ report; BeamHash III yields ~1.9 solutions per solve.
 | | Requirement |
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
-| **VRAM — to run at all** | ~6 GB |
-| **VRAM — for a search that actually finds solutions** | **~16 GB today** (see the caveat below) |
-| **VRAM — what a full search genuinely needs** | **~7.46 GiB** (row-bucket path) |
+| **VRAM — CUDA backend (the default)** | **10 GB** — needs > 8.46 GiB *reported*, so a 10 GB card clears it |
+| **VRAM — OpenCL backend (fallback)** | **12 GB** — the single-allocation ceiling binds first, see [limitation 1](#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit) |
+| **VRAM — what a full search occupies** | **7.46 GiB** (row-bucket path, both backends) |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
 
-> **Known limitation.** The 16 GB figure is *not* a property of the algorithm — it is a
-> stale heuristic in `compute_budget`. The real full-search footprint is ~7.46 GiB, so
-> 12 GB cards should be usable. See [Known limitations](#known-limitations).
+A card below its backend's threshold does not mine slowly — it **refuses to start**, by
+design. See [the partial-search caveat](#the-partial-search-caveat).
 
 ---
 
@@ -56,8 +55,15 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 
 The largest single allocation matters independently of total VRAM: OpenCL reports
 `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, commonly **¼ of VRAM** on NVIDIA. The row-bucket path's
-3.19 GiB record array therefore needs a card reporting ≥ ~3.2 GiB max-alloc (i.e. ≥ ~13 GB
-VRAM); smaller cards fall back to the sort path automatically (`want_rowbucket`).
+3.27 GiB record array therefore needs a card reporting ≥ ~3.3 GiB max-alloc; below that
+`rb_pick_geometry()` steps the bucket geometry down one notch at a time (16,1) → (15,2) →
+(14,3), which needs only 2.76 GiB and costs ~5 % speed, and only if even that will not fit
+does the path fall back to the sort path (~5× slower).
+
+**CUDA is not subject to that ceiling** — there is no `CL_DEVICE_MAX_MEM_ALLOC_SIZE`
+equivalent, so `CudaSolver` allocates its 3.51 GiB record array at the fastest (16,1)
+geometry on any card with the total memory for it. This is why the CUDA threshold is a
+whole size class lower than the OpenCL one.
 
 ---
 
@@ -74,9 +80,17 @@ P(solution findable) = (epr / 2^25)^32
   epr = 2^24 (half)   →  0.00000002 %
 ```
 
-**A reduced search does not mine slower — it mines essentially nothing.** The miner will
-appear to run normally while finding no shares. Until this is fixed (see below), treat
-any configuration that cannot host the full 2^25 seed layer as non-functional.
+**A reduced search does not mine slower — it mines essentially nothing.** The miner would
+appear to run normally while finding no shares, which is the worst possible failure mode,
+so **both backends refuse to start instead**:
+
+- OpenCL: `GpuSolver`'s constructor throws with the required and available GiB once
+  `budget_can_find_solutions()` fails (`src/gpu/gpu_solver.cpp`).
+- CUDA: `CudaSolver::available()` returns false unless total memory exceeds the full
+  footprint plus 1 GiB of headroom, so the backend is never selected
+  (`src/gpu/cuda_solver.cu`).
+
+`MXBM_ALLOW_PARTIAL_SEARCH=1` overrides the OpenCL refusal, for experiments only.
 
 ---
 
@@ -87,8 +101,9 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **56.1 sol/s** | 48.2 sol/s |
-| End-to-end solve | **35.2 ms** | 41.0 ms |
+| Throughput | **56.5 sol/s** | 48.2 sol/s |
+| End-to-end solve | **35.0 ms** | 41.0 ms |
+| Board power | 284 W (at the card's 285 W limit) | — |
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces (±4.1 %, 1σ).
@@ -104,30 +119,35 @@ See [performance.md](performance.md) for the full optimization history.
 
 These are open issues in MXBM, not properties of BeamHash III.
 
-### 1. The VRAM budget is ~1.65× too conservative
+### 1. Below 12 GB, OpenCL is capped by its single-allocation limit
 
-`compute_budget` sizes the seed layer per collision path (**256 B/element** row-bucket, **284 B** sort; measured 239 and 264). It used to use one figure of **396 B/element**
-(`5 rounds × 68 B resident + 56 B seed`), a formula left over from an earlier
-six-buffer design. The row-bucket path needs **239 B/element** and is now budgeted at 256.
+Not by total VRAM. Worked through from `compute_budget()` and `rb_pick_geometry()`:
 
-**Fixed 2026-07-25:** the budget is now per-path, and the row-bucket geometry adapts to the device's single-allocation limit — a card that cannot host the finest bucket layout steps down one geometry (~5 % slower) instead of falling back to the sort path (~5×).
+| Card | reported gmem / max_alloc | OpenCL | CUDA |
+|---|---|---|---|
+| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | full, geometry (16,1) | full |
+| 12 GB | 11.60 / 2.90 GiB | full, geometry (14,3), ~5 % slower | full |
+| 11 GB | 10.60 / 2.65 GiB | full, but on the **sort path** (~5× slower) | full |
+| 10 GB | 9.70 / 2.42 GiB | **refuses** — sort path fits only 0.93 × 2^25 | full |
+| 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | unavailable |
 
-Consequences:
+The seed layer itself is not the problem at any of these sizes: at 256 B/element a full
+2^25 layer needs only 8.59 GiB, so `elems_per_round` stays at 2^25 down to ~10.1 GiB of
+reported VRAM. What binds first is that NVIDIA's OpenCL reports `max_alloc = ¼ VRAM`,
+and the coarsest row-bucket geometry still wants a 2.76 GiB record array — i.e. an
+11 GB card or smaller cannot host *any* row-bucket geometry and drops to the sort path,
+whose 284 B/element no longer fits a full layer at 10 GB.
 
-- A full 2^25 search is only granted when `VRAM × 0.85 ≥ 2^25 × 396`, i.e. **≥ 14.6 GiB
-  reported VRAM** — effectively 16 GB cards only.
-- **12 GB cards are downgraded to a partial (non-functional) search** even though the
-  real 7.46 GiB footprint would fit.
-- 16 GB cards with high driver/display reservation can fall below the threshold and
-  silently degrade.
+**This was the "~1.65× too conservative budget" (fixed 2026-07-25):** `compute_budget`
+used a single 396 B/element figure left over from a six-buffer design, which granted a
+full search only above 14.6 GiB — 16 GB cards only. It is now sized per path (256 B
+row-bucket, 284 B sort; measured 239 and 264) and the geometry adapts to the device.
 
-### 2. A partial search fails silently
+Remaining work, in order of value: splitting the row-bucket record array into two
+buffers would put 10–11 GB cards on the fast path under OpenCL too, since the constraint
+is the size of the *largest single* allocation and not the total.
 
-There is no warning or error when `elems_per_round < 2^25`, despite that configuration
-being unable to find solutions in practice. It should refuse to start, or at minimum warn
-loudly, rather than mine nothing while appearing healthy.
-
-### 3. Memory efficiency is ~2.4× off the algorithm's design target
+### 2. Memory efficiency is ~2.4× off the algorithm's design target
 
 Beam's own mining documentation states:
 
@@ -168,10 +188,13 @@ structurally different, such as:
 > [docs/performance.md](performance.md)). Reaching 3 GB needs the *first* route —
 > streaming / in-place reuse — not more re-derivation.
 
-This is correctness-neutral, but it is very likely **also a performance gap**. MXBM's
-solver is memory-bandwidth-bound — every optimization that has worked so far won by
-moving fewer bytes (see [docs/performance.md](performance.md)). An implementation
-using less memory would be expected to move proportionally fewer bytes per round,
-which is the leading hypothesis for the remaining throughput difference. Memory
-efficiency and throughput are therefore probably the *same* problem, and reducing the
-per-element footprint is the highest-value open work item.
+This is correctness-neutral, but it is **also an energy gap**, and that half is now
+measured rather than suspected. A solve moves **13.5 GB** of DRAM traffic, which is
+within **0.7 %** of the compulsory minimum for these record widths — there is no waste
+left to reclaim, only records to narrow. Meanwhile the card runs pinned at its 285 W
+board limit in every kernel, so joules per solution are set by how long a solve takes,
+and MXBM needs 4.97 J/solution against lolMiner's 4.48. An implementation holding 3 GB
+instead of 7.46 would move proportionally fewer bytes, which is the leading hypothesis
+for that 11 %. See ["Power and efficiency"](performance.md#power-and-efficiency) for the
+measurements. Reducing the per-element footprint remains the highest-value open work
+item — it is now the *efficiency* lever, since throughput already clears the target.
