@@ -1146,6 +1146,20 @@ the target. What is left is not more solver micro-optimization:
    settings without a pool.
 4. **Per-path VRAM budget on the CUDA side.** The OpenCL path got this; the CUDA one
    hardcodes its geometry. Reach, not speed.
+4b. **Optimize the sort path.** *(Requested 2026-07-25; not started — no baseline
+   re-measured yet, the figures below are the last recorded ones.)* It has been parked at
+   **~214.6 ms** since 2026-07-24, when the row-bucket path took over and every
+   optimization since went there: it never received compile-time round constants (worth
+   **−32.5 %** on the fused path), index-only records, or the packed-record work. It is
+   not a dead path — it is what runs on any device that cannot host a row-bucket
+   geometry, which per
+   [limitation 1](HW_REQUIREMENTS.md#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit)
+   means 11 GB cards and anything whose OpenCL `max_alloc` is small, and the CUDA backend
+   has no sort path at all. So this is reach and it is also the only path some users will
+   ever run. Known starting points: the [record audit](#the-record-redundancy-audit)
+   already took it 285 → 264 B/element and left one deliberate 4 B/element (~138 MB) of
+   slack in `leaves[2]`; whether the row-bucket path's wins transfer at all is the open
+   question, since the two differ in structure and not just in tuning.
 5. **Overlap the phases — profile is complementary, but concurrency CANNOT reach it.
    Built, measured, null. Do not retry with streams.**
 
