@@ -959,39 +959,76 @@ the target. What is left is not more solver micro-optimization:
    settings without a pool.
 4. **Per-path VRAM budget on the CUDA side.** The OpenCL path got this; the CUDA one
    hardcodes its geometry. Reach, not speed.
-5. **Two concurrent solves, to overlap complementary bottlenecks.** The rounds do not all
-   bottleneck on the same resource: `entry` is at 98.6 % of SM throughput and r1+r2 sit at
-   28 %/53 % DRAM, while r3/r4/terminal are at 78–80 % DRAM. Running two solves offset in
-   phase would let one's siphash arithmetic overlap the other's DRAM-saturated scatter —
-   different units, so the overlap is genuinely additive rather than contending.
+5. **Overlap the phases — measured, and the profile is genuinely complementary.**
+
+   Profiled 2026-07-25 (`sudo ./cuda/profile.sh`). The question was whether any round is
+   simultaneously compute- and bandwidth-saturated, because that is the only case where
+   running work concurrently cannot help. None is:
+
+   | kernel | ms | SM %peak | DRAM %peak | SM-busy | DRAM-busy | bottleneck |
+   |---|---|---|---|---|---|---|
+   | entry | 2.57 | **98.0** | 15.9 | 2.52 | 0.41 | compute-saturated |
+   | r1 | 5.80 | 65.0 | 28.2 | 3.77 | 1.63 | **neither — latency-bound** |
+   | r2 | 10.21 | 65.8 | 53.0 | 6.72 | 5.41 | **neither — latency-bound** |
+   | r3 | 9.94 | 21.1 | 78.1 | 2.10 | 7.77 | DRAM-saturated |
+   | r4 | 5.63 | 28.8 | 79.9 | 1.62 | 4.50 | DRAM-saturated |
+   | terminal | 1.04 | 70.1 | 80.3 | 0.73 | 0.84 | DRAM-saturated |
+   | **total** | **35.20** | | | **17.46** | **20.56** | |
+
+   Across the whole solve the **SM is busy 50 % of the wall clock and DRAM 58 %** — so
+   both sit idle roughly half the time, just not at the same moments. `entry` is the
+   extreme: 98 % SM against 16 % DRAM, i.e. it saturates compute while the memory system
+   is nearly idle, and r3/r4 are its mirror image at 21–29 % SM against 78–80 % DRAM.
+
+   This also settles the r1/r2 question. They are at 65 % SM and 28–53 % DRAM —
+   **neither** resource saturated, which is the signature of latency-bound code. That is
+   the favourable case: more concurrent warps give the scheduler more to hide latency
+   with. (An earlier note in this repo had that backwards and called latency-bound the
+   weak case; it is the strong one. Contention for the *same* saturated unit is the weak
+   case, and no pair of rounds here shares one.)
+
+   **Ceiling: 1.71×.** With perfect overlap the floor is `max(SM-busy, DRAM-busy)` =
+   20.6 ms, i.e. 35.2 → 20.6 ms, ~96 sol/s. Treat that as an upper bound only — it
+   assumes zero interference and perfect phase alignment, and two independently scheduled
+   solves will drift into phase as often as out of it. Note also that DRAM is the binding
+   constraint at 58 %, so nothing beyond 1.71× is available from scheduling alone; past
+   that it is again a bytes-moved problem.
+
+   **Cheap first step — overlap `entry` alone, ~0.36 GiB.** `entry_scatter` writes exactly
+   one `u64` per element (`(idx<<32)|key`), densely, and only the first `nslots` words of
+   `elem[0]`. So `entry` for nonce N+1 can run on a second stream against r3/r4 of nonce N
+   — which have 71–79 % of SM idle — if it is given its own dense stride-1 output buffer
+   (`nslots × 8 B` = **0.363 GiB**, against 8.1 GiB free) plus its own `counts` (256 KB).
+   Today it cannot, because the ping-pong is `entry→[0]`, `r1:[0]→[1]`, `r2:[1]→[0]`,
+   `r3:[0]→[1]`, `r4:[1]→[0]`, so `entry(N+1)` would collide with `r4(N)`. If `entry`
+   hides completely: 35.2 → 32.6 ms, **~60.7 sol/s (+8 %)** for one buffer and one stream.
+   Worth doing first regardless, because it measures the real interference cost before
+   anything expensive is built.
+
+   **Full version — two solves in flight — needs the capacity work.** Exact allocator
+   arithmetic: `elem[0]` 3.628 + `elem[1]` 2.902 + back-refs 1.289 = **7.820 GiB** per
+   pipeline, so two plus a ~0.4 GiB context is **16.04 GiB against a 15.99 GiB card** —
+   short by ~48 MiB, 0.3 %. The slack that would close it looks unnecessary: bucket
+   capacity is `mean + 8σ + 32` = 743 against a mean of 528 (41 % slack), while the
+   Poisson maximum over 65 536 buckets is ~636. At 6σ the cap is 697 — still 61 above that
+   expected maximum — one pipeline is 7.416 GiB and two fit with 0.76 GiB spare. **Gated
+   on `bucketDrops == 0` across many nonces**; the capacity is deliberately generous and
+   this must be demonstrated, not reasoned.
 
    Nothing overlaps today: the CUDA backend uses no `cudaStream` at all, so every kernel
    runs in issue order on the default stream. That is why the headroom is untouched, and
-   equally why this is real work rather than a tuning knob — it needs a second set of
-   buffers, a second stream, and the solve loop restructured to keep two nonces in flight.
-   (An earlier plan item called "nonce-pipeline the round-5 tail" was never implemented;
-   do not treat it as precedent.)
-
-   **Blocked on footprint, which is why this is the same problem as memory efficiency.**
-   Two searches need ~14.9 GiB of buffers plus a shared context against 15.99 GiB total,
-   with a display attached — a few hundred MB of margin, too thin to be safe. This is a
-   second, independent reason to pursue the streaming / in-place layer reuse in
-   [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md): not only does it move fewer bytes, it buys
-   the room for concurrency. lolMiner fitting the same search in 4G says the room exists.
-
-   **Measure first: SM/ALU throughput on r1 and r2.** We have it for `entry` (98.6 %) but
-   not for these two, and it decides the mechanism. Near SM peak → they are compute-bound,
-   and overlapping them against r3/r4's bandwidth is exactly complementary. Neither SM- nor
-   DRAM-saturated → they are latency-bound, and concurrency helps *more* directly, by
-   giving the scheduler more warps to hide the latency with. The case that would sink the
-   idea is the one where the phases turn out to contend for the same unit after all.
+   why this is real work rather than a tuning knob. (An earlier plan item called
+   "nonce-pipeline the round-5 tail" was never implemented; do not treat it as precedent.)
 
 **Where the remaining time is, for anyone picking it up.** Of the CUDA backend's 35.2 ms:
 r3, r4 and terminal (16.6 ms) sit at **78–80 % of theoretical DRAM peak** and are
-effectively done; `entry` (2.6 ms) is at **98.6 % of SM throughput**, compute-bound on
+effectively done; `entry` (2.6 ms) is at **98 % of SM throughput**, compute-bound on
 siphash that the PoW definition fixes; and r1 + r2 (16.0 ms) hold what headroom exists, at
-28 % and 53 % DRAM, limited by siphash and global latency rather than bandwidth. Every
-lever tried against that headroom is in the table above, and all of them are null.
+**65 % SM against 28 % and 53 % DRAM** — neither resource saturated, i.e. latency-bound.
+Every *single-kernel* lever tried against that headroom is in the table above, and all of
+them are null. What the SM figures added (measured later, see lead 5) is that the headroom
+is not addressable within a kernel at all: no round is both compute- and bandwidth-bound,
+so the remaining win is **overlapping** rounds, not tightening them.
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
