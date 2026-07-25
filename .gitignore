@@ -35,9 +35,17 @@
 spike/
 Testing/
 
-# Live miner run logs -- these echo the authorized worker (wallet address)
+# Live miner run logs -- these echo the authorized worker (wallet address).
+# /logs/ is where --log puts its transcript when --logfile is not given.
 *.log
 mxbm-run.log
+/logs/
+
+# Local miner configs -- same reason as the logs above: these hold YOUR wallet
+# address and pool credentials. Both formats are documented in docs/usage.md,
+# and committed examples with placeholder addresses live in tests/fixtures/.
+/user_config.json
+/*.cfg
 
 # Python bytecode
 __pycache__/

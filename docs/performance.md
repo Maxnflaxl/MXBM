@@ -123,6 +123,13 @@ exactly**, and the 60 s σ of 2.30 matches the benchmark's ±2.3. Two independen
 measurements agreeing to three significant figures is the strongest evidence available
 that the figure is real.
 
+That table was tallied by hand from a logged session. It no longer has to be: the
+`/summary` API accumulates the same statistics itself, and `Session_Stats.Speed_60s`
+reports `N`, `Mean`, `Stddev`, `Min` and `Max` over the whole run for both windows and
+for power, clocks and temperature — see
+[usage.md](usage.md#dashboard-and-monitoring-api). Only the median still needs the
+samples kept; the accumulators are constant-memory and hold none.
+
 It also shows why **the peak must not be quoted**. Individual 15 s windows reached
 **61.5 sol/s**, which is tempting and wrong: it is the maximum of 304 draws from a noisy
 distribution, and for σ = 3.27 the expected maximum of 304 draws is ≈ 67 — so 61.5 is
