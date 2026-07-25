@@ -34,3 +34,7 @@
 # Phase-D2 exploratory spikes (CUDA comparison, etc.) — not part of the build
 spike/
 Testing/
+
+# Live miner run logs -- these echo the authorized worker (wallet address)
+*.log
+mxbm-run.log

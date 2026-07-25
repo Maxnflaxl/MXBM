@@ -9,6 +9,11 @@ constexpr std::chrono::seconds kWindow60{60};
 constexpr size_t kSubmitCap = 64;
 }
 
+void Stats::set_telemetry_source(TelemetryFn fn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    telemetry_ = std::move(fn);
+}
+
 void Stats::set_device_label(std::string label) {
     std::lock_guard<std::mutex> lock(mutex_);
     device_label_ = std::move(label);
@@ -99,6 +104,7 @@ Stats::Snapshot Stats::snapshot() const {
     s.last_latency_ms = last_latency_ms_;
     s.pool = pool_;
     s.device_label = device_label_;
+    if (telemetry_) telemetry_(s);
     s.connect_ms = connect_ms_;
     s.uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_);
     s.last_job_id = last_job_id_;

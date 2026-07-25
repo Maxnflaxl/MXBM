@@ -82,12 +82,25 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     // golden table: the brief's prose format string put a space there too,
     // but the golden's own column alignment has one fewer space in that one
     // gap, so the golden (what ships) wins; see task-3-report.md.
+    // Telemetry columns show a value when the platform supplied one and "--" when it
+    // did not, per field: a card that reports power but not fan shows the power.
+    char eff[16], pw[16], cclk[16], mclk[16], tmp[16], fan[16];
+    auto dashf = [](char* b, size_t n, const char* fmt, bool have, double v) {
+        if (have) std::snprintf(b, n, fmt, v); else std::snprintf(b, n, "--");
+    };
+    dashf(eff,  sizeof eff,  "%.3f", s.has_power && s.power_w > 0.0, s.sol60 / (s.power_w > 0.0 ? s.power_w : 1.0));
+    dashf(pw,   sizeof pw,   "%.0f", s.has_power,     s.power_w);
+    dashf(cclk, sizeof cclk, "%.0f", s.has_sm_clock,  (double)s.sm_clock_mhz);
+    dashf(mclk, sizeof mclk, "%.0f", s.has_mem_clock, (double)s.mem_clock_mhz);
+    dashf(tmp,  sizeof tmp,  "%.0f", s.has_temp,      (double)s.temp_c);
+    dashf(fan,  sizeof fan,  "%.0f", s.has_fan,       (double)s.fan_pct);
+
     char device_row[256];
     std::snprintf(device_row, sizeof device_row,
         "%-17s%6.2f %6.2f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
         s.device_label.c_str(), s.sol60, 0.0, s.iter60,
         shares.c_str(), best.c_str(),
-        "--", "--", "--", "--", "--", "--");
+        eff, pw, cclk, mclk, tmp, fan);
 
     // Total row: same reconciliation (no separator after %-18s); the reference miner's
     // own Total omits the clock/temp/fan columns entirely (not just blanks

@@ -81,6 +81,15 @@ public:
         std::string last_job_id;
         double last_job_units;
         uint64_t reconnects;
+        // Device telemetry, filled by whatever the platform can supply (NVML on
+        // NVIDIA). Each has_* is false when that particular query is unavailable --
+        // laptops commonly report power but not fan -- so the table can show the
+        // fields that exist rather than all-or-nothing.
+        bool has_power = false;  double power_w = 0.0;
+        bool has_sm_clock = false;  unsigned sm_clock_mhz = 0;
+        bool has_mem_clock = false; unsigned mem_clock_mhz = 0;
+        bool has_temp = false;   unsigned temp_c = 0;
+        bool has_fan = false;    unsigned fan_pct = 0;
     };
     Snapshot snapshot() const;
 
@@ -89,6 +98,11 @@ public:
     // at startup after the solver backend is chosen; thread-safe. Defaults to
     // "GPU 0" since the GPU solver is the default backend.
     void set_device_label(std::string label);
+
+    // Installed once at startup by whichever backend can supply telemetry; called
+    // while building a snapshot. Left null on platforms with none.
+    using TelemetryFn = std::function<void(Snapshot&)>;
+    void set_telemetry_source(TelemetryFn fn);
 
     // Test seam (same documented-seam pattern as Client::handle_line and
     // Engine::submit_fn): defaults to std::chrono::steady_clock::now in the
@@ -103,6 +117,7 @@ public:
     std::function<std::chrono::steady_clock::time_point()> now_fn;
 
 private:
+    TelemetryFn telemetry_;
     struct Event {
         std::chrono::steady_clock::time_point t;
         uint32_t candidates;

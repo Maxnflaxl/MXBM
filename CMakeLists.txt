@@ -141,7 +141,14 @@ target_include_directories(test_api PRIVATE tests src)
 target_link_libraries(test_api PRIVATE mxbm_api Threads::Threads)
 add_test(NAME api COMMAND test_api)
 
+# NVML telemetry: dlopen'd at runtime, so no build-time NVIDIA dependency. Compiled
+# unconditionally -- it reports nothing on a machine without the driver.
+add_library(mxbm_nvml STATIC src/gpu/nvml.cpp)
+target_include_directories(mxbm_nvml PUBLIC src)
+target_link_libraries(mxbm_nvml PUBLIC ${CMAKE_DL_LIBS})
+
 add_executable(mxbm src/main.cpp src/cli/options.cpp)
+target_link_libraries(mxbm PRIVATE mxbm_nvml)
 target_include_directories(mxbm PRIVATE src)
 target_link_libraries(mxbm PRIVATE mxbm_miner)
 target_link_libraries(mxbm PRIVATE mxbm_ui)

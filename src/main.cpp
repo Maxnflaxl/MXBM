@@ -25,6 +25,7 @@
 #include "stratum/messages.h"
 #include "miner/engine.h"
 #include "version.h"
+#include "gpu/nvml.h"
 #ifdef MXBM_HAVE_OPENCL
 #include "gpu/gpu_solver.h"
 #endif
@@ -227,6 +228,7 @@ int main(int argc, char** argv) {
                           cs->device().global_mem / 1073741824.0,
                           cs->device().compute_units);
             ui::console::info(line);
+            worker_label = cs->device().name;   // the table showed "GPU 0" for both backends
             solver = std::move(cs);
         } catch (const std::exception& e) {
             ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
@@ -245,6 +247,7 @@ int main(int argc, char** argv) {
                           gs->device().global_mem / 1073741824.0,
                           gs->device().compute_units);
             ui::console::info(line);
+            worker_label = gs->device().name;
             solver = std::move(gs);
         } catch (const std::exception& e) {
             ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
@@ -259,6 +262,20 @@ int main(int argc, char** argv) {
     }
 #endif
     stats.set_device_label(worker_label);
+
+    // Device telemetry, if the platform can supply it. NVML is dlopen'd, ships with the
+    // NVIDIA driver rather than the toolkit, and is independent of which solver backend
+    // was chosen -- so an OpenCL run on an NVIDIA card gets it too.
+    if (solver && gpu::nvml_init()) {
+        stats.set_telemetry_source([](miner::Stats::Snapshot& s) {
+            const gpu::Telemetry t = gpu::nvml_sample();
+            s.has_power = t.have_power;         s.power_w       = t.power_w;
+            s.has_sm_clock = t.have_sm;         s.sm_clock_mhz  = t.sm_clock_mhz;
+            s.has_mem_clock = t.have_mem;       s.mem_clock_mhz = t.mem_clock_mhz;
+            s.has_temp = t.have_temp;           s.temp_c        = t.temp_c;
+            s.has_fan = t.have_fan;             s.fan_pct       = t.fan_pct;
+        });
+    }
     if (!solver && gpu_attempt_failed) {
         ui::console::info("Falling back to monitoring jobs only (no solving)");
     } else if (!solver) {
