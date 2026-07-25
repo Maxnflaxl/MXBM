@@ -13,6 +13,7 @@ bool g_nocolor = false;
 
 const char* const kGreen = "\033[1;32m";
 const char* const kRed   = "\033[1;31m";
+const char* const kBlue  = "\033[1;34m";
 const char* const kReset = "\033[0m";
 
 void print_line(const std::string& text) {
@@ -93,6 +94,28 @@ void disconnected() {
 
 void info(const std::string& msg) {
     print_line(msg);
+}
+
+void stats_block(const std::string& block) {
+    if (g_nocolor) { print_line(block); return; }
+    // Colour each line separately rather than wrapping the whole block in one
+    // SGR pair. The block is multi-line, and a single unterminated colour would
+    // stay in effect across every newline -- so anything another thread printed
+    // mid-block (a share line, a new job) would come out blue too, and a log
+    // truncated inside the block would leave the colour set forever. Per-line
+    // pairs keep every line self-contained.
+    size_t i = 0;
+    while (i <= block.size()) {
+        size_t j = block.find('\n', i);
+        const size_t end = (j == std::string::npos) ? block.size() : j;
+        std::fputs(kBlue, stdout);
+        std::fwrite(block.data() + i, 1, end - i, stdout);
+        std::fputs(kReset, stdout);
+        std::fputc('\n', stdout);
+        if (j == std::string::npos) break;
+        i = j + 1;
+    }
+    std::fflush(stdout);
 }
 
 void error(const std::string& msg) {

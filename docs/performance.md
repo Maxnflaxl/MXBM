@@ -75,8 +75,8 @@ pipeline. That overhead is gone; bench and end-to-end now track each other.
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 48.2 | 41.0 | shipping |
-| **CUDA** | **56.1** | **35.2** | [not yet wired into the miner](#the-cuda-backend) |
+| **OpenCL** | 48.2 | 41.0 | fallback / `--solver opencl` |
+| **CUDA** | **56.1** | **35.2** | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
 Both backends measured end-to-end over **300 distinct nonces**, ±4.1 % (1σ). The CUDA
@@ -923,13 +923,19 @@ element below the `[7,7,6,5,1]` schedule.
 
 ## The CUDA backend
 
-Built, gated, and measured. It is **not wired into the miner** — it lives under `cuda/`,
-builds with `nvcc` directly, and the shipping solver is still OpenCL.
+Built, gated, measured, and **wired into the miner** (2026-07-25). `--solver auto`, the
+default, now prefers CUDA and falls back to OpenCL and then to the CPU reference; the
+backend can be pinned with `--solver cuda|opencl`. CUDA is an *optional* build component
+— CMake probes for it with `check_language(CUDA)`, so a machine without a CUDA toolchain
+still builds and ships the OpenCL path unchanged.
+
+A standalone `nvcc`-only bench still lives under `cuda/` for profiling work (Nsight
+Compute cannot profile OpenCL, which is what motivated the port in the first place).
 
 | | end-to-end | verified/solve | sol/s |
 |---|---|---|---|
-| OpenCL (shipping) | 41.0 ms | 1.98 | 48.2 |
-| **CUDA backend** | **35.2 ms** | **1.98** | **56.1** |
+| OpenCL (fallback) | 41.0 ms | 1.98 | 48.2 |
+| **CUDA backend (default)** | **35.2 ms** | **1.98** | **56.1** |
 | lolMiner (user-measured, stock) | — | — | 53.0 |
 
 Same methodology on both sides: median over **300 distinct nonces**, persistent buffers,

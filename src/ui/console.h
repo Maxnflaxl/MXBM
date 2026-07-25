@@ -48,6 +48,11 @@ void share_result(int code, const std::string& description, long long ms = -1);
 void disconnected();
 
 void info(const std::string& msg);
+
+// The periodic multi-line statistics table, rendered blue to separate it from
+// the surrounding event lines. Takes an already-assembled block from
+// ui::format_stats_block; suppressed to plain text by init(true).
+void stats_block(const std::string& block);
 void error(const std::string& msg);
 
 } } } // namespace mxbm::ui::console

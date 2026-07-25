@@ -10,14 +10,17 @@ implementation.
 
 > **Status: GPU solver working, optimization ongoing.** MXBM connects to a real
 > Beam pool over TLS, authenticates with your wallet address, receives live jobs,
-> and runs the full job → solve → difficulty → submit pipeline on an **OpenCL GPU
-> solver**. On an RTX 4070 Ti SUPER it does **48.2 sol/s** (41.0 ms per solve, end-to-end) — up
-> from 1.8 sol/s when the solver first found a share — verified against the BeamHash III
-> known-answer vectors.
+> and runs the full job → solve → difficulty → submit pipeline on a **GPU solver**.
 >
-> A **CUDA backend** measures **56.1 sol/s** on the same card and the same gate, which is
-> past the ~53 sol/s the fastest closed-source miner reaches at stock clocks. It is not
-> yet wired into the miner — the shipping solver is still OpenCL. See
+> There are two GPU backends. On an RTX 4070 Ti SUPER the **CUDA** backend does
+> **56.1 sol/s** (35.2 ms per solve, end-to-end) and the portable **OpenCL** one
+> **48.2 sol/s** — up from 1.8 sol/s when the solver first found a share, and both
+> verified against the BeamHash III known-answer vectors. `--solver auto` (the default)
+> prefers CUDA, falls back to OpenCL, then to the CPU reference; CUDA is an optional
+> build component, so a machine without a CUDA toolchain still builds the OpenCL path.
+>
+> The CUDA figure is past the ~53 sol/s the fastest closed-source miner reaches at stock
+> clocks, but by ~6 % against a ±4 % measurement error. See
 > [docs/performance.md](docs/performance.md) for the full measured history and the caveats
 > on that comparison.
 >
@@ -44,10 +47,11 @@ Licensed under the [Apache License 2.0](LICENSE).
   statistics block, share/accept lines), a compatible command-line surface, and
   both configuration-file formats.
 - **`/summary` HTTP API** for monitoring.
-- **OpenCL GPU solver** — a fused row-bucket Wagner pipeline that finds all five
-  rounds' collisions in local memory. Selected automatically when a suitable device
-  is present, with automatic fallback. Every optimization is gated on byte-identical
-  known-answer solutions; see [docs/performance.md](docs/performance.md).
+- **CUDA and OpenCL GPU solvers** — a fused row-bucket Wagner pipeline that finds all
+  five rounds' collisions in local memory. The best available backend is selected
+  automatically, with fallback all the way down to the CPU reference. Every optimization
+  is gated on byte-identical known-answer solutions; see
+  [docs/performance.md](docs/performance.md).
 - **Self-contained** — no Boost, no Beam runtime. The only dependencies are a
   vendored single-header JSON library and your system OpenSSL.
 
@@ -76,13 +80,13 @@ files, and API.
 | Stratum client | Connect, authenticate, receive jobs from a real pool | ✅ done |
 | Miner shell | lolMiner-style console, CLI, config files, `/summary` API | ✅ done |
 | GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
-| **Solver performance** | **Close the gap to the fastest closed-source miners** | **in progress** |
+| Solver performance | Close the gap to the fastest closed-source miners | ✅ done (CUDA, +6 %) |
 | Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
-| Optimized backends | Tuned CUDA (NVIDIA) and HIP (AMD) kernels | planned |
+| Optimized backends | Tuned CUDA (NVIDIA) ✅ done; HIP (AMD) | in progress |
 
-GPU support targets both NVIDIA and AMD: an OpenCL baseline first (runs on
-both), then vendor-tuned CUDA and HIP backends. The OpenCL solver is measured on
-NVIDIA; AMD is untested so far.
+GPU support targets both NVIDIA and AMD: an OpenCL baseline (runs on both), then
+vendor-tuned backends. The CUDA backend is done and shipping; HIP is not started. Both
+solvers are measured on NVIDIA only — AMD is untested so far.
 
 ## Architecture
 

@@ -14,7 +14,7 @@ report; BeamHash III yields ~1.9 solutions per solve.
 
 | | Requirement |
 |---|---|
-| **GPU** | OpenCL 1.2+ device. Developed and measured on NVIDIA (Ada, sm_89). |
+| **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
 | **VRAM — to run at all** | ~6 GB |
 | **VRAM — for a search that actually finds solutions** | **~16 GB today** (see the caveat below) |
 | **VRAM — what a full search genuinely needs** | **~7.46 GiB** (row-bucket path) |
@@ -84,11 +84,16 @@ any configuration that cannot host the full 2^25 seed layer as non-functional.
 Reference card: **RTX 4070 Ti SUPER** (Ada, sm_89, 66 CUs, 16 GB, 48 KB LDS/workgroup).
 Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
-| | |
-|---|---|
-| Throughput | **47.5 sol/s** (BeamHash III yields ~1.9 solutions per solve) |
-| End-to-end solve | **40.0 ms** (median of 5, steady state) — the headline figure (`GpuSolver::solve()`, incl. recovery + CPU verification) |
-| Solve time (pipeline only) | 40.3 ms median (`./build/bench_rounds 20`) |
+| | CUDA (default) | OpenCL (fallback) |
+|---|---|---|
+| Throughput | **56.1 sol/s** | 48.2 sol/s |
+| End-to-end solve | **35.2 ms** | 41.0 ms |
+
+End-to-end is the headline figure — `solve()` including survivor readback, back-reference
+recovery and CPU verification — as a median over 300 distinct nonces (±4.1 %, 1σ).
+BeamHash III yields ~1.98 *verified* solutions per solve, measured independently on both
+backends. `./build/bench_rounds 20` reports the pipeline-only median instead (40.3 ms on
+OpenCL), which is the controlled number used to make optimization decisions.
 
 See [performance.md](performance.md) for the full optimization history.
 

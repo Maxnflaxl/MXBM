@@ -132,6 +132,11 @@ target_include_directories(test_format PRIVATE tests src)
 target_link_libraries(test_format PRIVATE mxbm_ui)
 add_test(NAME format COMMAND test_format)
 
+add_executable(test_console tests/test_console.cpp)
+target_include_directories(test_console PRIVATE tests src)
+target_link_libraries(test_console PRIVATE mxbm_ui)
+add_test(NAME console COMMAND test_console)
+
 add_library(mxbm_api STATIC src/api/http_summary.cpp)
 target_include_directories(mxbm_api PUBLIC src)
 target_link_libraries(mxbm_api PUBLIC mxbm_miner mxbm_json mxbm_version)

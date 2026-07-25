@@ -84,7 +84,8 @@ void Ticker::worker_main() {
         // mutex, and console I/O should never hold up stop().
         if (fire_short) console::info(format_speed_line(stats_->snapshot()));
         if (fire_long) {
-            console::info(format_stats_block(stats_->snapshot(), mxbm::version(), clock_hhmmss().c_str()));
+            console::stats_block(
+                format_stats_block(stats_->snapshot(), mxbm::version(), clock_hhmmss().c_str()));
         }
     }
 }
