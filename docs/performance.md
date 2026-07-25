@@ -916,14 +916,42 @@ the target. What is left is not more solver micro-optimization:
    independent of either miner's counters. `docs-internal/MINER_COMP.md` has the protocol
    and the sample-size arithmetic. The margin (56.1 ± 2.3 against 53) is real but thin
    enough that this matters.
-2. **Wire the CUDA backend into the miner**, keeping OpenCL as the portable fallback. It
-   is currently standalone under `cuda/`, gated on the KAT but not reachable from the
-   stratum path.
+2. ~~**Wire the CUDA backend into the miner.**~~ **Done 2026-07-25** — `--solver
+   auto|cuda|opencl|gpu|ref`, CUDA preferred, OpenCL kept as the portable fallback.
 3. **Overclocking.** Deferred until parity was in sight. BeamHash III is bandwidth-bound,
    so a memory offset scales it close to linearly — and it applies to lolMiner equally,
-   so the honest comparison is overclocked against overclocked.
+   so the honest comparison is overclocked against overclocked. Design decisions, the
+   verified NVML ranges and the verified lolMiner behaviour are in
+   [overclocking.md](overclocking.md). `mxbm --benchmark BEAM-III` exists to A/B the
+   settings without a pool.
 4. **Per-path VRAM budget on the CUDA side.** The OpenCL path got this; the CUDA one
    hardcodes its geometry. Reach, not speed.
+5. **Two concurrent solves, to overlap complementary bottlenecks.** The rounds do not all
+   bottleneck on the same resource: `entry` is at 98.6 % of SM throughput and r1+r2 sit at
+   28 %/53 % DRAM, while r3/r4/terminal are at 78–80 % DRAM. Running two solves offset in
+   phase would let one's siphash arithmetic overlap the other's DRAM-saturated scatter —
+   different units, so the overlap is genuinely additive rather than contending.
+
+   Nothing overlaps today: the CUDA backend uses no `cudaStream` at all, so every kernel
+   runs in issue order on the default stream. That is why the headroom is untouched, and
+   equally why this is real work rather than a tuning knob — it needs a second set of
+   buffers, a second stream, and the solve loop restructured to keep two nonces in flight.
+   (An earlier plan item called "nonce-pipeline the round-5 tail" was never implemented;
+   do not treat it as precedent.)
+
+   **Blocked on footprint, which is why this is the same problem as memory efficiency.**
+   Two searches need ~14.9 GiB of buffers plus a shared context against 15.99 GiB total,
+   with a display attached — a few hundred MB of margin, too thin to be safe. This is a
+   second, independent reason to pursue the streaming / in-place layer reuse in
+   [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md): not only does it move fewer bytes, it buys
+   the room for concurrency. lolMiner fitting the same search in 4G says the room exists.
+
+   **Measure first: SM/ALU throughput on r1 and r2.** We have it for `entry` (98.6 %) but
+   not for these two, and it decides the mechanism. Near SM peak → they are compute-bound,
+   and overlapping them against r3/r4's bandwidth is exactly complementary. Neither SM- nor
+   DRAM-saturated → they are latency-bound, and concurrency helps *more* directly, by
+   giving the scheduler more warps to hide the latency with. The case that would sink the
+   idea is the one where the phases turn out to contend for the same unit after all.
 
 **Where the remaining time is, for anyone picking it up.** Of the CUDA backend's 35.2 ms:
 r3, r4 and terminal (16.6 ms) sit at **78–80 % of theoretical DRAM peak** and are
