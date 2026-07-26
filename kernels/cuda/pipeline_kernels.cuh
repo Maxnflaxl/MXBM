@@ -14,16 +14,9 @@ void entry_scatter(const uint64_t* __restrict__ pp4, uint32_t begin, uint32_t co
                    uint32_t* __restrict__ drops) {
     const uint32_t g = blockIdx.x*blockDim.x + threadIdx.x;
     if (g >= count) return;
-    const uint32_t idx = begin + g;
-    uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
-    bh3::Elem e; bh3::seed_element(pp, idx, e);
-    uint32_t t1[1] = { idx };
-    bh3::apply_mix(e, t1, 1u, 448u);
-    const uint32_t key = (uint32_t)(e.w[0] & 0xFFFFFFu);
-    const uint32_t b = key >> (24u - bucket_bits);
-    const uint32_t pos = atomicAdd(&counts[b], 1u);
-    if (pos < bucket_cap) belem[(size_t)b*bucket_cap + pos] = ((uint64_t)idx << 32) | key;
-    else atomicAdd(&drops[1], 1u);
+    // Body shared with fused_round's COTENANT path, so the co-resident entry cannot
+    // drift from the standalone one.
+    entry_body(begin + g, pp4, bucket_bits, bucket_cap, counts, belem, drops);
 }
 
 // ---- terminal: combine at Lout(5)=24 and keep the all-zero survivors ----------------
@@ -38,8 +31,8 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
                     uint32_t* __restrict__ all_left, uint32_t* __restrict__ all_right,
                     uint32_t* __restrict__ surv_slots, uint32_t* __restrict__ surv_count,
                     uint32_t surv_cap, uint32_t* __restrict__ drops) {
-    __shared__ uint64_t lwork[kFCap];
-    __shared__ uint32_t lgi[kFCap], llead[kFCap], lkey[kFCap], lchain[kFCap], tab[kTabSize];
+    __shared__ uint64_t lwork[kTCap];
+    __shared__ uint32_t lgi[kTCap], llead[kTCap], lkey[kTCap], lchain[kTCap], tab[kTabSize];
     __shared__ uint32_t gcount;
     const uint32_t lId = threadIdx.x;
     const uint32_t submaskCount = 1u << submask_bits;
@@ -56,13 +49,13 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
         const uint32_t key = (uint32_t)(w0 & 0xFFFFFFu);
         if ((key & (submaskCount - 1u)) != mask) continue;
         const uint32_t pos = atomicAdd(&gcount, 1u);
-        if (pos >= kFCap) { atomicAdd(&drops[1], 1u); continue; }
+        if (pos >= kTCap) { atomicAdd(&drops[1], 1u); continue; }
         const uint64_t meta = in_belem[d + 1];
         lwork[pos] = w0; lgi[pos] = (uint32_t)(meta >> 32);
         llead[pos] = (uint32_t)meta; lkey[pos] = key;
     }
     __syncthreads();
-    const uint32_t total = gcount < kFCap ? gcount : kFCap;
+    const uint32_t total = gcount < kTCap ? gcount : kTCap;
     for (uint32_t pos = lId; pos < total; pos += kWG) {
         const uint32_t hk = (lkey[pos] >> submask_bits) & (kTabSize - 1u);
         lchain[pos] = atomicExch(&tab[hk], pos);

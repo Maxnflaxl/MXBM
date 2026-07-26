@@ -124,6 +124,14 @@ CudaSolver::CudaSolver() : p_(new Impl) {
     const RbGeometry g = pick_geometry(p_->info.global_mem);
     if (!g.viable)
         throw std::runtime_error("CUDA: no row-bucket geometry fits this device");
+    // MXBM_PERFECT_TAB drops the key comparison in the chain walk, which is only sound
+    // while the table can separate every key that varies inside a group: 24 - bb - sm
+    // bits. Every geometry on the bb + sm = 17 line leaves exactly 7 and kTabSize is 128,
+    // so this holds for all of them -- but MXBM_BB/MXBM_SM can be set off the line by
+    // hand, and silently combining unequal keys would corrupt results rather than fail.
+    if (MXBM_PERFECT_TAB && (24u - g.bb - g.sm) > 7u)
+        throw std::runtime_error("CUDA: geometry leaves more key bits than the chain "
+                                 "table can separate (bb + sm must be >= 17)");
     const bool forced = std::getenv("MXBM_BB") || std::getenv("MXBM_SM");
     bool ok = p_->alloc_geometry(g.bb, g.sm);
     for (uint32_t bb = g.bb; !ok && !forced && bb > 14u; ) {
