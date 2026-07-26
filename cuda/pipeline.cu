@@ -6,6 +6,19 @@
 // The gate is the same one the OpenCL path uses and is non-negotiable: survivors == 3 on
 // the KAT prePow, bucketDrops == 0, pairDrops == 0.
 #include "pipeline_kernels.cuh"
+#ifndef MXBM_ABL_DERIVE
+#define MXBM_ABL_DERIVE 0
+#endif
+#ifndef MXBM_ABL_EMIT
+#define MXBM_ABL_EMIT 0
+#endif
+#ifndef MXBM_CO_NOSCATTER
+#define MXBM_CO_NOSCATTER 0
+#endif
+#ifndef MXBM_SUBPASS
+#define MXBM_SUBPASS 0
+#endif
+#define MXBM_ABL (MXBM_ABL_DERIVE | MXBM_ABL_EMIT | MXBM_ABL_MIX | MXBM_CO_NOSCATTER)
 #include "kat_vectors.h"
 #include <cstdio>
 #include <cmath>
@@ -25,6 +38,18 @@ using namespace mxbm::cuda;
 
 #define CK(x) do{ cudaError_t e=(x); if(e){ printf("CUDA %s @%d\n",cudaGetErrorString(e),__LINE__); return 1; } }while(0)
 
+// ---- MXBM_OCC: what the per-bucket capacity actually has to cover --------------------
+// The 8 in fb_cap_for's mean + 8*sqrt(mean) + 32 is the largest term in the footprint:
+// 215 of 743 slots at bb=16. counts[] is atomicAdd'ed WITHOUT being clamped (only the
+// emit is gated on cpos < cap), so it is the true unclamped occupancy and reducing it
+// gives the tail directly. Running max over every round of every solve.
+__global__ void occ_reduce(const uint32_t* __restrict__ counts, uint32_t nb,
+                           uint32_t* __restrict__ out) {
+    const uint32_t i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i < nb) atomicMax(out, counts[i]);
+}
+static bool occ_on() { static const bool v = getenv("MXBM_OCC") != nullptr; return v; }
+
 // ---- solver: persistent buffers, one solve() per (input, nonce) ---------------------
 // Mirrors src/gpu/gpu_solver.cpp so the timing is like-for-like: buffers are allocated
 // ONCE and reused, and solve() returns only CPU-VERIFIED solutions. Comparing a
@@ -35,8 +60,11 @@ template<class T> static T* dalloc(size_t n) { void* p=nullptr; cudaMalloc(&p, n
 struct CudaSolver {
     static constexpr uint32_t elems    = 1u << 25;
     static constexpr uint32_t capacity = elems + elems/32;    // 34,603,008
-    static constexpr uint32_t bb = 16, sm = 1, nb = 1u << bb;
     static constexpr uint32_t survCap = 1024;
+    // Geometry is a RUNTIME choice on the bb + sm = 17 line. Coarser buckets pay the
+    // per-bucket capacity slack fewer times (smaller footprint) but multiply the
+    // redundant staging rescan by 2^sm. MXBM_BB/MXBM_SM sweep it.
+    uint32_t bb = 16, sm = 1, nb = 1u << 16;
     uint32_t cap = 0; size_t nslots = 0;
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
@@ -48,6 +76,7 @@ struct CudaSolver {
     // it currently shares. Given its own buffer it can run on a second stream against
     // the previous nonce's r3/r4, which leave 71-79 % of the SM idle.
     // Double-buffered: entry(i+1) writes one slot while r1(i) still reads the other.
+    uint32_t *occmax = nullptr;                  // [0]=entry, [1..4]=rounds 1..4
     uint64_t *entryOut[2] = {nullptr,nullptr};
     uint32_t *entryCounts[2] = {nullptr,nullptr};
     uint64_t *dpp2[2] = {nullptr,nullptr};       // rounds of solve i still use solve i's pp
@@ -57,6 +86,10 @@ struct CudaSolver {
     bool r1Ever[2] = {false,false};
 
     bool init() {
+        if (const char* e = getenv("MXBM_BB")) bb = (uint32_t)atoi(e);
+        sm = 17u - bb;
+        if (const char* e = getenv("MXBM_SM")) sm = (uint32_t)atoi(e);
+        nb = 1u << bb;
         const uint32_t mean = capacity / nb;
         cap    = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
         nslots = (size_t)nb * cap;
@@ -72,6 +105,7 @@ struct CudaSolver {
         survSlots = dalloc<uint32_t>(survCap); survCount = dalloc<uint32_t>(1);
         dleaves = dalloc<uint32_t>((size_t)survCap*32);
         dpp = dalloc<uint64_t>(4);
+        occmax = dalloc<uint32_t>(5); cudaMemset(occmax, 0, 20);
         for (int k = 0; k < 2; ++k) {
             entryOut[k]    = dalloc<uint64_t>(nslots);
             entryCounts[k] = dalloc<uint32_t>(nb);
@@ -114,6 +148,7 @@ struct CudaSolver {
             entry_scatter<<<(elems+255)/256,256,0,st>>>(dpp2[slot], 0, elems, bb, cap,
                                                         entryCounts[slot], entryOut[slot], drops);
         }
+        if (occ_on()) occ_reduce<<<(nb+255)/256,256,0,st>>>(entryCounts[slot], nb, occmax);
         cudaEventRecord(entryDone[slot], st);
     }
 
@@ -124,6 +159,10 @@ struct CudaSolver {
     // sees, so the memory traffic per rep is identical to the real thing. Each rep
     // re-zeros the output counters first, exactly as MXBM_ENTRY_REPS does, so every rep
     // is a complete correct pass and the last leaves valid state for the next round.
+    // Which round hosts the co-tenant entry. r3 by default: longest of the DRAM-bound
+    // rounds (9.5 ms at 21 % SM), so the most idle issue slots to fill. MXBM_CO_ROUND.
+    static int co_round() { static const int v = []{ const char* e=getenv("MXBM_CO_ROUND");
+                                return e ? atoi(e) : 3; }(); return v; }
     static int rep_round() { static const int v = []{ const char* e=getenv("MXBM_ROUND_REPS");
                                  return e ? atoi(e) : 0; }(); return v; }
     static int rep_count() { static const int v = []{ const char* e=getenv("MXBM_ROUND_REPS");
@@ -133,14 +172,25 @@ struct CudaSolver {
     // Rounds 1..terminal + recover + CPU verify, consuming entry's output from `slot`.
     // `after_r1` is invoked once r1 has been ISSUED (not completed), which is the point at
     // which the next nonce's entry may be queued on the other stream.
+    // coNonce != nullptr: host that nonce's entry pass inside round `coRound`'s blocks,
+    // instead of launching entry_scatter for it separately. See COTENANT in fused_round.
     template<class F>
     std::vector<std::array<uint8_t,104>> finish_solve(const uint8_t input[32], const uint8_t nonce[8],
                                                       int slot, cudaStream_t st, F after_r1,
-                                                      uint32_t* survOut = nullptr, uint32_t* dropOut = nullptr) {
+                                                      uint32_t* survOut = nullptr, uint32_t* dropOut = nullptr,
+                                                      const uint8_t* coNonce = nullptr, int coSlot = 0) {
         std::vector<std::array<uint8_t,104>> out;
         uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};
         bh3::compute_prepow(input, 32, nonce, extra0, pp);
         cudaMemcpyAsync(dpp, pp, 32, cudaMemcpyHostToDevice, st);
+        if (coNonce) {
+            uint64_t cpp[4];
+            bh3::compute_prepow(input, 32, coNonce, extra0, cpp);
+            cudaMemcpyAsync(dpp2[coSlot], cpp, 32, cudaMemcpyHostToDevice, st);
+            // entry_scatter appends atomically, so its counters must be zeroed first --
+            // exactly as launch_entry does before its own launch.
+            cudaMemsetAsync(entryCounts[coSlot], 0, (size_t)nb*4, st);
+        }
         cudaMemsetAsync(drops, 0, 16, st); cudaMemsetAsync(survCount, 0, 4, st);
         cudaStreamWaitEvent(st, entryDone[slot], 0);
         int inSet = 0;
@@ -154,10 +204,24 @@ struct CudaSolver {
               for (int rp = 0; rp < reps; ++rp) {                                         \
                 cudaMemsetAsync(counts[o], 0, (size_t)nb*4, st);                         \
                 cudaMemsetAsync(gictr, 0, 4, st);                                        \
-                fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>  \
-                  <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
-                      (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],                \
-                      left, right, gictr, drops, dpp); }                                 \
+                if (MXBM_SUBPASS)                                                        \
+                  fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR,false,true>\
+                    <<<nb, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,   \
+                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        left, right, gictr, drops, dpp);                                 \
+                else if (coNonce && (R) == co_round())                                   \
+                  fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR,true>\
+                    <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
+                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        left, right, gictr, drops, dpp,                                  \
+                        dpp2[coSlot], elems, cap, entryCounts[coSlot], entryOut[coSlot]); \
+                else                                                                     \
+                  fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR> \
+                    <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
+                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        left, right, gictr, drops, dpp); }                                \
+              if (occ_on())                                                             \
+                occ_reduce<<<(nb+255)/256,256,0,st>>>(counts[o], nb, occmax + (R));      \
               if ((R)==1) { cudaEventRecord(r1Done[slot], st); r1Ever[slot] = true;       \
                             after_r1(); }                                                \
               inSet = o; }
@@ -252,7 +316,15 @@ int main(int argc, char** argv) {
     const bool gate = (surv == 3) && (drop == 0) && (sols.size() == 3) && (matched == 3);
     printf("KAT      : survivors=%u verified=%zu goldens=%d/3 drops=%u -> %s\n",
            surv, sols.size(), matched, drop, gate ? "PASS" : "FAIL");
-    if (!gate) return 1;
+    // An attribution build computes the wrong answer BY DESIGN, so the gate cannot also
+    // be the exit condition for it. Everything else still has to pass it.
+    // MXBM_FORCE_TIMING: time a configuration that fails the gate. Only ever valid when
+    // the drop count is reported alongside, since drops REMOVE downstream work and thus
+    // flatter the result -- a config that is not faster despite dropping is conclusive.
+    const bool force = getenv("MXBM_FORCE_TIMING") != nullptr;
+    if (!gate && !MXBM_ABL && !force) return 1;
+    if (MXBM_ABL) printf("  *** ablation build (derive=%d emit=%d): timings only, results WRONG\n",
+                         MXBM_ABL_DERIVE, MXBM_ABL_EMIT);
 
     // --- like-for-like timing: distinct nonces, end-to-end, verified solutions ---
     //
@@ -265,8 +337,11 @@ int main(int argc, char** argv) {
     // double-count the shared time. The same figure is printed for both paths so the
     // comparison is like-for-like.
     const int n = (argc > 1) ? atoi(argv[1]) : 20;
-    bool overlap = false;
-    for (int i = 1; i < argc; ++i) if (!strcmp(argv[i], "--overlap")) overlap = true;
+    bool overlap = false, fuse = false;
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--overlap")) overlap = true;
+        if (!strcmp(argv[i], "--fuse"))    fuse = true;
+    }
 
     uint8_t nonce[8]; memcpy(nonce, kat::nonce0, 8);
     auto nonce_for = [&](int i, uint8_t* out) {
@@ -279,7 +354,36 @@ int main(int argc, char** argv) {
     cudaDeviceSynchronize();
     auto T0 = std::chrono::steady_clock::now();
 
-    if (!overlap) {
+    if (fuse) {
+        // Solve i's round `co_round` hosts solve i+1's entry pass, so entry_scatter is
+        // launched exactly ONCE (to prime solve 0) instead of once per solve. If the
+        // co-residency does nothing, this costs the same as sequential; if it works, the
+        // entry pass is free from solve 1 onward.
+        uint8_t cur[8], nxt[8];
+        nonce_for(0, cur);
+        s.launch_entry(kat::input32, cur, 0, s.sMain);          // prime solve 0 only
+        for (int i = 0; i < n; ++i) {
+            nonce_for(i, cur);
+            const int slot = i & 1;
+            const bool more = (i + 1 < n);
+            if (more) nonce_for(i + 1, nxt);
+            auto t0 = std::chrono::steady_clock::now();
+            uint32_t d = 0;
+            auto v = s.finish_solve(kat::input32, cur, slot, s.sMain, []{}, nullptr, &d,
+                                    more ? nxt : nullptr, (i + 1) & 1);
+            // NOSCATTER is a diagnostic: the co-tenant computes but stores nothing, so it
+            // cannot feed the next solve. Launch the real entry as well, making the
+            // co-tenant PURELY ADDITIVE compute -- the delta against sequential is then
+            // exactly what it costs to host entry's arithmetic inside a round, with its
+            // scatter left out. (Without this the pipeline runs on an empty buffer and
+            // "3.84 ms/solve" measures nothing at all.)
+            if (MXBM_CO_NOSCATTER && more) s.launch_entry(kat::input32, nxt, (i + 1) & 1, s.sMain);
+            cudaDeviceSynchronize();
+            ms.push_back(std::chrono::duration<double,std::milli>(
+                             std::chrono::steady_clock::now() - t0).count());
+            verified += v.size(); worstDrop |= d;
+        }
+    } else if (!overlap) {
         for (int i = 0; i < n; ++i) {
             nonce_for(i, nonce);
             auto t0 = std::chrono::steady_clock::now();
@@ -322,9 +426,25 @@ int main(int argc, char** argv) {
     const double med = ms[ms.size()/2];
     const double per = wall / n;
     const double spersolve = (double)verified / n;
-    printf("mode      : %s\n", overlap ? "OVERLAP (entry on 2nd stream)" : "sequential (baseline)");
+    printf("mode      : %s\n", fuse    ? "FUSED (entry co-tenant in a round's blocks)"
+                            : overlap ? "OVERLAP (entry on 2nd stream)"
+                                      : "sequential (baseline)");
     printf("end-to-end: %.2f ms/solve (wall/%d)   [per-solve median %.2f ms]\n", per, n, med);
     printf("solutions : %.2f verified/solve  =>  %.1f sol/s\n", spersolve, spersolve*1000.0/per);
     printf("drops     : %u  %s\n", worstDrop, worstDrop ? "*** NONZERO -- RESULT INVALID ***" : "(clean)");
+
+    if (occ_on()) {
+        // Normalised the way fb_cap_for is written -- (max - mean)/sqrt(mean) with
+        // mean = capacity/nb -- so the sd column compares directly against its 8.
+        uint32_t occ[5] = {0,0,0,0,0};
+        cudaMemcpy(occ, s.occmax, 20, cudaMemcpyDeviceToHost);
+        const double mean = (double)s.capacity / (double)s.nb, sd = std::sqrt(mean);
+        printf("occupancy : cap=%u (mean %.0f + 8 sd + 32), over %d solves x %u buckets\n",
+               s.cap, mean, n + 1, s.nb);
+        static const char* nm[5] = {"entry","r1","r2","r3","r4"};
+        for (int i = 0; i < 5; ++i)
+            printf("  %-6s max=%-6u  = mean + %.2f sd    (%.0f%% of cap)\n",
+                   nm[i], occ[i], ((double)occ[i] - mean)/sd, 100.0*occ[i]/s.cap);
+    }
     return 0;
 }
