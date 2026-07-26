@@ -30,11 +30,14 @@
 <line x1="62" y1="112.2" x2="938" y2="112.2" stroke="#2ca02c" stroke-width="1.2" stroke-dasharray="6 4"/>
 <text x="500.0" y="126.2" font-size="10" fill="#2ca02c" text-anchor="middle">lolMiner target 53 sol/s</text>
 <line x1="773.8" y1="58" x2="773.8" y2="368" stroke="#999" stroke-width="1.2" stroke-dasharray="3 3"/>
-<text x="769.8" y="362" font-size="9" fill="#777" text-anchor="end" transform="rotate(-90 769.8 362)">OpenCL &#183; pipeline median</text>
-<text x="783.8" y="362" font-size="9" fill="#777" text-anchor="start" transform="rotate(-90 783.8 362)">CUDA &#183; end-to-end</text>
+<text x="769.8" y="362" font-size="9" fill="#777" text-anchor="start" transform="rotate(-90 769.8 362)">OpenCL &#183; pipeline median</text>
+<text x="786.8" y="362" font-size="9" fill="#777" text-anchor="start" transform="rotate(-90 786.8 362)">CUDA &#183; end-to-end</text>
 <line x1="865.0" y1="86.2" x2="865.0" y2="108.4" stroke="#1f77b4" stroke-width="1.4"/>
 <line x1="861.0" y1="86.2" x2="869.0" y2="86.2" stroke="#1f77b4" stroke-width="1.4"/>
 <line x1="861.0" y1="108.4" x2="869.0" y2="108.4" stroke="#1f77b4" stroke-width="1.4"/>
+<line x1="938.0" y1="86.2" x2="938.0" y2="90.0" stroke="#1f77b4" stroke-width="1.4"/>
+<line x1="934.0" y1="86.2" x2="942.0" y2="86.2" stroke="#1f77b4" stroke-width="1.4"/>
+<line x1="934.0" y1="90.0" x2="942.0" y2="90.0" stroke="#1f77b4" stroke-width="1.4"/>
 <polyline points="62.0,86.2 98.5,303.9 135.0,307.6 171.5,310.4 208.0,328.3 244.5,330.7 281.0,331.5 317.5,332.3 354.0,334.5 390.5,336.9 427.0,340.4 463.5,342.4 500.0,344.7 536.5,345.7 573.0,352.9 609.5,353.5 646.0,353.9 682.5,355.3 719.0,356.5 755.5,357.2 792.0,356.8 828.5,357.7 865.0,358.6 901.5,358.6 938.0,358.8" fill="none" stroke="#d62728" stroke-width="2"/>
 <circle cx="62.0" cy="86.2" r="2.8" fill="#d62728"><title>2026-07-23
 First working GPU solver (first share found)</title></circle>

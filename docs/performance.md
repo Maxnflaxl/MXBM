@@ -73,6 +73,16 @@ Error bars are ±1σ, drawn only where a spread was actually measured — the pa
 `56.1 ± 2.3` out of the table, so a row without a measured spread stays a bare point
 rather than being given a fabricated one.
 
+**The spread is Poisson on the observed solution count, `1/√N`, and it cannot be got by
+repeating the run.** Five repeats of the 2026-07-26 build read 58.3, 58.4, 58.4, 58.4,
+58.4 — σ = 0.045, which looks like a superbly precise measurement and is not one. A repeat
+at the same duration replays the *same nonce sequence*, so it re-observes the same
+solutions and measures timing jitter only. The real uncertainty is in
+solutions-per-solve, and only a longer run samples more of it: the 300 s run saw 1.99
+where the 120 s runs all saw 2.01, a difference nine times that σ. So `58.0 ± 0.4` comes
+from 8,729 solves × 1.99 = 17,371 solutions → `1/√17371` = 0.76 %, the same model that
+gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
+
 | Date | Change | Before | After | **sol/s** | Δ ms | Δ % | Worked | Didn't work |
 |---|---|---|---|---|---|---|---|---|
 | 2026-07-23 | **First working GPU solver** (first share found) | — | ~1050 | **1.8** | — | — | — | — |
@@ -101,7 +111,7 @@ rather than being given a fabricated one.
 | 2026-07-25 | 128-bit access on the round-2/3 records | 41.6 | 38.4 | **51.6** | −3.2 | −7.7 % | [CUDA backend](#the-cuda-backend) | — |
 | 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1 ± 2.3** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](#levers-tried-after-the-mio-fix--all-null) |
 | 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.16 | 35.0 | **56.4** | −0.2 | −0.6 % | [Alignment pad](#the-round-2-alignment-pad) *(the win is −0.36 GiB; the speed is noise-level)* | — |
-| 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0** | −0.9 | −2.6 % | [Group cap](#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](#bytes-are-nearly-free-per-element-work-is-not) |
+| 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0 ± 0.4** | −0.9 | −2.6 % | [Group cap](#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](#bytes-are-nearly-free-per-element-work-is-not) |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|

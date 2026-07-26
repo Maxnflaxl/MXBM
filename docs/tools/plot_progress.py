@@ -209,11 +209,17 @@ def render(rows, switch_at, log=True):
         xb = (x(switch_at - 1) + x(switch_at)) / 2
         a('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="#999" stroke-width="1.2" '
           'stroke-dasharray="3 3"/>' % (xb, T, xb, H - B))
-        for dx, anchor, txt in ((-4, "end", "OpenCL &#183; pipeline median"),
-                                (10, "start", "CUDA &#183; end-to-end")):
-            a('<text x="%.1f" y="%d" font-size="9" fill="#777" text-anchor="%s" '
+        # Both read bottom-to-top from just inside the plot floor, so both need
+        # text-anchor="start": under rotate(-90) an "end" anchor makes the label run
+        # DOWNWARD out of the plot and off the canvas. The glyphs extend toward -x from
+        # the baseline, so the right-hand label's baseline is offset by the cap height
+        # as well as the gap to put its body clear of the divider on the other side.
+        GAP, CAP = 4, 9
+        for dx, txt in ((-GAP, "OpenCL &#183; pipeline median"),
+                        (GAP + CAP, "CUDA &#183; end-to-end")):
+            a('<text x="%.1f" y="%d" font-size="9" fill="#777" text-anchor="start" '
               'transform="rotate(-90 %.1f %d)">%s</text>'
-              % (xb + dx, H - B - 6, anchor, xb + dx, H - B - 6, txt))
+              % (xb + dx, H - B - 6, xb + dx, H - B - 6, txt))
 
     # -- series ----------------------------------------------------------
     def poly(vals, scale, colour):
