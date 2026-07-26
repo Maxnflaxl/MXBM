@@ -120,71 +120,18 @@ bool compact_active();   // defined below; gates the compacted sort path
 //   r2 reads a 16 B (key,left,right,gi)  -- rebuilt from its two parent seeds
 // Both derivations live in the kernel's non-divergent expand loop; done in the
 // sub-mask-filtered staging loop instead, round 2's cost 23.5 ms rather than 0.4.
-constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 2u };
-// The two ping-pong sets do NOT need the same width. Round r writes set (r&1), and
-// the entry writes set 0, so set 0 holds the round-2 and round-4 outputs (max 10 u64)
-// while set 1 holds the round-1 and round-3 outputs (max 8). Sizing them separately
-// frees ~0.7 GiB. Derived from kFbStride rather than written out, so it cannot drift.
-constexpr uint32_t fb_set_stride(int set) {
-    uint32_t m = (set == 0) ? kFbStride[1] : 0u;          // entry writes set 0
-    for (int r = 1; r <= 4; ++r)
-        if ((r & 1) == set && kFbStride[r + 1] > m) m = kFbStride[r + 1];
-    return m;
-}
-// Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
-// occupancy is ~Poisson(mean) with mean = capacity/nb and **sigma = sqrt(mean)**.
-// MEASURED (MXBM_OCC, 52 round-solve samples at nb=32768): the max over all buckets
-// sits at mean + 4.07..4.35 sigma, very tightly concentrated -- as expected, since the
-// max of n Poisson draws concentrates around mean + sigma*sqrt(2 ln n).
-//
-// The previous formula was `mean + mean/4 + 256`, whose headroom term scales with mean
-// rather than sqrt(mean). That is dimensionally wrong for a Poisson tail: it gave ~17
-// sigma at nb=32768 and would have grown *further* out of proportion as buckets coarsen.
-// 8 sigma leaves an enormous margin over the measured 4.35 (a Poisson tail at 8 sigma is
-// ~1e-15 per bucket) while cutting the array 14%. Drops are counted and gate every run.
-static uint32_t fb_cap_for(uint32_t mean) {
-    const double sd = std::sqrt((double)mean);
-    return mean + (uint32_t)(8.0 * sd) + 32u;
-}
-
-// Row-bucket footprint (must mirror alloc_rowbucket): FAT ping-pong (work[7]+gi+
-// lead+leaves[9]) x2 + left/right. Returns {total bytes, largest single alloc}.
-void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single) {
-    const uint32_t nb = 1u << bb;
-    const uint32_t cap = fb_cap_for(capacity / nb);
-    const size_t nslots = (size_t)nb * cap;
-    single = nslots * fb_set_stride(0) * 8;                     // fb_elem[0] -- largest
-    total = nslots * (fb_set_stride(0) + fb_set_stride(1)) * 8  // both packed record sets
-          + 2*(size_t)nb*4 + (size_t)5*capacity*4*2 + 64;       // +counts/left/right/counters
-}
+// kFbStride, fb_set_stride, fb_cap_for, rowbucket_bytes and rb_geometry_for now live in
+// gpu/rowbucket_geom.h -- the CUDA backend picks its geometry from the same arithmetic,
+// and it cannot include this file (OpenCL headers). See there for the sigma reasoning
+// and the measured ladder.
 
 // Device-memory-aware default: MXBM_ROWBUCKET forces the fused path on (even if it
 // might not fit -- the user's explicit choice), MXBM_NO_ROWBUCKET forces it off, and
 // otherwise auto-select when BOTH the largest single alloc clears max_alloc AND the
 // total leaves ~1 GB headroom under global_mem. Falls back to the sort path on any
 // device that can't hold the ~12 GB working set (8-12 GB cards). capacity==0 (some
-// synthetic Budgets) only honors an explicit force.
-// Row-bucket geometry, chosen to fit the DEVICE rather than fixed. The group the
-// staging loop stages is mean_bucket / 2^submaskBits and wants to be ~256, which pins
-// bucketBits + submaskBits = 17; within that, the smallest submaskBits wins because it
-// is a direct multiplier on redundant bucket rescans. But finer buckets pay the
-// per-bucket capacity slack more times, so they need a LARGER single allocation:
-//
-//     (16,1) 40.4 ms  3.27 GiB single   (15,2) 42.6 ms  2.96   (14,3) 47.5 ms  2.76
-//
-// A card that cannot host (16,1) should therefore drop one step -- 5% slower -- rather
-// than fall back to the sort path, which measures 215 ms. MXBM_BB / MXBM_SM override.
+// synthetic Budgets) only honors an explicit force. MXBM_BB / MXBM_SM override.
 struct RbGeom { uint32_t bb, sm; };
-RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem) {
-    for (uint32_t bb = 16; bb >= 14; --bb) {
-        size_t total = 0, single = 0;
-        rowbucket_bytes(capacity, bb, total, single);
-        if (max_alloc && single > (size_t)max_alloc) continue;
-        if (global_mem && total + (size_t)(1ull << 30) > (size_t)global_mem) continue;
-        return { bb, 17u - bb, true };
-    }
-    return { 14u, 3u, false };   // nothing fits; callers fall back to the sort path
-}
 
 static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
     if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM"))

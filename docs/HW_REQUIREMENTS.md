@@ -16,9 +16,9 @@ report; BeamHash III yields ~1.9 solutions per solve.
 | | Requirement |
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
-| **VRAM — CUDA backend (the default)** | **10 GB** — needs > 8.46 GiB *reported*, so a 10 GB card clears it |
+| **VRAM — CUDA backend (the default)** | **8 GB** — needs > 7.6 GiB *reported*. 10 GB and up get the fastest geometry; 8 GB steps down one rung, ~8 % slower |
 | **VRAM — OpenCL backend (fallback)** | **12 GB** — the single-allocation ceiling binds first, see [limitation 1](#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit) |
-| **VRAM — what a full search occupies** | **7.46 GiB** (row-bucket path, both backends) |
+| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, **6.50 GiB** at the coarsest (row-bucket path, both backends) |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -61,9 +61,14 @@ The largest single allocation matters independently of total VRAM: OpenCL report
 does the path fall back to the sort path (~5× slower).
 
 **CUDA is not subject to that ceiling** — there is no `CL_DEVICE_MAX_MEM_ALLOC_SIZE`
-equivalent, so `CudaSolver` allocates its 3.51 GiB record array at the fastest (16,1)
+equivalent, so `CudaSolver` allocates its 3.27 GiB record array at the fastest (16,1)
 geometry on any card with the total memory for it. This is why the CUDA threshold is a
 whole size class lower than the OpenCL one.
+
+CUDA walks the *same* ladder, from the same `rb_geometry_for()`, bounded by total VRAM
+alone — and then checks the prediction against the allocator, stepping down again if the
+memory is not actually free (a desktop compositor can be holding a gigabyte). The rungs
+cost 35.1 / 37.8 / 42.8 ms per solve, all measured with the KAT green and drops zero.
 
 ---
 
@@ -86,9 +91,10 @@ so **both backends refuse to start instead**:
 
 - OpenCL: `GpuSolver`'s constructor throws with the required and available GiB once
   `budget_can_find_solutions()` fails (`src/gpu/gpu_solver.cpp`).
-- CUDA: `CudaSolver::available()` returns false unless total memory exceeds the full
-  footprint plus 1 GiB of headroom, so the backend is never selected
-  (`src/gpu/cuda_solver.cu`).
+- CUDA: `CudaSolver::available()` returns false unless *some* geometry on the ladder fits
+  in total memory plus 1 GiB of headroom, so the backend is never selected
+  (`src/gpu/cuda_solver.cu`). The seed layer is never reduced to make one fit — the ladder
+  trades speed for footprint and nothing else.
 
 `MXBM_ALLOW_PARTIAL_SEARCH=1` overrides the OpenCL refusal, for experiments only.
 
@@ -132,11 +138,15 @@ Not by total VRAM. Worked through from `compute_budget()` and `rb_pick_geometry(
 
 | Card | reported gmem / max_alloc | OpenCL | CUDA |
 |---|---|---|---|
-| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | full, geometry (16,1) | full |
-| 12 GB | 11.60 / 2.90 GiB | full, geometry (14,3), ~5 % slower | full |
-| 11 GB | 10.60 / 2.65 GiB | full, but on the **sort path** (~5× slower) | full |
-| 10 GB | 9.70 / 2.42 GiB | **refuses** — sort path fits only 0.93 × 2^25 | full |
-| 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | unavailable |
+| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | full, geometry (16,1) | full, (16,1), 35.1 ms |
+| 12 GB | 11.60 / 2.90 GiB | full, geometry (14,3), ~5 % slower | full, (16,1), 35.1 ms |
+| 11 GB | 10.60 / 2.65 GiB | full, but on the **sort path** (~5× slower) | full, (16,1), 35.1 ms |
+| 10 GB | 9.70 / 2.42 GiB | **refuses** — sort path fits only 0.93 × 2^25 | full, (16,1), 35.1 ms |
+| 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | full, (15,2), 37.8 ms |
+
+The 8 GB row changed on 2026-07-26. `CudaSolver::available()` used to demand the (16,1)
+footprint specifically, so those cards were refused by both backends and mined nothing;
+they now run the full search one rung down the ladder. The CUDA floor is 7.6 GiB reported.
 
 The seed layer itself is not the problem at any of these sizes: at 256 B/element a full
 2^25 layer needs only 8.59 GiB, so `elems_per_round` stays at 2^25 down to ~10.1 GiB of

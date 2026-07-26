@@ -202,6 +202,17 @@ target_include_directories(test_version PRIVATE tests src)
 target_link_libraries(test_version PRIVATE mxbm_version)
 add_test(NAME version COMMAND test_version)
 
+# Row-bucket geometry and footprint arithmetic. Its own library because BOTH backends
+# make this decision and must make it identically, and the CUDA translation unit cannot
+# include round_pipeline.h (OpenCL headers). Depends on nothing.
+add_library(mxbm_geom STATIC src/gpu/rowbucket_geom.cpp)
+target_include_directories(mxbm_geom PUBLIC src)
+
+add_executable(test_rowbucket_geom tests/test_rowbucket_geom.cpp)
+target_include_directories(test_rowbucket_geom PRIVATE tests src)
+target_link_libraries(test_rowbucket_geom PRIVATE mxbm_geom)
+add_test(NAME rowbucket_geom COMMAND test_rowbucket_geom)
+
 # ---- CUDA GPU solver (optional component) ----
 # Optional in exactly the same way OpenCL is: if nvcc is absent the build proceeds
 # without it and the OpenCL path remains the default. Kept separate so an incomplete or
@@ -216,7 +227,7 @@ if(CMAKE_CUDA_COMPILER)
   message(STATUS "CUDA found: CUDA solver enabled (arch ${CMAKE_CUDA_ARCHITECTURES})")
   add_library(mxbm_cuda STATIC src/gpu/cuda_solver.cu)
   target_include_directories(mxbm_cuda PUBLIC src PRIVATE kernels/cuda)
-  target_link_libraries(mxbm_cuda PUBLIC mxbm_beamhash)
+  target_link_libraries(mxbm_cuda PUBLIC mxbm_beamhash mxbm_geom)
   set_target_properties(mxbm_cuda PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
   # 186 = "pointless comparison of unsigned integer with zero", from template
   # instantiations where a leaf count is 0 and the loop compiles away.
@@ -245,6 +256,7 @@ if(OpenCL_FOUND)
   target_include_directories(mxbm_gpu PRIVATE ${CMAKE_BINARY_DIR})
   target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
   target_link_libraries(mxbm_gpu PUBLIC mxbm_beamhash)   # gpu_solver.cpp: is_valid_solution/pack_indices/compute_prepow
+  target_link_libraries(mxbm_gpu PUBLIC mxbm_geom)       # round_pipeline.cpp: geometry/footprint
   target_sources(mxbm_gpu PRIVATE src/gpu/budget.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/gpu_solver.cpp)

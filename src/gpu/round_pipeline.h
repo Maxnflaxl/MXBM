@@ -1,6 +1,7 @@
 #pragma once
 #include "gpu/cl_runtime.h"
 #include "gpu/budget.h"
+#include "gpu/rowbucket_geom.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -91,20 +92,9 @@ FusedConsts fused_consts_for(int r);
 // before it can size the seed layer (see kBytesPerElement* in budget.h).
 bool rowbucket_viable(Runtime& rt, const Budget& b);
 
-// The row-bucket geometry decision, with the device reduced to the two numbers
-// it actually turns on. Pure, so the "which cards get the fast path" table in
-// docs/HW_REQUIREMENTS.md can be pinned by a test instead of worked out by hand
-// -- mutation testing showed the step-down was previously unverified, and it is
-// the whole reason a 12 GB card runs the fast path at all.
-//   bb/sm  : bucket bits and sub-mask bits, always summing to 17
-//   viable : false when even the coarsest geometry will not fit
-struct RbGeometry { uint32_t bb, sm; bool viable; };
-RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem);
-
-// Bytes the row-bucket path needs at a given geometry: {total, largest single
-// allocation}. The single figure is what OpenCL's CL_DEVICE_MAX_MEM_ALLOC_SIZE
-// caps, and is what binds below 12 GB.
-void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single);
+// RbGeometry, rb_geometry_for() and rowbucket_bytes() are declared in
+// gpu/rowbucket_geom.h (included above) -- backend-neutral, because the CUDA solver
+// makes the same decision from the same arithmetic and cannot see OpenCL's headers.
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b);
 

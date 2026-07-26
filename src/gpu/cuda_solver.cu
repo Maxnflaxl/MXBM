@@ -1,12 +1,14 @@
 // CUDA backend implementation. The kernels live in kernels/cuda/ and are shared with the
 // standalone bench (cuda/pipeline.cu), so there is one copy of each.
 #include "gpu/cuda_solver.h"
+#include "gpu/rowbucket_geom.h"
 #include "pipeline_kernels.cuh"
 #include "beamhash/bh3_blake2b.h"
 #include "beamhash/bh3_verify.h"
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -19,7 +21,6 @@ template<class T> T* dalloc(size_t n) { void* p=nullptr; return cudaMalloc(&p, n
 
 constexpr uint32_t kElems    = 1u << 25;
 constexpr uint32_t kCapacity = kElems + kElems/32;      // 34,603,008
-constexpr uint32_t kBB = 16, kSM = 1, kNB = 1u << kBB;
 constexpr uint32_t kSurvCap = 1024;
 // set 0 carries the round-2 and round-4 outputs, set 1 the round-1 and round-3 outputs.
 // Round 2's record is 9 u64: an 8-u64 record at a 16 B-aligned stride, plus a 9th-word
@@ -28,24 +29,57 @@ constexpr uint32_t kSurvCap = 1024;
 // was padded to keep the 128-bit accesses aligned -- see docs/performance.md.
 constexpr uint32_t kSetStride[2] = { 9u, 8u };
 constexpr uint32_t kR2RecStride  = 8u;   // round 2's record; the 9th word is the plane
+static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_stride(1),
+              "CUDA record widths must match the shared footprint arithmetic");
 
-// Total device memory the solver needs, so available() can refuse a device that would
-// only fit a reduced seed layer.
-size_t footprint_bytes() {
-    const uint32_t mean = kCapacity / kNB;
-    const uint32_t cap  = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
-    const size_t nslots = (size_t)kNB * cap;
-    return nslots*(kSetStride[0]+kSetStride[1])*8 + (size_t)5*kCapacity*4*2 + (size_t)2*kNB*4;
+// Was hardcoded (16,1), so a card that could not host 7.46 GiB was refused outright --
+// even though the same kernels run unchanged at 6.50 GiB. bb and sm are kernel
+// ARGUMENTS, and everything compile-time is invariant along the bb + sm = 17 line: the
+// grid is 2^17 blocks, the staged group is capacity / 2^17 = 264, and the 128-entry
+// chain table is a perfect hash for the 24 - bb - sm = 7 bits left varying.
+// max_alloc = 0: CUDA has no per-allocation limit (see rowbucket_geom.h).
+RbGeometry pick_geometry(uint64_t global_mem) {
+    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem);
+    if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
+                                                 g.viable = true; }
+    if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
+    return g;
 }
 } // namespace
 
 struct CudaSolver::Impl {
+    uint32_t bb = 16, sm = 1, nb = 1u << 16;
     uint32_t cap = 0; size_t nslots = 0;
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
     std::atomic<bool> abort_{false};
     DeviceInfo info;
+
+    // The geometry-dependent half of the allocation: the two record sets and their
+    // bucket counters. Split out so a step-down retries only what changes size.
+    bool alloc_geometry(uint32_t bb_, uint32_t sm_) {
+        for (auto*& q : elem)   { cudaFree(q); q = nullptr; }
+        for (auto*& q : counts) { cudaFree(q); q = nullptr; }
+        bb = bb_; sm = sm_; nb = 1u << bb_;
+        cap    = fb_cap_for(kCapacity / nb);
+        nslots = (size_t)nb * cap;
+        elem[0] = dalloc<uint64_t>(nslots*kSetStride[0]);
+        elem[1] = dalloc<uint64_t>(nslots*kSetStride[1]);
+        counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
+        return elem[0] && elem[1] && counts[0] && counts[1];
+    }
+
+    // The frees belong here, not in ~CudaSolver: that constructor throws when a device
+    // is too small, and a throwing constructor never runs its own destructor, so every
+    // cudaMalloc before the throw leaked for the life of the process. A caller catching
+    // the throw and retrying smaller therefore got LESS memory on each attempt. ~Impl
+    // runs either way, p_ being a fully-constructed member.
+    ~Impl() {
+        for (auto* q : {elem[0], elem[1], dpp}) cudaFree(q);
+        for (auto* q : {counts[0], counts[1], gictr, drops,
+                        left, right, survSlots, survCount, dleaves}) cudaFree(q);
+    }
 };
 
 bool CudaSolver::available() {
@@ -54,8 +88,10 @@ bool CudaSolver::available() {
     cudaDeviceProp p{};
     if (cudaGetDeviceProperties(&p, 0) != cudaSuccess) return false;
     if (p.major < 8) return false;                      // needs Ampere+ shared-mem budget
-    // Refuse anything that cannot host the full seed layer: a reduced layer mines nothing.
-    return (size_t)p.totalGlobalMem > footprint_bytes() + (size_t)(1ull<<30);
+    // Refuse only what no geometry on the ladder can host. The seed layer itself is
+    // never reduced -- a reduced layer mines nothing (budget.h, budget_can_find_solutions)
+    // -- so the ladder trades speed for footprint and nothing else.
+    return pick_geometry(p.totalGlobalMem).viable;
 }
 
 CudaSolver::DeviceInfo CudaSolver::device_info() {
@@ -71,20 +107,32 @@ void CudaSolver::request_abort() { p_->abort_.store(true, std::memory_order_rela
 
 CudaSolver::CudaSolver() : p_(new Impl) {
     p_->info = device_info();
-    const uint32_t mean = kCapacity / kNB;
-    p_->cap    = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
-    p_->nslots = (size_t)kNB * p_->cap;
-    p_->elem[0] = dalloc<uint64_t>(p_->nslots*kSetStride[0]);
-    p_->elem[1] = dalloc<uint64_t>(p_->nslots*kSetStride[1]);
-    p_->counts[0] = dalloc<uint32_t>(kNB); p_->counts[1] = dalloc<uint32_t>(kNB);
+    // Geometry-independent first, so the step-down below is not retrying these.
     p_->gictr = dalloc<uint32_t>(1); p_->drops = dalloc<uint32_t>(4);
     p_->left  = dalloc<uint32_t>((size_t)5*kCapacity);
     p_->right = dalloc<uint32_t>((size_t)5*kCapacity);
     p_->survSlots = dalloc<uint32_t>(kSurvCap); p_->survCount = dalloc<uint32_t>(1);
     p_->dleaves = dalloc<uint32_t>((size_t)kSurvCap*32);
     p_->dpp = dalloc<uint64_t>(4);
-    if (!p_->elem[0] || !p_->elem[1] || !p_->left || !p_->right || !p_->dpp)
+    if (!p_->left || !p_->right || !p_->dpp)
         throw std::runtime_error("CUDA allocation failed (device out of memory)");
+
+    // Then walk the ladder for real: rb_geometry_for() sizes against TOTAL VRAM, but a
+    // desktop compositor can be sitting on a gigabyte of it, and whether a footprint
+    // fits *today* is only knowable by asking the allocator. An explicit MXBM_BB /
+    // MXBM_SM is the user's choice and is not stepped down under them.
+    const RbGeometry g = pick_geometry(p_->info.global_mem);
+    if (!g.viable)
+        throw std::runtime_error("CUDA: no row-bucket geometry fits this device");
+    const bool forced = std::getenv("MXBM_BB") || std::getenv("MXBM_SM");
+    bool ok = p_->alloc_geometry(g.bb, g.sm);
+    for (uint32_t bb = g.bb; !ok && !forced && bb > 14u; ) {
+        --bb;
+        std::fprintf(stderr, "CUDA: %u buckets did not fit, retrying at %u\n",
+                     1u << (bb+1), 1u << bb);
+        ok = p_->alloc_geometry(bb, 17u - bb);
+    }
+    if (!ok) throw std::runtime_error("CUDA allocation failed (device out of memory)");
     // Ada splits L1/shared by a carveout that defaults to favouring L1; ask for shared.
     #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
                                           cudaSharedmemCarveoutMaxShared)
@@ -96,12 +144,9 @@ CudaSolver::CudaSolver() : p_(new Impl) {
     #undef CARVE
 }
 
-CudaSolver::~CudaSolver() {
-    if (!p_) return;
-    for (auto* q : {p_->elem[0], p_->elem[1], p_->dpp}) cudaFree(q);
-    for (auto* q : {p_->counts[0], p_->counts[1], p_->gictr, p_->drops,
-                    p_->left, p_->right, p_->survSlots, p_->survCount, p_->dleaves}) cudaFree(q);
-}
+// Defined here rather than defaulted in the header: ~unique_ptr<Impl> needs Impl to be
+// a complete type, and the whole point of the pimpl is that it is not one there.
+CudaSolver::~CudaSolver() = default;
 
 std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
     std::vector<std::array<uint8_t,104>> out;
@@ -112,15 +157,15 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     bh3::compute_prepow(input, 32, nonce, extra0, pp);
     cudaMemcpy(I.dpp, pp, 32, cudaMemcpyHostToDevice);
     cudaMemset(I.drops, 0, 16); cudaMemset(I.survCount, 0, 4);
-    cudaMemset(I.counts[0], 0, (size_t)kNB*4);
+    cudaMemset(I.counts[0], 0, (size_t)I.nb*4);
 
-    entry_scatter<<<(kElems+255)/256,256>>>(I.dpp, 0, kElems, kBB, I.cap, I.counts[0], I.elem[0], I.drops);
+    entry_scatter<<<(kElems+255)/256,256>>>(I.dpp, 0, kElems, I.bb, I.cap, I.counts[0], I.elem[0], I.drops);
     int inSet = 0;
     #define ROUND(R, INW,OUTW,LEAFW,MODE, LOUT,PADN,SIN,SOUT,SBUILD, INSTR,OUTSTR)   \
         { const int o = inSet ^ 1;                                                   \
-          cudaMemset(I.counts[o], 0, (size_t)kNB*4); cudaMemset(I.gictr, 0, 4);      \
+          cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
           fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>    \
-            <<<kNB << kSM, kWG>>>(kBB, kSM, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
+            <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
                 I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],               \
                 I.left, I.right, I.gictr, I.drops, I.dpp);                            \
           inSet = o; }
@@ -129,7 +174,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u)
     ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
     #undef ROUND
-    terminal_round<<<kNB << kSM, kWG>>>(kBB, kSM, I.cap, 4u*kCapacity, I.counts[inSet],
+    terminal_round<<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, 4u*kCapacity, I.counts[inSet],
                                         I.elem[inSet], I.left, I.right, I.survSlots,
                                         I.survCount, kSurvCap, I.drops);
 
