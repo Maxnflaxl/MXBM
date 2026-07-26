@@ -29,6 +29,15 @@ constexpr uint32_t kSurvCap = 1024;
 // was padded to keep the 128-bit accesses aligned -- see docs/performance.md.
 constexpr uint32_t kSetStride[2] = { 9u, 8u };
 constexpr uint32_t kR2RecStride  = 8u;   // round 2's record; the 9th word is the plane
+
+// Each round's template arguments, named once. They were written out separately at the
+// launch and at the carveout call, and had drifted: the carveout was applied to LM_RD2
+// with OUTSTR 10 and LM_EMIT with INSTR 10, instantiations that no longer run, so the
+// kernels that DO run never received the preference.
+#define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
+#define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,kR2RecStride,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap
+#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u,kFCap
 static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_stride(1),
               "CUDA record widths must match the shared footprint arithmetic");
 
@@ -144,10 +153,8 @@ CudaSolver::CudaSolver() : p_(new Impl) {
     // Ada splits L1/shared by a carveout that defaults to favouring L1; ask for shared.
     #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
                                           cudaSharedmemCarveoutMaxShared)
-    CARVE((fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>));
-    CARVE((fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,10u>));
-    CARVE((fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,10u,8u>));
-    CARVE((fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>));
+    CARVE((fused_round<MXBM_R1_ARGS>)); CARVE((fused_round<MXBM_R2_ARGS>));
+    CARVE((fused_round<MXBM_R3_ARGS>)); CARVE((fused_round<MXBM_R4_ARGS>));
     CARVE(terminal_round);
     #undef CARVE
 }
@@ -169,18 +176,23 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
 
     entry_scatter<<<(kElems+255)/256,256>>>(I.dpp, 0, kElems, I.bb, I.cap, I.counts[0], I.elem[0], I.drops);
     int inSet = 0;
-    #define ROUND(R, INW,OUTW,LEAFW,MODE, LOUT,PADN,SIN,SOUT,SBUILD, INSTR,OUTSTR)   \
+    // Variadic so a round can carry the optional trailing template arguments
+    // (COTENANT, SUBPASS, FCAP) without every other round having to name them.
+    #define ROUND(R, ...)                                                            \
         { const int o = inSet ^ 1;                                                   \
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
-          fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR>    \
+          fused_round<__VA_ARGS__>                                                   \
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
                 I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],               \
                 I.left, I.right, I.gictr, I.drops, I.dpp);                            \
           inSet = o; }
-    ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
-    ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,kR2RecStride)
-    ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u)
-    ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
+    // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
+    #define ROUND_X(...) ROUND(__VA_ARGS__)
+    ROUND_X(1, MXBM_R1_ARGS)
+    ROUND_X(2, MXBM_R2_ARGS)
+    ROUND_X(3, MXBM_R3_ARGS)
+    ROUND_X(4, MXBM_R4_ARGS)
+    #undef ROUND_X
     #undef ROUND
     terminal_round<<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, 4u*kCapacity, I.counts[inSet],
                                         I.elem[inSet], I.left, I.right, I.survSlots,

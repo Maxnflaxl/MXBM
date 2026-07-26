@@ -36,6 +36,24 @@
 using namespace mxbm;
 using namespace mxbm::cuda;
 
+// Each round's template arguments, named ONCE. They were previously written out
+// separately at the launch, at the carveout call and (in the bench) at the occupancy
+// probe, and had drifted in three of the four: the carveout was being applied to
+// LM_RD2 with OUTSTR 10 and LM_EMIT with INSTR 10 -- instantiations that no longer
+// exist at runtime -- so the kernels that DO run never received the preference, and
+// the bench's blocks/SM column was reporting a different kernel than it timed.
+#if MXBM_R2_FULL
+#define MXBM_R1_ARGS 7,7,2,LM_SEEDF,424u,2u,1u,2u,2u, 1u,10u,kFCap
+#define MXBM_R2_ARGS 7,7,2,LM_RAW,  400u,4u,2u,4u,4u, 10u,10u,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u,kFCap
+#else
+#define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
+#define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,8u,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 8u,8u,kFCap
+#endif
+#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u,kFCap
+
+
 #define CK(x) do{ cudaError_t e=(x); if(e){ printf("CUDA %s @%d\n",cudaGetErrorString(e),__LINE__); return 1; } }while(0)
 
 // ---- MXBM_OCC: what the per-bucket capacity actually has to cover --------------------
@@ -116,10 +134,8 @@ struct CudaSolver {
         cudaStreamCreate(&sMain); cudaStreamCreate(&sEntry);
         #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
                                               cudaSharedmemCarveoutMaxShared)
-        CARVE((fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>));
-        CARVE((fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,10u>));
-        CARVE((fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,10u,8u>));
-        CARVE((fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>));
+        CARVE((fused_round<MXBM_R1_ARGS>)); CARVE((fused_round<MXBM_R2_ARGS>));
+        CARVE((fused_round<MXBM_R3_ARGS>)); CARVE((fused_round<MXBM_R4_ARGS>));
         CARVE(terminal_round);
         #undef CARVE
         return elem[0] && elem[1] && left && right && dpp
@@ -196,7 +212,7 @@ struct CudaSolver {
         int inSet = 0;
         // R==1 reads entry's dedicated stride-1 buffer instead of elem[0]; every later
         // round ping-pongs exactly as before, so the only change is r1's input pointer.
-        #define ROUND(R, INW,OUTW,LEAFW,MODE, LOUT,PADN,SIN,SOUT,SBUILD, INSTR,OUTSTR)   \
+        #define ROUND(R, ...)                                                            \
             { const int o = inSet ^ 1;                                                   \
               const uint32_t* inC = ((R)==1) ? entryCounts[slot] : counts[inSet];        \
               const uint64_t* inE = ((R)==1) ? entryOut[slot]    : elem[inSet];          \
@@ -205,18 +221,18 @@ struct CudaSolver {
                 cudaMemsetAsync(counts[o], 0, (size_t)nb*4, st);                         \
                 cudaMemsetAsync(gictr, 0, 4, st);                                        \
                 if (MXBM_SUBPASS)                                                        \
-                  fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR,false,true>\
+                  fused_round<__VA_ARGS__,false,true>\
                     <<<nb, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,   \
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
                         left, right, gictr, drops, dpp);                                 \
                 else if (coNonce && (R) == co_round())                                   \
-                  fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR,true>\
+                  fused_round<__VA_ARGS__,true>\
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
                         left, right, gictr, drops, dpp,                                  \
                         dpp2[coSlot], elems, cap, entryCounts[coSlot], entryOut[coSlot]); \
                 else                                                                     \
-                  fused_round<INW,OUTW,LEAFW,MODE,LOUT,PADN,SIN,SOUT,SBUILD,INSTR,OUTSTR> \
+                  fused_round<__VA_ARGS__>                                                 \
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
                         left, right, gictr, drops, dpp); }                                \
@@ -225,16 +241,20 @@ struct CudaSolver {
               if ((R)==1) { cudaEventRecord(r1Done[slot], st); r1Ever[slot] = true;       \
                             after_r1(); }                                                \
               inSet = o; }
+        // ROUND_X exists only to expand MXBM_Rn_ARGS first: a function-like macro counts
+        // its arguments before expanding them, so ROUND(1, MXBM_R1_ARGS) reads as 2 args.
+        #define ROUND_X(...) ROUND(__VA_ARGS__)
 #if MXBM_R2_FULL
-        ROUND(1, 7,7,2,LM_SEEDF,424u,2u,1u,2u,2u, 1u,10u)
-        ROUND(2, 7,7,2,LM_RAW,  400u,4u,2u,4u,4u, 10u,10u)
+        ROUND_X(1, MXBM_R1_ARGS)
+        ROUND_X(2, MXBM_R2_ARGS)
 #else
-        ROUND(1, 7,7,2,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u)
-        ROUND(2, 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,8u)
+        ROUND_X(1, MXBM_R1_ARGS)
+        ROUND_X(2, MXBM_R2_ARGS)
 #endif
-        ROUND(3, 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, MXBM_R2_FULL ? 10u : 8u, 8u)
-        ROUND(4, 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u)
+        ROUND_X(3, MXBM_R3_ARGS)
+        ROUND_X(4, MXBM_R4_ARGS)
         #undef ROUND
+        #undef ROUND_X
         for (int rp = 0, treps = (rep_round() == 5) ? rep_count() : 1; rp < treps; ++rp) {
             cudaMemsetAsync(survCount, 0, 4, st);
             terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
@@ -300,10 +320,10 @@ int main(int argc, char** argv) {
         };
         printf("occupancy (%d SMs):\n", pr.multiProcessorCount);
         show("entry", (const void*)entry_scatter, (s.elems+255)/256);
-        show("r1", (const void*)(fused_round<7,7,2,LM_SEED,424u,2u,1u,2u,2u,1u,2u>), s.nb << s.sm);
-        show("r2", (const void*)(fused_round<7,7,2,LM_RD2,400u,4u,2u,4u,4u,2u,10u>), s.nb << s.sm);
-        show("r3", (const void*)(fused_round<7,6,4,LM_EMIT,376u,6u,4u,2u,8u,10u,8u>), s.nb << s.sm);
-        show("r4", (const void*)(fused_round<6,1,2,LM_USE,288u,9u,2u,0u,0u,8u,2u>), s.nb << s.sm);
+        show("r1", (const void*)(fused_round<MXBM_R1_ARGS>), s.nb << s.sm);
+        show("r2", (const void*)(fused_round<MXBM_R2_ARGS>), s.nb << s.sm);
+        show("r3", (const void*)(fused_round<MXBM_R3_ARGS>), s.nb << s.sm);
+        show("r4", (const void*)(fused_round<MXBM_R4_ARGS>), s.nb << s.sm);
     }
 
     // --- correctness gate: the KAT input has exactly 3 known goldens ---

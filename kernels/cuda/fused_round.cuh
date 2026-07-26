@@ -111,6 +111,15 @@ constexpr uint32_t kFCap    = (uint32_t)MXBM_FCAP;
 #ifndef MXBM_NARROW6
 #define MXBM_NARROW6 0
 #endif
+
+// Round 1's own cap. Folding its gi into its leaf and narrowing LEAFW to 1 took it to
+// 64 B/element AND its register count from 64 to 48, so at 288 it fits 5 blocks/SM where
+// 320 fits 4 -- 48 registers and 18980 B against the 51/19456 that 5 blocks needs, so no
+// launch bound is required to hold it there. Only r1 pays the higher spill rate a tighter
+// cap implies; it is worth 0.15 ms of r1's 5.28.
+#ifndef MXBM_R1_FCAP
+#define MXBM_R1_FCAP 288
+#endif
 // 8-way max split. The level must be chosen BEFORE any part is walked: escalating after
 // a walk would re-emit everything the earlier, coarser parts already emitted, which
 // inflates the next round's bucket counts and evicts real elements -- it shows up as
@@ -247,7 +256,13 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
 // kernel pushes past 85 the occupancy drops to 2 and this will lose -- check ptxas -v.
 template<int INW, int OUTW, int LEAFW, int LMODE,
          uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
-         uint32_t INSTR, uint32_t OUTSTR, bool COTENANT = false, bool SUBPASS = false>
+         uint32_t INSTR, uint32_t OUTSTR,
+         // Per-round group cap. Every shared array scales with it, and B (shared bytes
+         // per staged element) differs by round -- r3 80, r2 72, r1 64 -- so one global
+         // value cannot put them all at their best occupancy. Lowering it for a round
+         // costs only that round's own spill rate. Ahead of the two bools because the
+         // co-tenant and sub-pass launches append to the argument list.
+         uint32_t FCAP = kFCap, bool COTENANT = false, bool SUBPASS = false>
 __global__ __launch_bounds__(kWG)
 void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
@@ -273,11 +288,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     // launch sites need no new argument.
     constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT);
     constexpr int  LWS     = NARROW6 ? INW - 1 : INW;      // lwork stride, u64
-    __shared__ uint64_t lwork[LWS * kFCap];
-    __shared__ uint16_t lw6[NARROW6 ? kFCap : 1];
-    __shared__ uint32_t lgi[kFCap], lleaf[LEAFW * kFCap];
-    __shared__ uint32_t llead[kNeedLead ? kFCap : 1];
-    __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : kFCap], lchain[kFCap], tab[kTabSize];
+    __shared__ uint64_t lwork[LWS * FCAP];
+    __shared__ uint16_t lw6[NARROW6 ? FCAP : 1];
+    // Round 1's gi IS its leaf: both are the seed index, written from the same
+    // rec0 >> 32. So LM_SEED keeps only one copy and reads gi through lleaf[0],
+    // which drops a whole 4 B/element array for the round that gains most from
+    // occupancy. Every other mode has a genuinely distinct gi.
+    constexpr bool kGiIsLead = (LMODE == LM_SEED || LMODE == LM_SEEDF);
+    __shared__ uint32_t lgi[kGiIsLead ? 1 : FCAP], lleaf[LEAFW * FCAP];
+    __shared__ uint32_t llead[kNeedLead ? FCAP : 1];
+    __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : FCAP], lchain[FCAP], tab[kTabSize];
     __shared__ uint32_t gcount;
     __shared__ uint32_t cnt8[MXBM_SPILL ? 8 : 1];
     // SUBPASS: one block owns a whole BUCKET and sweeps its sub-masks in sequence, so the
@@ -287,6 +307,9 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     __shared__ uint8_t skey[SUBPASS ? kSKey : 1];
     auto lead_of = [&](uint32_t p) -> uint32_t {
         return kNeedLead ? llead[p] : lleaf[p * LEAFW + 0];
+    };
+    auto gi_of = [&](uint32_t p) -> uint32_t {
+        return kGiIsLead ? lleaf[p * LEAFW + 0] : lgi[p];
     };
     // w is a compile-time-bounded loop index at every call site, so the branch folds.
     auto ldw = [&](uint32_t p, int w) -> uint64_t {
@@ -367,10 +390,10 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         if constexpr (!SUBPASS)
             if ((key & ((1u << sbits) - 1u)) != mask) continue;
         const uint32_t pos = atomicAdd(&gcount, 1u);
-        // Keep counting past kFCap: gcount is what decides whether to split.
-        if (pos >= kFCap) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
+        // Keep counting past FCAP: gcount is what decides whether to split.
+        if (pos >= FCAP) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
         if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
-            lgi[pos] = (uint32_t)(rec0 >> 32);                       // derive later
+            lleaf[pos*LEAFW + 0] = (uint32_t)(rec0 >> 32);           // derive later
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else if constexpr (LMODE == LM_RD2) {
             const uint64_t rec1 = in_belem[d + 1];
@@ -442,7 +465,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
 #endif
     __syncthreads();
     if constexpr (MXBM_SPILL) {
-        if (gcount > kFCap && !counted) {
+        if (gcount > FCAP && !counted) {
             // One word-0 pass counts all 8 possible sub-parts at once, so the split level
             // is picked from real sizes rather than discovered by trial. Paid only by the
             // few per cent of groups that overflow; the common path never runs it.
@@ -465,7 +488,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         if ((i & ((1u << lv) - 1u)) == q) sz += cnt8[i];
                     if (sz > mx) mx = sz;
                 }
-                if (mx <= kFCap) break;
+                if (mx <= FCAP) break;
             }
             xb = lv > kMaxSpill ? kMaxSpill : lv;
             nparts = 1u << xb; xp = 0; counted = true;
@@ -473,15 +496,15 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             continue;
         }
         // Only reachable if the chosen split still overflows, which the count rules out.
-        if (gcount > kFCap && lId == 0) atomicAdd(&drops[1], gcount - kFCap);
+        if (gcount > FCAP && lId == 0) atomicAdd(&drops[1], gcount - FCAP);
     }
-    const uint32_t total = gcount < kFCap ? gcount : kFCap;
+    const uint32_t total = gcount < FCAP ? gcount : FCAP;
 
     // EXPAND + CHAIN. Every lane is active here, which is why the re-derivations live in
     // this loop and not the staging one (worth 8x their SIMD utilisation).
     for (uint32_t pos = lId; pos < total; pos += kWG) {
         if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
-            const uint32_t idx = lgi[pos];
+            const uint32_t idx = lleaf[pos*LEAFW + 0];
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
             bh3::Elem e;
             if constexpr (MXBM_ABL_DERIVE & 1) abl_spread(idx, 0u, e);
@@ -491,7 +514,6 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 bh3::apply_mix(e, t1, 1u, 448u);
             }
             for (int w = 0; w < INW; ++w) lwork[pos*LWS + w] = e.w[w];
-            lleaf[pos*LEAFW + 0] = idx;
         } else if constexpr (LMODE == LM_RD2) {
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
             bh3::Elem e;
@@ -519,7 +541,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             // Perfect table => same chain means same key, so the test is a tautology.
             if (MXBM_PERFECT_TAB || lkey[oth] == lkey[pos]) {
                 const uint32_t la = lead_of(pos), lb = lead_of(oth);
-                const uint32_t ga = lgi[pos],  gb = lgi[oth];
+                const uint32_t ga = gi_of(pos), gb = gi_of(oth);
                 uint32_t leftPos = pos, rightPos = oth;
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
 
@@ -618,8 +640,8 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                               make_ulonglong2(c.w[0],
                                             ((uint64_t)cgi << 32) | (uint64_t)ctree[0]));
                     }
-                    st_em(all_left  + out_off + cgi, lgi[leftPos]);
-                    st_em(all_right + out_off + cgi, lgi[rightPos]);
+                    st_em(all_left  + out_off + cgi, gi_of(leftPos));
+                    st_em(all_right + out_off + cgi, gi_of(rightPos));
                 } else atomicAdd(&drops[2], 1u);
             }
             oth = lchain[oth];

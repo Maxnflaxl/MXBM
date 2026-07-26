@@ -116,11 +116,17 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 48.2 | 41.0 | fallback / `--solver opencl` |
-| **CUDA** | **58.0** | **34.1** | **shipping** — default when a CUDA device is present |
+| **CUDA** | **58.0**[^drift] | **34.1**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
 The CUDA row is **8,729 solves over 300 s** (`mxbm --benchmark BEAM-III`), at 1.99
-verified solutions per solve and a p5–p95 of 33.8–35.2 ms. OpenCL is the older 300-nonce measurement, ±4.1 % (1σ).
+verified solutions per solve and a p5–p95 of 33.8–35.2 ms.
+
+[^drift]: **Not currently reproducible** — the same build measured 35.5–35.7 ms hours
+    later on the same machine, for reasons traced to the GPU and not the host but not yet
+    explained. See [the warning above](#-the-absolute-figures-on-this-page-are-not-currently-reproducible).
+    The −1.34 ms improvement that produced this row re-measures correctly in both regimes;
+    the absolute scale does not. OpenCL is the older 300-nonce measurement, ±4.1 % (1σ).
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
@@ -1748,6 +1754,73 @@ useful elements resident per SM  =  100 KB / ( (1 + 8/sqrt(mean)) x B )
 Coarser is better on fill and loses to integer block flooring; finer is worse on fill.
 **sm=1 is a genuine optimum, and geometry is now closed from both directions.** `B` is the
 only term left.
+
+### Round 1 takes a fifth block (−0.15 ms), via a per-round group cap
+
+*(2026-07-26.)* r1 had two redundancies the other rounds do not:
+
+- **its `gi` IS its leaf.** Both are the seed index, written from the same `rec0 >> 32`.
+  LM_SEED now keeps one copy and reads `gi` through `lleaf[0]`, dropping a whole
+  4 B/element array — and, unexpectedly, its register count with it, **64 → 48**.
+- **`LEAFW` was 2 but only slot 0 is ever touched** (`SIN` = 1, and the ctree build reads
+  index 0 of both parents), so it is 1.
+
+That takes r1 to 64 B/element. It is then held back by a *global* `kFCap`: at 320 it fits
+4 blocks/SM, at 288 it fits 5, but lowering `kFCap` globally makes every other round spill
+more and the total does not move. **`FCAP` is therefore a per-round template parameter**,
+which is the natural completion of "B differs per round" — r1 runs at 288 and pays its own
+slightly higher spill rate, r2/r3/r4 stay at 320.
+
+r1 marginal **5.28 → 5.13 ms**, end-to-end 34.30 → 34.17 across three interleaved runs.
+No launch bound is needed to hold 5 blocks: 48 registers and 18 980 B against the 51 and
+19 456 that 5 blocks requires.
+
+**A latent bug surfaced while measuring this.** Each round's template arguments were
+written out separately at the launch, at the carveout call and at the bench's occupancy
+probe, and had drifted in three of the four: the carveout was being applied to `LM_RD2`
+with `OUTSTR` 10 and `LM_EMIT` with `INSTR` 10, **instantiations that no longer run**, so
+the kernels that do run never received the shared-memory preference — and the bench's
+blocks/SM column was reporting a different kernel than it timed, which is why r1 appeared
+stuck at 4. The arguments are now named once as `MXBM_Rn_ARGS` and used by all three.
+
+### ⚠ The absolute figures on this page are not currently reproducible
+
+*(Open, 2026-07-26. Read before trusting any single-number claim here.)*
+
+The same binaries that measured **34.15–34.20 ms** early in the session measured
+**35.49–35.72 ms** a few hours later, on the same machine, unchanged. Every absolute
+figure in this document — including the 34.1 ms / 58.0 sol/s headline and the row in the
+progress table — was taken in the earlier regime and does not reproduce in the later one.
+
+**What this does NOT invalidate.** Every A/B in this session was run back-to-back and
+interleaved, so the deltas stand. Re-checking the session's main result on the drifted
+machine gives the same answer it gave before: pre-session config **36.85 ms** against
+current **35.51 ms**, a −1.34 ms win, versus −1.40 ms measured earlier. The *relative*
+method is sound; only the scale moved.
+
+**What it is not.** Four explanations checked and rejected:
+
+| candidate | evidence against |
+|---|---|
+| thermal throttling | card is *cooler and clocking higher* in the slow regime — 54 °C / 2760 MHz against 63 °C / 2685 MHz |
+| within-run drift | the 15 s windows of the published run show no trend: first five average 58.5, last five 58.1 |
+| memory clock | 10251 MHz in both regimes |
+| host CPU contention | the bench does host-side verification and the box has `tte` on 51 % of a core, but the **GPU kernel sum itself rose 34.49 → 35.41 ms** while host overhead is only +0.15 ms |
+
+That last row is the important one: the slowdown is **on the GPU**, not in the host path.
+Per-round, measured by replay in both regimes: entry 2.72→2.79, r1 5.33→5.37, r2
+10.38→10.58, r3 9.50→9.78, r4 5.49→5.77, terminal 1.07→1.12. Everything is ~2–3 % slower
+in step, which points at a global clock/power state the reported SM and memory clocks do
+not capture — the card is SW-power-capped at 285 W in both regimes
+(`clocks_throttle_reasons.active = 0x4`), so one candidate is that the same 285 W buys
+less work at a different point on the V/f curve, but that is a hypothesis and not a
+measurement.
+
+**What to do before quoting a number again:** establish the reproducible steady state
+first — fixed power limit, card at thermal equilibrium, host quiet — and re-measure the
+headline and the progress-table row against it. Until then treat 34.1 ms / 58.0 sol/s as
+an upper bound and the −1.34 ms improvement as the solid result. This affects the
+previously published 56.4 sol/s equally; it was measured the same way.
 
 ### Round 3 does not want a fourth block — occupancy pays only where a round is latency-bound
 
