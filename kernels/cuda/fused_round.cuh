@@ -95,6 +95,22 @@ constexpr uint32_t kFCap    = (uint32_t)MXBM_FCAP;
 #ifndef MXBM_SPILL
 #define MXBM_SPILL 1
 #endif
+
+// MXBM_NARROW6: round 3 stages its 7th work word in 2 bytes instead of 8.
+//
+// r3's input is r2's output, which combine() masked to LOUT = 400 bits -- so word 6
+// carries bits 384..399, sixteen significant bits in a u64. Storing it in its own u16
+// plane takes r3 from 80 to 74 B per staged element, which is what it needs to reach
+// 4 blocks/SM at a kFCap that keeps the spill rare. Only LM_EMIT qualifies: r1's input
+// is a full 448 bits, r2's word 6 holds 40, and r4's word 5 holds 56.
+//
+// The cost is bank conflicts, and it is predictable: the conflict degree of a u64 stride
+// S is 32/gcd(2S,32), so ODD strides give 2-way and even ones 4-way or worse. Dropping
+// lwork from 7 to 6 u64 therefore doubles the conflicts on the walk's dominant shared
+// access. Whether the extra block pays for that is the measurement.
+#ifndef MXBM_NARROW6
+#define MXBM_NARROW6 0
+#endif
 // 8-way max split. The level must be chosen BEFORE any part is walked: escalating after
 // a walk would re-emit everything the earlier, coarser parts already emitted, which
 // inflates the next round's bucket counts and evicts real elements -- it shows up as
@@ -253,7 +269,12 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
     // exception: its leaf payload is the packed leftContrib, not leaves.
     constexpr bool kNeedLead = (LMODE == LM_USE);
-    __shared__ uint64_t lwork[INW * kFCap];
+    // Derived, not passed: LM_EMIT is round 3's mode and nothing else uses it, so the
+    // launch sites need no new argument.
+    constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT);
+    constexpr int  LWS     = NARROW6 ? INW - 1 : INW;      // lwork stride, u64
+    __shared__ uint64_t lwork[LWS * kFCap];
+    __shared__ uint16_t lw6[NARROW6 ? kFCap : 1];
     __shared__ uint32_t lgi[kFCap], lleaf[LEAFW * kFCap];
     __shared__ uint32_t llead[kNeedLead ? kFCap : 1];
     __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : kFCap], lchain[kFCap], tab[kTabSize];
@@ -266,6 +287,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     __shared__ uint8_t skey[SUBPASS ? kSKey : 1];
     auto lead_of = [&](uint32_t p) -> uint32_t {
         return kNeedLead ? llead[p] : lleaf[p * LEAFW + 0];
+    };
+    // w is a compile-time-bounded loop index at every call site, so the branch folds.
+    auto ldw = [&](uint32_t p, int w) -> uint64_t {
+        if constexpr (NARROW6) return (w == INW - 1) ? (uint64_t)lw6[p] : lwork[p*LWS + w];
+        else                   return lwork[p*LWS + w];
+    };
+    auto stw = [&](uint32_t p, int w, uint64_t v) {
+        if constexpr (NARROW6) { if (w == INW - 1) lw6[p] = (uint16_t)v;
+                                 else              lwork[p*LWS + w] = v; }
+        else lwork[p*LWS + w] = v;
     };
 
     const uint32_t lId = threadIdx.x;
@@ -362,16 +393,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             // destination is only 16 B aligned for even pos.
             #pragma unroll
             for (int w = 0; w < INW; ++w)
-                __pipeline_memcpy_async(&lwork[pos*INW + w], &in_belem[d + w], 8);
+                __pipeline_memcpy_async(&lwork[pos*LWS + w], &in_belem[d + w], 8);
             __pipeline_commit();
             const uint64_t p0 = in_belem[d + INW], p1 = r3_word8(in_belem, d, side_in + base + p);
 #else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
-            lwork[pos*INW + 0] = q0.x; lwork[pos*INW + 1] = q0.y;
-            lwork[pos*INW + 2] = q1.x; lwork[pos*INW + 3] = q1.y;
-            lwork[pos*INW + 4] = q2.x; lwork[pos*INW + 5] = q2.y;
-            lwork[pos*INW + 6] = q3.x;
+            stw(pos,0,q0.x); stw(pos,1,q0.y);
+            stw(pos,2,q1.x); stw(pos,3,q1.y);
+            stw(pos,4,q2.x); stw(pos,5,q2.y);
+            stw(pos,6,q3.x);
             const uint64_t p0 = q3.y, p1 = r3_word8(in_belem, d, side_in + base + p);
 #endif
             const uint32_t l0 = r3_l0(p0);
@@ -386,16 +417,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
 #if MXBM_CPASYNC
             #pragma unroll
             for (int w = 0; w < INW; ++w)
-                __pipeline_memcpy_async(&lwork[pos*INW + w], &in_belem[d + w], 8);
+                __pipeline_memcpy_async(&lwork[pos*LWS + w], &in_belem[d + w], 8);
             __pipeline_commit();
 #else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             #pragma unroll
             for (int j = 0; j < INW/2; ++j) {
                 const ulonglong2 q = v[j];
-                lwork[pos*INW + 2*j] = q.x; lwork[pos*INW + 2*j + 1] = q.y;
+                lwork[pos*LWS + 2*j] = q.x; lwork[pos*LWS + 2*j + 1] = q.y;
             }
-            if constexpr (INW & 1) lwork[pos*INW + INW-1] = in_belem[d + INW-1];
+            if constexpr (INW & 1) lwork[pos*LWS + INW-1] = in_belem[d + INW-1];
 #endif
             const uint64_t meta = in_belem[d + INW];
             lgi[pos] = (uint32_t)(meta >> 32); llead[pos] = (uint32_t)meta;
@@ -459,7 +490,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 uint32_t t1[1] = { idx };
                 bh3::apply_mix(e, t1, 1u, 448u);
             }
-            for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = e.w[w];
+            for (int w = 0; w < INW; ++w) lwork[pos*LWS + w] = e.w[w];
             lleaf[pos*LEAFW + 0] = idx;
         } else if constexpr (LMODE == LM_RD2) {
             uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
@@ -468,11 +499,11 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 abl_spread(lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], e);
             else
                 rebuild_r2(pp, lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], e);
-            for (int w = 0; w < INW; ++w) lwork[pos*INW + w] = e.w[w];
+            for (int w = 0; w < INW; ++w) lwork[pos*LWS + w] = e.w[w];
         }
         // lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode -- and
         // it is filled by this point (the two derive modes fill it just above).
-        const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[pos*INW] & 0xFFFFFFu)
+        const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[pos*LWS] & 0xFFFFFFu)
                                              : lkey[pos];
         const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
         lchain[pos] = atomicExch(&tab[hk], pos);
@@ -493,8 +524,8 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }
 
                 bh3::Elem a{}, b{}, c;
-                for (int w = 0; w < INW; ++w) { a.w[w] = lwork[leftPos*INW+w];
-                                                b.w[w] = lwork[rightPos*INW+w]; }
+                for (int w = 0; w < INW; ++w) { a.w[w] = ldw(leftPos, w);
+                                                b.w[w] = ldw(rightPos, w); }
                 bh3::combine(a, b, LOUT, c);
 
                 uint32_t ctree[9]; uint64_t contribOut = 0;

@@ -1749,6 +1749,46 @@ Coarser is better on fill and loses to integer block flooring; finer is worse on
 **sm=1 is a genuine optimum, and geometry is now closed from both directions.** `B` is the
 only term left.
 
+### Round 3 does not want a fourth block — occupancy pays only where a round is latency-bound
+
+*(2026-07-26. This closes the "r3 still needs its own cut" lead rather than delivering it.)*
+
+r3 is the one round still at 3 blocks/SM, so it looked like the obvious next 1.6 ms.
+`MXBM_NARROW6=1` gets it there: r3's input is r2's output masked to `LOUT` = 400 bits, so
+word 6 carries **16 significant bits in a u64**, and moving it to its own `uint16_t` plane
+takes r3 from 80 to 74 B per staged element — under the 4-block line at `kFCap` 320, with
+no extra spill. The goldens passing is itself the check that word 6 really is that narrow.
+
+It buys nothing. r3's marginal cost is **9.50 ms at 3 blocks and 9.51 at 4**, and the
+end-to-end figure does not move (34.31 against 34.20–34.37 baseline).
+
+**And it is not the bank conflicts cancelling a gain**, which is what the stride change
+predicted: the conflict degree of a u64 stride *S* is `32/gcd(2S,32)`, so odd strides give
+2-way and even ones 4-way, and dropping `lwork` from 7 u64 to 6 doubles the conflicts on
+the walk's dominant shared access. Forcing both builds to 3 blocks isolates it — r3
+marginal **9.54 with stride 7, 9.51 with stride 6**. The penalty is zero, which agrees
+with the earlier finding that [bank conflicts here are a red herring](#where-the-cuda-backend-stands-after-the-fix).
+
+So two independent routes to r3-at-4-blocks — lowering `kFCap` to 300, and narrowing word
+6 — are both null, and the reason is visible in the bandwidth column:
+
+| round | GB/s | % of peak | what a 4th block bought |
+|---|---|---|---|
+| r1 | 252 | 37 % | 5.85 → 5.33 (−9 %) |
+| r2 | 336 | 50 % | 10.71 → 10.38 (−3 %) |
+| r3 | 537 | **80 %** | 9.50 → 9.51 (**null**) |
+| r4 | 587 | 87 % | already at 4 |
+
+**Occupancy pays where a round is latency-bound and not where it is bandwidth-bound** —
+more warps cannot hide a stall in a memory system that is already saturated. That refines
+the equation below: it predicts where occupancy is *available*, not where it is *worth
+having*. r1 and r2 were the two rounds with DRAM headroom and they are exactly the two
+that paid; r3 and r4 sit at 80–87 % of peak and are done.
+
+`MXBM_NARROW6` is retained default-off. It is null on speed but real on footprint (−6
+B/element of shared for r3), so it is worth having if anything ever makes r3
+latency-bound again.
+
 **The open lead, with its budget.** 4 blocks/SM needs ≤ 24 576 B of shared per block
 (25 600 minus ~1 KB the driver reserves). At the safe `kFCap` of 352 that is **68.3 B per
 staged element against the 84 B used today — a 15.7 B cut.** What is identifiable:
@@ -1769,9 +1809,10 @@ mean (264) — a 25 % cut, enough on its own, and it never touches the walk. It 
 only one of the two that gets *better* as the group shrinks, since the tail ratio it
 removes is exactly what makes finer sub-masks lose.
 
-Note the budget differs per round, because `B` does: r3 is 84 B/element (INW 7, LEAFW 4),
-r1/r2 are 76, r4 is 72. `blocks/SM` is per kernel, so r2 and r4 reach 4 blocks on a smaller
-cut than r3 needs — a partial win is available before a total one.
+Note the budget differs per round, because `B` does: r3 is 80 B/element (INW 7, LEAFW 4),
+r1/r2 are 72, r4 is 68. `blocks/SM` is per kernel, so the lighter rounds reach 4 blocks on
+a smaller cut — which is what shipped. **r3 is the exception and is now closed above: it
+reaches 4 blocks and does not care.**
 
 **Ruled out — do not revisit** (all measured, see [What didn't work](#what-didnt-work)):
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
