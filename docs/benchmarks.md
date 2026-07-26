@@ -44,8 +44,9 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 | VRAM for a full search | 7.46 GiB | ~4 GiB[^4g] | |
 
 Both figures are 15 s-window medians from the head-to-head session. MXBM's own
-long-run benchmark on the current build measures **56.4 sol/s at 35.1 ms/solve**
-over 8,494 solves, so the margin above is unchanged by anything since.
+long-run benchmark on the current build measures **58.0 sol/s at 34.1 ms/solve**
+over 8,729 solves (p5–p95 33.8–35.2), so the margin above is if anything understated —
+the head-to-head predates the 2026-07-26 group-cap change, which was worth −0.9 ms.
 
 **Read that efficiency row carefully — it compares two different operating points.** MXBM
 runs pinned at the card's 285 W board limit in every kernel (verified: the driver reports
@@ -93,7 +94,8 @@ against it. Measured with `benchmarks/power_sweep.sh`, 90 s per point:
 
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
-about 1 % high in absolute terms** — stock reads 57.5 here and 56.4 over a long run.
+about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
+(both on the build of 2026-07-25; the current one is 58.0).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
 observed.
@@ -159,7 +161,7 @@ instead of 53.
 
 Quote a **median over several thousand solves**, not a peak. Under a few thousand, the
 solutions-per-solve factor alone moves the headline by more than a sol/s — this project
-published 57.5 from a 90 s run and measured 56.4 from a 300 s one, same build. Individual 15 s
+published 57.5 from a 90 s run and measured 56.4 from a 300 s one, same build (2026-07-25). Individual 15 s
 windows on this card reach 61.5 sol/s, and that figure is noise: for the observed spread,
 the expected maximum of 304 samples is about 67. The median moves by less than 1 %
 between runs; peaks move by 10 %.
@@ -220,4 +222,4 @@ broken on your GPU, that is a bug report we want, not a disappointment to manage
 
 | GPU | VRAM | Driver | Backend | sol/s | W | sol/s/W | Reported by |
 |---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB | 610.43.03 | CUDA | 56.4 | 284 | 0.198 | reference card |
+| RTX 4070 Ti SUPER | 16 GiB | 610.43.03 | CUDA | 58.0 | 285 | 0.204 | reference card |
