@@ -142,6 +142,34 @@ int main() {
         check(out.find(kReset) != std::string::npos, "and resets afterwards");
     }
 
+    // -- the job line carries the block height --
+    // Beam's stratum job carries "height" and the console used to discard it.
+    // The prefix is the reference miner's verbatim so one grep spans both miners' logs; the
+    // job id survives in parentheses because shares and cancels key off it.
+    {
+        std::string out = capture([] {
+            ui::console::init(true);
+            ui::console::job("5417", 0x09000000u, 2500000);
+        });
+        check(out.find("New job received for blockheight 2500000 (job 5417) "
+                       "Difficulty: 512") != std::string::npos,
+              "the job line names the block height, keeps the id, and keeps the difficulty");
+    }
+
+    // A pool that omits "height" leaves it 0. "blockheight 0" would assert
+    // something false about the chain, so the line reverts to its older wording
+    // rather than printing a placeholder.
+    {
+        std::string out = capture([] {
+            ui::console::init(true);
+            ui::console::job("5417", 0x09000000u, 0);
+        });
+        check(out.find("New job received: 5417 Difficulty: 512") != std::string::npos,
+              "a missing height falls back to the id-only wording");
+        check(out.find("blockheight") == std::string::npos,
+              "...and never prints 'blockheight 0'");
+    }
+
     // -- the startup block, in the reference miner's order and shape --
     {
         std::string out = capture([] {

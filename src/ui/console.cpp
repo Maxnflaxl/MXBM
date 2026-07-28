@@ -191,12 +191,24 @@ void start_mining() {
 }
 
 void job(const std::string& id, uint32_t difficulty, uint64_t height) {
-    (void)height;   // signature stability only -- see doc comment in console.h
     // Beam display units, not the raw packed uint32, and unabbreviated --
     // unlike format_units()'s k/M share notation.
     char units[32];
     std::snprintf(units, sizeof units, "%.0f", pow::to_display_units(difficulty));
-    print_colored(kYellow, "New job received: " + id + " Difficulty: " + units);
+
+    // "for blockheight N" is the reference miner's wording, and matching it verbatim is the
+    // point: rigs run both, and one grep should find the job lines in either log.
+    // What it does NOT do is drop the job id the way the reference miner's line does -- the
+    // id is what a share, a cancel and a /summary entry are correlated by, so it
+    // stays, parenthesised behind the height.
+    //
+    // A pool that omits "height" leaves it 0 (messages.cpp defaults it), and
+    // "blockheight 0" would be a lie about the chain rather than a missing field,
+    // so that case keeps the original wording instead.
+    std::string text = height != 0
+        ? "New job received for blockheight " + std::to_string(height) + " (job " + id + ")"
+        : "New job received: " + id;
+    print_colored(kYellow, text + " Difficulty: " + units);
 }
 
 void share_found(const std::string& device, double units, double target_units) {

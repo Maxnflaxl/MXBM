@@ -347,7 +347,7 @@ in the same order, minus the colour and plus a timestamp on every one:
 
 ```
 [2026-07-25 19:16:21] MXBM 0.5.126 [2ecb9d4] — open BeamHash III miner
-[2026-07-25 19:16:23] New job received: 58481 Difficulty: 512
+[2026-07-25 19:16:23] New job received for blockheight 3974400 (job 58481) Difficulty: 512
 [2026-07-25 19:16:44] RTX 4070 Ti SUPER: Found a share of difficulty 8.0k (3.9x target of 2048)
 [2026-07-25 19:16:44] Share accepted (18 ms)
 ```

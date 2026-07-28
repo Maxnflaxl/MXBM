@@ -70,9 +70,13 @@ void connected(bool tls);
 void authorized(const std::string& user);
 void start_mining();
 
-// "New job received: <id> Difficulty: <N>" -- a plain rounded integer
-// (pow::to_display_units), NOT the k/M format_units() notation the share lines
-// use. `height` is accepted for signature stability and currently unused.
+// "New job received for blockheight <H> (job <id>) Difficulty: <N>", matching
+// the reference miner's wording for the height so one grep works across both miners' logs,
+// but keeping the job id it drops. A `height` of 0 means the pool sent none, and
+// the line falls back to "New job received: <id> Difficulty: <N>".
+//
+// Difficulty is a plain rounded integer (pow::to_display_units), NOT the k/M
+// format_units() notation the share lines use.
 void job(const std::string& id, uint32_t difficulty, uint64_t height);
 
 // "CPU 0: Found a share of difficulty 8.0k" (green). `units` and `target_units`

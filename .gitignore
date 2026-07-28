@@ -37,6 +37,10 @@
 # Internal working docs (research, planning, roadmap, legal notes) — not shipped publicly
 /docs-internal/
 
+# The working task list. The PUBLIC roadmap is the table in README.md; this one holds
+# the undecided and the unflattering, so it stays local.
+/TODO.md
+
 # Phase-D2 exploratory spikes (CUDA comparison, etc.) — not part of the build
 spike/
 Testing/
