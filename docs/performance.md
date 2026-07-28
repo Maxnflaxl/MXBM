@@ -1889,6 +1889,44 @@ way to learn what the cost side is worth.
 > a real prediction and it is the point of running the sweep; it is not a reason to expect
 > much.
 
+### The occupancy optimum does move under a cap — by 0.08 % of a solve
+
+*(`benchmarks/occupancy_cap.sh`, 2026-07-28. Direction predicted correctly, magnitude
+overestimated 2.5×, and the honest conclusion is to drop it.)*
+
+Every occupancy decision here was tuned at stock, where more resident warps hide more
+latency. Under a cap they also cost power, and power spent on occupancy is not spent on
+clock. Round 1 has the cleanest knob for this: `MXBM_R1_FCAP=288` fits five blocks/SM,
+320 fits four, and the stock answer was already recorded as 0.15 ms in favour of 288.
+
+Round 1 replayed 9× to lift a sub-ms difference clear of run-to-run spread:
+
+| cap | 288 (5 blocks) | 320 (4 blocks) | Δ per r1 pass | Δ clock | winner |
+|---|---|---|---|---|---|
+| 285 W | 74.86 / 74.97 ms @ 2670/2655 MHz | 76.36 / 75.50 @ 2670/2685 | **+0.113 ms** | +15 MHz | 288 |
+| 180 W | 97.40 / 97.14 @ 1995/1965 | 96.91 / 96.99 @ 2010/2010 | **−0.036 ms** | +30 MHz | **320** |
+
+**The ordering flips**, and the clock story is the cleaner half: dropping one block buys
+15 MHz at stock and 30 MHz at 180 W, with every 320 sample clocking at or above every 288
+sample. The mechanism is real and it does steepen under a cap.
+
+**And it is far too small to matter.** −0.036 ms per r1 pass is **0.08 % of a 43.6 ms
+solve**; even assuming all four fused rounds gained the same, the ceiling is **0.33 %**.
+The time signal at 180 W (0.32 ms across 9 replays) also barely clears the 288 arm's own
+0.26 ms spread, so it is directionally credible and quantitatively marginal.
+
+**Where the prediction went wrong, since it was written down first:** the activity→clock
+steepening was taken from the DRAM-traffic result (5×, 60 → 210 MHz) and applied to
+occupancy. Occupancy's own steepening is **2×** (15 → 30 MHz). Scaling one lever's
+exchange rate by another lever's is what produced a 5×-too-large forecast.
+
+**And the pre-registered decision rule was the wrong rule.** It said "if 288 still wins at
+180 W, the idea is dead" — a test on *sign*. The sign flipped and the lever is still dead,
+because 0.33 % is not worth a runtime-selected kernel variant. A stopping rule should have
+named a *magnitude*: below ~1 % of a solve, drop it regardless of direction. Recorded
+because it is the second time today a correctly-predicted direction came with a
+uselessly-small size.
+
 ### The quad record on OpenCL takes 11 GB cards off the sort path (~190 → 45 ms)
 
 *(2026-07-28. The reason to port it: on OpenCL the quad record is not a footprint
