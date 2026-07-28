@@ -649,7 +649,11 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
                               make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi)));
-                    } else if constexpr (MXBM_R3_QUAD && LMODE == LM_RD2) {
+                    } else if constexpr (LMODE == LM_RD2 && OUTSTR == 3) {
+                        // Keyed on the STRIDE, not on MXBM_R3_QUAD: the miner
+                        // instantiates both record formats and picks between them at
+                        // runtime from the card's VRAM, so the macro is not a constant
+                        // there. OUTSTR == 3 is what "this is the quad record" means.
                         // QUAD RECORD: key, four leaves, gi -- 3 u64 where the packed
                         // record below takes 9. The work words are dropped entirely;
                         // round 3 rebuilds them from these same four leaves. Three

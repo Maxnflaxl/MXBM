@@ -14,10 +14,18 @@ namespace mxbm { namespace gpu {
 // Sizing them separately frees ~0.7 GiB. Derived from the per-round stride table rather
 // than written out, so it cannot drift from the kernels.
 constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 2u };
-constexpr uint32_t fb_set_stride(int set) {
+
+// Round r's output stride. Under the QUAD RECORD (MXBM_R3_QUAD, CUDA only) round 2 emits
+// key + four leaves + gi in 3 u64 instead of the 72 B packed record, and round 3 rebuilds
+// the work words from those leaves. Set 0's width is then round 2's record and nothing
+// else -- round 4 writes 2 -- so 9 u64 becomes 3, which is where the ~2.1 GiB goes.
+constexpr uint32_t fb_round_stride(int r, bool quad) {
+    return (quad && r == 2) ? 3u : kFbStride[r + 1];
+}
+constexpr uint32_t fb_set_stride(int set, bool quad = false) {
     uint32_t m = (set == 0) ? kFbStride[1] : 0u;          // entry writes set 0
     for (int r = 1; r <= 4; ++r)
-        if ((r & 1) == set && kFbStride[r + 1] > m) m = kFbStride[r + 1];
+        if ((r & 1) == set && fb_round_stride(r, quad) > m) m = fb_round_stride(r, quad);
     return m;
 }
 
@@ -43,7 +51,8 @@ uint32_t fb_cap_for(uint32_t mean);
 // Bytes the row-bucket path needs at a given geometry: {total, largest single
 // allocation}. The single figure is what OpenCL's CL_DEVICE_MAX_MEM_ALLOC_SIZE caps,
 // and is what binds below 12 GB.
-void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single);
+void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
+                     bool quad = false);
 
 // The row-bucket geometry decision, with the device reduced to the two numbers it
 // actually turns on. Pure, so docs/HW_REQUIREMENTS.md's "which cards get the fast path"
@@ -63,12 +72,39 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // A card that cannot host (16,1) drops one step -- 8-14 % slower -- rather than falling
 // back to the sort path, which measures 215 ms.
 //
+// THE QUAD RECORD IS A SECOND AXIS, not a finer geometry, and the ladder is ordered by
+// MEASURED time rather than by footprint because the two disagree. On the reference card:
+//
+//   packed (16,1)  7.46 GiB  33.67 ms      quad (16,1)  5.28 GiB  38.39 ms
+//   packed (15,2)  6.88 GiB  36.01 ms      quad (15,2)  4.91 GiB  40.65 ms
+//   packed (14,3)  6.50 GiB  40.02 ms      quad (14,3)  4.66 GiB  44.75 ms
+//
+// So quad (16,1) is BOTH smaller and faster than packed (14,3): a coarser geometry pays
+// in scatter locality what the quad record pays in re-derivation arithmetic, and the
+// arithmetic is cheaper. Sorting the rungs by footprint would pick the wrong one.
+//
+// The quad record is CUDA-only -- it is implemented in kernels/cuda/fused_round.cuh and
+// has no OpenCL counterpart -- so `allow_quad` is false by default and only the CUDA
+// backend passes true. It buys no speed and no watts at any power cap (measured; see
+// docs/performance.md), so it is purely what lets a smaller card run at all.
+//
 //   max_alloc : largest single allocation the backend permits. OpenCL is bound by
 //               CL_DEVICE_MAX_MEM_ALLOC_SIZE (VRAM/4 on NVIDIA); CUDA has no such
 //               limit, and passes 0 to say so. That asymmetry is the reach difference.
 //   bb/sm     : bucket bits and sub-mask bits, always summing to 17
-//   viable    : false when even the coarsest geometry will not fit
-struct RbGeometry { uint32_t bb, sm; bool viable; };
-RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem);
+//   quad      : use the 24 B quad record for round 2 -> round 3
+//   viable    : false when no rung will fit
+struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
+RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
+                           bool allow_quad = false);
+
+// The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
+// backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said
+// would fit -- a desktop compositor holding a gigabyte is not visible in totalGlobalMem.
+// Walking this list rather than decrementing `bb` is what makes that retry cross from
+// the packed rungs onto the quad ones instead of stopping at the bottom of the packed
+// half. `n` receives the count.
+struct RbRung { uint32_t bb, sm; bool quad; };
+const RbRung* rb_rungs(int& n);
 
 }} // namespace mxbm::gpu

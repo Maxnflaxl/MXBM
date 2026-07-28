@@ -517,7 +517,7 @@ int main(int argc, char** argv) {
             else                               std::signal(SIGINT, SIG_DFL);
             ui::console::error(std::string("Benchmark failed: ") + e.what());
             ui::console::info("If another process is using the GPU, stop it and retry: "
-                              "a full BeamHash III search needs ~7.5 GiB free.");
+                              "a full BeamHash III search needs ~5.7 GiB free at the smallest geometry.");
             return 1;
         }
         ticker.stop();
@@ -636,7 +636,7 @@ int main(int argc, char** argv) {
             if (n == 1) {
                 ui::console::info("Retrying with backoff - mining continues. If another process "
                                   "is using the GPU, stop it: a full BeamHash III search needs "
-                                  "~7.5 GiB free.");
+                                  "~5.7 GiB free at the smallest geometry.");
                 }
             };
         }

@@ -39,8 +39,18 @@ constexpr uint32_t kR2RecStride  = 8u;   // round 2's record; the 9th word is th
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,kR2RecStride,kFCap
 #define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap
 #define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u,kFCap
+// The quad-record pair. Only rounds 2 and 3 differ, and only in their strides and round
+// 3's mode: the record carries the same INFORMATION either way, so every L value, tree
+// width and cap is identical. Both pairs are instantiated and the choice is made at
+// RUNTIME from the geometry, because which one a card wants depends on its VRAM.
+constexpr uint32_t kQuadStride = 3u;
+#define MXBM_R2Q_ARGS 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, 2u,kQuadStride,kFCap
+#define MXBM_R3Q_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap
 static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_stride(1),
               "CUDA record widths must match the shared footprint arithmetic");
+static_assert(kQuadStride == fb_round_stride(2, true) &&
+              fb_set_stride(0, true) == kQuadStride && fb_set_stride(1, true) == 8u,
+              "quad record widths must match the shared footprint arithmetic");
 
 // Was hardcoded (16,1), so a card that could not host 7.46 GiB was refused outright --
 // even though the same kernels run unchanged at 6.50 GiB. bb and sm are kernel
@@ -49,16 +59,22 @@ static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_strid
 // chain table is a perfect hash for the 24 - bb - sm = 7 bits left varying.
 // max_alloc = 0: CUDA has no per-allocation limit (see rowbucket_geom.h).
 RbGeometry pick_geometry(uint64_t global_mem) {
-    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem);
+    // allow_quad: the 24 B record is implemented in the CUDA kernels only, so this is
+    // the one caller that passes true. It costs +14 % time and buys no watts at any cap
+    // (measured), so the ladder only reaches for it when a card cannot host a packed
+    // rung -- which is exactly what takes the CUDA path below 6.5 GiB.
+    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem, /*allow_quad=*/true);
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
                                                  g.viable = true; }
     if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
+    if (const char* e = std::getenv("MXBM_QUAD")) { g.quad = atoi(e) != 0; g.viable = true; }
     return g;
 }
 } // namespace
 
 struct CudaSolver::Impl {
     uint32_t bb = 16, sm = 1, nb = 1u << 16;
+    bool quad = false;                  // 24 B round-2 record; see rowbucket_geom.h
     uint32_t cap = 0; size_t nslots = 0;
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
@@ -69,14 +85,17 @@ struct CudaSolver::Impl {
 
     // The geometry-dependent half of the allocation: the two record sets and their
     // bucket counters. Split out so a step-down retries only what changes size.
-    bool alloc_geometry(uint32_t bb_, uint32_t sm_) {
+    bool alloc_geometry(uint32_t bb_, uint32_t sm_, bool quad_) {
         for (auto*& q : elem)   { cudaFree(q); q = nullptr; }
         for (auto*& q : counts) { cudaFree(q); q = nullptr; }
-        bb = bb_; sm = sm_; nb = 1u << bb_;
+        bb = bb_; sm = sm_; nb = 1u << bb_; quad = quad_;
         cap    = fb_cap_for(kCapacity / nb);
         nslots = (size_t)nb * cap;
-        elem[0] = dalloc<uint64_t>(nslots*kSetStride[0]);
-        elem[1] = dalloc<uint64_t>(nslots*kSetStride[1]);
+        // Set 0 is 9 u64 for the packed record and 3 for the quad one -- taken from the
+        // shared helper rather than a local constant so the allocation cannot disagree
+        // with what rb_geometry_for sized the ladder against.
+        elem[0] = dalloc<uint64_t>(nslots*fb_set_stride(0, quad));
+        elem[1] = dalloc<uint64_t>(nslots*fb_set_stride(1, quad));
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
         return elem[0] && elem[1] && counts[0] && counts[1];
     }
@@ -171,13 +190,24 @@ CudaSolver::CudaSolver(int index) : p_(new Impl) {
     if (MXBM_PERFECT_TAB && (24u - g.bb - g.sm) > 7u)
         throw std::runtime_error("CUDA: geometry leaves more key bits than the chain "
                                  "table can separate (bb + sm must be >= 17)");
-    const bool forced = std::getenv("MXBM_BB") || std::getenv("MXBM_SM");
-    bool ok = p_->alloc_geometry(g.bb, g.sm);
-    for (uint32_t bb = g.bb; !ok && !forced && bb > 14u; ) {
-        --bb;
-        std::fprintf(stderr, "CUDA: %u buckets did not fit, retrying at %u\n",
-                     1u << (bb+1), 1u << bb);
-        ok = p_->alloc_geometry(bb, 17u - bb);
+    const bool forced = std::getenv("MXBM_BB") || std::getenv("MXBM_SM")
+                     || std::getenv("MXBM_QUAD");
+    bool ok = p_->alloc_geometry(g.bb, g.sm, g.quad);
+    // Keep stepping down the SAME ladder rb_geometry_for walked, rather than
+    // decrementing bb: the rungs interleave the two record formats, so a bb-only retry
+    // would stop at the bottom of the packed half and refuse a card the quad rungs
+    // would have hosted.
+    if (!ok && !forced) {
+        int n = 0;
+        const RbRung* rungs = rb_rungs(n);
+        int i = 0;
+        while (i < n && !(rungs[i].bb == g.bb && rungs[i].quad == g.quad)) ++i;
+        for (++i; !ok && i < n; ++i) {
+            std::fprintf(stderr, "CUDA: %u buckets%s did not fit, retrying at %u%s\n",
+                         1u << g.bb, g.quad ? " (quad record)" : "",
+                         1u << rungs[i].bb, rungs[i].quad ? " (quad record)" : "");
+            ok = p_->alloc_geometry(rungs[i].bb, rungs[i].sm, rungs[i].quad);
+        }
     }
     if (!ok) throw std::runtime_error("CUDA allocation failed (device out of memory)");
     // Ada splits L1/shared by a carveout that defaults to favouring L1; ask for shared.
@@ -185,6 +215,10 @@ CudaSolver::CudaSolver(int index) : p_(new Impl) {
                                           cudaSharedmemCarveoutMaxShared)
     CARVE((fused_round<MXBM_R1_ARGS>)); CARVE((fused_round<MXBM_R2_ARGS>));
     CARVE((fused_round<MXBM_R3_ARGS>)); CARVE((fused_round<MXBM_R4_ARGS>));
+    // Both record formats are instantiated; the carveout has to reach the pair that
+    // actually runs, and applying it to a kernel that never launches is what the
+    // MXBM_Rn_ARGS naming exists to prevent (see the drift bug in cad8fde).
+    CARVE((fused_round<MXBM_R2Q_ARGS>)); CARVE((fused_round<MXBM_R3Q_ARGS>));
     CARVE(terminal_round);
     #undef CARVE
 }
@@ -221,8 +255,10 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
     #define ROUND_X(...) ROUND(__VA_ARGS__)
     ROUND_X(1, MXBM_R1_ARGS)
-    ROUND_X(2, MXBM_R2_ARGS)
-    ROUND_X(3, MXBM_R3_ARGS)
+    // Rounds 2 and 3 come in a matched pair -- r2's OUTSTR is r3's INSTR -- so they
+    // switch together or the second reads a record the first never wrote.
+    if (I.quad) { ROUND_X(2, MXBM_R2Q_ARGS) ROUND_X(3, MXBM_R3Q_ARGS) }
+    else        { ROUND_X(2, MXBM_R2_ARGS)  ROUND_X(3, MXBM_R3_ARGS)  }
     ROUND_X(4, MXBM_R4_ARGS)
     #undef ROUND_X
     #undef ROUND

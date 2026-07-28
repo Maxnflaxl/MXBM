@@ -16,9 +16,9 @@ report; BeamHash III yields ~1.9 solutions per solve.
 | | Requirement |
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
-| **VRAM — CUDA backend (the default)** | **8 GB** — needs > 7.6 GiB *reported*. 10 GB and up get the fastest geometry; 8 GB steps down one rung, ~8 % slower |
+| **VRAM — CUDA backend (the default)** | **6 GB** — needs > 5.7 GiB *reported*. 10 GB and up get the fastest geometry; below that the ladder steps down, 7–33 % slower |
 | **VRAM — OpenCL backend (fallback)** | **12 GB** — the single-allocation ceiling binds first, see [limitation 1](#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit) |
-| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, **6.50 GiB** at the coarsest (row-bucket path, both backends) |
+| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (CUDA, with the [quad record](performance.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)); 6.50 GiB is the OpenCL floor |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -51,6 +51,7 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
 | Row-bucket (default) | **7.46 GiB** | 239 B | 3.27 GiB |
+| Row-bucket, quad record (CUDA) | **5.28 GiB** | 169 B | 2.90 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
 The largest single allocation matters independently of total VRAM: OpenCL reports
@@ -67,8 +68,13 @@ whole size class lower than the OpenCL one.
 
 CUDA walks the *same* ladder, from the same `rb_geometry_for()`, bounded by total VRAM
 alone — and then checks the prediction against the allocator, stepping down again if the
-memory is not actually free (a desktop compositor can be holding a gigabyte). The rungs
-cost 35.1 / 37.8 / 42.8 ms per solve, all measured with the KAT green and drops zero.
+memory is not actually free (a desktop compositor can be holding a gigabyte). It also
+walks **three further rungs OpenCL does not have**, using the 24 B quad record: the full
+six-rung table, with its measured times, is under
+[limitation 1](#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit). Every rung
+is KAT-gated with drops zero, and the allocator retry walks the rung list rather than the
+geometry, so a card that loses a packed rung to a busy desktop falls through onto the quad
+ones instead of being refused.
 
 ---
 
@@ -143,17 +149,37 @@ Not by total VRAM. Worked through from `compute_budget()` and `rb_pick_geometry(
 | 12 GB | 11.60 / 2.90 GiB | full, geometry (14,3), ~5 % slower | full, (16,1), 35.1 ms |
 | 11 GB | 10.60 / 2.65 GiB | full, but on the **sort path** (~5× slower) | full, (16,1), 35.1 ms |
 | 10 GB | 9.70 / 2.42 GiB | **refuses** — sort path fits only 0.93 × 2^25 | full, (16,1), 35.1 ms |
-| 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | full, (15,2), 37.8 ms |
+| 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | full, (15,2), 36.0 ms |
+| 6 GB | 5.70 / 1.43 GiB | **refuses** | full, **quad (14,3)**, 44.8 ms |
 
-The CUDA millisecond figures are from the build of 2026-07-25 and are left as measured:
-what this table is about is the **ratio** between geometries, and both sides of that ratio
-came from the same session. The current build measures 33.8 ms at (16,1) — see
-[Reference measurements](#reference-measurements) — so read the rows as "(15,2) costs
-about 8 % over (16,1)", not as absolute timings.
+**The CUDA ladder has two axes, and it is ordered by measured time rather than by
+footprint** — because the two disagree. All six rungs are KAT-gated and drop-free:
+
+| rung | footprint | ms/solve | reached when |
+|---|---|---|---|
+| packed (16,1) | 7.46 GiB | **33.7** | ≥ 8.5 GiB free |
+| packed (15,2) | 6.88 GiB | 36.0 | ≥ 7.9 |
+| **quad (16,1)** | **5.28 GiB** | 38.4 | ≥ 6.3 |
+| packed (14,3) | 6.50 GiB | 40.0 | only when a single-allocation ceiling binds |
+| **quad (15,2)** | 4.91 GiB | 40.7 | ≥ 5.9 |
+| **quad (14,3)** | 4.66 GiB | 44.8 | ≥ 5.7 — the floor |
+
+The row that matters is the third. **quad (16,1) is both smaller and faster than packed
+(14,3)** — 5.28 GiB at 38.4 ms against 6.50 at 40.0 — because a coarser geometry pays in
+scatter locality what the quad record pays in re-derivation arithmetic, and the arithmetic
+is cheaper. A ladder sorted by footprint would hand those cards the slower rung. packed
+(14,3) is kept below it only because its *single* allocation is smaller (2.76 GiB against
+2.90), which a `max_alloc`-bound backend can still need.
+
+The quad record buys no speed and no watts at any power limit — that is
+[measured, not assumed](performance.md#under-a-cap-the-effect-appears--and-the-trade-still-never-pays) —
+so the ladder reaches for it only when no packed rung fits. It is purely what lets a
+smaller card run at all. `MXBM_QUAD=0|1` forces the choice.
 
 The 8 GB row changed on 2026-07-26. `CudaSolver::available()` used to demand the (16,1)
 footprint specifically, so those cards were refused by both backends and mined nothing;
-they now run the full search one rung down the ladder. The CUDA floor is 7.6 GiB reported.
+they now run the full search one rung down the ladder. The CUDA floor moved again on
+2026-07-28, to 5.7 GiB reported, when the quad record joined the ladder as a second axis.
 
 The seed layer itself is not the problem at any of these sizes: at 256 B/element a full
 2^25 layer needs only 8.59 GiB, so `elems_per_round` stays at 2^25 down to ~10.1 GiB of

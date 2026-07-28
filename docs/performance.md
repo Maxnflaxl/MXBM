@@ -1994,9 +1994,21 @@ arithmetic — and the arithmetic is cheaper. Above it, the packed record wins a
 stay the default.
 
 That extends the CUDA path from a 7.46 GiB floor to **4.66 GiB**, which is the 6 GB card
-class (an RTX 3050 6 GB reports ~5.7 GiB). Not wired into `pick_geometry` yet: the ladder
-currently chooses a geometry, and this makes the record format a second axis it would have
-to choose on. See [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#current-footprint-full-225-search).
+class (an RTX 3050 6 GB reports ~5.7 GiB).
+
+**Shipped 2026-07-28.** `rb_geometry_for` takes an `allow_quad` flag — true only from
+`CudaSolver`, since the record has no OpenCL counterpart — and walks a six-rung ladder
+ordered by measured time. Both record formats are instantiated and the choice is made at
+runtime from the card's VRAM, so one binary serves every rung; `MXBM_QUAD=0|1` forces it.
+The allocator-retry path walks the same rung list rather than decrementing `bb`, or it
+would stop at the bottom of the packed half and refuse a card the quad rungs would host.
+Goldens match `[1,1,1]` under `MXBM_QUAD=1` and the miner reports 1.99 verified
+solutions/solve on that path, so the mining route is gated and not just the bench.
+
+**Stated CUDA requirement drops from 8 GB to 6 GB**, and the cards between 6.3 and 7.9 GiB
+free get a *faster* rung than before — quad (16,1) at 38.4 ms where the packed ladder gave
+them (14,3) at 40.0. Full table in
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit).
 
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
 
