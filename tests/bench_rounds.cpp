@@ -43,6 +43,11 @@ int main(int argc, char** argv) {
     (void)run_pipeline(rt, pb, b, kat::prePow, nullptr, /*verbose=*/false);
 
     std::vector<double> tot, mix, scat, mat;
+    // Per ROUND as well as per phase. The summed figures hid a 20 ms anomaly for weeks:
+    // round 4's mix measures ~4x the others while doing less work than round 5, and a
+    // single "median mix" line cannot show that. Kept as medians, not means, for the
+    // same reason the totals are.
+    std::vector<double> rmix[5], rmat[5], rscat[5];
     int failures = 0;
     // --vary: perturb the prePow per iteration. The KAT input has exactly 3 solutions
     // by construction, so repeating it cannot measure the solutions-per-solve rate that
@@ -59,6 +64,9 @@ int main(int argc, char** argv) {
         for (int r = 0; r < 5; ++r) {
             bd += res.rounds[r].bucket_drops; pd += res.rounds[r].pair_drops;
             m += res.rounds[r].t_mix_ms; s += res.rounds[r].t_scatter_ms; mt += res.rounds[r].t_match_ms;
+            rmix[r].push_back(res.rounds[r].t_mix_ms);
+            rmat[r].push_back(res.rounds[r].t_match_ms);
+            rscat[r].push_back(res.rounds[r].t_scatter_ms);
         }
         tot.push_back(res.t_total_ms); mix.push_back(m); scat.push_back(s); mat.push_back(mt);
 
@@ -87,6 +95,15 @@ int main(int argc, char** argv) {
     std::printf("median match   : %.1f ms\n", median(mat));
     std::printf("median mix     : %.1f ms\n", median(mix));
     std::printf("median scatter : %.1f ms\n", median(scat));
+    // padNum/Lmix are what the mix kernel varies by round; printing them next to the
+    // time is what makes "r5 does MORE work and runs faster" legible rather than a
+    // claim someone has to go and re-derive.
+    static const uint32_t kPadN[5] = { 1u, 2u, 4u, 6u, 9u };
+    static const uint32_t kLmix[5] = { 448u, 424u, 400u, 376u, 288u };
+    std::printf("  round :   mix    match  scatter   (padNum, Lmix)\n");
+    for (int r = 0; r < 5; ++r)
+        std::printf("     r%d : %6.1f  %6.1f   %6.1f   (%u, %u)\n", r + 1,
+                    median(rmix[r]), median(rmat[r]), median(rscat[r]), kPadN[r], kLmix[r]);
     std::printf("correctness    : %d/%d clean\n", iters - failures, iters);
     std::printf("===========================\n");
     return failures == 0 ? 0 : 1;   // nonzero exit => a gate failed

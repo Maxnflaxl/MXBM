@@ -304,9 +304,19 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     // Compaction: fixed-width in-place mix by round. inwords_for(r) = [_,7,7,6,5]
     // for r=2..5; r2,r3 (7) reuse stock round_mix, r4 (6) / r5 (5) use narrowed
     // variants. Same signature as round_mix, so only the kernel name changes.
+    // Fully-constant variants (INW *and* padNum *and* Lmix baked in) are the default:
+    // see ROUND_MIX_K in round.cl for why, and for the 27 ms it was costing round 4.
+    // MXBM_MIX_RUNTIME falls back to the partially-constant kernels, which is what the
+    // A/B was run against and what makes the win re-measurable.
+    static const bool runtimeMix = std::getenv("MXBM_MIX_RUNTIME") != nullptr;
     const char* mixName = "round_mix";
     if (pb.compact) {
-        if      (r == 4) mixName = "round_mix_c6";
+        if (!runtimeMix) {
+            static const char* kK[6] = { "", "", "round_mix_k2", "round_mix_k3",
+                                         "round_mix_k4", "round_mix_k5" };
+            mixName = kK[r];
+        }
+        else if (r == 4) mixName = "round_mix_c6";
         else if (r == 5) mixName = "round_mix_c5";
     }
     Kernel k = rt.kernel(prog, mixName);

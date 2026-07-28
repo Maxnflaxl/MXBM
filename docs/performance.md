@@ -1468,11 +1468,13 @@ the target. What is left is not more solver micro-optimization:
    gate every run is held to. So the geometry ladder, not a tighter cap, is the lever for
    fitting a smaller card — and the "8σ→6σ reduction" lead 5 records as moot-but-real was
    never real.
-4b. **Optimize the sort path.** *(Requested 2026-07-25; not started — no baseline
-   re-measured yet, the figures below are the last recorded ones.)* It has been parked at
-   **~214.6 ms** since 2026-07-24, when the row-bucket path took over and every
-   optimization since went there: it never received compile-time round constants (worth
-   **−32.5 %** on the fused path), index-only records, or the packed-record work. It is
+4b. **Optimize the sort path.** *(Started 2026-07-28; **214.8 → 193.6 ms** so far — see
+   [the round-4 mix anomaly](#the-round-4-mix-anomaly-was-a-runtime-constant-270--82-ms),
+   which was the first thing on it and is now closed.)* It had been parked at ~214.6 ms
+   since 2026-07-24, when the row-bucket path took over and every optimization since went
+   there: it never received compile-time round constants (worth **−32.5 %** on the fused
+   path), index-only records, or the packed-record work. The first instalment of the
+   constants is in and was worth −9.8 %; the other two are untouched. It is
    not a dead path — it is what runs on any device that cannot host a row-bucket
    geometry, which per
    [limitation 1](HW_REQUIREMENTS.md#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit)
@@ -1886,6 +1888,59 @@ way to learn what the cost side is worth.
 > net win at 180 W**, which is thin enough that it could land either side of zero. That is
 > a real prediction and it is the point of running the sweep; it is not a reason to expect
 > much.
+
+### The round-4 mix anomaly was a runtime constant (27.0 → 8.2 ms)
+
+*(Closed 2026-07-28. Open since before the CUDA backend existed, and the fix is a
+transformation this document already recommended twice.)*
+
+The sort path's `round_mix` is **one kernel**; only `padNum`, `Lmix` and the buffers
+differ per round. Round 4's mix measured **27.0 ms against 7.6 / 7.6 / 7.8** for rounds
+2 / 3 / 5, and three explanations had already been ruled out: not the leaf read (a fixed
+contiguous 9-leaf read left it at 30 ms), not work volume (**round 5 does *more* — the
+internal loop runs 2/4/6/9 times for r2–r5 — and runs 4× faster**), not a branch, since
+the data is round-independent.
+
+**It was `Lmix` arriving as a kernel argument.** Inside `bh3_apply_mix`:
+
+```c
+uint word = (Lmix + i*25u) >> 6;
+t[word] |= v << sh;                  // t is a private ulong[8]
+```
+
+A private array indexed by a value the compiler cannot resolve **cannot be kept in
+registers**. `t[8]` went to scratch, and every `|=` became a scratch load-modify-store.
+Round 4 is where the cliff landed: six iterations, three of which also trigger the
+`t[word+1]` carry write — one more live scratch slot than the allocator had. Rounds 2 and
+3 trigger the carry once; round 5 triggers it four times but reads a fully contiguous
+36 B leaf stride.
+
+The fix is `ROUND_MIX_K`, which bakes `padNum` and `Lmix` in alongside the `INW` that was
+*already* compile-time — and the reason that one was is recorded three lines above it in
+the same file: *"a runtime stride here cost +24 ms (mix regressed 50→74), the same
+unrolling-killer that sank runtime-width match."* The lesson had been written down and
+applied to one of the three constants.
+
+| | runtime `Lmix` | constants | |
+|---|---|---|---|
+| r2 mix | 7.6 ms | 7.3 | |
+| r3 mix | 7.6 | 7.3 | |
+| **r4 mix** | **27.0** | **8.2** | −18.8 ms |
+| r5 mix | 7.8 | 6.3 | |
+| total mix | 50.6 / 50.8 | 29.2 / 29.8 | |
+| **solve** | **214.8 / 215.3** | **193.5 / 194.1** | **−9.8 %** |
+
+Interleaved, 15 solves each, goldens byte-identical and drops zero on every run.
+`bh3_apply_mix` itself is untouched — it is on the never-modify list with `bh3_combine`
+and `bh3_siphash24`; being `inline`, it simply receives literals now. `MXBM_MIX_RUNTIME`
+restores the old kernels so the A/B stays re-measurable.
+
+**The generalisable part:** a constant that is *known per round* but *passed at runtime*
+is not a small inefficiency here — it can be a 3× cliff, because it decides whether a
+private array lives in registers or in scratch. The row-bucket path learned this as
+"−32.5 % from compile-time round constants"; the sort path had the same three constants
+and only one of them had been fixed. **`padNum` and `Lmix` are still runtime arguments in
+`round_match` too**, which is 158 ms of the remaining 193.
 
 ### The quad record: −29 % footprint, and the byte prize does NOT survive re-derivation
 

@@ -76,6 +76,49 @@ __kernel void NAME(uint N, uint capacity, uint padNum, uint Lmix,               
 }
 ROUND_MIX_C(round_mix_c6, 6)   // r4 input: 6 significant words
 ROUND_MIX_C(round_mix_c5, 5)   // r5 input: 5 significant words
+
+// FULLY CONSTANT variants: padNum and Lmix baked in as well as INW.
+//
+// WHY. INW was made compile-time above because a runtime stride cost +24 ms, and the
+// same reasoning was never carried to the other two. It should have been, and round 4
+// is where it shows: mix measures 27.0 ms there against 7.6 / 7.6 / 7.8 for r2 / r3 /
+// r5 -- while r5 does MORE of the work (padNum 9 against 6). Not the leaf read (a fixed
+// contiguous 9-leaf read left r4 at 30 ms), not work volume, not a branch.
+//
+// The suspect is inside bh3_apply_mix, which is called with runtime Lmix:
+//
+//     uint word = (Lmix + i*25u) >> 6;      t[word] |= v << sh;
+//
+// `t` is a private ulong[8] indexed by a value the compiler cannot resolve, so it
+// cannot be kept in registers and goes to scratch -- every |= becomes a scratch
+// load-modify-store. With Lmix and padNum constant the loop unrolls, every `word`
+// and `sh` folds to a literal, and t[8] becomes eight registers.
+//
+// bh3_apply_mix itself is NOT touched (it is on the never-modify list with combine and
+// siphash24) -- it is `inline` and simply gets literals at the call site.
+#define ROUND_MIX_K(NAME, INW, PADN, LMIX)                                      \
+__kernel void NAME(uint N, uint capacity, uint padNum, uint Lmix,               \
+                   __global ulong* work,                                        \
+                   __global const uint* leaves_in,                             \
+                   __global ulong* pairs_out) {                                 \
+    uint g = (uint)get_global_id(0);                                           \
+    if (g >= N) return;                                                        \
+    uint tree[9];                                                             \
+    for (uint i = 0; i < (PADN); ++i) tree[i] = leaves_in[(size_t)g*BH3_MAX_LEAVES + i]; \
+    ulong e[7];                                                               \
+    for (int k = 0; k < 7; ++k) e[k] = 0ul;                                   \
+    for (int k = 0; k < (INW); ++k) e[k] = work[(size_t)g*(INW) + k];          \
+    e[0] = bh3_apply_mix(e, tree, (PADN), (LMIX));                            \
+    work[(size_t)g*(INW)] = e[0];                                             \
+    pairs_out[(size_t)g] = ((ulong)g << 32) | (uint)(e[0] & 0xFFFFFFu);        \
+}
+// (INW, padNum, Lmix) per round, from inwords_for / padnum_for / lmix_for. The kernel
+// signature is unchanged so mix_level still only swaps a name; the three arguments are
+// simply ignored by these variants.
+ROUND_MIX_K(round_mix_k2, 7, 2, 424)
+ROUND_MIX_K(round_mix_k3, 7, 4, 400)
+ROUND_MIX_K(round_mix_k4, 6, 6, 376)
+ROUND_MIX_K(round_mix_k5, 5, 9, 288)
 // round_scatter: radix-bucket N mixed elements by the top bucket_bits of
 // their 24-bit collision key, so the sortless all-pairs match (T4) only
 // searches within a bucket. bucket_count[b] is the raw (uncapped) atomic
