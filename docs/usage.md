@@ -60,7 +60,7 @@ immediately; only a *missing* one defers to the config.
 
 | Flag | Meaning | Default |
 |------|---------|---------|
-| `--benchmark BEAM-III` | Solve synthetic jobs and report sol/s. No pool, no wallet. | |
+| `--benchmark BEAM-III` | Solve synthetic jobs and report sol/s. No pool, no wallet. Uses one device. | |
 | `--benchmark-seconds N` | Stop the benchmark after N seconds. | until Ctrl+C |
 
 `--benchmark` names the algorithm itself, so it satisfies `--algo` on its own:
@@ -450,9 +450,20 @@ refer to the same physical card. CUDA's own enumeration defaults to fastest-firs
 NVML's is by bus id, so the two disagree on any rig whose cards are not identical;
 sorting by PCI address is the only key all three agree on.
 
-> **Only one GPU is mined at a time so far.** A `--devices` list naming several is
-> accepted — it will be right when multi-device mining lands — but MXBM says plainly
-> that it is using the first of them.
+**Several GPUs mine at once.** Each selected card gets its own solver, its own worker
+thread and its own **nonce lane**: card *n* of *N* walks nonces *n, n+N, n+2N, …* off the
+pool's prefix, so no two cards ever try the same nonce. That matters because the failure
+is silent — two cards duplicating each other's work would each look perfectly healthy
+while the rig did half of what it was paid for.
+
+A card that fails to initialise is reported and skipped rather than taking the rig down;
+the others keep mining. Speed and share statistics are reported as the rig's **total**,
+not per card — per-device rows are still to come.
+
+> **Multi-GPU has never run on a multi-GPU machine.** It is built and tested — four
+> concurrent engines, disjoint nonces, verified against a deliberately broken lane
+> assignment — but the development box has one card. If you run it on several, a report
+> either way is the single most useful thing you can send us.
 
 ### Clocks and fans
 

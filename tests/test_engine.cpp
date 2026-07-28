@@ -2,6 +2,10 @@
 // FakeSolver returns a canned candidate and Engine::submit_fn captures the
 // submissions, so there are no threads and no transport; see miner/engine.h
 // for why process_job() alone is enough to test this deterministically.
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -292,6 +296,65 @@ int main() {
         for (int i = 0; i < 4; ++i) e.process_job(job, "abc");
         check(s.first_counter_byte == std::vector<uint8_t>({0, 1, 2, 3}),
               "the single-device default still walks 0,1,2,3 -- unchanged by the lane parameter");
+    }
+
+    section("several engines mine one job concurrently without colliding");
+    {
+        // The closest thing to a multi-GPU rig that a one-GPU machine can run:
+        // N engines, N solvers, N worker threads, all started on the same job.
+        // What it proves is what a second card cannot be borrowed to check --
+        // that the threads each make progress and that no nonce is ever tried
+        // twice across them.
+        struct ThreadedSolver : Solver {
+            std::mutex m;
+            std::vector<std::array<uint8_t, 8>> seen;
+            std::vector<std::array<uint8_t, 104>> solve(const uint8_t[32],
+                                                        const uint8_t nonce[8]) override {
+                std::array<uint8_t, 8> n{};
+                std::memcpy(n.data(), nonce, 8);
+                {
+                    std::lock_guard<std::mutex> lock(m);
+                    seen.push_back(n);
+                }
+                // Slow the loop down so the test does not spend its time
+                // allocating: the point is concurrency, not throughput.
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                return {};
+            }
+        };
+
+        const unsigned kLanes = 4;
+        Client mclient;
+        mclient.handle_line(wire::kResultLoginOk);
+        std::vector<std::unique_ptr<ThreadedSolver>> msolvers;
+        std::vector<std::unique_ptr<Engine>> mengines;
+        for (unsigned lane = 0; lane < kLanes; ++lane) {
+            msolvers.push_back(std::unique_ptr<ThreadedSolver>(new ThreadedSolver));
+            mengines.push_back(std::unique_ptr<Engine>(
+                new Engine(mclient, *msolvers.back(), lane, kLanes)));
+            mengines.back()->submit_fn = [](const Solution&, Origin) {};
+        }
+        for (auto& e : mengines) e->start();
+
+        // One job, fanned out to every engine -- they divide the nonce space,
+        // not the jobs.
+        Job shared{"job-multi", valid_input, hard_difficulty, 2500100};
+        for (auto& e : mengines) e->on_job(shared, "a1f");
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        for (auto& e : mengines) e->stop();
+
+        std::vector<std::array<uint8_t, 8>> all;
+        unsigned idle = 0;
+        for (auto& s : msolvers) {
+            std::lock_guard<std::mutex> lock(s->m);
+            if (s->seen.empty()) ++idle;
+            for (const auto& n : s->seen) all.push_back(n);
+        }
+        check(idle == 0, "every engine's worker thread actually mined");
+        check(all.size() >= kLanes, "and between them they made real progress");
+        std::sort(all.begin(), all.end());
+        check(std::adjacent_find(all.begin(), all.end()) == all.end(),
+              "no nonce was tried twice across four concurrent engines");
     }
 
     return summary("engine");

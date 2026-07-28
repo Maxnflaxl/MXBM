@@ -215,14 +215,6 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    // One solver, so one card. A list naming several is not an error -- it is a
-    // rig config that will be right once multi-device mining lands -- but it
-    // must not look like it was honoured.
-    if (selected_devices.size() > 1) {
-        ui::console::info("--devices selected " + std::to_string(selected_devices.size())
-                          + " GPUs; mining on the first of them only - "
-                          "multi-device mining is not implemented yet");
-    }
     const int device_index = selected_devices.empty() ? 0 : (int)selected_devices.front();
 #ifdef MXBM_HAVE_CUDA
     // Say which card was chosen whenever the choice was the user's, or whenever
@@ -236,7 +228,14 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // The first selected device's solver. Everything that is single-device by
+    // nature -- the benchmark, the device block, the NVML handle -- uses this
+    // one; mining adds the rest below.
     std::unique_ptr<miner::Solver> solver;
+    // Devices two and up, when --devices named several and the backend can
+    // drive them. Each gets its own Engine and its own nonce lane.
+    std::vector<std::unique_ptr<miner::Solver>> extra_solvers;
+    std::vector<std::string> extra_labels;
     // Set when a construction attempt was actually made and threw, so the
     // fallback below need not claim "no GPU available" when one was found.
     bool gpu_attempt_failed = false;
@@ -265,6 +264,21 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
             gpu_attempt_failed = true;
+        }
+        // The remaining selected devices. A card that fails to initialise is
+        // reported and skipped rather than taking the rig down with it: on a
+        // multi-GPU box the whole point is that the others keep mining.
+        for (size_t k = 1; solver && k < selected_devices.size(); ++k) {
+            const size_t pos = selected_devices[k];
+            const int idx = pos < cuda_devices.size() ? cuda_devices[pos].index : (int)pos;
+            try {
+                auto cs = std::make_unique<gpu::CudaSolver>(idx);
+                extra_labels.push_back(cs->device().name);
+                extra_solvers.push_back(std::move(cs));
+            } catch (const std::exception& e) {
+                ui::console::error("Device " + std::to_string(pos) + " could not be initialised ("
+                                   + e.what() + ") - continuing without it");
+            }
         }
     }
 #endif
@@ -510,14 +524,19 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // Null when no backend claimed a solver: jobs are monitored, not solved.
-    std::unique_ptr<miner::Engine> engine;
+    // One Engine per device, each with its own solver and its own nonce lane.
+    // Empty when no backend claimed a solver: jobs are monitored, not solved.
+    // engines[0] drives `solver`; the rest drive extra_solvers in order.
+    std::vector<std::unique_ptr<miner::Engine>> engines;
 
-    // Which pool's job the solver works on: a pass-through to Engine::on_job
+    // Which pool's job the solvers work on: a pass-through to Engine::on_job
     // with no fee configured, and what DevFee switches each round with one.
+    // EVERY engine gets every job -- they divide the nonce space, not the jobs,
+    // so each card searches the same block header from a disjoint set of
+    // nonces (miner/engine.h, the lane parameter).
     miner::JobRouter router(
-        [&engine](const stratum::Job& j, const std::string& prefix, miner::Origin origin) {
-            if (engine) engine->on_job(j, prefix, origin);
+        [&engines](const stratum::Job& j, const std::string& prefix, miner::Origin origin) {
+            for (auto& e : engines) e->on_job(j, prefix, origin);
         });
 
     // Declared before submit_fn below, which captures it to route Dev-origin
@@ -526,7 +545,18 @@ int main(int argc, char** argv) {
     std::unique_ptr<miner::DevFee> devfee;
 
     if (solver) {
-        engine = std::make_unique<miner::Engine>(client, *solver);
+        const uint64_t lanes = 1 + extra_solvers.size();
+        engines.push_back(std::make_unique<miner::Engine>(client, *solver, 0, lanes));
+        for (size_t k = 0; k < extra_solvers.size(); ++k)
+            engines.push_back(std::make_unique<miner::Engine>(client, *extra_solvers[k],
+                                                              k + 1, lanes));
+        if (lanes > 1) {
+            std::string names = worker_label;
+            for (const auto& l : extra_labels) names += ", " + l;
+            ui::console::info("Mining on " + std::to_string(lanes) + " devices: " + names);
+        }
+
+        auto& engine = engines[0];
         engine->submit_fn = [&client, &stats, &devfee, worker_label](
                 const stratum::Solution& s, miner::Origin origin) {
             // Achieved difficulty for the "Found a share" line and the
@@ -569,6 +599,15 @@ int main(int argc, char** argv) {
                                   "~7.5 GiB free.");
             }
         };
+        // Every engine reports through the same hooks, so the stats are the
+        // rig's total rather than one card's. Stats is mutex-guarded
+        // throughout (miner/stats.h), which is what makes that safe with a
+        // worker thread per device.
+        for (size_t k = 1; k < engines.size(); ++k) {
+            engines[k]->submit_fn      = engines[0]->submit_fn;
+            engines[k]->on_attempt     = engines[0]->on_attempt;
+            engines[k]->on_solver_error = engines[0]->on_solver_error;
+        }
     }
 
     client.on_result = [&opts, &stats](const stratum::Result& r) {
@@ -601,7 +640,7 @@ int main(int argc, char** argv) {
     // Developer fee. Announced at startup either way, so "does this binary
     // charge me?" is answerable from the console. Mechanism in miner/devfee.h;
     // user-facing terms in docs/devfee.md.
-    if (miner::devfee_configured() && engine) {
+    if (miner::devfee_configured() && !engines.empty()) {
         miner::DevFeePool pool = miner::devfee_pool();
         miner::DevFeeSchedule sched = miner::devfee_schedule();
 
@@ -632,7 +671,7 @@ int main(int argc, char** argv) {
         devfee->on_slice_begin = [](std::chrono::seconds d) { ui::console::devfee_start(d); };
         devfee->on_slice_end   = [](std::chrono::seconds d) { ui::console::devfee_end(d); };
         devfee->on_note        = [](const std::string& m) { ui::console::info(m); };
-    } else if (engine) {
+    } else if (!engines.empty()) {
         ui::console::info("Dev fee: none - this build mines entirely for you");
         if (opts.devfee_pct > 0.0) {
             // With no developer address compiled in there is nowhere to send
@@ -660,7 +699,9 @@ int main(int argc, char** argv) {
     ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint,
                  http_api.bound_port());
 
-    if (engine) engine->start();
+    // Each engine spawns its own worker thread; they share one Stats and one
+    // Client, both of which are mutex-guarded.
+    for (auto& e : engines) e->start();
     // After the engine so the fee's first job never arrives before there is a
     // worker to mine it, and after the API/ticker so a fee round is reportable
     // the moment it can happen.
