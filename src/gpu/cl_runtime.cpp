@@ -100,7 +100,30 @@ cl_program Runtime::compile(const std::vector<std::string>& sources, const std::
     cl_int err = CL_SUCCESS;
     cl_program prog = clCreateProgramWithSource(ctx_, (cl_uint)ptrs.size(), ptrs.data(), lens.data(), &err);
     check_cl(err, "clCreateProgramWithSource");
-    err = clBuildProgram(prog, 1, &dev_, options.c_str(), nullptr, nullptr);
+    // MXBM_CL_VERBOSE: ask NVIDIA's OpenCL compiler for the ptxas report and print it.
+    // This is the ONLY register/spill instrument available on this path -- Nsight cannot
+    // profile OpenCL -- and spilling is the one mechanism with a demonstrated 3x behind
+    // it here (the round-4 mix anomaly: a private ulong[8] in scratch, 27 -> 8 ms).
+    // The report names, per kernel: registers used, "bytes stack frame" (the scratch
+    // allocation) and "bytes spill stores/loads".
+    std::string opts = options;
+    const bool verbose = std::getenv("MXBM_CL_VERBOSE") != nullptr;
+    if (verbose) opts += " -cl-nv-verbose";
+    // MXBM_CL_MAXREG=N caps registers program-wide. Diagnostic only: it is how you test
+    // whether a kernel's register count -- and so its occupancy -- is what is costing it,
+    // by forcing a fast kernel DOWN to a slow one's count and watching it slow down.
+    if (const char* r = std::getenv("MXBM_CL_MAXREG")) {
+        opts += " -cl-nv-maxrregcount=";
+        opts += r;
+    }
+    err = clBuildProgram(prog, 1, &dev_, opts.c_str(), nullptr, nullptr);
+    if (verbose && err == CL_SUCCESS) {
+        size_t n = 0;
+        clGetProgramBuildInfo(prog, dev_, CL_PROGRAM_BUILD_LOG, 0, nullptr, &n);
+        std::string log(n, '\0');
+        clGetProgramBuildInfo(prog, dev_, CL_PROGRAM_BUILD_LOG, n, &log[0], nullptr);
+        std::fprintf(stderr, "---- ptxas report ----\n%s\n----------------------\n", log.c_str());
+    }
     if (err != CL_SUCCESS) {
         size_t n = 0;
         clGetProgramBuildInfo(prog, dev_, CL_PROGRAM_BUILD_LOG, 0, nullptr, &n);

@@ -1974,6 +1974,39 @@ There was never a cliff here to find, and "compile-time round constants are wort
 generalised from a case that had one. Look for the dynamic index first; the constants are
 the fix, not the diagnosis.
 
+#### The OpenCL path finally has a register/spill instrument
+
+`MXBM_CL_VERBOSE=1` appends `-cl-nv-verbose` and prints NVIDIA's `ptxas` report. This is
+the only register-level instrument available here — Nsight cannot profile OpenCL, which is
+why every figure on this path had come from ablation and arithmetic. Pair it with
+`CUDA_CACHE_DISABLE=1`, or the driver's on-disk cache returns the binary without
+recompiling and the report is empty.
+
+It settles both questions above from the compiler rather than from timings:
+
+| kernel | stack frame | spill | registers |
+|---|---|---|---|
+| `round_mix` / `_c5` / `_c6` *(runtime `Lmix`)* | **112 B** | 0 | 39 |
+| `round_mix_k2…k5` *(constant)* | **0 B** | 0 | 28–32 |
+| `round_match` | 0 B | 0 | 40 |
+| `round_match_sorted` *(r1/r2)* | 0 B | 0 | **48** |
+| `round_match_sorted_7_6` / `_6_5`, `round_match_k3`/`k4` | 0 B | 0 | 40 |
+
+**112 B is exactly `t[8]` (64 B) + `tree[9]` (36 B)** — the diagnosis confirmed at source,
+not inferred. And **no match kernel spills at all**, so the mechanism worth 3× in the mix
+is simply absent there; that line of enquiry is closed rather than open.
+
+The register column also offers a mechanism for the unexplained r1/r2 regression: the
+generic kernel they use costs **48** registers and the K variants **40**, so
+constant-folding *raised* occupancy. Forcing the generic down to 40 with
+`MXBM_CL_MAXREG=40` costs **r1 +4.9 ms and r2 +9.5** — the same direction as the K
+regression and larger. On a gather-bound kernel more resident warps can cost more in cache
+locality than they buy in latency hiding, which is the same shape as
+[the (17,0) geometry result](#bytes-are-nearly-free-per-element-work-is-not) (−9 % traffic,
++9 % time, lost to scatter locality). Stated as supported rather than proven: the capped
+build's own spill numbers were not in the driver's (truncated) log, so "the cap did not
+simply induce a spill" is not directly verified.
+
 ### The quad record: −29 % footprint, and the byte prize does NOT survive re-derivation
 
 *(Built and measured 2026-07-28. `MXBM_R3_QUAD`, off by default. This is the experiment
