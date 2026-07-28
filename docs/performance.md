@@ -1974,6 +1974,46 @@ There was never a cliff here to find, and "compile-time round constants are wort
 generalised from a case that had one. Look for the dynamic index first; the constants are
 the fix, not the diagnosis.
 
+#### Index-only round 1 does NOT transfer to the sort path (+27 ms)
+
+*(Built, gated, measured, reverted to opt-in 2026-07-28. `MXBM_IDXONLY`.)*
+
+The row-bucket path's largest single win of its kind was
+[re-deriving round-1 seeds from indices](#seed-re-derivation): **−12.1 ms of 114.8**. The
+sort path has the identical opportunity — a round-1 element is `seed_element(pp, idx)`
+mixed at 448 over the tree `{idx}`, fully determined by an index the sort pair already
+carries — and storing it costs 56 B/element of work plus a 4 B leaf write that lands in its
+own 32 B sector, then 2 × 56 B of scattered reads per candidate pair.
+
+`round1_mix_seeds_idx` stores only the sort pair; `round_match_seed` derives both parents,
+hoisting the left one out of the inner loop since it is invariant there. **Correct on the
+first run** — goldens byte-identical, drops zero, 10/10 clean.
+
+| | stored | index-only |
+|---|---|---|
+| r1 match | 31.6 / 31.7 ms | **60.2 / 61.2** |
+| solve | 190.5 / 190.8 | **215.8 / 218.1** |
+
+**+27 ms.** The seed kernel got ~3 ms cheaper from dropping ~3 GB of writes, and the match
+paid ~29 for it.
+
+**Why it wins there and loses here, which is the transferable part.** On the row-bucket
+path the derivation sits in the *deferred all-lanes loop*, where the kernel is already
+memory-stalled and has idle issue slots — the same document records that arithmetic as
+**"+0.4 ms here versus +23.5 ms for the same arithmetic in the sub-mask-filtered staging
+loop"**. The sort path's match has no deferred phase; every derivation is on the critical
+path. And the counts differ: the seed kernel derives **once per element** (33.5 M), the
+match derives **once per pair-member** — at Poisson(2) multiplicity that is
+`E[m] + E[m(m−1)/2] = 4` per run over 16.7 M runs, so **≈2× the derivations, all in the
+worst place.**
+
+So the rule is not "re-derivation beats storage". It is **re-derivation pays only where the
+kernel has idle issue slots to hide it in** — which is the same finding as
+[the quad record](#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)
+(the arithmetic ate the watts the bytes freed) and
+[the match constants](#the-same-trick-on-round_match-mostly-does-not-work-37-ms-and-two-rounds-lose)
+(no cliff to find) from two more directions.
+
 #### The OpenCL path finally has a register/spill instrument
 
 `MXBM_CL_VERBOSE=1` appends `-cl-nv-verbose` and prints NVIDIA's `ptxas` report. This is

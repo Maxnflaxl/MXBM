@@ -32,6 +32,9 @@ struct PipelineBuffers {
     // an element's lead IS leaf 0 of its own prefix, so round_match stopped writing it
     // ("all_lead dropped") -- the allocation just outlived the write by several rounds
     // of cleanup. Worth 20 B/element on the sort path.
+    Mem pp;                     // ulong[4] prePow. Persistent because the index-only
+                                // round-1 match derives its parents and so needs the
+                                // same prePow the seed kernel used; mix_seeds writes it.
     Mem bucket_count;           // uint[num_buckets]
     Mem bucket_slots;           // uint[num_buckets*slots_per_bucket]
     Mem counters;               // uint[4]: {out_count, bucket_drops, pair_drops, spare}
