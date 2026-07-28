@@ -112,7 +112,7 @@ files, and API.
 | GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
 | Solver performance | Close the gap to the fastest closed-source miners | ✅ done (CUDA, +6 %) |
 | Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
-| Overclocking | NVML power limit (`--pl`) ✅ done; clock/fan control (see [overclocking.md](docs/overclocking.md)) | in progress |
+| Overclocking | `--pl`, `--cclk`, `--mclk`, `--coff`, `--moff`, `--fan` — clamped to the driver's own bands, restored on exit (see [overclocking.md](docs/overclocking.md)) | ✅ done |
 | Optimized backends | Tuned CUDA (NVIDIA) ✅ done; HIP (AMD) | in progress |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline (runs on both), then

@@ -1,8 +1,10 @@
 # Overclocking — design decisions
 
-Status: **`--pl` implemented (2026-07-25); the clock and fan knobs are not.**
-Everything below is the design both halves follow; the "To determine" section is what
-still gates the rest.
+Status: **all knobs implemented — `--pl` 2026-07-25, `--cclk`/`--mclk`/`--coff`/`--moff`/`--fan`
+2026-07-28.** Everything below is the design they follow. The "To determine" section is
+what remains *measured-unknown*, and the memory-offset unit in particular is still open:
+the code reports the offset in the units the user typed and logs the resulting clock, so
+the ambiguity is visible rather than hidden, but it is not resolved.
 
 `--pl` was taken first because it is the only knob whose value is
 [measured](performance.md#both-miners-under-the-same-cap) rather than assumed: the card
@@ -17,12 +19,23 @@ they would be working against.
 
 ```
 --pl W               board power limit in watts, per GPU ("240", "240,*,260"; * skips)
---no-oc-reset [0|1]  leave it applied at exit instead of restoring (default: off)
+--cclk MHz           lock the core clock        --coff MHz  shift its V/F curve (signed)
+--mclk MHz           lock the memory clock      --moff MHz  shift its V/F curve (signed)
+--fan PCT            fan target, in percent
+--no-oc-reset [0|1]  leave them applied at exit instead of restoring (default: off)
 ```
 
-Config-file keys `PL` and `NO_OC_RESET` set the same things; `PL` also accepts a JSON
-array (`"PL": [220, "*", 260]`). Applied after device enumeration and before any solving,
-so a benchmark measures the same operating point mining will use.
+Config-file keys `PL`, `CCLK`, `MCLK`, `COFF`, `MOFF`, `FAN` and `NO_OC_RESET` set the
+same things, and each also accepts a JSON array (`"PL": [220, "*", 260]`). Applied after
+device enumeration and before any solving, so a benchmark measures the same operating
+point mining will use.
+
+**Apply order is fixed**: power limit, core offset, memory offset, locked core clock,
+locked memory clock, fan. The V/F curve is shaped before anything is pinned onto it, and
+the fan is set last, against the thermal load the rest implies. **Restore is the exact
+reverse**, so the fan returns to the driver's curve while the clocks are still coming
+down, and the power limit is put back last — nothing is ever unlocked into a clock the
+old limit would not have permitted.
 
 Everything in the "Verified" sections below was measured on this machine on 2026-07-25,
 not taken from documentation or recollection. Everything in "To determine" is explicitly
@@ -136,6 +149,18 @@ The cost being accepted: the stratum TLS client and JSON parser run as root.
 already mirrors lolMiner's CLI surface elsewhere; someone moving over should not have to
 relearn these. Single-GPU for now, but parse the comma/`*` syntax from the start so
 multi-GPU does not become a breaking change.
+
+**Implemented as designed.** Two details the implementation had to settle that this
+document did not:
+
+- **A lock and an offset are undone differently.** An offset is restored by writing the
+  previous value back; a lock has no previous value to write, because it took clock
+  management away from the driver, so it is undone by an explicit reset call. Getting
+  that backwards leaves a card pinned after exit, which is the failure restore exists to
+  prevent, and it is pinned in `test_overclock`.
+- **The fan is restored to AUTO, not to the percentage it read at startup.** Writing back
+  the observed percentage would leave the fan fixed at a speed chosen for a cold idle
+  card, which on a card that later gets hot is a way to cook it.
 
 ### 3. Behaviour when OC is requested but cannot be applied
 

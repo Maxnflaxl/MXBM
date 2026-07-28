@@ -48,6 +48,8 @@ WARMUP=${WARMUP:-25}     # both miners are flat by ~10 s; 25 is deliberately gen
 TAIL=${TAIL:-4}          # drop the wind-down, which is real on lolMiner (235 -> 227 W)
 REPEATS=${REPEATS:-2}
 LIMITS=${LIMITS:-stock}
+CCLKS=${CCLKS:-"*"}      # locked core clock, MHz; "*" leaves it to the driver
+MCLKS=${MCLKS:-"*"}      # locked memory clock, MHz
 SETTLE=${SETTLE:-15}
 OUT=${OUT_DIR:-/tmp/mxbm-compare}
 mkdir -p "$OUT"
@@ -65,7 +67,11 @@ echo "card default power limit: ${DEFAULT} W   |   ${SECS}s per run, first ${WAR
 # sets the first limit, silently loses the right to set the rest, and (before
 # the guard below) skipped them one by one.
 KEEPALIVE=""
-if [ "$LIMITS" != "stock" ]; then
+NEEDS_ROOT=no
+[ "$LIMITS" != "stock" ] && NEEDS_ROOT=yes
+[ "$CCLKS" != "*" ] && NEEDS_ROOT=yes
+[ "$MCLKS" != "*" ] && NEEDS_ROOT=yes
+if [ "$NEEDS_ROOT" = yes ]; then
     if ! sudo -v; then
         echo "need root to set the power limit -- aborting before measuring anything"
         exit 1
@@ -76,6 +82,11 @@ fi
 
 restore() {
     [ -n "$KEEPALIVE" ] && kill "$KEEPALIVE" 2>/dev/null
+    # Always try to unlock the clocks, even on Ctrl+C and even if no clock list
+    # was given: a card left locked outlives this script and silently caps
+    # whatever runs next.
+    sudo -n nvidia-smi -rgc >/dev/null 2>&1
+    sudo -n nvidia-smi -rmc >/dev/null 2>&1
     if [ "$LIMITS" != "stock" ]; then
         echo "restoring ${DEFAULT} W"
         sudo -n nvidia-smi -pl "$DEFAULT" >/dev/null 2>&1
@@ -142,12 +153,29 @@ print("%s %.1f %.0f %.0f %.0f %d" % (
 PY
 }
 
-printf '\n%-7s %-9s %8s %8s %9s %8s %7s %s\n' \
-       LIMIT MINER "sol/s" "watts" "sol/s/W" "SMclk" "temp" "samples"
-printf '%s\n' "--------------------------------------------------------------------------------"
+printf '\n%-14s %-9s %8s %8s %9s %8s %7s %s\n' \
+       "POINT" MINER "sol/s" "watts" "sol/s/W" "SMclk" "temp" "samples"
+printf '%s\n' "-----------------------------------------------------------------------------------"
 
 flip=0
 for pl in $LIMITS; do
+ for cclk in $CCLKS; do
+  for mclk in $MCLKS; do
+    # Clock locks are applied with nvidia-smi for the same reason the cap is:
+    # one instrument, applied identically to both miners, so neither miner's own
+    # overclock code is a variable in a measurement about their kernels.
+    if [ "$cclk" != "*" ]; then
+        sudo -n nvidia-smi -lgc "$cclk,$cclk" >/dev/null 2>&1 \
+            || echo "!! could not lock core clock to ${cclk} MHz"
+    fi
+    if [ "$mclk" != "*" ]; then
+        sudo -n nvidia-smi -lmc "$mclk,$mclk" >/dev/null 2>&1 \
+            || echo "!! could not lock memory clock to ${mclk} MHz"
+    fi
+    point="$pl"
+    [ "$cclk" != "*" ] && point="$point/c$cclk"
+    [ "$mclk" != "*" ] && point="$point/m$mclk"
+
     if [ "$pl" != "stock" ]; then
         # Distinguish "lost root" from "the card rejected this value": the first
         # dooms every remaining point and must stop the sweep, the second is
@@ -174,29 +202,35 @@ for pl in $LIMITS; do
     for rep in $(seq 1 "$REPEATS"); do
         for who in $order; do
             sleep "$SETTLE"                 # let the card fall back to idle first
-            read -r sol watt smclk memclk temp n <<<"$(run_one "$who" "${pl}_${who}_r${rep}")"
+            read -r sol watt smclk memclk temp n <<<"$(run_one "$who" "${point//\//_}_${who}_r${rep}")"
             if [ "$sol" = "ERR" ]; then
-                printf '%-7s %-9s %8s %8s %9s %8s %7s %s\n' \
-                       "$pl" "$who#$rep" ERR "$watt" - "$smclk" "$temp" "$n"
+                printf '%-14s %-9s %8s %8s %9s %8s %7s %s\n' \
+                       "$point" "$who#$rep" ERR "$watt" - "$smclk" "$temp" "$n"
             else
                 eff=$(python3 -c "print('%.4f' % ($sol/$watt))" 2>/dev/null || echo -)
-                printf '%-7s %-9s %8s %8s %9s %8s %7s %s\n' \
-                       "$pl" "$who#$rep" "$sol" "$watt" "$eff" "$smclk" "$temp" "$n"
-                echo "$pl $who $sol $watt" >> "$OUT/rows.txt"
+                printf '%-14s %-9s %8s %8s %9s %8s %7s %s\n' \
+                       "$point" "$who#$rep" "$sol" "$watt" "$eff" "$smclk" "$temp" "$n"
+                echo "$point $who $sol $watt" >> "$OUT/rows.txt"
             fi
         done
         # Reverse the order for the next repeat as well, so within a point the
         # two miners see the same distribution of "went first" and "went second".
         if [ "$order" = "mxbm lol" ]; then order="lol mxbm"; else order="mxbm lol"; fi
     done
+    # Unlock between grid points, so the next one starts from the driver's own
+    # management rather than inheriting the last lock.
+    [ "$cclk" != "*" ] && sudo -n nvidia-smi -rgc >/dev/null 2>&1
+    [ "$mclk" != "*" ] && sudo -n nvidia-smi -rmc >/dev/null 2>&1
+  done
+ done
 done
 
 # Medians across repeats -- the figure to quote, since a single 60 s run of
 # either miner moves by more than the difference being measured.
 if [ -s "$OUT/rows.txt" ]; then
     echo
-    printf '%-7s %-9s %8s %8s %9s   %s\n' LIMIT MINER "sol/s" "watts" "sol/s/W" "(median of repeats)"
-    printf '%s\n' "--------------------------------------------------------------------------------"
+    printf '%-14s %-9s %8s %8s %9s   %s\n' "POINT" MINER "sol/s" "watts" "sol/s/W" "(median of repeats)"
+    printf '%s\n' "-----------------------------------------------------------------------------------"
     python3 - "$OUT/rows.txt" <<'PY'
 import statistics as st, sys
 from collections import OrderedDict
@@ -206,7 +240,7 @@ for line in open(sys.argv[1]):
     g.setdefault((pl, who), []).append((float(sol), float(watt)))
 for (pl, who), v in g.items():
     s, w = st.median([x[0] for x in v]), st.median([x[1] for x in v])
-    print("%-7s %-9s %8.2f %8.1f %9.4f   n=%d" % (pl, who, s, w, s / w, len(v)))
+    print("%-14s %-9s %8.2f %8.1f %9.4f   n=%d" % (pl, who, s, w, s / w, len(v)))
 PY
 fi
 

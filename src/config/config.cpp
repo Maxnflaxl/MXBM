@@ -145,6 +145,11 @@ constexpr StrOpt kStrOpts[] = {
     {"SOLVER",    &cli::Options::solver,    &cli::Options::Seen::solver,    kSolverDomain,    nullptr,    false},
     {"BENCHMARK", &cli::Options::benchmark, &cli::Options::Seen::benchmark, kBenchmarkDomain, "BEAM-III", false},
     {"PL",        &cli::Options::power_limit, &cli::Options::Seen::power_limit, nullptr,        nullptr,    true},
+    {"CCLK",      &cli::Options::core_clock,  &cli::Options::Seen::core_clock,  nullptr,          nullptr,    true},
+    {"MCLK",      &cli::Options::mem_clock,   &cli::Options::Seen::mem_clock,   nullptr,          nullptr,    true},
+    {"COFF",      &cli::Options::core_offset, &cli::Options::Seen::core_offset, nullptr,          nullptr,    true},
+    {"MOFF",      &cli::Options::mem_offset,  &cli::Options::Seen::mem_offset,  nullptr,          nullptr,    true},
+    {"FAN",       &cli::Options::fan,         &cli::Options::Seen::fan,         nullptr,          nullptr,    true},
 };
 
 constexpr DblOpt kDblOpts[] = {

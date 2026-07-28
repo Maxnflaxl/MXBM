@@ -81,7 +81,13 @@ namespace mxbm { namespace miner {
 // reset it -- a newly-switched-to job's first solve() always runs clean.
 class Engine {
 public:
-    Engine(stratum::Client& client, Solver& solver);
+    // `lane` of `lanes` partitions the nonce space when several Engines mine
+    // the same job on different devices at once. Each Engine walks
+    // lane, lane+lanes, lane+2*lanes, ... so no two ever try the same nonce --
+    // two cards duplicating each other's work would halve the rig's rate while
+    // every counter still looked healthy. lanes=1 is the single-device case and
+    // is byte-for-byte what this did before the parameter existed.
+    Engine(stratum::Client& client, Solver& solver, uint64_t lane = 0, uint64_t lanes = 1);
     ~Engine();
 
     Engine(const Engine&) = delete;
@@ -197,8 +203,11 @@ private:
     bool started_ = false;
 
     // Per-attempt nonce counter. Never reset (not even across job changes),
-    // so no (prefix, counter) nonce pair is ever attempted twice.
+    // so no (prefix, counter) nonce pair is ever attempted twice. Starts at
+    // this Engine's lane and advances by the lane count, so several Engines
+    // sharing a pool prefix never collide.
     uint64_t nonce_counter_ = 0;
+    uint64_t nonce_stride_  = 1;
 
     // Consecutive failed solve() calls; reset by the first success. Only ever
     // touched on the worker thread.

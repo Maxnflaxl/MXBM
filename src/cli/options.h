@@ -23,7 +23,12 @@ struct Options {
     bool nocolor = false;
     int  apiport = 0;                // 0 = API off
     int  shortstats = 15, longstats = 60;   // seconds, >=1
-    std::string devices;             // accepted, stored; selection not yet implemented
+    // --devices: which GPU(s) to mine on. "ALL" (the default) or a
+    // comma-separated list of indices as printed by --list-devices, which are
+    // in PCI order so an index means the same card here, in --pl and in NVML.
+    std::string devices;
+    // --list-devices: print the device table and exit, mining nothing.
+    bool list_devices = false;
     bool watchdog_requested = false; // accepted; monitoring not yet implemented
     std::string solver = "auto";     // --solver gpu|ref|auto (default: prefer gpu, fall back to ref)
 
@@ -44,6 +49,17 @@ struct Options {
     // limit in every kernel, so the limit picks the operating point. See
     // docs/performance.md "Power and efficiency" and docs/overclocking.md.
     std::string power_limit;
+
+    // The rest of the overclock surface, same per-GPU list syntax, all empty
+    // when not given. --cclk/--mclk LOCK a clock to a value; --coff/--moff
+    // shift its voltage/frequency curve and may be negative. The pair is the
+    // standard undervolt idiom -- lock the clock, raise the offset, so the
+    // locked frequency runs at a lower voltage. docs/overclocking.md.
+    std::string core_clock;      // --cclk MHz
+    std::string mem_clock;       // --mclk MHz
+    std::string core_offset;     // --coff MHz, signed
+    std::string mem_offset;      // --moff MHz, signed
+    std::string fan;             // --fan percent
 
     // --no-oc-reset: leave applied settings on the card at exit instead of
     // putting the previous ones back. Defaults to false (restore), matching
@@ -73,7 +89,10 @@ struct Options {
         bool solver = false, devfee = false;
         bool log = false, logfile = false, timeprint = false, digits = false;
         bool watchdog = false, benchmark = false, benchmark_seconds = false;
+        bool list_devices = false;
         bool power_limit = false, no_oc_reset = false;
+        bool core_clock = false, mem_clock = false, core_offset = false;
+        bool mem_offset = false, fan = false;
         // Not precedence (there is only one legal value): it records that SOME
         // source supplied an algorithm, for main() to enforce after the merge.
         bool algo = false;
@@ -93,6 +112,19 @@ struct Options {
 // They need not be interleaved -- all four are collected independently and
 // bound by occurrence order once the whole command line has been scanned.
 bool parse_args(int argc, char** argv, Options& out, std::string& err);
+
+// Resolves --devices against the number of devices actually detected.
+//
+// "ALL" (any case) and an empty spec both mean every device; anything else is a
+// comma-separated list of indices as printed by --list-devices. Indices are
+// validated against `count` HERE rather than at parse time, because the CLI is
+// parsed before any driver has been asked what exists -- and "--devices 3" on a
+// two-card rig has to be an error rather than a silent fallback to card 0.
+//
+// Returns false with `err` set on a malformed or out-of-range list. Duplicates
+// collapse; order is preserved.
+bool resolve_devices(const std::string& spec, unsigned count,
+                     std::vector<unsigned>& selected, std::string& err);
 
 // Applies the rules that hold BETWEEN options and so cannot be settled until
 // every source -- command line and config file -- has had its say. Call once,

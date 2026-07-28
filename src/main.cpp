@@ -103,12 +103,15 @@ int main(int argc, char** argv) {
 
     const bool benchmark_mode = !opts.benchmark.empty();
     // Checked here rather than in parse_args: a config file may supply ALGO
-    // and POOLS, so these fire only when no source supplied them.
-    if (!opts.seen.algo && !benchmark_mode) {
+    // and POOLS, so these fire only when no source supplied them. --list-devices
+    // is exempt for the same reason --version is: it answers a question about
+    // the machine, not about a mining run, and demanding a wallet address to
+    // answer "which cards do I have" would be absurd.
+    if (!opts.seen.algo && !benchmark_mode && !opts.list_devices) {
         std::fputs("unsupported algo (pass --algo BEAM-III, or set ALGO in your config)\n", stderr);
         return 1;
     }
-    if (opts.pools.empty() && !benchmark_mode) {
+    if (opts.pools.empty() && !benchmark_mode && !opts.list_devices) {
         std::fputs("missing --pool (or config with POOLS)\n", stderr);
         return 1;
     }
@@ -141,9 +144,6 @@ int main(int argc, char** argv) {
     if (opts.pools.size() > 1) {
         ui::console::info("Failover pools configured - failover across pools is not implemented yet; using pool 1");
     }
-    if (!opts.devices.empty()) {
-        ui::console::info("--devices noted - device selection is not implemented yet; currently ignored");
-    }
     if (opts.watchdog_requested) {
         ui::console::info("--watchdog noted - watchdog monitoring is not implemented yet");
     }
@@ -173,6 +173,69 @@ int main(int argc, char** argv) {
     // reverse declaration order, so the reference can never dangle.
     // A GPU backend is tried only when built in and available(); construction
     // can throw anyway on a memory-starved device, so it is guarded too.
+    // Which card(s) the user asked for. Enumerated in PCI order so an index
+    // means the same physical card here, in --pl's per-GPU list and in NVML --
+    // CUDA's own default ordering is "fastest first", which does not agree.
+    std::vector<unsigned> selected_devices;
+    unsigned device_count = 0;
+#ifdef MXBM_HAVE_CUDA
+    const std::vector<gpu::CudaSolver::DeviceInfo> cuda_devices = gpu::CudaSolver::enumerate();
+    device_count = (unsigned)cuda_devices.size();
+#endif
+
+    if (opts.list_devices) {
+#ifdef MXBM_HAVE_CUDA
+        if (cuda_devices.empty()) {
+            ui::console::info("No CUDA devices detected.");
+        } else {
+            ui::console::info("Detected devices (indices are in PCI order, and mean the same "
+                              "card in --devices and --pl):");
+            for (size_t i = 0; i < cuda_devices.size(); ++i) {
+                const auto& d = cuda_devices[i];
+                char line[256];
+                std::snprintf(line, sizeof line, "  %zu: %-34s %5llu MB  PCI %-6s  Cuda%s",
+                              i, d.name.c_str(),
+                              (unsigned long long)(d.global_mem / (1024ull * 1024ull)),
+                              d.pci.c_str(),
+                              d.viable ? "" : "  [too small for BeamHash III]");
+                ui::console::info(line);
+            }
+        }
+#else
+        ui::console::info("This build has no CUDA backend, so no devices can be listed.");
+#endif
+        return 0;
+    }
+
+    {
+        std::string derr;
+        if (!cli::resolve_devices(opts.devices, device_count, selected_devices, derr)) {
+            ui::console::error("--devices \"" + opts.devices + "\": " + derr
+                               + " (try --list-devices)");
+            return 1;
+        }
+    }
+    // One solver, so one card. A list naming several is not an error -- it is a
+    // rig config that will be right once multi-device mining lands -- but it
+    // must not look like it was honoured.
+    if (selected_devices.size() > 1) {
+        ui::console::info("--devices selected " + std::to_string(selected_devices.size())
+                          + " GPUs; mining on the first of them only - "
+                          "multi-device mining is not implemented yet");
+    }
+    const int device_index = selected_devices.empty() ? 0 : (int)selected_devices.front();
+#ifdef MXBM_HAVE_CUDA
+    // Say which card was chosen whenever the choice was the user's, or whenever
+    // there was more than one to choose from -- on a single-GPU box with no
+    // --devices the line is noise.
+    if ((opts.seen.devices || cuda_devices.size() > 1)
+        && (size_t)device_index < cuda_devices.size()) {
+        ui::console::info("Mining on device " + std::to_string(device_index) + ": "
+                          + cuda_devices[(size_t)device_index].name
+                          + " (PCI " + cuda_devices[(size_t)device_index].pci + ")");
+    }
+#endif
+
     std::unique_ptr<miner::Solver> solver;
     // Set when a construction attempt was actually made and threw, so the
     // fallback below need not claim "no GPU available" when one was found.
@@ -186,10 +249,14 @@ int main(int argc, char** argv) {
 #ifdef MXBM_HAVE_CUDA
     // CUDA first when both are built: it measures ~1.16x the OpenCL path's rate on the
     // same card (docs/performance.md). --solver opencl forces the portable path.
+    // enumerate() returned PCI order, so the user's index is a position in that
+    // list; the CUDA index to construct on is the one recorded in the entry.
+    const int cuda_index = (device_index >= 0 && (size_t)device_index < cuda_devices.size())
+                         ? cuda_devices[(size_t)device_index].index : device_index;
     if ((opts.solver == "cuda" || opts.solver == "gpu" || opts.solver == "auto")
-        && gpu::CudaSolver::available()) {
+        && gpu::CudaSolver::available(cuda_index)) {
         try {
-            auto cs = std::make_unique<gpu::CudaSolver>();
+            auto cs = std::make_unique<gpu::CudaSolver>(cuda_index);
             worker_label = cs->device().name;   // the real name, not a bare "GPU 0"
             dev_name = cs->device().name;
             dev_mem = cs->device().global_mem;
@@ -257,31 +324,66 @@ int main(int argc, char** argv) {
     // alike -- because the limit selects the operating point both of them
     // measure. A card that cannot be set still mines, at stock: a miner that
     // failed to apply OC is degraded, not wrong (docs/overclocking.md).
-    if (!opts.power_limit.empty()) {
-        long w = 0; bool found = false; std::string perr;
-        if (!gpu::oc_parse_list(opts.power_limit, 0, w, found, perr)) {
-            // Malformed input is an error wherever it came from. The CLI
-            // rejects it at parse time; this catches the config-file path,
-            // which stores strings without a syntax check.
-            ui::console::error("Invalid power limit \"" + opts.power_limit + "\": " + perr);
-            return 1;
-        }
-        gpu::oc_set_restore_enabled(!opts.no_oc_reset);
-        if (!have_nvml) {
-            ui::console::error("--pl needs NVML (an NVIDIA driver), which is not available here; "
-                               "continuing at the card's current limit");
-        } else {
-            const gpu::OcResult r = gpu::oc_apply_power_limit(opts.power_limit);
-            if (r.status == gpu::OcStatus::Applied) {
-                ui::console::info(r.message);
-                if (opts.no_oc_reset)
-                    ui::console::info("--no-oc-reset: this limit will be left on the card at exit");
-            } else if (r.status != gpu::OcStatus::NotRequested) {
-                ui::console::error(r.message);
+    {
+        gpu::OcRequest ocreq;
+        ocreq.pl   = opts.power_limit;
+        ocreq.cclk = opts.core_clock;
+        ocreq.mclk = opts.mem_clock;
+        ocreq.coff = opts.core_offset;
+        ocreq.moff = opts.mem_offset;
+        ocreq.fan  = opts.fan;
+        const bool any = !(ocreq.pl.empty() && ocreq.cclk.empty() && ocreq.mclk.empty()
+                           && ocreq.coff.empty() && ocreq.moff.empty() && ocreq.fan.empty());
+
+        // Malformed input is an error wherever it came from. The CLI rejects it
+        // at parse time; this catches the config-file path, which stores
+        // strings without a syntax check.
+        const struct { const std::string& spec; const char* flag; bool sign; } checks[] = {
+            {ocreq.pl, "--pl", false}, {ocreq.cclk, "--cclk", false},
+            {ocreq.mclk, "--mclk", false}, {ocreq.coff, "--coff", true},
+            {ocreq.moff, "--moff", true}, {ocreq.fan, "--fan", true},
+        };
+        for (const auto& c : checks) {
+            if (c.spec.empty()) continue;
+            long v = 0; bool found = false; std::string perr;
+            if (!gpu::oc_parse_list(c.spec, 0, v, found, perr, c.sign)) {
+                ui::console::error(std::string("Invalid ") + c.flag + " \"" + c.spec + "\": " + perr);
+                return 1;
             }
         }
-    } else if (opts.no_oc_reset) {
-        ui::console::info("--no-oc-reset noted, but no --pl was given - nothing to reset");
+
+        if (any) {
+            gpu::oc_set_restore_enabled(!opts.no_oc_reset);
+            if (!have_nvml) {
+                // Two different causes, and saying the wrong one sends the user
+                // hunting for a driver they already have. NVML is only opened
+                // when a solver was selected, because changing the power limit
+                // of a card this process is not going to use is a side effect
+                // nobody asked for.
+                ui::console::error(solver
+                    ? std::string("Overclock settings need NVML (an NVIDIA driver), which is not "
+                                  "available here; continuing at the card's current settings")
+                    : std::string("Overclock settings were not applied: no GPU solver is in use, "
+                                  "so there is no card for them to apply to"));
+            } else {
+                // the reference miner prints this banner before its own OC block and rig
+                // operators grep for it, so the line stays even when every knob
+                // then fails -- "it tried and could not" is the useful log, and
+                // silence is the one outcome that is not.
+                ui::console::info("Applying overclock settings...");
+                for (const gpu::OcResult& r : gpu::oc_apply(ocreq)) {
+                    if (r.status == gpu::OcStatus::Applied || r.status == gpu::OcStatus::Clamped)
+                        ui::console::info(r.message);
+                    else
+                        ui::console::error(r.message);
+                }
+                if (opts.no_oc_reset)
+                    ui::console::info("--no-oc-reset: applied settings will be left on the card at exit");
+            }
+        } else if (opts.no_oc_reset) {
+            ui::console::info("--no-oc-reset noted, but no overclock setting was given - "
+                              "nothing to reset");
+        }
     }
 
     if (!solver && gpu_attempt_failed) {

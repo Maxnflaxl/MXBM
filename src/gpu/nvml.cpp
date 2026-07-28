@@ -32,6 +32,34 @@ nvmlReturn_t (*p_pl_get)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_pl_default)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_pl_constraints)(nvmlDevice_t, unsigned*, unsigned*) = nullptr;
 nvmlReturn_t (*p_pl_set)(nvmlDevice_t, unsigned) = nullptr;
+// V/F curve offsets. Signed: a negative offset is a downclock, which is a
+// legitimate thing to ask for and the reason these are int and not unsigned.
+nvmlReturn_t (*p_coff_get)(nvmlDevice_t, int*) = nullptr;
+nvmlReturn_t (*p_coff_set)(nvmlDevice_t, int) = nullptr;
+nvmlReturn_t (*p_coff_range)(nvmlDevice_t, int*, int*) = nullptr;
+nvmlReturn_t (*p_moff_get)(nvmlDevice_t, int*) = nullptr;
+nvmlReturn_t (*p_moff_set)(nvmlDevice_t, int) = nullptr;
+nvmlReturn_t (*p_moff_range)(nvmlDevice_t, int*, int*) = nullptr;
+// Locked clocks, and the max the domain supports.
+nvmlReturn_t (*p_maxclock)(nvmlDevice_t, int, unsigned*) = nullptr;
+nvmlReturn_t (*p_lock_core)(nvmlDevice_t, unsigned, unsigned) = nullptr;
+nvmlReturn_t (*p_unlock_core)(nvmlDevice_t) = nullptr;
+nvmlReturn_t (*p_lock_mem)(nvmlDevice_t, unsigned, unsigned) = nullptr;
+nvmlReturn_t (*p_unlock_mem)(nvmlDevice_t) = nullptr;
+// Fans.
+nvmlReturn_t (*p_numfans)(nvmlDevice_t, unsigned*) = nullptr;
+nvmlReturn_t (*p_fan_set)(nvmlDevice_t, unsigned, unsigned) = nullptr;
+nvmlReturn_t (*p_fan_auto)(nvmlDevice_t, unsigned) = nullptr;
+nvmlReturn_t (*p_fan_range)(nvmlDevice_t, unsigned*, unsigned*) = nullptr;
+
+// Every write goes through the same mapping, so one place decides what
+// "NoPermission" means and callers cannot each invent their own reading of it.
+NvmlWrite map_write(nvmlReturn_t rc) {
+    if (rc == NVML_SUCCESS)             return NvmlWrite::Ok;
+    if (rc == NVML_ERROR_NO_PERMISSION) return NvmlWrite::NoPermission;
+    if (rc == NVML_ERROR_NOT_SUPPORTED) return NvmlWrite::Unsupported;
+    return NvmlWrite::Failed;
+}
 
 template<class F> void bind(F& fn, const char* name) { fn = (F)dlsym(g_lib, name); }
 
@@ -61,6 +89,25 @@ bool nvml_init() {
     bind(p_pl_default,     "nvmlDeviceGetPowerManagementDefaultLimit");
     bind(p_pl_constraints, "nvmlDeviceGetPowerManagementLimitConstraints");
     bind(p_pl_set,         "nvmlDeviceSetPowerManagementLimit");
+    // Clock and fan control. All optional: an older driver simply will not have
+    // some of these symbols, and the knob then reports Unsupported rather than
+    // failing the whole NVML init -- telemetry must keep working on a card that
+    // cannot be overclocked.
+    bind(p_coff_get,   "nvmlDeviceGetGpcClkVfOffset");
+    bind(p_coff_set,   "nvmlDeviceSetGpcClkVfOffset");
+    bind(p_coff_range, "nvmlDeviceGetGpcClkMinMaxVfOffset");
+    bind(p_moff_get,   "nvmlDeviceGetMemClkVfOffset");
+    bind(p_moff_set,   "nvmlDeviceSetMemClkVfOffset");
+    bind(p_moff_range, "nvmlDeviceGetMemClkMinMaxVfOffset");
+    bind(p_maxclock,   "nvmlDeviceGetMaxClockInfo");
+    bind(p_lock_core,  "nvmlDeviceSetGpuLockedClocks");
+    bind(p_unlock_core,"nvmlDeviceResetGpuLockedClocks");
+    bind(p_lock_mem,   "nvmlDeviceSetMemoryLockedClocks");
+    bind(p_unlock_mem, "nvmlDeviceResetMemoryLockedClocks");
+    bind(p_numfans,    "nvmlDeviceGetNumFans");
+    bind(p_fan_set,    "nvmlDeviceSetFanSpeed_v2");
+    bind(p_fan_auto,   "nvmlDeviceSetDefaultFanSpeed_v2");
+    bind(p_fan_range,  "nvmlDeviceGetMinMaxFanSpeed");
     if (!p_init || !p_handle) { dlclose(g_lib); g_lib = nullptr; return false; }
 
     if (p_init() != NVML_SUCCESS)              { dlclose(g_lib); g_lib = nullptr; return false; }
@@ -143,11 +190,103 @@ PowerLimit nvml_power_limit() {
 
 NvmlWrite nvml_set_power_limit(unsigned watts) {
     if (!g_ready || !p_pl_set) return NvmlWrite::Unsupported;
-    const nvmlReturn_t rc = p_pl_set(g_dev, watts * 1000u);
-    if (rc == NVML_SUCCESS)                 return NvmlWrite::Ok;
-    if (rc == NVML_ERROR_NO_PERMISSION)     return NvmlWrite::NoPermission;
-    if (rc == NVML_ERROR_NOT_SUPPORTED)     return NvmlWrite::Unsupported;
-    return NvmlWrite::Failed;
+    return map_write(p_pl_set(g_dev, watts * 1000u));
+}
+
+// --- clock offsets -------------------------------------------------------
+
+namespace {
+// Offsets are read the same way for both domains; only the symbols differ.
+ClockOffset read_offset(nvmlReturn_t (*get)(nvmlDevice_t, int*),
+                        nvmlReturn_t (*range)(nvmlDevice_t, int*, int*)) {
+    ClockOffset o;
+    if (!g_ready || !get) return o;
+    int v = 0;
+    if (get(g_dev, &v) != NVML_SUCCESS) return o;
+    o.current_mhz = v;
+    o.valid = true;
+    // The band is separately optional. Leaving it 0/0 lets the caller tell
+    // "no clamp available" from "clamped to zero", which are not the same --
+    // and an unclamped write is the driver's problem to reject, not ours to
+    // guess at.
+    int lo = 0, hi = 0;
+    if (range && range(g_dev, &lo, &hi) == NVML_SUCCESS) { o.min_mhz = lo; o.max_mhz = hi; }
+    return o;
+}
+} // namespace
+
+ClockOffset nvml_core_clock_offset() { return read_offset(p_coff_get, p_coff_range); }
+ClockOffset nvml_mem_clock_offset()  { return read_offset(p_moff_get, p_moff_range); }
+
+NvmlWrite nvml_set_core_clock_offset(int mhz) {
+    if (!g_ready || !p_coff_set) return NvmlWrite::Unsupported;
+    return map_write(p_coff_set(g_dev, mhz));
+}
+NvmlWrite nvml_set_mem_clock_offset(int mhz) {
+    if (!g_ready || !p_moff_set) return NvmlWrite::Unsupported;
+    return map_write(p_moff_set(g_dev, mhz));
+}
+
+// --- locked clocks -------------------------------------------------------
+
+unsigned nvml_max_core_clock_mhz() {
+    unsigned v = 0;
+    if (!g_ready || !p_maxclock) return 0;
+    return p_maxclock(g_dev, /*NVML_CLOCK_SM=*/1, &v) == NVML_SUCCESS ? v : 0;
+}
+unsigned nvml_max_mem_clock_mhz() {
+    unsigned v = 0;
+    if (!g_ready || !p_maxclock) return 0;
+    return p_maxclock(g_dev, /*NVML_CLOCK_MEM=*/2, &v) == NVML_SUCCESS ? v : 0;
+}
+
+NvmlWrite nvml_set_locked_core_clock(unsigned lo, unsigned hi) {
+    if (!g_ready || !p_lock_core) return NvmlWrite::Unsupported;
+    return map_write(p_lock_core(g_dev, lo, hi));
+}
+NvmlWrite nvml_set_locked_mem_clock(unsigned lo, unsigned hi) {
+    if (!g_ready || !p_lock_mem) return NvmlWrite::Unsupported;
+    return map_write(p_lock_mem(g_dev, lo, hi));
+}
+NvmlWrite nvml_reset_locked_core_clock() {
+    if (!g_ready || !p_unlock_core) return NvmlWrite::Unsupported;
+    return map_write(p_unlock_core(g_dev));
+}
+NvmlWrite nvml_reset_locked_mem_clock() {
+    if (!g_ready || !p_unlock_mem) return NvmlWrite::Unsupported;
+    return map_write(p_unlock_mem(g_dev));
+}
+
+// --- fans ----------------------------------------------------------------
+
+FanInfo nvml_fans() {
+    FanInfo f;
+    if (!g_ready) return f;
+    unsigned n = 0;
+    // A card with no readable fan count but a readable speed is still a card
+    // with one fan -- laptops and blower cards do this -- so fall back rather
+    // than declaring the knob unavailable.
+    if (p_numfans && p_numfans(g_dev, &n) == NVML_SUCCESS && n > 0) f.count = n;
+    unsigned pct = 0;
+    if (p_fan && p_fan(g_dev, &pct) == NVML_SUCCESS) {
+        f.pct = pct;
+        if (f.count == 0) f.count = 1;
+    }
+    unsigned lo = 0, hi = 0;
+    if (p_fan_range && p_fan_range(g_dev, &lo, &hi) == NVML_SUCCESS) {
+        f.min_pct = lo; f.max_pct = hi;
+    }
+    f.valid = f.count > 0;
+    return f;
+}
+
+NvmlWrite nvml_set_fan_speed(unsigned fan, unsigned pct) {
+    if (!g_ready || !p_fan_set) return NvmlWrite::Unsupported;
+    return map_write(p_fan_set(g_dev, fan, pct));
+}
+NvmlWrite nvml_reset_fan(unsigned fan) {
+    if (!g_ready || !p_fan_auto) return NvmlWrite::Unsupported;
+    return map_write(p_fan_auto(g_dev, fan));
 }
 
 }} // namespace mxbm::gpu

@@ -6,6 +6,7 @@
 #include "beamhash/bh3_blake2b.h"
 #include "beamhash/bh3_verify.h"
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -64,6 +65,7 @@ struct CudaSolver::Impl {
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
     std::atomic<bool> abort_{false};
     DeviceInfo info;
+    int device_index = 0;
 
     // The geometry-dependent half of the allocation: the two record sets and their
     // bucket counters. Split out so a step-down retries only what changes size.
@@ -91,11 +93,12 @@ struct CudaSolver::Impl {
     }
 };
 
-bool CudaSolver::available() {
+bool CudaSolver::available(int index) {
     int n = 0;
     if (cudaGetDeviceCount(&n) != cudaSuccess || n == 0) return false;
+    if (index < 0 || index >= n) return false;
     cudaDeviceProp p{};
-    if (cudaGetDeviceProperties(&p, 0) != cudaSuccess) return false;
+    if (cudaGetDeviceProperties(&p, index) != cudaSuccess) return false;
     if (p.major < 8) return false;                      // needs Ampere+ shared-mem budget
     // Refuse only what no geometry on the ladder can host. The seed layer itself is
     // never reduced -- a reduced layer mines nothing (budget.h, budget_can_find_solutions)
@@ -103,19 +106,46 @@ bool CudaSolver::available() {
     return pick_geometry(p.totalGlobalMem).viable;
 }
 
-CudaSolver::DeviceInfo CudaSolver::device_info() {
+CudaSolver::DeviceInfo CudaSolver::device_info(int index) {
     DeviceInfo d; cudaDeviceProp p{};
-    if (cudaGetDeviceProperties(&p, 0) == cudaSuccess) {
+    d.index = index;
+    if (cudaGetDeviceProperties(&p, index) == cudaSuccess) {
         d.name = p.name; d.global_mem = p.totalGlobalMem; d.compute_units = p.multiProcessorCount;
+        d.viable = p.major >= 8 && pick_geometry(p.totalGlobalMem).viable;
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%x:%x", p.pciBusID, p.pciDeviceID);
+        d.pci = buf;
     }
     return d;
+}
+
+std::vector<CudaSolver::DeviceInfo> CudaSolver::enumerate() {
+    std::vector<DeviceInfo> out;
+    int n = 0;
+    if (cudaGetDeviceCount(&n) != cudaSuccess) return out;
+    for (int i = 0; i < n; ++i) out.push_back(device_info(i));
+    // PCI order, not CUDA's. CUDA defaults to CUDA_DEVICE_ORDER=FASTEST_FIRST, so
+    // its index 0 is not necessarily bus 1 -- and --pl's per-GPU list is applied
+    // through NVML, which orders by bus. Sorting here is what stops "GPU 1" from
+    // meaning two different cards in two different flags on the same rig.
+    std::sort(out.begin(), out.end(), [](const DeviceInfo& a, const DeviceInfo& b) {
+        return a.pci < b.pci;
+    });
+    return out;
 }
 
 const CudaSolver::DeviceInfo& CudaSolver::device() const { return p_->info; }
 void CudaSolver::request_abort() { p_->abort_.store(true, std::memory_order_relaxed); }
 
-CudaSolver::CudaSolver() : p_(new Impl) {
-    p_->info = device_info();
+CudaSolver::CudaSolver(int index) : p_(new Impl) {
+    // Bind THIS thread to the chosen device before any allocation. CUDA's current
+    // device is per-thread, which is why solve() sets it again below: the engine
+    // runs solve() on a worker thread that never saw this constructor, and would
+    // otherwise use device 0's context against this device's pointers.
+    if (cudaSetDevice(index) != cudaSuccess)
+        throw std::runtime_error("cudaSetDevice(" + std::to_string(index) + ") failed");
+    p_->device_index = index;
+    p_->info = device_info(index);
     // Geometry-independent first, so the step-down below is not retrying these.
     p_->gictr = dalloc<uint32_t>(1); p_->drops = dalloc<uint32_t>(4);
     p_->left  = dalloc<uint32_t>((size_t)5*kCapacity);
@@ -166,6 +196,8 @@ CudaSolver::~CudaSolver() = default;
 std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
     std::vector<std::array<uint8_t,104>> out;
     Impl& I = *p_;
+    // Per-thread, and cheap when it is already current. See the constructor.
+    cudaSetDevice(I.device_index);
     I.abort_.store(false, std::memory_order_relaxed);
 
     uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};

@@ -28,7 +28,9 @@ std::string usage_text() {
         "  --apiport N            enable the /summary API on port N, 0 disables it (default: 0)\n"
         "  --shortstats N         short-stats interval in seconds, >=1 (default: 15)\n"
         "  --longstats N          long-stats interval in seconds, >=1 (default: 60)\n"
-        "  --devices LIST         device selector (accepted, stored; device selection is a later phase)\n"
+        "  --devices LIST         which GPU to mine on: ALL (default) or a comma-separated\n"
+        "                         list of indices as shown by --list-devices\n"
+        "  --list-devices         print the detected GPUs, with their indices, and exit\n"
         "  --watchdog             enable the watchdog (accepted; arrives in a later phase)\n"
         "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
         "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
@@ -51,6 +53,12 @@ std::string usage_text() {
         "  --pl W                 board power limit in watts, per GPU (\"240\", \"240,*,260\";\n"
         "                         * skips a GPU). Needs root. Restored on exit unless\n"
         "                         --no-oc-reset. See docs/overclocking.md\n"
+        "  --cclk MHz             lock the core clock       --coff MHz  shift its V/F curve\n"
+        "  --mclk MHz             lock the memory clock     --moff MHz  shift its V/F curve\n"
+        "  --fan PCT              fan target, in percent\n"
+        "                         All take the same per-GPU list syntax as --pl and need\n"
+        "                         root; the two offsets may be negative. Clamped to the\n"
+        "                         band the driver reports, and restored on exit.\n"
         "  --no-oc-reset [0|1]    leave --pl applied at exit instead of restoring (default: off)\n"
         "  --version              print the version string and exit\n"
         "  --help                 show this help text\n";
@@ -92,6 +100,55 @@ T bound_value(const std::vector<T>& vals, size_t i, const T& def) {
 }
 
 } // namespace
+
+bool resolve_devices(const std::string& spec, unsigned count,
+                     std::vector<unsigned>& selected, std::string& err) {
+    selected.clear();
+    err.clear();
+
+    std::string norm;
+    for (char c : spec) norm += (char)std::tolower((unsigned char)c);
+    // Trim, so " ALL " and a config file's stray whitespace behave.
+    while (!norm.empty() && (norm.front() == ' ' || norm.front() == '\t')) norm.erase(0, 1);
+    while (!norm.empty() && (norm.back()  == ' ' || norm.back()  == '\t')) norm.pop_back();
+
+    if (norm.empty() || norm == "all") {
+        for (unsigned i = 0; i < count; ++i) selected.push_back(i);
+        return true;
+    }
+    if (count == 0) { err = "no devices were detected"; return false; }
+
+    size_t pos = 0;
+    for (;;) {
+        const size_t comma = norm.find(',', pos);
+        std::string tok = norm.substr(pos, comma == std::string::npos ? std::string::npos
+                                                                     : comma - pos);
+        while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(0, 1);
+        while (!tok.empty() && (tok.back()  == ' ' || tok.back()  == '\t')) tok.pop_back();
+        if (tok.empty()) { err = "empty entry in the device list"; return false; }
+        for (char c : tok) {
+            if (c < '0' || c > '9') {
+                err = "'" + tok + "' is not a device index (or the word ALL)";
+                return false;
+            }
+        }
+        const long v = std::strtol(tok.c_str(), nullptr, 10);
+        if (v < 0 || (unsigned long)v >= count) {
+            err = "device " + tok + " does not exist; "
+                + std::to_string(count) + (count == 1 ? " was detected" : " were detected");
+            return false;
+        }
+        // Collapse duplicates rather than mining the same card twice, which
+        // would halve its rate and look like a hardware fault.
+        bool dup = false;
+        for (unsigned s2 : selected) dup = dup || s2 == (unsigned)v;
+        if (!dup) selected.push_back((unsigned)v);
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+    }
+    if (selected.empty()) { err = "the device list selected nothing"; return false; }
+    return true;
+}
 
 bool parse_args(int argc, char** argv, Options& out, std::string& err) {
     out = Options{};
@@ -165,6 +222,31 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.seen.power_limit = true;
             continue;
         }
+        // The clock and fan knobs. Same list grammar as --pl; the only
+        // difference is that the two OFFSETS accept a sign, because a negative
+        // offset is an undervolt rather than a typo. As with --pl the VALUES
+        // are validated against the band the driver reports for the actual
+        // card, which the CLI cannot see -- only the syntax is checked here.
+        if (arg == "--cclk" || arg == "--mclk" || arg == "--coff" || arg == "--moff"
+            || arg == "--fan") {
+            if (i + 1 >= argc) {
+                err = "missing value for " + arg + "\n\n" + usage_text();
+                return false;
+            }
+            const bool signed_ok = (arg == "--coff" || arg == "--moff" || arg == "--fan");
+            const std::string spec = argv[++i];
+            long v = 0; bool found = false; std::string perr;
+            if (!gpu::oc_parse_list(spec, 0, v, found, perr, signed_ok)) {
+                err = "invalid " + arg + " (" + perr + ")\n\n" + usage_text();
+                return false;
+            }
+            if (arg == "--cclk")      { out.core_clock  = spec; out.seen.core_clock  = true; }
+            else if (arg == "--mclk") { out.mem_clock   = spec; out.seen.mem_clock   = true; }
+            else if (arg == "--coff") { out.core_offset = spec; out.seen.core_offset = true; }
+            else if (arg == "--moff") { out.mem_offset  = spec; out.seen.mem_offset  = true; }
+            else                      { out.fan         = spec; out.seen.fan         = true; }
+            continue;
+        }
         if (arg == "--log" || arg == "--timeprint" || arg == "--no-oc-reset") {
             // Optional value, handled exactly like --tls above.
             bool value = true;
@@ -224,6 +306,11 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             if (!parse_int(argv[++i], kStatsIntervalMin, INT_MAX, v)) { err = "invalid --longstats (must be >=1)\n\n" + usage_text(); return false; }
             out.longstats = v;
             out.seen.longstats = true;
+            continue;
+        }
+        if (arg == "--list-devices") {
+            out.list_devices = true;
+            out.seen.list_devices = true;
             continue;
         }
         if (arg == "--devices") {

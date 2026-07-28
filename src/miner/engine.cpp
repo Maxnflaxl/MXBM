@@ -68,8 +68,9 @@ void build_nonce(const std::string& prefix, uint64_t counter, uint8_t out[8]) {
 
 } // namespace
 
-Engine::Engine(stratum::Client& client, Solver& solver)
-    : client_(client), solver_(solver) {
+Engine::Engine(stratum::Client& client, Solver& solver, uint64_t lane, uint64_t lanes)
+    : client_(client), solver_(solver),
+      nonce_counter_(lane), nonce_stride_(lanes ? lanes : 1) {
     // Default routes everything to the one Client this Engine was built
     // with, ignoring Origin: a build with no dev-fee wiring only ever tags
     // work Main anyway. main.cpp replaces this with a router that picks the
@@ -87,7 +88,8 @@ void Engine::process_job(const stratum::Job& job, const std::string& nonceprefix
     if (!from_hex_strict(job.input, input32, 32)) return;   // malformed: no crash, no submit
 
     uint8_t nonce8[8];
-    build_nonce(nonceprefix, nonce_counter_++, nonce8);
+    build_nonce(nonceprefix, nonce_counter_, nonce8);
+    nonce_counter_ += nonce_stride_;
 
     std::vector<std::array<uint8_t, 104>> candidates = solver_.solve(input32, nonce8);
 

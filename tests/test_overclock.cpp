@@ -18,6 +18,7 @@
 #include "gpu/overclock.h"
 #include "gpu/nvml.h"
 #include "check.h"
+#include <cstdarg>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -48,6 +49,58 @@ void fake_reset(unsigned cur, unsigned lo, unsigned hi, NvmlWrite res) {
     oc_reset_state_for_test();
     const PowerOps ops = { &fake_read, &fake_write };
     oc_set_power_ops(ops);
+}
+
+// The clock/fan half of the same fake. Every call appends to one log string,
+// so a test asserts on the exact sequence of writes -- which is the only way to
+// catch a restore that puts things back in the wrong ORDER, or that writes a
+// value back where it should have issued a reset.
+std::string g_clk_log;
+NvmlWrite   g_clk_fail = NvmlWrite::Ok;
+int g_coff_cur = 0, g_moff_cur = 0;
+unsigned g_fan_cur = 45;
+
+void logf(const char* fmt, ...) {
+    char buf[64];
+    va_list ap; va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    g_clk_log += buf;
+}
+
+ClockOffset fk_coff_read() { ClockOffset o; o.valid = true; o.current_mhz = g_coff_cur;
+                             o.min_mhz = -1000; o.max_mhz = 1000; return o; }
+ClockOffset fk_moff_read() { ClockOffset o; o.valid = true; o.current_mhz = g_moff_cur;
+                             o.min_mhz = -2000; o.max_mhz = 6000; return o; }
+NvmlWrite fk_coff_write(int v) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+                                 logf("coff=%d;", v); g_coff_cur = v; return NvmlWrite::Ok; }
+NvmlWrite fk_moff_write(int v) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+                                 logf("moff=%d;", v); g_moff_cur = v; return NvmlWrite::Ok; }
+unsigned fk_max_core() { return 3150; }
+unsigned fk_max_mem()  { return 10501; }
+NvmlWrite fk_lock_core(unsigned lo, unsigned hi) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+                                                   logf("lockcore=%u,%u;", lo, hi); return NvmlWrite::Ok; }
+NvmlWrite fk_lock_mem(unsigned lo, unsigned hi)  { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+                                                   logf("lockmem=%u,%u;", lo, hi); return NvmlWrite::Ok; }
+NvmlWrite fk_unlock_core() { logf("unlockcore;"); return NvmlWrite::Ok; }
+NvmlWrite fk_unlock_mem()  { logf("unlockmem;");  return NvmlWrite::Ok; }
+FanInfo fk_fan_read() { FanInfo f; f.valid = true; f.count = 2; f.pct = g_fan_cur;
+                        f.min_pct = 30; f.max_pct = 100; return f; }
+NvmlWrite fk_fan_write(unsigned i, unsigned p) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+                                                 logf("fan%u=%u;", i, p); return NvmlWrite::Ok; }
+NvmlWrite fk_fan_reset(unsigned i) { logf("fanauto%u;", i); return NvmlWrite::Ok; }
+
+void fake_clock_reset() {
+    g_clk_log.clear();
+    g_coff_cur = 0; g_moff_cur = 0; g_fan_cur = 45;
+    oc_reset_state_for_test();
+    const ClockOps ops = {
+        &fk_coff_read, &fk_coff_write, &fk_moff_read, &fk_moff_write,
+        &fk_max_core, &fk_max_mem,
+        &fk_lock_core, &fk_unlock_core, &fk_lock_mem, &fk_unlock_mem,
+        &fk_fan_read, &fk_fan_write, &fk_fan_reset,
+    };
+    oc_set_clock_ops(ops);
 }
 
 // Parses `spec` for `index` and reports the outcome as one comparable string:
@@ -109,9 +162,9 @@ int main() {
     {
         const OcResult r = oc_apply_power_limit("220");
         check(r.status == OcStatus::Applied, "in-band value applies");
-        check(r.applied_w == 220, "the requested value is what is applied");
+        check(r.applied == 220, "the requested value is what is applied");
         check(g_writes.size() == 1 && g_writes[0] == 220, "220 W reached the device");
-        check(r.previous_w == 285, "the previous limit is reported");
+        check(r.previous == 285, "the previous limit is reported");
         check(oc_has_pending_restore(), "a restore is now pending");
         oc_restore();
         check(g_writes.size() == 2 && g_writes[1] == 285,
@@ -125,15 +178,15 @@ int main() {
     {
         const OcResult r = oc_apply_power_limit("50");
         check(r.status == OcStatus::Clamped, "below the band reports Clamped, not Applied");
-        check(r.applied_w == 100 && g_writes.size() == 1 && g_writes[0] == 100,
+        check(r.applied == 100 && g_writes.size() == 1 && g_writes[0] == 100,
               "clamped UP to the device minimum, and that is what was written");
-        check(r.requested_w == 50, "the request is still reported, so the clamp is visible");
+        check(r.requested == 50, "the request is still reported, so the clamp is visible");
     }
     fake_reset(285, 100, 366, NvmlWrite::Ok);
     {
         const OcResult r = oc_apply_power_limit("500");
         check(r.status == OcStatus::Clamped, "above the band reports Clamped");
-        check(r.applied_w == 366 && g_writes[0] == 366, "clamped DOWN to the device maximum");
+        check(r.applied == 366 && g_writes[0] == 366, "clamped DOWN to the device maximum");
     }
 
     section("a refused write leaves nothing to restore");
@@ -187,6 +240,115 @@ int main() {
     check(nvml_mw_to_w(284999) == 285, "284999 mW -> 285 W (truncation would give 284)");
     check(nvml_mw_to_w(100000) == 100, "100000 mW -> 100 W");
     check(nvml_mw_to_w(220400) == 220, "220400 mW -> 220 W");
+
+    // --- the clock and fan knobs ----------------------------------------
+    //
+    // Same discipline as above: a fake card records every write, so what
+    // reached the device is checked rather than inferred. These knobs restore
+    // in two different ways -- an offset is written back, a lock is RESET --
+    // and getting that backwards leaves a card pinned after exit, which is the
+    // failure the whole restore path exists to prevent.
+    section("clock offsets, locks and fans against a fake device");
+    fake_clock_reset();
+    {
+        OcRequest req; req.coff = "150"; req.moff = "-200";
+        const std::vector<OcResult> rs = oc_apply(req);
+        check(rs.size() == 2, "one result per requested knob, none for the rest");
+        check(rs[0].status == OcStatus::Applied && rs[0].applied == 150, "core offset applied");
+        check(rs[1].status == OcStatus::Applied && rs[1].applied == -200,
+              "a NEGATIVE memory offset is a downclock, not a parse error");
+        check(g_clk_log == "coff=150;moff=-200;", "both offsets reached the device in order");
+        oc_restore();
+        check(g_clk_log == "coff=150;moff=-200;moff=0;coff=0;",
+              "restore writes the PREVIOUS offsets back, in reverse order");
+    }
+
+    fake_clock_reset();
+    {
+        OcRequest req; req.cclk = "2100"; req.mclk = "10000";
+        const std::vector<OcResult> rs = oc_apply(req);
+        check(rs.size() == 2 && rs[0].applied == 2100 && rs[1].applied == 10000,
+              "both clocks locked at the requested values");
+        check(g_clk_log == "lockcore=2100,2100;lockmem=10000,10000;",
+              "a lock pins BOTH ends of the range -- a range would let the driver choose");
+        oc_restore();
+        check(g_clk_log == "lockcore=2100,2100;lockmem=10000,10000;unlockmem;unlockcore;",
+              "a lock is undone by a RESET, not by writing an old value back");
+    }
+
+    fake_clock_reset();
+    {
+        OcRequest req; req.cclk = "9000";              // above the fake's 3150 max
+        const std::vector<OcResult> rs = oc_apply(req);
+        check(rs[0].status == OcStatus::Clamped && rs[0].applied == 3150,
+              "a locked clock is clamped to the device maximum");
+        check(rs[0].requested == 9000, "and the request is still reported, so the clamp shows");
+    }
+
+    fake_clock_reset();
+    {
+        OcRequest req; req.coff = "5000";              // above the fake's +1000
+        const std::vector<OcResult> rs = oc_apply(req);
+        check(rs[0].status == OcStatus::Clamped && rs[0].applied == 1000,
+              "an offset is clamped to the band the driver reports");
+        OcRequest low; low.coff = "-5000";
+        fake_clock_reset();
+        check(oc_apply(low)[0].applied == -1000, "and clamped at the bottom of it too");
+    }
+
+    section("--fan drives every fan the card has");
+    fake_clock_reset();
+    {
+        OcRequest req; req.fan = "70";
+        const std::vector<OcResult> rs = oc_apply(req);
+        check(rs[0].status == OcStatus::Applied && rs[0].applied == 70, "fan target applied");
+        check(g_clk_log == "fan0=70;fan1=70;",
+              "BOTH fans are set -- one left on the driver's curve is not the setting asked for");
+        oc_restore();
+        check(g_clk_log == "fan0=70;fan1=70;fanauto0;fanauto1;",
+              "restore hands the fans back to AUTO, not to the percentage they happened to read");
+    }
+    fake_clock_reset();
+    {
+        OcRequest req; req.fan = "10";                 // below the fake's 30 % floor
+        check(oc_apply(req)[0].applied == 30, "fan speed clamps up to the device minimum");
+    }
+
+    section("a knob that fails leaves nothing of ITS OWN to restore");
+    fake_clock_reset();
+    g_clk_fail = NvmlWrite::NoPermission;
+    {
+        OcRequest req; req.coff = "150";
+        const std::vector<OcResult> rs = oc_apply(req);
+        check(rs[0].status == OcStatus::NoPermission, "no permission is reported as such");
+        check(rs[0].message.find("sudo") != std::string::npos, "the message names the cause");
+        check(!oc_has_pending_restore(), "a write that never landed schedules no restore");
+        oc_restore();
+        check(g_clk_log.empty(), "and restore writes nothing");
+    }
+    g_clk_fail = NvmlWrite::Ok;
+
+    section("'*' and absence both leave the clocks alone");
+    fake_clock_reset();
+    {
+        OcRequest req; req.coff = "*"; req.cclk = "";
+        check(oc_apply(req).empty(), "'*' and an unset flag produce no results at all");
+        check(g_clk_log.empty(), "and issue no writes");
+    }
+
+    section("offsets accept a leading sign, and reject a bare one");
+    {
+        long v = 0; bool found = false; std::string err;
+        check(oc_parse_list("+300", 0, v, found, err, true) && found && v == 300,
+              "an explicit + is accepted on an offset");
+        check(oc_parse_list("-300", 0, v, found, err, true) && found && v == -300,
+              "and a - gives a negative offset");
+        check(oc_parse_list("0", 0, v, found, err, true) && found && v == 0,
+              "0 is a real offset -- back to stock -- where it is not a real power limit");
+        check(!oc_parse_list("-", 0, v, found, err, true), "a bare sign has no digits");
+        check(!oc_parse_list("-300", 0, v, found, err, false),
+              "a negative is still rejected where negatives are meaningless (--pl, --cclk)");
+    }
 
     oc_reset_power_ops();
 

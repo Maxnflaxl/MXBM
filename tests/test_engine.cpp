@@ -2,6 +2,7 @@
 // FakeSolver returns a canned candidate and Engine::submit_fn captures the
 // submissions, so there are no threads and no transport; see miner/engine.h
 // for why process_job() alone is enough to test this deterministically.
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -228,6 +229,70 @@ int main() {
     engine.process_job(easy, "", Origin::Dev);
     check(origins.size() == 1 && origins[0] == Origin::Dev,
           "the dev tag survives a round trip through the mailbox");
+
+    section("nonce lanes: several devices on one job never try the same nonce");
+    {
+        // The multi-device failure this guards against is silent: two cards
+        // walking the same nonce sequence would each look perfectly healthy
+        // while the rig did half the work it was paid for. So the check is on
+        // the ACTUAL nonces handed to the solvers, not on the counters.
+        //
+        // Every solver here records what it was asked to solve; three Engines
+        // share one prefix and split the space three ways.
+        struct RecordingSolver : Solver {
+            std::vector<std::array<uint8_t, 8>> seen;
+            std::vector<std::array<uint8_t, 104>> solve(const uint8_t[32],
+                                                        const uint8_t nonce[8]) override {
+                std::array<uint8_t, 8> n{};
+                std::memcpy(n.data(), nonce, 8);
+                seen.push_back(n);
+                return {};
+            }
+        };
+
+        const unsigned kLanes = 3, kAttempts = 8;
+        Client client;
+        RecordingSolver solvers[kLanes];
+        std::vector<std::array<uint8_t, 8>> all;
+        for (unsigned lane = 0; lane < kLanes; ++lane) {
+            Engine e(client, solvers[lane], lane, kLanes);
+            e.submit_fn = [](const stratum::Solution&, Origin) {};
+            stratum::Job job{"j1", std::string(64, 'a'), 0xFFFFFFFFu, 100};
+            for (unsigned i = 0; i < kAttempts; ++i) e.process_job(job, "abc");
+            check(solvers[lane].seen.size() == kAttempts, "every attempt reached the solver");
+            for (const auto& n : solvers[lane].seen) all.push_back(n);
+        }
+        std::sort(all.begin(), all.end());
+        check(all.size() == kLanes * kAttempts, "all attempts collected");
+        check(std::adjacent_find(all.begin(), all.end()) == all.end(),
+              "no two lanes ever produced the same nonce");
+
+        // And the prefix survives partitioning: the pool assigned it, so a lane
+        // that dropped it would submit shares the pool credits to nobody.
+        for (const auto& n : all)
+            check((n[0] >> 4) == 0xa && (n[0] & 0xF) == 0xb && (n[1] >> 4) == 0xc,
+                  "the pool's nonce prefix is still in every lane's nonce");
+    }
+    {
+        // lanes = 1 must be exactly what it was before lanes existed:
+        // consecutive counters from zero.
+        struct RecordingSolver : Solver {
+            std::vector<uint8_t> first_counter_byte;
+            std::vector<std::array<uint8_t, 104>> solve(const uint8_t[32],
+                                                        const uint8_t nonce[8]) override {
+                first_counter_byte.push_back(nonce[2]);   // prefix "abc" fills 1.5 bytes
+                return {};
+            }
+        };
+        Client client;
+        RecordingSolver s;
+        Engine e(client, s);
+        e.submit_fn = [](const stratum::Solution&, Origin) {};
+        stratum::Job job{"j1", std::string(64, 'a'), 0xFFFFFFFFu, 100};
+        for (int i = 0; i < 4; ++i) e.process_job(job, "abc");
+        check(s.first_counter_byte == std::vector<uint8_t>({0, 1, 2, 3}),
+              "the single-device default still walks 0,1,2,3 -- unchanged by the lane parameter");
+    }
 
     return summary("engine");
 }

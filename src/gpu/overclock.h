@@ -1,17 +1,25 @@
 #pragma once
-// Board power limit, owned for the lifetime of the process.
+// Overclock knobs, owned for the lifetime of the process.
 //
 // Why this exists at all: MXBM runs pinned at the card's power limit in EVERY
-// kernel (measured -- docs/performance.md "Power and efficiency"), so the limit
-// does not merely bound the miner, it selects its operating point. On the
-// reference card 220 W gives the same throughput as the reference miner for
-// 19 W less, and stock 285 W buys the last 2.3 sol/s for 45 W.
+// kernel (measured -- docs/performance.md), so the limit does not merely bound
+// the miner, it selects its operating point. The head-to-head sweep against
+// the reference miner then supplied the second reason: at a 180 W cap MXBM sustains
+// 570 MHz less core clock than the reference miner does, so what the card is allowed to
+// clock at is not a detail, it is most of the efficiency gap.
 //
-// Design decisions -- privilege model, the reference miner-compatible flag names, warn-and-
-// continue, restore-on-exit -- are in docs/overclocking.md. Only --pl is
-// implemented; the clock/fan knobs from that document are deliberately not, and
-// the list-parsing and restore machinery here is shaped to take them.
+// Design decisions -- privilege model, the reference miner-compatible flag names,
+// warn-and-continue, restore-on-exit -- are in docs/overclocking.md.
+//
+//   --pl W       board power limit
+//   --cclk MHz   lock the core clock          --coff MHz   shift its V/F curve
+//   --mclk MHz   lock the memory clock        --moff MHz   shift its V/F curve
+//   --fan PCT    fan target
+//
+// Every one takes the reference miner's per-GPU list syntax ("2100", "2100,*,2050"; '*'
+// skips a GPU).
 #include <string>
+#include <vector>
 #include "gpu/nvml.h"
 
 namespace mxbm { namespace gpu {
@@ -19,7 +27,7 @@ namespace mxbm { namespace gpu {
 // What happened when a knob was applied, so the console can name the CAUSE
 // rather than just reporting failure (docs/overclocking.md decision 3).
 enum class OcStatus {
-    NotRequested,   // no flag given
+    NotRequested,   // no flag given, or '*' skipped this GPU
     Applied,
     Clamped,        // applied, but not at the value asked for
     NoPermission,   // needs root; the expected outcome for an ordinary user
@@ -28,48 +36,68 @@ enum class OcStatus {
 };
 
 struct OcResult {
-    OcStatus status = OcStatus::NotRequested;
-    unsigned requested_w = 0;
-    unsigned applied_w   = 0;   // what actually reached the card
-    unsigned min_w = 0, max_w = 0, previous_w = 0;
+    OcStatus    status = OcStatus::NotRequested;
+    const char* knob   = "";    // "--pl", "--cclk", ... for grouping and logs
+    // In the knob's own unit: watts, MHz, MHz of offset, or fan percent.
+    // Signed because an offset may legitimately be negative -- a downclock is
+    // a setting people want, not an input error.
+    long requested = 0;
+    long applied   = 0;         // what actually reached the card
+    long previous  = 0;         // what was there before, for the restore
+    long min = 0, max = 0;      // the band the DRIVER reports; 0/0 = unknown
     std::string message;        // one line, already user-facing
 };
 
-// Parses the reference miner's per-GPU list syntax into the entry for `index`: "240",
-// "240,*,260", or "*" to skip a GPU. MXBM drives one GPU today, but parsing
-// the full syntax now means multi-GPU will not be a breaking change
-// (docs/overclocking.md decision 2). Returns false with `err` set on a
-// malformed list. `found` false means this GPU was explicitly skipped.
-bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& found,
-                   std::string& err);
+// Everything the user asked for, as raw list specs straight off the command
+// line. Empty means "not requested"; "*" means "deliberately skip this GPU".
+// Both leave the card alone, and both must, but they are not the same thing.
+struct OcRequest {
+    std::string pl, cclk, mclk, coff, moff, fan;
+};
 
-// Applies `spec` to device 0 and remembers the previous limit. Never throws;
-// read the status. Clamps to the band the DRIVER reports rather than to a
-// constant of ours -- a limit outside it is reported, not silently accepted.
+// Parses the reference miner's per-GPU list syntax into the entry for `index`: "240",
+// "240,*,260", or "*" to skip a GPU. Returns false with `err` set on a
+// malformed list; `found` false means this GPU was explicitly skipped.
+//
+// `allow_negative` exists for the offsets and only for them: --pl 0 and
+// --cclk -100 are input errors, while --coff -200 is an undervolt.
+bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& found,
+                   std::string& err, bool allow_negative = false);
+
+// Applies every requested knob to the device and returns one result per knob
+// that was actually requested. Never throws; read the statuses.
+//
+// ORDER MATTERS and is: power limit, core offset, memory offset, locked core
+// clock, locked memory clock, fan. The V/F curve is shaped before anything is
+// pinned onto it, and the fan is set last, against the thermal load the other
+// settings imply. Restore runs in exactly the reverse order.
+std::vector<OcResult> oc_apply(const OcRequest& req);
+
+// The narrow entry point --pl had before the other knobs existed.
 OcResult oc_apply_power_limit(const std::string& spec);
 
-// Puts back what oc_apply_* changed. Idempotent, so the atexit hook and the
+// Puts back everything oc_apply changed. Idempotent, so the atexit hook and the
 // signal handler can both call it. No-op when --no-oc-reset was given.
 void oc_restore();
 
 // Installs atexit + SIGINT/SIGTERM hooks that call oc_restore(). Needed
 // because mining mode blocks in client.run() forever and exits by signal, so
-// no destructor would otherwise run. oc_apply_power_limit() calls this itself
-// once a write has actually landed; exposed for tests.
+// no destructor would otherwise run. The apply calls this themselves once a
+// write has actually landed; exposed for tests.
 void oc_install_restore_hooks();
 
-// --no-oc-reset: leave the setting on the card at exit. Matches the reference miner,
+// --no-oc-reset: leave the settings on the card at exit. Matches the reference miner,
 // whose --no-oc-reset also defaults to 0 (i.e. restore).
 void oc_set_restore_enabled(bool enabled);
 
-// True while a setting is still on the card waiting to be put back. Lets a
+// True while any setting is still on the card waiting to be put back. Lets a
 // caller that temporarily owns SIGINT (the benchmark's graceful-stop handler)
 // know whether to hand it back to us or to SIG_DFL.
 bool oc_has_pending_restore();
 
 // --- test seam -----------------------------------------------------------
 //
-// Everything above talks to the card through these two calls and nothing else.
+// Everything above talks to the card through these calls and nothing else.
 // Without the seam the clamping, the status mapping and the restore bookkeeping
 // could only be exercised on a machine with an NVIDIA GPU *and* root, which in
 // practice meant they were not exercised at all -- mutation testing found nine
@@ -80,8 +108,29 @@ struct PowerOps {
     NvmlWrite  (*write)(unsigned watts);
 };
 void oc_set_power_ops(const PowerOps& ops);   // tests only
-void oc_reset_power_ops();                    // back to NVML
-// Clears the recorded previous limit and re-enables restore, so one test case
+
+// The rest of the card surface, injected the same way. Kept separate from
+// PowerOps so a test that only cares about --pl does not have to supply
+// thirteen function pointers it will never call.
+struct ClockOps {
+    ClockOffset (*core_offset_read)();
+    NvmlWrite   (*core_offset_write)(int mhz);
+    ClockOffset (*mem_offset_read)();
+    NvmlWrite   (*mem_offset_write)(int mhz);
+    unsigned    (*max_core_mhz)();
+    unsigned    (*max_mem_mhz)();
+    NvmlWrite   (*lock_core)(unsigned lo, unsigned hi);
+    NvmlWrite   (*unlock_core)();
+    NvmlWrite   (*lock_mem)(unsigned lo, unsigned hi);
+    NvmlWrite   (*unlock_mem)();
+    FanInfo     (*fan_read)();
+    NvmlWrite   (*fan_write)(unsigned fan, unsigned pct);
+    NvmlWrite   (*fan_reset)(unsigned fan);
+};
+void oc_set_clock_ops(const ClockOps& ops);   // tests only
+
+void oc_reset_power_ops();                    // back to NVML, both structs
+// Clears every recorded previous value and re-enables restore, so one test case
 // cannot leak state into the next.
 void oc_reset_state_for_test();
 

@@ -44,8 +44,14 @@ immediately; only a *missing* one defers to the config.
 | `--timeprint [0\|1]` | Stamp the average-speed line with `[HH:MM:SS]`. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one). Needs root. | card default |
-| `--no-oc-reset [0\|1]` | Leave `--pl` applied at exit instead of restoring the previous limit. | off |
-| `--devices LIST` | Device selector. Accepted and stored; selection is not implemented yet. | all |
+| `--cclk MHz` | Lock the core clock. Needs root. | driver-managed |
+| `--mclk MHz` | Lock the memory clock. Needs root. | driver-managed |
+| `--coff MHz` | Shift the core voltage/frequency curve. May be negative. Needs root. | 0 |
+| `--moff MHz` | Shift the memory voltage/frequency curve. May be negative. Needs root. | 0 |
+| `--fan PCT` | Fan target, in percent. Needs root. | driver's own curve |
+| `--no-oc-reset [0\|1]` | Leave applied settings on the card at exit instead of restoring them. | off |
+| `--devices LIST` | Which GPU to mine on: `ALL` or a comma-separated list of indices from `--list-devices`. | ALL |
+| `--list-devices` | Print the detected GPUs with their indices, and exit. | |
 | `--watchdog` | Enable the watchdog. Accepted; not implemented yet. | off |
 | `--version` | Print the version and exit. | |
 | `--help` | Print usage and exit. | |
@@ -154,8 +160,11 @@ never set a value the command line would reject.
 | `LOG`, `TIMEPRINT`, `WATCHDOG`, `NOCOLOR` | same | `1`/`0`, `true`/`false`, `on`/`off` |
 | `LOGFILE` | `--logfile` | path; implies `LOG` unless `LOG` says otherwise |
 | `SOLVER` | `--solver` | `cuda`, `opencl`, `gpu`, `ref`, `auto` |
-| `DEVICES` | `--devices` | list (JSON also accepts an array) |
+| `DEVICES` | `--devices` | `ALL` or a list of indices (JSON also accepts an array) |
 | `PL` | `--pl` | watts per GPU (JSON also accepts an array: `[220, "*", 260]`) |
+| `CCLK`, `MCLK` | `--cclk`, `--mclk` | MHz per GPU (JSON also accepts an array) |
+| `COFF`, `MOFF` | `--coff`, `--moff` | MHz per GPU, signed (JSON also accepts an array) |
+| `FAN` | `--fan` | percent per GPU (JSON also accepts an array) |
 | `NO_OC_RESET` | `--no-oc-reset` | `1`/`0`, `true`/`false`, `on`/`off` |
 | `DEVFEE` | `--dev-fee` | percentage, raise-only |
 | `BENCHMARK`, `BENCHMARK_SECONDS` | `--benchmark`, `--benchmark-seconds` | `BEAM-III`; seconds ≥ 1 |
@@ -420,6 +429,72 @@ The value is clamped to the band the driver reports for your card (100–366 W o
 reference one) and the clamp is announced, so a limit your card will not take is never
 silently ignored. The previous limit is restored when MXBM exits, including on Ctrl+C;
 `--no-oc-reset` leaves it applied instead.
+
+### Choosing which GPU to mine on
+
+```sh
+mxbm --list-devices
+```
+
+```
+Detected devices (indices are in PCI order, and mean the same card in --devices and --pl):
+  0: NVIDIA GeForce RTX 4070 Ti SUPER   15963 MB  PCI 1:0     Cuda
+```
+
+`--devices ALL` (the default) or `--devices 0,2` picks by those indices. An index that
+does not exist is an error naming how many were found, not a silent fallback to card 0 —
+a rig config that quietly mines the wrong card is worse than one that refuses to start.
+
+**Indices are in PCI order**, which is what makes `--devices 1` and `--pl 240,*,260`
+refer to the same physical card. CUDA's own enumeration defaults to fastest-first and
+NVML's is by bus id, so the two disagree on any rig whose cards are not identical;
+sorting by PCI address is the only key all three agree on.
+
+> **Only one GPU is mined at a time so far.** A `--devices` list naming several is
+> accepted — it will be right when multi-device mining lands — but MXBM says plainly
+> that it is using the first of them.
+
+### Clocks and fans
+
+`--cclk`/`--mclk` **lock** a clock to a value; `--coff`/`--moff` **shift** its
+voltage/frequency curve and may be negative. The pair is the standard undervolt idiom —
+lock the clock and raise the offset, so the locked frequency runs at a voltage that would
+otherwise deliver less. `--fan` sets a fan target in percent, on every fan the card has.
+
+```sh
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220 --cclk 2100 --coff 200 --moff 1500
+```
+
+All of them take the same per-GPU list syntax as `--pl`, all need root, and all are
+restored when MXBM exits unless `--no-oc-reset` says otherwise. Each is clamped to the
+band the driver reports for your card and says so when it clamps. On the reference card:
+
+| knob | band the driver permits |
+|---|---|
+| `--coff` | −1000 … +1000 MHz |
+| `--moff` | −2000 … +6000 MHz |
+| `--cclk` | up to 3150 MHz |
+| `--mclk` | up to 10501 MHz |
+| `--fan` | 30 … 100 % |
+
+> **A permitted range is register width, not a recommendation.** `--moff 6000` is
+> accepted by the driver and stable on no card in existence. Move one knob at a time and
+> watch for the two failure signatures: a core offset that is too high shows up as
+> solutions failing CPU verification, while a memory offset that is too high shows up as
+> sol/s *falling* while everything still verifies, because GDDR6X answers marginal
+> timing with link-level retries rather than with wrong data.
+
+**The memory offset's unit is not confirmed.** `nvidia-settings` exposes memory offsets
+in MHz of *transfer rate*, which is twice the memory clock; whether NVML's
+`nvmlDeviceSetMemClkVfOffset` uses the same convention has not been measured. MXBM
+reports the offset in the units you typed and the resulting clock in the statistics
+block, so the two together are unambiguous even though the convention is not yet
+settled. See [overclocking.md](overclocking.md).
+
+Restore order is the reverse of apply order: the fan goes back to the driver's curve
+first, so the card is cooling itself normally while the clocks come down, and the power
+limit is put back last, so nothing is ever unlocked into a clock the old limit would not
+have allowed.
 For mean and standard deviation without any parsing, the API reports them
 directly — see `Session_Stats` above.
 

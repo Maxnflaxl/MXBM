@@ -69,4 +69,58 @@ enum class NvmlWrite { Ok, NoPermission, Unsupported, Failed };
 // ordinary user and callers must report it as a cause, not a crash.
 NvmlWrite nvml_set_power_limit(unsigned watts);
 
+// --- clocks and fans -----------------------------------------------------
+//
+// Two different mechanisms, deliberately kept apart because they fail
+// differently and are restored differently:
+//
+//   OFFSETS (--coff/--moff) shift the whole voltage/frequency curve, so the
+//   card still manages itself and a too-high offset shows up as instability.
+//   Restoring means writing the previous offset back.
+//
+//   LOCKED CLOCKS (--cclk/--mclk) pin the clock to a range, taking that
+//   management away from the driver. Restoring means an explicit reset call,
+//   not writing a previous value -- there is no "previous lock" to put back.
+//
+// The pair is the standard Linux undervolt idiom: lock the core clock and
+// raise the V/F offset, so the locked frequency runs at a lower voltage than
+// it otherwise would.
+
+struct ClockOffset {
+    bool valid = false;         // false => the card does not expose this knob
+    int  current_mhz = 0;
+    int  min_mhz = 0, max_mhz = 0;   // the driver's permitted band
+};
+
+ClockOffset nvml_core_clock_offset();
+ClockOffset nvml_mem_clock_offset();
+NvmlWrite   nvml_set_core_clock_offset(int mhz);
+NvmlWrite   nvml_set_mem_clock_offset(int mhz);
+
+// The card's maximum for a clock domain, 0 when unreported. Used to clamp
+// --cclk/--mclk against the hardware rather than against a constant of ours.
+unsigned nvml_max_core_clock_mhz();
+unsigned nvml_max_mem_clock_mhz();
+
+// Locked clocks take a (min, max) pair; MXBM pins both to the same value,
+// which is what "run at exactly this clock" means and what --cclk promises.
+NvmlWrite nvml_set_locked_core_clock(unsigned min_mhz, unsigned max_mhz);
+NvmlWrite nvml_set_locked_mem_clock(unsigned min_mhz, unsigned max_mhz);
+NvmlWrite nvml_reset_locked_core_clock();
+NvmlWrite nvml_reset_locked_mem_clock();
+
+struct FanInfo {
+    bool     valid = false;
+    unsigned count = 0;         // a card can have several; --fan sets all of them
+    unsigned pct   = 0;         // fan 0's current speed
+    unsigned min_pct = 0, max_pct = 0;   // driver-reported band, 0/0 if unknown
+};
+
+FanInfo   nvml_fans();
+NvmlWrite nvml_set_fan_speed(unsigned fan, unsigned pct);
+// Hands the fan back to the driver's own curve. NOT the same as writing the
+// speed we first read: that would leave it pinned at a fixed value forever,
+// which on a card that later gets hot is a way to cook it.
+NvmlWrite nvml_reset_fan(unsigned fan);
+
 }} // namespace mxbm::gpu

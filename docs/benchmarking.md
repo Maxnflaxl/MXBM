@@ -113,6 +113,39 @@ and must not be presented as if it can.
 
 ---
 
+## 4b. Comparing two miners at the same board settings
+
+`benchmarks/compare_power.sh` runs MXBM and lolMiner against each other at identical
+settings. Four decisions in it are what make the comparison mean anything, and each is a
+way it could have been wrong instead:
+
+- **Settings are applied externally, with `nvidia-smi`, identically to both.** Using each
+  miner's own `--pl`/`--cclk` would put their overclock implementations into a
+  measurement that is supposed to be about their kernels.
+- **Power is sampled from NVML for both, never read from a miner's own report.**
+  lolMiner's statistics block averages in its ramp-up: it reads ~215 W on a one-minute
+  run where sampling that same run gives 235.
+- **The two miners alternate order at every point**, so a thermal trend across a long
+  sweep cannot land on one of them systematically.
+- **lolMiner's `--benchmark` is a fixed ~61 s run** — established by giving it a 240 s
+  ceiling and watching it stop at 61 with exit 0, not assumed. So both miners run 60 s
+  and each point is repeated, rather than one long run each.
+
+```sh
+LIMITS="200 220 240 285" REPEATS=2 benchmarks/compare_power.sh
+LIMITS="220 240" CCLKS="* 2100 2200" benchmarks/compare_power.sh   # a grid
+```
+
+`LIMITS` × `CCLKS` × `MCLKS` sweeps as a full grid; `*` in a clock list leaves that clock
+to the driver. Everything is restored on exit including on Ctrl+C, and the clocks are
+unlocked even when the run is interrupted — a card left locked outlives the script and
+silently caps whatever runs next.
+
+This still does not make the sol/s columns comparable *between* miners, for the reason in
+§1. The watts are comparable, because one instrument measured both.
+
+---
+
 ## 5. Gotchas
 
 - **Do not compare across pools.** Difficulty and share accounting differ.

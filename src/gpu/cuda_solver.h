@@ -9,6 +9,7 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mxbm { namespace gpu {
 
@@ -17,11 +18,24 @@ public:
     // True if a CUDA device is present AND has room for the full 2^25 seed layer. A
     // reduced layer finds essentially nothing (see budget_can_find_solutions), so a
     // device that cannot host the whole thing must not claim the job.
-    static bool available();
-    struct DeviceInfo { std::string name; unsigned long long global_mem = 0; unsigned compute_units = 0; };
-    static DeviceInfo device_info();
+    static bool available(int index = 0);
+    struct DeviceInfo {
+        std::string name; unsigned long long global_mem = 0; unsigned compute_units = 0;
+        // PCI bus:device, the same short form NVML reports. This is what makes an
+        // index mean the same card across CUDA, OpenCL and NVML: CUDA's own
+        // ordering is "fastest first" by default while NVML's is by bus id, so
+        // two backends' index N are NOT the same card on a mixed rig. Ordering
+        // by PCI address is the only key all three agree on.
+        std::string pci;
+        int  index = 0;                 // this backend's own index for the card
+        bool viable = false;            // has room for the full 2^25 seed layer
+    };
+    static DeviceInfo device_info(int index = 0);
+    // Every CUDA device the driver reports, in PCI order.
+    static std::vector<DeviceInfo> enumerate();
 
-    CudaSolver();                       // throws std::runtime_error on failure
+    // `index` is a CUDA device index. Throws std::runtime_error on failure.
+    explicit CudaSolver(int index = 0);
     ~CudaSolver() override;
     CudaSolver(const CudaSolver&) = delete;
     CudaSolver& operator=(const CudaSolver&) = delete;

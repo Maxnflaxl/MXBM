@@ -350,5 +350,58 @@ int main() {
         check(!o.no_oc_reset && o.seen.no_oc_reset, "--no-oc-reset 0 means off, but is seen");
     }
 
+    section("the clock and fan knobs parse like --pl, and the offsets take a sign");
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
+                            "--cclk","2100","--mclk","10000","--coff","-200","--moff","1500",
+                            "--fan","70"};
+        Options o; std::string e;
+        check(parse_args(17,(char**)av,o,e), "all five knobs parse together");
+        check(o.core_clock == "2100" && o.mem_clock == "10000", "the two locks land");
+        check(o.core_offset == "-200" && o.mem_offset == "1500",
+              "a NEGATIVE core offset survives the parser -- it is an undervolt, not a typo");
+        check(o.fan == "70", "and the fan target lands");
+        check(o.seen.core_clock && o.seen.fan, "each records that it was seen");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1",
+                            "--cclk","-2100"};
+        Options o; std::string e;
+        check(!parse_args(9,(char**)av,o,e),
+              "a negative LOCKED clock is rejected -- unlike an offset, it means nothing");
+    }
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1130","--user","a.r1","--fan"};
+        Options o; std::string e;
+        check(!parse_args(8,(char**)av,o,e), "a knob with no value is an error, not a default");
+    }
+
+    section("--devices resolves against the devices actually present");
+    {
+        std::vector<unsigned> sel; std::string e;
+        // "all" and an empty spec both mean everything, so a config file that
+        // sets DEVICES = ALL behaves the same as not setting it at all.
+        check(resolve_devices("ALL", 3, sel, e) && sel.size() == 3, "ALL selects every device");
+        check(resolve_devices("all", 3, sel, e) && sel.size() == 3, "and is case-insensitive");
+        check(resolve_devices("", 2, sel, e) && sel.size() == 2, "an empty spec means all too");
+        check(resolve_devices("0,2", 3, sel, e) && sel.size() == 2 && sel[0] == 0 && sel[1] == 2,
+              "a list selects exactly those, in the order given");
+        check(resolve_devices("2,0", 3, sel, e) && sel[0] == 2 && sel[1] == 0,
+              "and preserves that order rather than sorting it");
+        check(resolve_devices("1,1", 3, sel, e) && sel.size() == 1,
+              "a duplicate collapses -- mining one card twice would halve it and look like a fault");
+        check(!resolve_devices("3", 3, sel, e), "an index past the end is an error");
+        check(e.find("does not exist") != std::string::npos, "and the message says so");
+        check(!resolve_devices("0,3", 3, sel, e),
+              "a bad entry is rejected even when a good one precedes it");
+        check(!resolve_devices("abc", 3, sel, e), "a non-number is an error");
+        check(!resolve_devices("0,,1", 3, sel, e), "so is an empty entry");
+        check(!resolve_devices("-1", 3, sel, e), "so is a negative index");
+        check(!resolve_devices("0", 0, sel, e),
+              "asking for a specific device when none was detected is an error, not a no-op");
+        check(resolve_devices("ALL", 0, sel, e) && sel.empty(),
+              "but ALL of nothing is simply nothing, which the caller reports its own way");
+    }
+
     return summary("cli");
 }
