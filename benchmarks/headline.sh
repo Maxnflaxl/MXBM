@@ -31,7 +31,7 @@
 #  * OPTIONALLY LOCKED CLOCKS (root only). This is the reproducible reference:
 #    if ms/solve at a locked clock is stable across days while the stock number
 #    is not, the regime is a clock/power-state effect and the locked number is
-#    the one to track builds against. LGC=2600 LMC=10501 is a reasonable pin.
+#    the one to track builds against. LGC=2600 LMC=10251 is a reasonable pin.
 #  * REPEATS, SPACED. One number is a sample, not a measurement. Each run is
 #    reported separately and the summary quotes the median AND the full range,
 #    because the range is the quantity actually in question here.
@@ -43,7 +43,7 @@
 #
 #   benchmarks/headline.sh                        # stock, no root
 #   RUNS=8 SECS=180 benchmarks/headline.sh
-#   sudo -v && LGC=2600 LMC=10501 benchmarks/headline.sh   # locked reference
+#   sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh   # locked reference
 #   LONG=300 benchmarks/headline.sh               # + one long run for the sol/s basis
 #
 # -f disables pathname expansion: LGC/LMC default to "*" meaning "leave it to

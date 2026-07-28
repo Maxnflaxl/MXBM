@@ -219,8 +219,23 @@ left to reclaim, only records to narrow. Meanwhile the card runs pinned at its 2
 board limit in every kernel, so joules per solution are set by how long a solve takes:
 4.94 J/solution at stock, 4.08 capped to 220 W and 3.95 at the ~200 W efficiency peak,
 against lolMiner's 4.48 at its own uncapped 239 W. MXBM is therefore ahead on energy
-when capped and behind when not, and the margin either way is set by the bytes. An implementation holding 3 GB instead
-of 7.46 would move proportionally fewer of them. See
-["Power and efficiency"](performance.md#power-and-efficiency). Reducing the per-element
-footprint remains the highest-value open work item — it is now the lever that widens a
-lead rather than one that closes a deficit, since throughput already clears the target.
+when capped and behind when not, and the margin either way is set by the bytes. See
+["Power and efficiency"](performance.md#power-and-efficiency).
+
+> **Correction (2026-07-28): "3 GB instead of 7.46 would move proportionally fewer bytes"
+> is wrong, and the two halves of this section are two different projects.** Footprint and
+> traffic are not the same quantity. Streaming / in-place layer reuse — the route named
+> above for reaching 3 GB — writes *the same bytes to reused addresses*: the peak
+> allocation falls, the traffic does not move at all. Only **narrower records** reduce
+> traffic, and traffic is what the energy argument rests on.
+>
+> The energy half is now measured rather than inferred. Cutting round 2's record 72 B →
+> 16 B, so the solve moves 16 % fewer bytes, raises the clock the card sustains at a fixed
+> 285 W by **60 MHz** — with a positive control at ±0 MHz, since rounds 1 and 4 already
+> store 16 B and ablating them changes nothing. See ["bytes are not free in
+> watts"](performance.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
+>
+> So: **narrowing records is the efficiency lever** (measured, and it is the one that
+> widens the lead against lolMiner under a cap). **In-place reuse is the reach lever** —
+> it is what puts a full search on an 8 GB card, which is worth doing on its own terms and
+> is not an energy improvement.

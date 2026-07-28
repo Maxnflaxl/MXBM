@@ -433,18 +433,23 @@ The mechanism is visible in the clocks, and it is the same story at every point:
 | 285 W | 2685 MHz | 2745 MHz | −60 |
 
 MXBM's kernels cost more power per clock, so a tightening cap takes clock away from us
-faster than from them — 60 MHz behind at stock, 570 MHz behind at 180 W. The suspect is
+faster than from them — 60 MHz behind at stock, 570 MHz behind at 180 W. The suspect was
 DRAM traffic: MXBM moves [14.23 GB/solve](#current-focus-and-open-leads) at geometry
 (16,1), while lolMiner selects a **4G** variant that fits the search in 4 GB and must
 therefore move far less.
+
+**That suspicion has since been measured, and it holds.** Narrowing round 2's record so
+the solve moves 16 % fewer bytes raises the clock the card sustains at the same 285 W by
+**60 MHz**, with a positive control at ±0 MHz and the obvious confound excluded — see
+[bytes are not free in watts](#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
 
 **This inverts one of this document's own conclusions.** [Bytes are nearly
 free](#bytes-are-nearly-free-per-element-work-is-not) measured that narrowing records buys
 almost no *speed*, because the pipeline is latency- and occupancy-bound rather than
 bandwidth-bound, and that is why memory efficiency was filed under reach. Under a power
-cap bytes are not free at all: they are watts, watts are clock, and clock is speed. The
-footprint work is the main **efficiency** lever available, and nothing here had priced it
-as one.
+cap bytes are not free at all: they are watts, watts are clock, and clock is speed. What
+that promotes is **narrowing records**, which cuts bytes moved; in-place layer reuse cuts
+the footprint while moving the same bytes, so it stays a reach lever.
 
 ### The memory traffic is compulsory
 
@@ -487,11 +492,13 @@ lolMiner spends **4.48 J per solution**; MXBM spends **4.94** at stock and
 only undercuts it by capping — 4.08 at 220 W, 3.95 at the ~200 W peak. Winning by
 11 % on energy while giving up 12 % of throughput to get there is a real lead but
 a bought one, and where the rest of it went is not mysterious: 13.0 GB of
-compulsory traffic per solve, from a 7.46 GiB footprint against a 3 GB design
-target. Memory efficiency and energy
-efficiency remain one problem, exactly as HW_REQUIREMENTS predicted before either
-was measured — the difference now is that it is a lead to extend rather than a
-deficit to erase.
+compulsory traffic per solve. **Traffic, specifically — not the 7.46 GiB
+footprint it sits in.** Those were treated here as one problem and they are two:
+[the byte-power measurement](#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz)
+prices the bytes *moved* at 60 MHz of sustained clock per 16 % of traffic, while
+a smaller peak allocation that moves the same bytes to reused addresses buys
+none of that. Narrowing records extends this lead; in-place reuse extends the
+range of cards that can run at all.
 
 Full data, method and caveats for the head-to-head: `docs-internal/MINER_COMP_RESULTS.md`.
 The two runs were not simultaneous, so lolMiner's power figure still
@@ -1722,6 +1729,91 @@ So the remaining 6–9 ms per round is the staging read, the chain walk and the 
 count* of the scatter — none of which is byte-count-driven, and none of which any
 single-kernel lever has moved. That is the same conclusion the overlap work reached from
 the other direction, and it points at the same place: co-residency.
+
+### …but bytes are not free in WATTS, and under a cap watts are clock (−60 MHz)
+
+*(Measured 2026-07-28, `benchmarks/byte_power.sh`. This is the counterpart to the section
+above and it does not contradict it: the same bytes are cheap in time and expensive in
+power.)*
+
+The [head-to-head sweep](#both-miners-under-the-same-cap) found MXBM clocking 60–570 MHz
+below lolMiner at every equal power cap and named DRAM traffic as **the suspect**. That
+was an inference from the fact that lolMiner fits the search in 4 GB. This measures it.
+
+**The card is power-capped essentially all the time**, which is what makes the experiment
+possible: the controlled headline run recorded `sw_power_cap` active **99–100 %** of the
+time at stock. So board watts are pinned by definition and the *clock* is the free
+variable — if work costs less power, the card spends the saving on frequency, and the SM
+clock is a direct readout of the power cost of the work.
+
+Method: the same `MXBM_ABL_EMIT` ablation the speed attribution used — round 2's scattered
+payload narrowed 72 B → 16 B with `combine`, `apply_mix` and the ctree build all still
+live, so bytes are the only variable — replayed with `MXBM_ROUND_REPS` so the round
+dominates the timeline. Each comparison is bracketed by two unablated runs, so drift has
+to be beaten rather than assumed; it came out at 0–0.5 ms and **0 MHz** every time.
+
+| | ms/solve | SM | W | |
+|---|---|---|---|---|
+| baseline, no replay | 33.79 | 2685 | 284.2 | |
+| r1 full ×8 | 69.84 | 2655 | 284.1 | **control** — r1 already stores 16 B |
+| r1 narrowed ×8 | 70.00 | 2655 | 284.1 | **±0 MHz, ±0.0 W**, as it must be |
+| r2 full ×24 | 270.89 | **2610** | 284.3 | |
+| r2 narrowed ×24 | 233.57 | **2670** | 283.9 | **+60 MHz** at the same cap |
+
+**Removing 2.09 GB/solve — 16.1 % of the solve's 13.0 GB — buys 60 MHz, 2.3 % of clock.**
+The control is what makes that quotable: rounds 1 and 4 already store 16 B, so ablating r1
+changes no traffic, and it moves the clock by exactly nothing.
+
+**The obvious confound is excluded by construction.** The narrowed build feeds round 3 a
+deliberately garbled record, which costs 180–197 k bucket drops (0.5 % of elements) and
+therefore slightly less downstream work. Sweeping the replay count separates the two,
+because more replays mean round 2 occupies more of the timeline while the drop count per
+solve stays fixed:
+
+| replays | non-round-2 share of the solve | Δ clock |
+|---|---|---|
+| 4 | 36.6 % | −75 MHz |
+| 8 | 22.2 % | −75 MHz |
+| 16 | 12.5 % | −60 MHz |
+| 24 | 8.7 % | −60 MHz |
+
+The drop-affected share of the timeline falls **4.2×** and the effect does not follow it
+down — it converges on 60 MHz, which is the clock the card holds while actually running
+round 2. Had the drops been driving it, 24 replays would have shown roughly 18 MHz.
+
+**What the claim is, precisely.** The ablation removes stores, so it removes DRAM traffic,
+L2 traffic *and* store-instruction issue together, and this experiment cannot separate
+them. The honest statement is that **round 2's scattered store path costs 60 MHz of
+sustained clock at a fixed 285 W** — not that DRAM specifically does. For the decision it
+informs that distinction does not matter, because narrowing a record reduces all three at
+once; it matters for anyone tempted to price the effect per byte and extrapolate.
+
+**And it sharpens rather than reverses "bytes are nearly free".** The marginal cost of
+round 2's payload here is **1.69 ms** per pass (10.32 full against 8.63 narrowed, taken
+across 4→24 replays), of which about 0.2 ms is itself the clock the freed watts bought. So
+in *time* the bytes are even cheaper than the 3.47 ms the 2026-07-26 attribution recorded
+on the pre-group-cap build. Bytes are cheap in time and expensive in power, and on a card
+that is power-capped 99 % of the time the second one is what reaches the headline.
+
+**What this changes about the roadmap** — and it splits an item the docs had as one:
+
+- **Narrowing records** cuts bytes moved → cuts watts → buys clock. This is the
+  **efficiency** lever, and it is now measured rather than suspected.
+- **Streaming / in-place layer reuse** cuts the 7.46 GiB *footprint* by writing the same
+  bytes to reused addresses. Traffic is unchanged, so by this measurement it buys no
+  clock at all. It is a **reach** lever — 8 GB cards — and nothing else.
+
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target)
+names in-place reuse as the route to the 3 GB target and treats memory efficiency and
+energy efficiency as one problem. It is the route to the *footprint* target; the energy
+half has to come from narrower records. Since [measured traffic is within 1 % of
+compulsory](#the-memory-traffic-is-compulsory) for the current widths, narrower records
+means a structural change and not tuning.
+
+**Not yet done: the same experiment under a low cap.** At stock the clock has little room
+to move, and the gap against lolMiner widened from 60 MHz at stock to 570 MHz at 180 W. If
+the effect scales, `PL=180 benchmarks/byte_power.sh` is where it becomes a headline number
+rather than a 2.3 % one. It needs root.
 
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
 

@@ -90,7 +90,7 @@ unexplained; see [performance.md](performance.md#-the-absolute-figures-reproduce
 ```sh
 benchmarks/headline.sh                                  # stock, no root
 RUNS=8 SECS=180 LONG=300 benchmarks/headline.sh
-sudo -v && LGC=2600 LMC=10501 benchmarks/headline.sh    # locked-clock reference
+sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh    # locked-clock reference
 ```
 
 The locked-clock form is the one to track *builds* against: it removes the card's own
