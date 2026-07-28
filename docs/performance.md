@@ -365,6 +365,10 @@ its ramp and reads ~20 W low. Two repeats per cell; the spread within a cell is 
 
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|
+| 120 W | 26.30 | 119.8 | 0.2196 | **33.50** | 119.5 | **0.2805** |
+| 140 W | 32.65 | 139.9 | 0.2334 | **40.60** | 139.6 | **0.2908** |
+| 160 W | 39.35 | 160.1 | 0.2458 | **48.60** | 160.1 | **0.3036** |
+| 175 W | 43.95 | 175.2 | 0.2509 | **52.00** | 174.6 | **0.2978** |
 | 180 W | 46.05 | 180.0 | 0.2558 | **52.65** | 179.6 | **0.2932** |
 | 190 W | 48.75 | 189.9 | 0.2567 | **53.25** | 189.6 | **0.2809** |
 | 200 W | 52.15 | 199.8 | **0.2611** | **54.25** | 199.6 | **0.2718** |
@@ -379,9 +383,9 @@ its ramp and reads ~20 W low. Two repeats per cell; the spread within a cell is 
 **The result is three-part, and only the middle part is the one this document used to
 claim.** Crossings are interpolated from the table:
 
-- **Below ~212 W, lolMiner wins on both, and the margin grows fast.** At 180 W it does
-  52.65 sol/s to MXBM's 46.05 (**+14.3 %**) at 0.2932 sol/s/W to MXBM's 0.2558
-  (**+14.6 %**).
+- **Below ~212 W, lolMiner wins on both, and the margin grows as the cap tightens.**
+  At 180 W it does 52.65 sol/s to MXBM's 46.05 (**+14.3 %**); at 160 W, 48.60 to 39.35
+  (**+23.5 %**); at 120 W, 33.50 to 26.30 (**+27.4 %**).
 - **Between ~212 W and ~257 W, MXBM wins on both** — by 1.9 % on each at 220 W, widening
   to 7.3 % speed and 5.7 % efficiency at 240 W. The previously published band of
   217–252 W was right, and slightly conservative.
@@ -395,12 +399,17 @@ Two facts that reframe the whole comparison:
 same range gives up 22 %. And above ~236 W the cap stops doing anything: the 240, 255 and
 285 W rows all draw 235.7–235.8 W, which is why it never reaches the board limit.
 
-**Its best efficiency beats our best efficiency, by a lot.** 0.2932 sol/s/W at 180 W
-against MXBM's peak of 0.2611 at 200 W — **12.3 %**, and lolMiner's curve is still
-climbing at the left edge of what was measured, so its true peak is below 180 W and
-unmeasured. Put the other way: **lolMiner at 180 W delivers 52.65 sol/s for 179.6 W,
-where MXBM needs 199.8 W to deliver 52.15.** That is the same argument this document
-made in the other direction at 220 W, and it is now theirs.
+**Both miners have an interior efficiency optimum; lolMiner's is higher and further
+left.** MXBM peaks at **0.2611 sol/s/W at 200 W**, lolMiner at **0.3036 at 160 W** — a
+**16.3 %** gap between one miner at its best and the other at its best. Both fall away
+below their peak, for the same reason: past a certain point the core clock has dropped
+far enough that the parts of the board which do not scale with it are being paid for out
+of less work.
+
+Put the other way, and this is the sharpest form of it: **lolMiner at 160 W delivers
+48.60 sol/s for 160.1 W, where MXBM needs 199.8 W to deliver 52.15.** Nearly the same
+throughput for 40 W less. That is the argument this document used to make in the other
+direction at 220 W, and at the efficient end of the curve it now belongs to them.
 
 What MXBM keeps is the top end: **59.15 sol/s against a ceiling of ~54.4**, a **8.8 %**
 higher maximum throughput that lolMiner cannot reach at any setting.

@@ -293,23 +293,47 @@ std::string HttpSummary::build_body() const {
         {"Job_Id", s.last_job_id},
     };
 
-    json worker;
-    worker["Index"] = 0;
-    worker["Name"] = s.device_label;
-    // THIS DEVICE's 60 s rate: the per-device breakdown, not the miner total
-    // Session.Speed_60s carries. They coincide only while there is one device.
-    worker["Performance"] = s.sol60;
-    worker["Iterations_s"] = s.iter60;
-    // null -- not 0, not omitted -- for a field the platform cannot supply: 0
-    // would misreport "fan unknown" as "fan stopped", and an absent key would
-    // be indistinguishable from an older MXBM.
-    worker["Power_W"]        = s.has_power     ? json(s.power_w)                : json(nullptr);
-    worker["Core_Clock_MHz"] = s.has_sm_clock  ? json(s.sm_clock_mhz)           : json(nullptr);
-    worker["Mem_Clock_MHz"]  = s.has_mem_clock ? json(s.mem_clock_mhz)          : json(nullptr);
-    worker["Temp_C"]         = s.has_temp      ? json(s.temp_c)                 : json(nullptr);
-    worker["Fan_Pct"]        = s.has_fan       ? json(s.fan_pct)                : json(nullptr);
+    // One entry per mining device. A snapshot built by hand carries no device
+    // vector, so fall back to the legacy single-device fields rather than
+    // serving an empty Workers array -- see the same fallback in ui/format.cpp.
     j["Workers"] = json::array();
-    j["Workers"].push_back(worker);
+    if (s.devices.empty()) {
+        json worker;
+        worker["Index"] = 0;
+        worker["Name"] = s.device_label;
+        worker["Performance"] = s.sol60;
+        worker["Iterations_s"] = s.iter60;
+        // null -- not 0, not omitted -- for a field the platform cannot supply:
+        // 0 would misreport "fan unknown" as "fan stopped", and an absent key
+        // would be indistinguishable from an older MXBM.
+        worker["Power_W"]        = s.has_power     ? json(s.power_w)      : json(nullptr);
+        worker["Core_Clock_MHz"] = s.has_sm_clock  ? json(s.sm_clock_mhz) : json(nullptr);
+        worker["Mem_Clock_MHz"]  = s.has_mem_clock ? json(s.mem_clock_mhz): json(nullptr);
+        worker["Temp_C"]         = s.has_temp      ? json(s.temp_c)       : json(nullptr);
+        worker["Fan_Pct"]        = s.has_fan       ? json(s.fan_pct)      : json(nullptr);
+        j["Workers"].push_back(worker);
+    } else {
+        for (size_t i = 0; i < s.devices.size(); ++i) {
+            const miner::Stats::Device& d = s.devices[i];
+            json worker;
+            worker["Index"] = (unsigned)i;
+            worker["Name"] = d.label;
+            // THIS DEVICE's 60 s rate: the per-device breakdown, not the miner
+            // total Session.Speed_60s carries. They coincide only with one card.
+            worker["Performance"] = d.sol60;
+            worker["Iterations_s"] = d.iter60;
+            worker["Accepted"] = d.accepted;
+            worker["Stale"]    = d.stale;
+            worker["Rejected"] = d.rejected;
+            worker["Best_Share"] = d.best_share_units;
+            worker["Power_W"]        = d.has_power     ? json(d.power_w)      : json(nullptr);
+            worker["Core_Clock_MHz"] = d.has_sm_clock  ? json(d.sm_clock_mhz) : json(nullptr);
+            worker["Mem_Clock_MHz"]  = d.has_mem_clock ? json(d.mem_clock_mhz): json(nullptr);
+            worker["Temp_C"]         = d.has_temp      ? json(d.temp_c)       : json(nullptr);
+            worker["Fan_Pct"]        = d.has_fan       ? json(d.fan_pct)      : json(nullptr);
+            j["Workers"].push_back(worker);
+        }
+    }
 
     j["Stratum"] = {
         {"Current_Pool", s.pool},

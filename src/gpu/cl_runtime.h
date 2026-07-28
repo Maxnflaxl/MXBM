@@ -56,12 +56,13 @@ using Mem     = Handle<cl_mem,     clReleaseMemObject>;
 
 class Runtime {
 public:
-    Runtime();
+    explicit Runtime(unsigned index = 0);
     ~Runtime();
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
 
-    static bool any_device_available();
+    // `index` selects among the devices every platform reports, flattened.
+    static bool any_device_available(unsigned index = 0);
 
     const DeviceInfo& device() const { return info_; }
 

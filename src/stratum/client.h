@@ -42,6 +42,32 @@ public:
     // main.cpp.
     std::function<void()> on_disconnect;
 
+    // One entry of the failover list.
+    struct Endpoint {
+        std::string host;
+        uint16_t    port = 0;
+        bool        tls = true;
+        std::string api_key;   // the wallet/worker this pool authenticates with
+    };
+
+    // The pools to fall back to, in order, when the current one will not come
+    // back. Empty (the default) means "never move" -- the single-pool behaviour,
+    // unchanged. Call before run(); the list is read only from run()'s thread.
+    //
+    // Rotation is deliberately slow: kRedialsBeforeFailover consecutive failed
+    // redials, not one. A pool that drops a connection is usually back within
+    // seconds, and moving on the first failure would hand the rig to the backup
+    // over a blip -- then keep it there, since nothing pulls it home.
+    void set_failover_pools(std::vector<Endpoint> pools);
+
+    // How many consecutive failed redials before moving to the next pool.
+    static constexpr unsigned kRedialsBeforeFailover = 3;
+
+    // Fired when run() gives up on one pool and dials the next. Wired to a
+    // console line in main.cpp: a rig that quietly changed pools would make
+    // every later share land somewhere the operator was not looking.
+    std::function<void(const std::string& from, const std::string& to)> on_failover;
+
     // Opens the connection; stores host/port/tls so run() can reconnect with
     // the same parameters later. Transport verify is always false in Phase A
     // (pool mode; plan-mandated default — see transport.h).
@@ -73,10 +99,25 @@ public:
 
     std::string current_nonceprefix() const;
 
+    // "host:port" of the pool currently selected. Public for the same reason
+    // handle_line() is: it lets a test drive and observe the state machine
+    // without a real socket.
+    std::string current_pool() const;
+
+    // Advances to the next failover entry, wrapping. run() calls this after
+    // kRedialsBeforeFailover consecutive failed redials; public so the rotation
+    // can be tested without waiting on three real dial timeouts. No-op with
+    // fewer than two pools.
+    void advance_pool();
+
 private:
     // Reconnects with the stored host_/port_/tls_ and, if that succeeds,
     // resends Login with the stored api_key_. False if either step fails.
     bool reconnect_and_login();
+
+    std::vector<Endpoint> failover_;
+    size_t   failover_index_ = 0;
+    unsigned consecutive_redial_failures_ = 0;
 
     Transport transport_;
     std::mutex write_mutex_;   // serializes send_line() from login()/submit()/reconnect

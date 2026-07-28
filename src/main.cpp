@@ -7,6 +7,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <memory>
 #include <string>
@@ -24,6 +25,7 @@
 #include "miner/engine.h"
 #include "miner/devfee.h"
 #include "miner/benchmark.h"
+#include "miner/watchdog.h"
 #include "version.h"
 #include "gpu/nvml.h"
 #include "gpu/overclock.h"
@@ -141,12 +143,6 @@ int main(int argc, char** argv) {
 
     // Flags that are accepted but not yet implemented get a console
     // acknowledgment rather than silently doing nothing.
-    if (opts.pools.size() > 1) {
-        ui::console::info("Failover pools configured - failover across pools is not implemented yet; using pool 1");
-    }
-    if (opts.watchdog_requested) {
-        ui::console::info("--watchdog noted - watchdog monitoring is not implemented yet");
-    }
 
     // A config file's POOLS entries carry their own USER/PASS/TLS, so CLI
     // --user/--pass/--tls given without any --pool bind to nothing. Say so.
@@ -283,10 +279,15 @@ int main(int argc, char** argv) {
     }
 #endif
 #ifdef MXBM_HAVE_OPENCL
+    // The OpenCL index is the user's selection used directly: OpenCL enumerates
+    // per platform and exposes no PCI address to sort on, so unlike the CUDA
+    // path there is no translation to make. On a single-vendor rig the two
+    // orderings agree; --list-devices is what to check when they might not.
+    const unsigned cl_index = device_index >= 0 ? (unsigned)device_index : 0u;
     if (!solver && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
-        && gpu::GpuSolver::available()) {
+        && gpu::GpuSolver::available(cl_index)) {
         try {
-            auto gs = std::make_unique<gpu::GpuSolver>();
+            auto gs = std::make_unique<gpu::GpuSolver>(cl_index);
             worker_label = gs->device().name;
             dev_name = gs->device().name;
             dev_mem = gs->device().global_mem;
@@ -324,13 +325,20 @@ int main(int argc, char** argv) {
     }
 
     if (have_nvml) {
-        stats.set_telemetry_source([](miner::Stats::Snapshot& s) {
-            const gpu::Telemetry t = gpu::nvml_sample();
-            s.has_power = t.have_power;         s.power_w       = t.power_w;
-            s.has_sm_clock = t.have_sm;         s.sm_clock_mhz  = t.sm_clock_mhz;
-            s.has_mem_clock = t.have_mem;       s.mem_clock_mhz = t.mem_clock_mhz;
-            s.has_temp = t.have_temp;           s.temp_c        = t.temp_c;
-            s.has_fan = t.have_fan;             s.fan_pct       = t.fan_pct;
+        // Each row samples its OWN card. The index is the position in the
+        // PCI-sorted list --devices selected from, and NVML enumerates by bus
+        // id too, so the two agree without a translation table.
+        std::vector<unsigned> nvml_index;
+        for (unsigned d : selected_devices) nvml_index.push_back(d);
+        if (nvml_index.empty()) nvml_index.push_back(0);
+        stats.set_telemetry_source([nvml_index](unsigned row, miner::Stats::Device& d) {
+            const unsigned idx = row < nvml_index.size() ? nvml_index[row] : row;
+            const gpu::Telemetry t = gpu::nvml_sample(idx);
+            d.has_power = t.have_power;         d.power_w       = t.power_w;
+            d.has_sm_clock = t.have_sm;         d.sm_clock_mhz  = t.sm_clock_mhz;
+            d.has_mem_clock = t.have_mem;       d.mem_clock_mhz = t.mem_clock_mhz;
+            d.has_temp = t.have_temp;           d.temp_c        = t.temp_c;
+            d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
         });
     }
     // Board power limit. After device enumeration so the console has already
@@ -428,6 +436,22 @@ int main(int argc, char** argv) {
     if (!benchmark_mode) {
         ui::console::connecting_to_pool();
         auto connect_t0 = std::chrono::steady_clock::now();
+        // Failover list, in the order the pools were given. Each carries its own
+        // credentials: they are different accounts, and re-logging into pool B
+        // with pool A's wallet would mine for the wrong address.
+        if (opts.pools.size() > 1) {
+            std::vector<stratum::Client::Endpoint> eps;
+            for (const auto& p : opts.pools)
+                eps.push_back(stratum::Client::Endpoint{p.host, p.port, p.tls, p.user});
+            client.set_failover_pools(eps);
+            client.on_failover = [](const std::string& from, const std::string& to) {
+                ui::console::error("Pool " + from + " is not answering - failing over to " + to);
+            };
+            ui::console::info("Failover pools: " + std::to_string(opts.pools.size())
+                              + " configured; moving on after "
+                              + std::to_string(stratum::Client::kRedialsBeforeFailover)
+                              + " consecutive failed redials");
+        }
         bool up = client.connect(opts.pools[0].host, opts.pools[0].port, opts.pools[0].tls);
         auto connect_t1 = std::chrono::steady_clock::now();
         stats.record_connect(
@@ -556,8 +580,21 @@ int main(int argc, char** argv) {
             ui::console::info("Mining on " + std::to_string(lanes) + " devices: " + names);
         }
 
-        auto& engine = engines[0];
-        engine->submit_fn = [&client, &stats, &devfee, worker_label](
+        // Labels in the same order as the engines, so row N of the statistics
+        // table is engine N is device N.
+        {
+            std::vector<std::string> labels{worker_label};
+            for (const auto& l : extra_labels) labels.push_back(l);
+            stats.set_device_labels(labels);
+        }
+
+        // Built per engine rather than shared, so each carries its own device
+        // index into Stats. Sharing one closure was what made every card report
+        // as device 0.
+        for (size_t k = 0; k < engines.size(); ++k) {
+            const unsigned dev = (unsigned)k;
+            const std::string label = (k == 0) ? worker_label : extra_labels[k - 1];
+            engines[k]->submit_fn = [&client, &stats, &devfee, label, dev](
                 const stratum::Solution& s, miner::Origin origin) {
             // Achieved difficulty for the "Found a share" line and the
             // best-share stat, from the same SHA-256 predicate Engine's
@@ -573,12 +610,12 @@ int main(int argc, char** argv) {
                 if (origin == miner::Origin::Main) {
                     // The current target is the bar this share had to clear:
                     // process_job() never submits a superseded job.
-                    ui::console::share_found(worker_label.c_str(), units,
+                    ui::console::share_found(label.c_str(), units,
                                              stats.current_job_units(origin));
                 }
-                stats.record_share_found(units, origin);
+                stats.record_share_found(units, origin, dev);
             }
-            stats.record_submit(s.id, origin);
+            stats.record_submit(s.id, origin, dev);
             // Route by the Origin the JOB carried, never by which pool is
             // active now: a fee round can end mid-solve, and the other pool
             // would reject the solution as an unknown job id (miner/origin.h).
@@ -587,26 +624,21 @@ int main(int argc, char** argv) {
             } else {
                 client.submit(s);
             }
-        };
-        engine->on_attempt = [&stats](uint32_t candidates) { stats.record_attempt(candidates); };
-        engine->on_solver_error = [](const std::string& what, uint32_t n) {
-            ui::console::error("Solver error (" + std::to_string(n) + " in a row): " + what);
+            };
+            engines[k]->on_attempt = [&stats, dev](uint32_t candidates) {
+                stats.record_attempt(candidates, dev);
+            };
+            engines[k]->on_solver_error = [label](const std::string& what, uint32_t n) {
+            ui::console::error(label + " solver error (" + std::to_string(n)
+                               + " in a row): " + what);
             // The hint only on the first failure: once it is retrying every
             // 30s, repeating the same advice would bury the errors themselves.
             if (n == 1) {
                 ui::console::info("Retrying with backoff - mining continues. If another process "
                                   "is using the GPU, stop it: a full BeamHash III search needs "
                                   "~7.5 GiB free.");
-            }
-        };
-        // Every engine reports through the same hooks, so the stats are the
-        // rig's total rather than one card's. Stats is mutex-guarded
-        // throughout (miner/stats.h), which is what makes that safe with a
-        // worker thread per device.
-        for (size_t k = 1; k < engines.size(); ++k) {
-            engines[k]->submit_fn      = engines[0]->submit_fn;
-            engines[k]->on_attempt     = engines[0]->on_attempt;
-            engines[k]->on_solver_error = engines[0]->on_solver_error;
+                }
+            };
         }
     }
 
@@ -702,6 +734,57 @@ int main(int argc, char** argv) {
     // Each engine spawns its own worker thread; they share one Stats and one
     // Client, both of which are mutex-guarded.
     for (auto& e : engines) e->start();
+
+    // Watchdog. Started after the engines, so a card that takes half a minute
+    // to allocate is not accused of hanging before it has begun -- and it takes
+    // its first sighting from wherever the counters are then.
+    miner::Watchdog watchdog;
+    if (opts.watchdog_requested && !engines.empty()) {
+        miner::WatchdogAction action = miner::WatchdogAction::Exit;
+        if (!miner::parse_watchdog_action(opts.watchdog_action, action)) {
+            ui::console::error("Unknown --watchdog action \"" + opts.watchdog_action
+                               + "\" - expected off, exit or script");
+            return 1;
+        }
+        if (action == miner::WatchdogAction::Script && opts.watchdog_script.empty()) {
+            ui::console::error("--watchdog script needs --watchdogscript PATH");
+            return 1;
+        }
+        watchdog.counts = [&stats] {
+            std::vector<uint64_t> c;
+            for (const auto& d : stats.snapshot().devices) c.push_back(d.attempts);
+            return c;
+        };
+        // "Mining is expected" means a job has arrived. Before that, and while
+        // the pool is down, every device is legitimately idle.
+        watchdog.mining = [&stats] { return !stats.snapshot().last_job_id.empty(); };
+        const std::string script = opts.watchdog_script;
+        watchdog.on_hung = [action, script](unsigned dev) {
+            const std::string who = "GPU " + std::to_string(dev);
+            ui::console::error(who + " has stopped completing solves - it looks hung.");
+            switch (action) {
+            case miner::WatchdogAction::Exit:
+                ui::console::error("Watchdog: exiting with code 42 so a supervisor can "
+                                   "restart the miner. A wedged GPU context cannot be "
+                                   "rebuilt from inside this process.");
+                std::exit(42);
+            case miner::WatchdogAction::Script:
+                ui::console::info("Watchdog: running " + script);
+                // The device index is the argument, so one script can serve a
+                // rig and know which card it is being called about.
+                if (std::system((script + " " + std::to_string(dev)).c_str()) != 0)
+                    ui::console::error("Watchdog script exited non-zero");
+                break;
+            case miner::WatchdogAction::Off:
+                ui::console::info("Watchdog: action is 'off' - mining continues on the "
+                                  "remaining devices.");
+                break;
+            }
+        };
+        watchdog.start();
+        ui::console::info("Watchdog: on, action '" + std::string(miner::watchdog_action_name(action))
+                          + "'");
+    }
     // After the engine so the fee's first job never arrives before there is a
     // worker to mine it, and after the API/ticker so a fee round is reportable
     // the moment it can happen.

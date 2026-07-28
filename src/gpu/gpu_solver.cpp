@@ -7,9 +7,9 @@
 
 namespace mxbm { namespace gpu {
 
-GpuSolver::GpuSolver() {
+GpuSolver::GpuSolver(unsigned index) : rt_(index) {
     // rt_ is already constructed (device selected, context/queue created --
-    // Runtime's own default constructor, run implicitly before this body)
+    // Runtime's constructor, run before this body)
     // by the time we get here; throws ClError if no device is present, so
     // callers must guard with available() first, exactly as every device
     // test in this suite guards with Runtime::any_device_available().
@@ -49,7 +49,7 @@ GpuSolver::GpuSolver() {
     pb_ = alloc_pipeline(rt_, budget_);
 }
 
-bool GpuSolver::available() { return Runtime::any_device_available(); }
+bool GpuSolver::available(unsigned index) { return Runtime::any_device_available(index); }
 
 std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
     // Opt-in per-solve profiling: run with MXBM_PROFILE=1 to print a one-line

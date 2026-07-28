@@ -52,7 +52,8 @@ immediately; only a *missing* one defers to the config.
 | `--no-oc-reset [0\|1]` | Leave applied settings on the card at exit instead of restoring them. | off |
 | `--devices LIST` | Which GPU to mine on: `ALL` or a comma-separated list of indices from `--list-devices`. | ALL |
 | `--list-devices` | Print the detected GPUs with their indices, and exit. | |
-| `--watchdog` | Enable the watchdog. Accepted; not implemented yet. | off |
+| `--watchdog [ACTION]` | Watch for a GPU that stops working. `exit` (default), `script`, or `off`. | off |
+| `--watchdogscript PATH` | Script to run when the action is `script`. | |
 | `--version` | Print the version and exit. | |
 | `--help` | Print usage and exit. | |
 
@@ -85,8 +86,14 @@ mxbm --algo BEAM-III \
      --pool backup.pool:3334 --user addr.rig1
 ```
 
-> Failover *switching logic* is a planned feature; the current release connects
-> to the first pool and reconnects to it on drop.
+MXBM stays on the first pool while it answers. After **three consecutive failed
+redials** it moves to the next in the list, wrapping at the end, and says so on the
+console. Rotation is deliberately slow: a pool that drops a connection is usually back
+within seconds, and moving on the first failure would hand the rig to the backup over a
+blip — then leave it there, because nothing pulls it home.
+
+Each pool keeps its own credentials. They are different accounts, and re-logging into
+pool B with pool A's wallet would mine for the wrong address.
 
 ## Configuration files
 
@@ -158,6 +165,7 @@ never set a value the command line would reject.
 | `SHORTSTATS`, `LONGSTATS` | same | seconds, ≥ 1 |
 | `DIGITS` | `--digits` | 0–6 |
 | `LOG`, `TIMEPRINT`, `WATCHDOG`, `NOCOLOR` | same | `1`/`0`, `true`/`false`, `on`/`off` |
+| `WATCHDOGSCRIPT` | `--watchdogscript` | path |
 | `LOGFILE` | `--logfile` | path; implies `LOG` unless `LOG` says otherwise |
 | `SOLVER` | `--solver` | `cuda`, `opencl`, `gpu`, `ref`, `auto` |
 | `DEVICES` | `--devices` | `ALL` or a list of indices (JSON also accepts an array) |
@@ -464,6 +472,36 @@ not per card — per-device rows are still to come.
 > concurrent engines, disjoint nonces, verified against a deliberately broken lane
 > assignment — but the development box has one card. If you run it on several, a report
 > either way is the single most useful thing you can send us.
+
+### Watchdog
+
+A crashed or hung card is the one failure a rig cannot notice by itself: the process is
+alive, the pool connection is up, the console keeps printing, and one card's share of the
+hashrate has quietly gone missing. On a single GPU the speed drops to zero and someone
+looks; on eight it is a 12 % dip that reads like variance for a week.
+
+```sh
+mxbm ... --watchdog              # exit(42) when a card hangs; the default action
+mxbm ... --watchdog off          # report it, keep mining on the others
+mxbm ... --watchdog script --watchdogscript /usr/local/bin/reset-gpu.sh
+```
+
+What it watches is each device's **count of completed solves**, not its hashrate. A rate
+cannot tell "hung" from "the 60-second window has not filled yet", and a card that finds
+no candidates for a minute is unlucky rather than crashed; a counter that stops advancing
+is unambiguous. A device is called hung after **90 seconds** without completing one.
+
+**Idle is not hung.** The clock only runs while a job is present, so a rig waiting on its
+first job — or one whose pool has dropped — is never mistaken for a crashed one. That
+matters most under the default action: a watchdog that cannot tell those apart restarts
+healthy rigs exactly when a restart helps least. A card that recovers on its own is
+reported again if it stalls later, rather than being written off after the first time.
+
+`exit` is the default because it is the only action that actually recovers an NVIDIA
+card: a wedged CUDA context generally cannot be torn down by the process that wedged it,
+so the fix is to exit with a code a supervisor (systemd, a rig manager, a shell loop)
+can act on. **42** is the conventional one, and what lolMiner uses. The script action
+passes the device index as its first argument, so one script can serve a whole rig.
 
 ### Clocks and fans
 

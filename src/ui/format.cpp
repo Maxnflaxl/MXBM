@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace mxbm { namespace ui {
 
@@ -19,12 +20,11 @@ std::string format_uptime(std::chrono::seconds uptime) {
     return buf;
 }
 
-// "A/S/R" packed accepted/stale/rejected triple, shared by both table rows.
-std::string format_shares(const miner::Stats::Snapshot& s) {
+// "A/S/R" packed accepted/stale/rejected triple, shared by every table row.
+std::string format_shares(uint64_t a, uint64_t st, uint64_t r) {
     char buf[64];
     std::snprintf(buf, sizeof buf, "%llu/%llu/%llu",
-        (unsigned long long)s.accepted, (unsigned long long)s.stale,
-        (unsigned long long)s.rejected);
+        (unsigned long long)a, (unsigned long long)st, (unsigned long long)r);
     return buf;
 }
 
@@ -109,7 +109,7 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     // comes back, then the measured submit-to-result latency.
     long long latency_ms = (s.last_latency_ms >= 0) ? s.last_latency_ms : s.connect_ms;
 
-    std::string shares = format_shares(s);
+    std::string shares = format_shares(s.accepted, s.stale, s.rejected);
     std::string best = format_units(s.best_share_units);
 
     char line2[128];
@@ -120,30 +120,89 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     std::snprintf(line5, sizeof line5, "Connected to: %s (%lldms latency)",
         s.pool.c_str(), latency_ms);
 
-    // Device row: %-17s deliberately abuts the first %*.*f with NO literal
-    // separator space (every OTHER field is single-space separated), as the
-    // header alignment requires. Telemetry columns show "--" per missing field.
-    char eff[16], pw[16], cclk[16], mclk[16], tmp[16], fan[16];
+    // One row per device: %-17s deliberately abuts the first %*.*f with NO
+    // literal separator space (every OTHER field is single-space separated), as
+    // the header alignment requires. Telemetry columns show "--" per missing
+    // field.
+    //
+    // The pool-rate column is a property of the CONNECTION, not of a card --
+    // the pool credits shares without saying which GPU found them -- so it is
+    // shown only on the Total row and dashed out per device. Attributing a
+    // share of it per card would be a number nobody measured.
     auto dashf = [](char* b, size_t n, const char* fmt, bool have, double v) {
         if (have) std::snprintf(b, n, fmt, v); else std::snprintf(b, n, "--");
     };
-    dashf(eff,  sizeof eff,  "%.3f", s.has_power && s.power_w > 0.0, s.sol60 / (s.power_w > 0.0 ? s.power_w : 1.0));
-    dashf(pw,   sizeof pw,   "%.0f", s.has_power,     s.power_w);
-    dashf(cclk, sizeof cclk, "%.0f", s.has_sm_clock,  (double)s.sm_clock_mhz);
-    dashf(mclk, sizeof mclk, "%.0f", s.has_mem_clock, (double)s.mem_clock_mhz);
-    dashf(tmp,  sizeof tmp,  "%.0f", s.has_temp,      (double)s.temp_c);
-    dashf(fan,  sizeof fan,  "%.0f", s.has_fan,       (double)s.fan_pct);
 
-    char device_row[256];
-    std::snprintf(device_row, sizeof device_row,
-        "%-17s%*.*f %*.*f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
-        short_device_name(s.device_label).c_str(),
-        speed_w, digits, s.sol60, speed_w, digits, s.pool_sol_session, s.iter60,
-        shares.c_str(), best.c_str(),
-        eff, pw, cclk, mclk, tmp, fan);
+    // A Snapshot built by hand -- a test, or any consumer predating the device
+    // vector -- carries the legacy single-device fields and no rows. Synthesise
+    // the one row they describe rather than printing a table with no devices in
+    // it; Stats::snapshot() always fills the vector, so this is the fallback
+    // path only.
+    std::vector<miner::Stats::Device> rows = s.devices;
+    if (rows.empty()) {
+        miner::Stats::Device d;
+        d.label = s.device_label;
+        d.sol15 = s.sol15;  d.sol60 = s.sol60;  d.iter60 = s.iter60;
+        d.accepted = s.accepted; d.stale = s.stale; d.rejected = s.rejected;
+        d.best_share_units = s.best_share_units;
+        d.has_power = s.has_power;         d.power_w = s.power_w;
+        d.has_sm_clock = s.has_sm_clock;   d.sm_clock_mhz = s.sm_clock_mhz;
+        d.has_mem_clock = s.has_mem_clock; d.mem_clock_mhz = s.mem_clock_mhz;
+        d.has_temp = s.has_temp;           d.temp_c = s.temp_c;
+        d.has_fan = s.has_fan;             d.fan_pct = s.fan_pct;
+        rows.push_back(std::move(d));
+    }
+
+    std::string device_rows;
+    const bool multi = rows.size() > 1;
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const miner::Stats::Device& d = rows[i];
+        char eff[16], pw[16], cclk[16], mclk[16], tmp[16], fan[16];
+        dashf(eff,  sizeof eff,  "%.3f", d.has_power && d.power_w > 0.0,
+              d.sol60 / (d.power_w > 0.0 ? d.power_w : 1.0));
+        dashf(pw,   sizeof pw,   "%.0f", d.has_power,     d.power_w);
+        dashf(cclk, sizeof cclk, "%.0f", d.has_sm_clock,  (double)d.sm_clock_mhz);
+        dashf(mclk, sizeof mclk, "%.0f", d.has_mem_clock, (double)d.mem_clock_mhz);
+        dashf(tmp,  sizeof tmp,  "%.0f", d.has_temp,      (double)d.temp_c);
+        dashf(fan,  sizeof fan,  "%.0f", d.has_fan,       (double)d.fan_pct);
+
+        // "GPU 0 " prefixes the name once there is more than one card, so the
+        // index in --devices and --pl is readable straight off the table.
+        std::string name = short_device_name(d.label);
+        if (multi) {
+            char pfx[24];
+            std::snprintf(pfx, sizeof pfx, "GPU %zu ", i);
+            name = std::string(pfx) + name;
+            if (name.size() > (size_t)kNameW) name.resize((size_t)kNameW);
+        }
+        const std::string dshares = format_shares(d.accepted, d.stale, d.rejected);
+        const std::string dbest = format_units(d.best_share_units);
+
+        char row[256];
+        std::snprintf(row, sizeof row,
+            "%-17s%*.*f %*s %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
+            name.c_str(),
+            speed_w, digits, d.sol60, speed_w, multi ? "--" : "",
+            d.iter60, dshares.c_str(), dbest.c_str(),
+            eff, pw, cclk, mclk, tmp, fan);
+        // A single-device rig keeps the pool column on its one row: there is
+        // no Total line under it to carry the figure.
+        if (!multi) {
+            std::snprintf(row, sizeof row,
+                "%-17s%*.*f %*.*f %6.1f %8s %6s %8s %6s %5s %6s %5s %4s",
+                name.c_str(),
+                speed_w, digits, d.sol60, speed_w, digits, s.pool_sol_session,
+                d.iter60, dshares.c_str(), dbest.c_str(),
+                eff, pw, cclk, mclk, tmp, fan);
+        }
+        device_rows += row;
+        device_rows += '\n';
+    }
 
     // Total row: same missing separator after %-18s. the reference miner's own Total omits
-    // the clock/temp/fan columns entirely rather than blanking them.
+    // the clock/temp/fan columns entirely rather than blanking them -- summing a
+    // temperature is meaningless and averaging one reports a figure no card
+    // measured. Speeds, iterations and share counts DO add, so those are summed.
     char total_row[256];
     std::snprintf(total_row, sizeof total_row,
         "%-18s%*.*f %*.*f %6.1f %8s %6s %8s %6s",
@@ -186,7 +245,7 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
     out += '\n';
     out += widen_header(kHeader1, digits);  out += '\n';
     out += widen_header(kHeader2, digits);  out += '\n';
-    out += device_row; out += '\n';
+    out += device_rows;               // already newline-terminated per row
     out += kRule27;   out += '\n';
     out += total_row; out += '\n';
     if (devfee_row[0]) { out += devfee_row; out += '\n'; }

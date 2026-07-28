@@ -176,7 +176,9 @@ def render(rows):
     c.text(L, C_TOP - 10, "watts actually drawn", 11, cl.INK_2)
     c.line(xs(max(lo, wrange[0])), ys_c(max(lo, wrange[0])),
            xs(min(hi, wrange[1])), ys_c(min(hi, wrange[1])), cl.GRID, 1)
-    c.text(xs(caps[0]) + 6, ys_c(caps[0]) - 8, "drawing exactly the cap", 9, cl.MUTED)
+    # Sits on the y=x reference where nothing else does -- above the traces at
+    # the right-hand end, since both miners fall BELOW the line there.
+    c.text(xs(caps[-1]) - 6, ys_c(caps[-1]) - 8, "drawing exactly the cap", 9, cl.MUTED, "end")
     for who, colour in (("lol", LOL), ("mx", MX)):
         pts = [(r["cap"], r[who][0]) for r in rows]
         pc.c.polyline([(xs(x), ys_c(y)) for x, y in pts], colour)
@@ -186,9 +188,11 @@ def render(rows):
     sat = [r for r in rows if abs(r["lol"][0] - max(r2["lol"][0] for r2 in rows)) < SAT_TOL]
     if len(sat) > 1:
         top = max(r["lol"][0] for r in rows)
-        c.text(xs(sat[0]["cap"]) + 10, ys_c(top) + 20,
-               "lolMiner stops responding to the cap here -- %s W all draw ~%.0f W"
-               % ("/".join("%g" % s["cap"] for s in sat), top), 10, cl.INK_2)
+        # Right-anchored at the plot edge: the note is about the RIGHT-hand end
+        # of the trace, and left-anchoring it there ran the text off the canvas.
+        c.text(W - R - 4, ys_c(top) + 20,
+               "lolMiner stops responding to the cap here: %s W all draw ~%.0f W"
+               % ("/".join("%g" % s["cap"] for s in sat), top), 10, cl.INK_2, "end")
 
     # -- annotations on efficiency ----------------------------------------
     best = max(rows, key=lambda r: r["lol"][2])

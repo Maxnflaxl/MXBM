@@ -7,22 +7,37 @@
 namespace mxbm { namespace gpu {
 namespace {
 
-// First platform that has at least one device; prefer GPU, else any type.
-bool pick_device(cl_platform_id* plat_out, cl_device_id* dev_out) {
+// The `index`-th device across every platform; prefer GPUs, else any type.
+//
+// Indexing runs over the FLATTENED list -- platform 0's devices, then platform
+// 1's -- because that is the only ordering available before a device handle
+// exists to ask about. It matches CUDA's PCI-sorted index only on a
+// single-vendor rig; on a mixed one the two backends can disagree, which is why
+// --list-devices prints what each backend actually found rather than promising
+// one numbering for both.
+bool pick_device(cl_platform_id* plat_out, cl_device_id* dev_out, unsigned index) {
     *dev_out = nullptr;
     cl_uint nplat = 0;
     if (clGetPlatformIDs(0, nullptr, &nplat) != CL_SUCCESS || nplat == 0) return false;
     std::vector<cl_platform_id> plats(nplat);
     if (clGetPlatformIDs(nplat, plats.data(), nullptr) != CL_SUCCESS) return false;
     for (cl_device_type type : {(cl_device_type)CL_DEVICE_TYPE_GPU, (cl_device_type)CL_DEVICE_TYPE_ALL}) {
+        unsigned seen = 0;
         for (cl_platform_id p : plats) {
             cl_uint ndev = 0;
-            if (clGetDeviceIDs(p, type, 0, nullptr, &ndev) == CL_SUCCESS && ndev > 0) {
-                if (clGetDeviceIDs(p, type, 1, dev_out, nullptr) != CL_SUCCESS) continue;
+            if (clGetDeviceIDs(p, type, 0, nullptr, &ndev) != CL_SUCCESS || ndev == 0) continue;
+            std::vector<cl_device_id> devs(ndev);
+            if (clGetDeviceIDs(p, type, ndev, devs.data(), nullptr) != CL_SUCCESS) continue;
+            if (index < seen + ndev) {
+                *dev_out = devs[index - seen];
                 *plat_out = p;
                 return true;
             }
+            seen += ndev;
         }
+        // A GPU pass that found devices but not ENOUGH of them falls through to
+        // the ALL pass, which is the same widening the original did -- an index
+        // past the end of both is simply not available.
     }
     return false;
 }
@@ -42,13 +57,15 @@ void check_cl(cl_int err, const char* what) {
 
 } // namespace
 
-bool Runtime::any_device_available() {
+bool Runtime::any_device_available(unsigned index) {
     cl_platform_id p; cl_device_id d;
-    return pick_device(&p, &d);
+    return pick_device(&p, &d, index);
 }
 
-Runtime::Runtime() {
-    if (!pick_device(&plat_, &dev_)) throw ClError(CL_DEVICE_NOT_FOUND, "no OpenCL device");
+Runtime::Runtime(unsigned index) {
+    if (!pick_device(&plat_, &dev_, index))
+        throw ClError(CL_DEVICE_NOT_FOUND, "no OpenCL device at index "
+                      + std::to_string(index));
     info_.name        = str_info(dev_, CL_DEVICE_NAME);
     info_.version     = str_info(dev_, CL_DEVICE_VERSION);
     info_.clc_version = str_info(dev_, CL_DEVICE_OPENCL_C_VERSION);

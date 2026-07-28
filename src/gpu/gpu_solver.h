@@ -16,8 +16,9 @@ namespace mxbm { namespace gpu {
 // never reallocated per solve.
 class GpuSolver : public miner::Solver {
 public:
-    GpuSolver();                       // selects device, budget, alloc_pipeline
-    static bool available();           // Runtime::any_device_available()
+    // `index` selects among the OpenCL devices, flattened across platforms.
+    explicit GpuSolver(unsigned index = 0);   // selects device, budget, alloc_pipeline
+    static bool available(unsigned index = 0); // Runtime::any_device_available()
     std::vector<std::array<uint8_t,104>> solve(const uint8_t input[32], const uint8_t nonce[8]) override;
     void request_abort() override { abort_.store(true, std::memory_order_relaxed); }
     const DeviceInfo& device() const { return rt_.device(); }

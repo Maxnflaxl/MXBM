@@ -34,8 +34,19 @@ void Stats::set_telemetry_source(TelemetryFn fn) {
 }
 
 void Stats::set_device_label(std::string label) {
+    set_device_labels({std::move(label)});
+}
+
+void Stats::set_device_labels(std::vector<std::string> labels) {
     std::lock_guard<std::mutex> lock(mutex_);
-    device_label_ = std::move(label);
+    if (labels.empty()) labels.push_back("GPU 0");
+    devices_.clear();
+    devices_.reserve(labels.size());
+    for (auto& l : labels) {
+        DevLedger d;
+        d.label = std::move(l);
+        devices_.push_back(std::move(d));
+    }
 }
 
 void Stats::set_driver_version(std::string v) {
@@ -46,6 +57,9 @@ void Stats::set_driver_version(std::string v) {
 Stats::Stats() {
     now_fn = [] { return std::chrono::steady_clock::now(); };
     start_ = now_fn();
+    // One device until told otherwise, so every consumer can assume at least
+    // one row and a miner that never calls set_device_labels() is unchanged.
+    devices_.push_back(DevLedger{"GPU 0", 0, 0, 0, 0, 0, 0.0});
 }
 
 void Stats::prune_attempts(std::chrono::steady_clock::time_point now) {
@@ -53,22 +67,30 @@ void Stats::prune_attempts(std::chrono::steady_clock::time_point now) {
         attempts_.pop_front();
 }
 
-void Stats::record_attempt(uint32_t candidates) {
+void Stats::record_attempt(uint32_t candidates, unsigned device) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto t = now_fn();
-    attempts_.push_back(Event{t, candidates});
+    attempts_.push_back(Event{t, candidates, device});
     total_candidates_ += candidates;
+    // An out-of-range index is dropped from the per-device ledger rather than
+    // folded into device 0's: a row that silently absorbs another card's work
+    // is exactly the confusion these rows exist to remove. The rig total above
+    // still counts it, so nothing goes missing from the headline.
+    if (device < devices_.size()) {
+        devices_[device].total_candidates += candidates;
+        ++devices_[device].attempts;
+    }
     prune_attempts(t);
 }
 
-void Stats::record_submit(const std::string& job_id, Origin origin) {
+void Stats::record_submit(const std::string& job_id, Origin origin, unsigned device) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double units = origin == Origin::Dev ? devfee_last_job_units_ : last_job_units_;
-    submits_.push_back(PendingSubmit{job_id, now_fn(), units, origin});
+    submits_.push_back(PendingSubmit{job_id, now_fn(), units, origin, device});
     while (submits_.size() > kSubmitCap) submits_.pop_front();
 }
 
-void Stats::record_share_found(double achieved_units, Origin origin) {
+void Stats::record_share_found(double achieved_units, Origin origin, unsigned device) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     // The ring records EVERY found share, both origins, tagged -- a log, not a
@@ -82,6 +104,8 @@ void Stats::record_share_found(double achieved_units, Origin origin) {
     // Best-share is the user's record; a fee slice's share is the developer's.
     if (origin != Origin::Main) return;
     if (achieved_units > best_share_units_) best_share_units_ = achieved_units;
+    if (device < devices_.size() && achieved_units > devices_[device].best_share_units)
+        devices_[device].best_share_units = achieved_units;
 }
 
 void Stats::record_result(int code, Origin origin) {
@@ -104,6 +128,17 @@ void Stats::record_result(int code, Origin origin) {
         // Only on ACCEPT: stale and rejected shares pay nothing, and dev-fee
         // shares never bank at all.
         if (code == 1 && origin == Origin::Main) accepted_units_ += it->units;
+        // The verdict lands on the card that found it. Beam's results echo no
+        // submit id, so this is the SAME oldest-pending-first matching the
+        // latency uses -- with several cards submitting to one pool the pairing
+        // can be wrong under heavy overlap, which is why only the per-device
+        // A/S/R breakdown depends on it and the rig totals do not.
+        if (origin == Origin::Main && it->device < devices_.size()) {
+            DevLedger& d = devices_[it->device];
+            if (code == 1) ++d.accepted;
+            else if (code == 3) ++d.stale;
+            else ++d.rejected;
+        }
         const auto t0 = it->t;
         submits_.erase(it);
         // Likewise the displayed latency is the user's pool round trip.
@@ -162,10 +197,17 @@ Stats::Snapshot Stats::snapshot() const {
     auto now = now_fn();
 
     uint64_t cand15 = 0, cand60 = 0, n60 = 0;
+    std::vector<uint64_t> dev15(devices_.size(), 0), dev60(devices_.size(), 0),
+                          devn60(devices_.size(), 0);
     for (const auto& e : attempts_) {
         auto age = now - e.t;
-        if (age <= kWindow60) { cand60 += e.candidates; ++n60; }
-        if (age <= kWindow15) { cand15 += e.candidates; }
+        const bool in60 = age <= kWindow60, in15 = age <= kWindow15;
+        if (in60) { cand60 += e.candidates; ++n60; }
+        if (in15) { cand15 += e.candidates; }
+        if (e.device < devices_.size()) {
+            if (in60) { dev60[e.device] += e.candidates; ++devn60[e.device]; }
+            if (in15) { dev15[e.device] += e.candidates; }
+        }
     }
 
     Snapshot s;
@@ -181,9 +223,36 @@ Stats::Snapshot Stats::snapshot() const {
     s.best_share_units = best_share_units_;
     s.last_latency_ms = last_latency_ms_;
     s.pool = pool_;
-    s.device_label = device_label_;
     s.driver_version = driver_version_;
-    if (telemetry_) telemetry_(s);
+
+    s.devices.reserve(devices_.size());
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        Device d;
+        d.label  = devices_[i].label;
+        d.sol15  = (double)dev15[i] / 15.0;
+        d.sol60  = (double)dev60[i] / 60.0;
+        d.sol_session = elapsed > 0.0 ? (double)devices_[i].total_candidates / elapsed : 0.0;
+        d.iter60 = (double)devn60[i] / 60.0;
+        d.attempts = devices_[i].attempts;
+        d.accepted = devices_[i].accepted;
+        d.stale    = devices_[i].stale;
+        d.rejected = devices_[i].rejected;
+        d.best_share_units = devices_[i].best_share_units;
+        if (telemetry_) telemetry_((unsigned)i, d);
+        s.devices.push_back(std::move(d));
+    }
+    // The legacy single-device fields mirror device 0, so every consumer that
+    // has not learned about the vector yet keeps working and keeps meaning what
+    // it meant -- on a one-card rig they are identical by construction.
+    if (!s.devices.empty()) {
+        const Device& d0 = s.devices.front();
+        s.device_label  = d0.label;
+        s.has_power     = d0.has_power;     s.power_w       = d0.power_w;
+        s.has_sm_clock  = d0.has_sm_clock;  s.sm_clock_mhz  = d0.sm_clock_mhz;
+        s.has_mem_clock = d0.has_mem_clock; s.mem_clock_mhz = d0.mem_clock_mhz;
+        s.has_temp      = d0.has_temp;      s.temp_c        = d0.temp_c;
+        s.has_fan       = d0.has_fan;       s.fan_pct       = d0.fan_pct;
+    }
     s.connect_ms = connect_ms_;
     s.uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_);
     s.last_job_id = last_job_id_;

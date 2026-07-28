@@ -149,7 +149,18 @@ This still does not make the sol/s columns comparable *between* miners, for the 
 ## 5. Gotchas
 
 - **Do not compare across pools.** Difficulty and share accounting differ.
-- **Do not run the miners concurrently.** They contend for GPU and memory bandwidth.
+- **Do not run the miners concurrently, and check that nothing ELSE is on the card.**
+  They contend for GPU and memory bandwidth. This is not a theoretical caution: during
+  this project's own head-to-head sweep, a benchmark process left running by accident
+  (started without `--benchmark-seconds`, so it never exited) sat on the card for 24
+  minutes and **halved both miners' throughput** at one power point — 175 W read 19.8 and
+  24.5 sol/s where a clean re-run measured 44.0 and 52.0. The signature is a point that
+  contradicts its neighbours *while the core clock rises*, and it looks like a real
+  finding until you check `nvidia-smi --query-compute-apps`. Do that before, and after.
+- **A re-measurement must REPLACE what it re-measures, never average with it.** The same
+  episode produced a summary that took the median of the contaminated run and its clean
+  replacement together, reporting 31.75 sol/s — a number neither run measured and which
+  sat exactly between a right answer and a wrong one.
 - **Count stale and rejected shares separately.** A miner that submits faster but staler
   is not better; net accepted is what pays.
 - **Restart between runs.** Persistent buffer reuse makes solve #1 slower than steady

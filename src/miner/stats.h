@@ -30,20 +30,24 @@ public:
 
     // -- producers ----------------------------------------------------------
 
-    // Feeds the sol15/sol60/sol_session/iter60 windowed rates.
-    void record_attempt(uint32_t candidates);
+    // Feeds the sol15/sol60/sol_session/iter60 windowed rates. `device` is the
+    // index of the card that did the work, so a rig operator can see WHICH card
+    // is lagging rather than only that the total dropped.
+    void record_attempt(uint32_t candidates, unsigned device = 0);
 
     // Starts the accept/reject latency clock. record_result() matches
     // oldest-submit-first within an origin, not by job_id, since Beam results
     // echo no submit id. Captures that origin's current job target -- the two
     // pools run independent difficulties -- for record_result() to bank.
-    void record_submit(const std::string& job_id, Origin origin = Origin::Main);
+    void record_submit(const std::string& job_id, Origin origin = Origin::Main,
+                       unsigned device = 0);
 
     // Achieved difficulty of a newly found share, in the same display units as
     // pow::to_display_units. Tracks Snapshot::best_share_units for Main only:
     // a share found during a fee slice is the developer's. Also appends to the
     // recent-share ring, which holds BOTH origins, tagged.
-    void record_share_found(double achieved_units, Origin origin = Origin::Main);
+    void record_share_found(double achieved_units, Origin origin = Origin::Main,
+                            unsigned device = 0);
 
     // Wire result code: 1 = accepted, 3 = stale, any other value = rejected.
     // Pops the oldest pending submit OF THE SAME ORIGIN and records its round
@@ -101,6 +105,29 @@ public:
         double stddev() const;
     };
 
+    // One card's own numbers. The rig total is the sum of these where summing
+    // means anything -- speeds and counts add, a temperature does not, which is
+    // why the Total row leaves the telemetry columns blank rather than
+    // averaging them into a figure no card actually reported.
+    struct Device {
+        std::string label;
+        double sol15 = 0.0, sol60 = 0.0, sol_session = 0.0;
+        double iter60 = 0.0;
+        // Monotonic count of solve() calls this device has completed. The
+        // watchdog compares successive samples of THIS rather than of a rate:
+        // a rate that reads zero cannot distinguish "hung" from "the window has
+        // not filled yet", and a card that finds no candidates for a minute is
+        // unlucky, not crashed. A counter that stops advancing is unambiguous.
+        uint64_t attempts = 0;
+        uint64_t accepted = 0, stale = 0, rejected = 0;   // the USER's pool only
+        double best_share_units = 0.0;
+        bool has_power = false;     double power_w = 0.0;
+        bool has_sm_clock = false;  unsigned sm_clock_mhz = 0;
+        bool has_mem_clock = false; unsigned mem_clock_mhz = 0;
+        bool has_temp = false;      unsigned temp_c = 0;
+        bool has_fan = false;       unsigned fan_pct = 0;
+    };
+
     struct SeriesSet {
         Series sol15, sol60, iter60;
         Series power_w, sm_clock_mhz, mem_clock_mhz, temp_c, fan_pct;
@@ -137,6 +164,11 @@ public:
         uint64_t devfee_slices = 0;
         bool devfee_active = false;                 // a fee slice is running right now
         uint64_t devfee_accepted = 0, devfee_stale = 0, devfee_rejected = 0;
+        // One entry per mining device, in the order set_device_labels() gave.
+        // Always at least one, so a consumer never has to special-case an empty
+        // rig: a single-GPU run has exactly one entry and the Total row of the
+        // console is suppressed as redundant.
+        std::vector<Device> devices;
         // Oldest first, at most kRecentShares entries.
         std::vector<RecentShare> recent_shares;
         SeriesSet series;
@@ -155,13 +187,19 @@ public:
     double current_job_units(Origin origin = Origin::Main) const;
 
     // e.g. the GPU device name, or "CPU 0 reference". Set once at startup.
+    // The single-device form; equivalent to set_device_labels({label}).
     void set_device_label(std::string label);
+    // One label per mining device, in the order --devices selected them. Sets
+    // the number of per-device rows every later snapshot reports.
+    void set_device_labels(std::vector<std::string> labels);
 
     // Set once at startup, empty when the platform reports none. Thread-safe.
     void set_driver_version(std::string v);
 
-    // Called while building a snapshot; null on platforms with no telemetry.
-    using TelemetryFn = std::function<void(Snapshot&)>;
+    // Called once per device while building a snapshot; null on platforms with
+    // no telemetry. The index is the device's own, so the callback knows which
+    // card to sample.
+    using TelemetryFn = std::function<void(unsigned index, Device&)>;
     void set_telemetry_source(TelemetryFn fn);
 
     // Test seam: defaults to steady_clock::now in the constructor; tests swap
@@ -176,12 +214,14 @@ private:
     struct Event {
         std::chrono::steady_clock::time_point t;
         uint32_t candidates;
+        unsigned device;
     };
     struct PendingSubmit {
         std::string job_id;
         std::chrono::steady_clock::time_point t;
         double units;      // the job's target difficulty when this was submitted
         Origin origin;     // which connection it went to; matched by record_result
+        unsigned device;   // which card found it, so the verdict lands on its row
     };
 
     // Called on every insert. snapshot() computes the 15 s/60 s windows by
@@ -202,13 +242,25 @@ private:
     double best_share_units_ = 0.0;
     uint64_t accepted_ = 0, stale_ = 0, rejected_ = 0;
 
+    // Per-device ledgers, sized by set_device_labels(). The rig totals above
+    // are kept independently rather than summed on read: they must stay right
+    // even for a result that arrives with no pending submit to attribute it to.
+    struct DevLedger {
+        std::string label;
+        uint64_t total_candidates = 0;
+        uint64_t attempts = 0;
+        uint64_t accepted = 0, stale = 0, rejected = 0;
+        double best_share_units = 0.0;
+    };
+    std::vector<DevLedger> devices_;
+
     std::string pool_;
     long long connect_ms_ = 0;
     uint64_t reconnects_ = 0;
 
     std::string last_job_id_;
     double last_job_units_ = 0.0;
-    std::string device_label_ = "GPU 0";
+
     std::string driver_version_;
 
     // Developer-fee ledger, kept strictly apart from the counters above.

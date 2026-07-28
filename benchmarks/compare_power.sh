@@ -58,6 +58,12 @@ MCLKS=${MCLKS:-"*"}      # locked memory clock, MHz
 SETTLE=${SETTLE:-15}
 OUT=${OUT_DIR:-/tmp/mxbm-compare}
 mkdir -p "$OUT"
+# THIS RUN's rows only. The file used to accumulate across invocations, which
+# looked like a free history until a point was re-measured: the summary then
+# took the median of the old and new values together, so a contaminated run
+# and its clean replacement averaged into a number that was never measured.
+# A re-measurement has to REPLACE what it re-measures.
+: > "$OUT/rows.txt"
 
 [ -x "$LOL" ] || { echo "lolMiner not found at $LOL (set LOL=...)"; exit 1; }
 [ -x "$ROOT/build/mxbm" ] || { echo "build/mxbm not found -- build first"; exit 1; }
@@ -251,13 +257,26 @@ if [ -s "$OUT/rows.txt" ]; then
     python3 - "$OUT/rows.txt" <<'PY'
 import statistics as st, sys
 from collections import OrderedDict
-g = OrderedDict()
+# A run interrupted mid-write leaves a half-written line, so a malformed line is
+# skipped and COUNTED rather than crashing the summary and losing the good
+# measurements alongside it.
+g, bad = OrderedDict(), 0
 for line in open(sys.argv[1]):
-    pl, who, sol, watt = line.split()
-    g.setdefault((pl, who), []).append((float(sol), float(watt)))
+    f = line.split()
+    if len(f) != 4:
+        bad += 1
+        continue
+    pl, who, sol, watt = f
+    try:
+        g.setdefault((pl, who), []).append((float(sol), float(watt)))
+    except ValueError:
+        bad += 1
 for (pl, who), v in g.items():
     s, w = st.median([x[0] for x in v]), st.median([x[1] for x in v])
     print("%-14s %-9s %8.2f %8.1f %9.4f   n=%d" % (pl, who, s, w, s / w, len(v)))
+if bad:
+    print("(%d unparsable line%s skipped -- an interrupted run leaves one)"
+          % (bad, "" if bad == 1 else "s"))
 PY
 fi
 

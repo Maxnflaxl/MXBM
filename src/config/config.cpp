@@ -150,6 +150,7 @@ constexpr StrOpt kStrOpts[] = {
     {"COFF",      &cli::Options::core_offset, &cli::Options::Seen::core_offset, nullptr,          nullptr,    true},
     {"MOFF",      &cli::Options::mem_offset,  &cli::Options::Seen::mem_offset,  nullptr,          nullptr,    true},
     {"FAN",       &cli::Options::fan,         &cli::Options::Seen::fan,         nullptr,          nullptr,    true},
+    {"WATCHDOGSCRIPT", &cli::Options::watchdog_script, &cli::Options::Seen::watchdog, nullptr, nullptr, false},
 };
 
 constexpr DblOpt kDblOpts[] = {

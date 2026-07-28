@@ -31,7 +31,10 @@ std::string usage_text() {
         "  --devices LIST         which GPU to mine on: ALL (default) or a comma-separated\n"
         "                         list of indices as shown by --list-devices\n"
         "  --list-devices         print the detected GPUs, with their indices, and exit\n"
-        "  --watchdog             enable the watchdog (accepted; arrives in a later phase)\n"
+        "  --watchdog [ACTION]    watch for a GPU that stops working. ACTION is exit\n"
+        "                         (default; exits 42 for a supervisor to restart), script\n"
+        "                         (runs --watchdogscript), or off (report only)\n"
+        "  --watchdogscript PATH  script to run when ACTION is script\n"
         "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
         "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
         "  --solver cuda|opencl|gpu|ref|auto\n"
@@ -260,6 +263,14 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             else                             { out.no_oc_reset = value; out.seen.no_oc_reset = true; }
             continue;
         }
+        if (arg == "--watchdogscript") {
+            if (i + 1 >= argc) {
+                err = "missing value for --watchdogscript\n\n" + usage_text();
+                return false;
+            }
+            out.watchdog_script = argv[++i];
+            continue;
+        }
         if (arg == "--logfile") {
             if (i + 1 >= argc) { err = "missing value for --logfile\n\n" + usage_text(); return false; }
             out.log_path = argv[++i];
@@ -280,8 +291,18 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             continue;
         }
         if (arg == "--watchdog") {
+            // Optional value, consumed only when it really is an action -- so a
+            // bare --watchdog followed by another flag does not swallow it.
             out.watchdog_requested = true;
             out.seen.watchdog = true;
+            // Recognised locally rather than by calling into miner/: the CLI
+            // layer does not depend on the miner, and --solver validates its
+            // own domain the same way. main() re-parses it through
+            // miner::parse_watchdog_action, which is the single definition.
+            if (i + 1 < argc) {
+                const std::string v = argv[i + 1];
+                if (v == "off" || v == "exit" || v == "script") { out.watchdog_action = v; ++i; }
+            }
             continue;
         }
         if (arg == "--apiport") {

@@ -2,6 +2,7 @@
 #include <dlfcn.h>
 #include <cstring>
 #include <initializer_list>
+#include <vector>
 
 namespace mxbm { namespace gpu {
 namespace {
@@ -14,12 +15,21 @@ constexpr nvmlReturn_t NVML_ERROR_NO_PERMISSION = 4;
 using nvmlDevice_t = void*;
 
 void*        g_lib = nullptr;
-nvmlDevice_t g_dev = nullptr;
+nvmlDevice_t g_dev = nullptr;          // device 0; the OC writes still target it
+std::vector<nvmlDevice_t> g_devs;      // every device, for per-card telemetry
 bool         g_ready = false;
+
+// The handle for `index`, or nullptr when it does not exist. Callers return an
+// empty result on nullptr rather than falling back to device 0 -- a per-device
+// row is worse than useless if it can silently show another card.
+nvmlDevice_t dev_at(unsigned index) {
+    return index < g_devs.size() ? g_devs[index] : nullptr;
+}
 
 nvmlReturn_t (*p_init)(void) = nullptr;
 nvmlReturn_t (*p_shutdown)(void) = nullptr;
 nvmlReturn_t (*p_handle)(unsigned, nvmlDevice_t*) = nullptr;
+nvmlReturn_t (*p_count)(unsigned*) = nullptr;
 nvmlReturn_t (*p_power)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_clock)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_temp)(nvmlDevice_t, int, unsigned*) = nullptr;
@@ -78,6 +88,7 @@ bool nvml_init() {
     bind(p_init,     "nvmlInit_v2");
     bind(p_shutdown, "nvmlShutdown");
     bind(p_handle,   "nvmlDeviceGetHandleByIndex_v2");
+    bind(p_count,    "nvmlDeviceGetCount_v2");
     bind(p_power,    "nvmlDeviceGetPowerUsage");
     bind(p_clock,    "nvmlDeviceGetClockInfo");
     bind(p_temp,     "nvmlDeviceGetTemperature");
@@ -113,6 +124,19 @@ bool nvml_init() {
     if (p_init() != NVML_SUCCESS)              { dlclose(g_lib); g_lib = nullptr; return false; }
     if (p_handle(0, &g_dev) != NVML_SUCCESS)   { if (p_shutdown) p_shutdown();
                                                  dlclose(g_lib); g_lib = nullptr; return false; }
+    // Every device, in NVML's own order -- which is by PCI bus id, the same key
+    // CudaSolver::enumerate() sorts on, so index N means the same card in both.
+    g_devs.clear();
+    g_devs.push_back(g_dev);
+    if (p_count) {
+        unsigned n = 0;
+        if (p_count(&n) == NVML_SUCCESS) {
+            for (unsigned i = 1; i < n; ++i) {
+                nvmlDevice_t d = nullptr;
+                if (p_handle(i, &d) == NVML_SUCCESS) g_devs.push_back(d);
+            }
+        }
+    }
     g_ready = true;
     return true;
 }
@@ -121,12 +145,16 @@ void nvml_shutdown() {
     if (!g_ready) return;
     if (p_shutdown) p_shutdown();
     if (g_lib) dlclose(g_lib);
-    g_lib = nullptr; g_dev = nullptr; g_ready = false;
+    g_lib = nullptr; g_dev = nullptr; g_devs.clear(); g_ready = false;
 }
 
-Telemetry nvml_sample() {
+unsigned nvml_device_count() { return g_ready ? (unsigned)g_devs.size() : 0u; }
+
+Telemetry nvml_sample(unsigned index) {
     Telemetry t;
     if (!g_ready) return t;
+    nvmlDevice_t g_dev = dev_at(index);
+    if (!g_dev) return t;
     unsigned v = 0;
     if (p_power && p_power(g_dev, &v) == NVML_SUCCESS) { t.have_power = true; t.power_w = v / 1000.0; }
     if (p_clock && p_clock(g_dev, /*NVML_CLOCK_SM=*/1,  &v) == NVML_SUCCESS) { t.have_sm  = true; t.sm_clock_mhz  = v; }
@@ -144,8 +172,9 @@ std::string nvml_driver_version() {
     return buf;
 }
 
-std::string nvml_pci_address() {
-    if (!g_ready || !p_pci) return std::string();
+std::string nvml_pci_address(unsigned index) {
+    nvmlDevice_t g_dev = dev_at(index);
+    if (!g_ready || !p_pci || !g_dev) return std::string();
     // nvmlPciInfo_t is not declared here and has grown across NVML versions, so
     // pass more room than any known version needs -- under-sizing it would let
     // NVML write past the buffer -- and read only the leading busId string.

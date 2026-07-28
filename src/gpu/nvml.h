@@ -21,9 +21,15 @@ struct Telemetry {
 // Returns false if NVML is unavailable; safe to call once at startup and ignore.
 bool nvml_init();
 void nvml_shutdown();
-// Samples device 0. Fields whose query fails keep have_* == false, so a card that
-// reports power but not fan (common on laptops) still shows what it has.
-Telemetry nvml_sample();
+
+// How many devices NVML sees. 0 when NVML is unavailable.
+unsigned nvml_device_count();
+
+// Samples one device. Fields whose query fails keep have_* == false, so a card
+// that reports power but not fan (common on laptops) still shows what it has.
+// An out-of-range index returns an empty Telemetry rather than another card's:
+// a per-device row showing the wrong card's numbers is worse than a blank one.
+Telemetry nvml_sample(unsigned index = 0);
 
 // The installed NVIDIA driver version ("610.43.03"), or "" when NVML is not
 // available. Shown on the statistics block's header line: a driver change is
@@ -31,10 +37,10 @@ Telemetry nvml_sample();
 // that records it answers "what changed?" by itself.
 std::string nvml_driver_version();
 
-// Device 0's PCI address as "bus:device" ("1:0"), or "" when unavailable --
+// A device's PCI address as "bus:device" ("1:0"), or "" when unavailable --
 // the short form the reference miner prints, not NVML's full "00000000:01:00.0". On a
 // multi-GPU rig this is what tells two identical cards apart.
-std::string nvml_pci_address();
+std::string nvml_pci_address(unsigned index = 0);
 
 // --- board power limit ---------------------------------------------------
 //

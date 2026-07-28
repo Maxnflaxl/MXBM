@@ -29,7 +29,14 @@ struct Options {
     std::string devices;
     // --list-devices: print the device table and exit, mining nothing.
     bool list_devices = false;
-    bool watchdog_requested = false; // accepted; monitoring not yet implemented
+    // --watchdog [off|exit|script]: what to do when a card stops doing work.
+    // A bare --watchdog means "exit", the action the reference miner recommends for
+    // NVIDIA: a hung CUDA context usually cannot be rebuilt from inside the
+    // process that wedged it, so handing the problem to a supervisor is the
+    // only recovery that actually works.
+    bool watchdog_requested = false;
+    std::string watchdog_action = "exit";
+    std::string watchdog_script;     // --watchdogscript PATH, for action=script
     std::string solver = "auto";     // --solver gpu|ref|auto (default: prefer gpu, fall back to ref)
 
     // Console transcript (the reference miner's --log/--logfile). An explicit --logfile

@@ -111,7 +111,8 @@ files, and API.
 | Miner shell | lolMiner-style console, CLI, config files, dashboard + `/summary` API | ✅ done |
 | GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
 | Solver performance | Close the gap to the fastest closed-source miners | ✅ done (CUDA, +6 %) |
-| Multi-GPU | One solver, thread and nonce lane per card; `--devices` / `--list-devices` | ✅ done, untested on >1 card |
+| Multi-GPU | One solver, thread, nonce lane and stats row per card; `--devices` / `--list-devices` | ✅ done, untested on >1 card |
+| Rig robustness | Pool failover, hung-GPU watchdog (`--watchdog exit\|script\|off`) | ✅ done |
 | Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
 | Overclocking | `--pl`, `--cclk`, `--mclk`, `--coff`, `--moff`, `--fan` — clamped to the driver's own bands, restored on exit (see [overclocking.md](docs/overclocking.md)) | ✅ done |
 | Optimized backends | Tuned CUDA (NVIDIA) ✅ done; HIP (AMD) | in progress |

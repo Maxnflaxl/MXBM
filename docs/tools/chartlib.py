@@ -265,13 +265,24 @@ class Panel(object):
             if label:
                 self.c.text(self.x0 - 8, y + 3, fmt % v, 10, MUTED, "end")
 
-    def axis_x(self, values, fmt="%g", label=True, tick=4):
+    def axis_x(self, values, fmt="%g", label=True, tick=4, min_gap=34):
+        """Ticks on every value; LABELS only where they will not collide.
+
+        A tick mark is thin and can sit anywhere, but two labels 8 px apart
+        render as one unreadable smear ("175 W180 W"). Dropping the label keeps
+        the tick, so the point is still located -- and the value is in the table
+        the chart is generated from either way."""
         self.c.line(self.x0, self.y1, self.x1, self.y1, AXIS, 1)
+        last = None
         for v in values:
             x = self.xs(v)
             self.c.line(x, self.y1, x, self.y1 + tick, AXIS, 1)
-            if label:
-                self.c.text(x, self.y1 + tick + 12, fmt % v, 10, MUTED, "middle")
+            if not label:
+                continue
+            if last is not None and x - last < min_gap:
+                continue
+            self.c.text(x, self.y1 + tick + 12, fmt % v, 10, MUTED, "middle")
+            last = x
 
     def frame_y(self):
         self.c.line(self.x0, self.y0, self.x0, self.y1, AXIS, 1)

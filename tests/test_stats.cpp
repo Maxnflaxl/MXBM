@@ -210,9 +210,9 @@ int main() {
         install_fake_clock(s, fake_ms);
 
         double cur_power = 300.0;
-        s.set_telemetry_source([&cur_power](Stats::Snapshot& snap) {
-            snap.has_power = true;
-            snap.power_w = cur_power;
+        s.set_telemetry_source([&cur_power](unsigned, Stats::Device& d) {
+            d.has_power = true;
+            d.power_w = cur_power;
         });
 
         s.snapshot();                       // t=0: first fold, banks 300
