@@ -39,7 +39,12 @@
 # miner's curve against ITSELF (how gracefully does it degrade under a cap) plus
 # the watts, which are measured by one instrument for both. Accepted pool shares
 # remain the only cross-miner arbiter; see docs-internal/MINER_COMP.md.
-set -u
+# -f disables pathname expansion. Load-bearing, not tidiness: CCLKS defaults to
+# "*" meaning "leave this clock alone", and `for cclk in $CCLKS` would otherwise
+# glob it into the directory listing and try to lock the core clock to a value
+# of "benchmarks". Every list this script iterates is unquoted by necessity, so
+# globbing is switched off for all of them at once.
+set -uf
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOL=${LOL:-/home/maxnflaxl/Documents/lolMiner/1.98a/lolMiner}
@@ -164,13 +169,25 @@ for pl in $LIMITS; do
     # Clock locks are applied with nvidia-smi for the same reason the cap is:
     # one instrument, applied identically to both miners, so neither miner's own
     # overclock code is a variable in a measurement about their kernels.
+    # A clock that could not be locked SKIPS the point. Measuring at the
+    # driver's own clock while labelling the row with a lock that never
+    # applied is the same mislabelling the power cap is guarded against, and
+    # it is worse here because the number would look plausible.
+    lock_ok=yes
     if [ "$cclk" != "*" ]; then
         sudo -n nvidia-smi -lgc "$cclk,$cclk" >/dev/null 2>&1 \
-            || echo "!! could not lock core clock to ${cclk} MHz"
+            || { echo "!! could not lock core clock to ${cclk} MHz - skipping this point"
+                 lock_ok=no; }
     fi
-    if [ "$mclk" != "*" ]; then
+    if [ "$lock_ok" = yes ] && [ "$mclk" != "*" ]; then
         sudo -n nvidia-smi -lmc "$mclk,$mclk" >/dev/null 2>&1 \
-            || echo "!! could not lock memory clock to ${mclk} MHz"
+            || { echo "!! could not lock memory clock to ${mclk} MHz - skipping this point"
+                 lock_ok=no; }
+    fi
+    if [ "$lock_ok" = no ]; then
+        sudo -n nvidia-smi -rgc >/dev/null 2>&1
+        sudo -n nvidia-smi -rmc >/dev/null 2>&1
+        continue
     fi
     point="$pl"
     [ "$cclk" != "*" ] && point="$point/c$cclk"
