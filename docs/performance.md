@@ -438,9 +438,12 @@ DRAM traffic: MXBM moves [14.23 GB/solve](#current-focus-and-open-leads) at geom
 (16,1), while lolMiner selects a **4G** variant that fits the search in 4 GB and must
 therefore move far less.
 
-**That suspicion has since been measured, and it holds.** Narrowing round 2's record so
-the solve moves 16 % fewer bytes raises the clock the card sustains at the same 285 W by
-**60 MHz**, with a positive control at ±0 MHz and the obvious confound excluded — see
+**That suspicion has since been measured, and it accounts for the shape of this table.**
+Narrowing round 2's record so the solve moves 16 % fewer bytes buys **60 MHz at 285 W and
+210 MHz at 180 W** — the price of a byte rises 5× as the cap tightens, which is exactly
+the asymmetry the gap column shows. One lever worth 210 MHz against a 570 MHz deficit
+means the whole gap is the right order of magnitude for a traffic story: it needs about
+2.7× our lever, and lolMiner's 4 GB variant against our 7.46 GiB is plausibly that. See
 [bytes are not free in watts](#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
 
 **This inverts one of this document's own conclusions.** [Bytes are nearly
@@ -1810,10 +1813,59 @@ half has to come from narrower records. Since [measured traffic is within 1 % of
 compulsory](#the-memory-traffic-is-compulsory) for the current widths, narrower records
 means a structural change and not tuning.
 
-**Not yet done: the same experiment under a low cap.** At stock the clock has little room
-to move, and the gap against lolMiner widened from 60 MHz at stock to 570 MHz at 180 W. If
-the effect scales, `PL=180 benchmarks/byte_power.sh` is where it becomes a headline number
-rather than a 2.3 % one. It needs root.
+#### Under a low cap the same bytes cost 5× as much clock
+
+*(Measured 2026-07-28, `sudo PL=180 benchmarks/byte_power.sh`. This is the result that
+matters, because 180 W is where MXBM actually loses.)*
+
+At stock the clock has almost no room to move and 16 % of the traffic was worth 2.3 % of
+it. Capped to 180 W the card is far below its ceiling, and the same ablation moves it a
+great deal further:
+
+| cap | round 2 full | round 2 narrowed | Δ | as % of clock | drift |
+|---|---|---|---|---|---|
+| 285 W | 2610 MHz | 2670 MHz | **+60** | 2.3 % | 0 MHz |
+| 180 W | 1815 MHz | 2025 MHz | **+210** | **11.6 %** | 30 MHz |
+
+**The exchange rate is 5.0× steeper at 180 W**, and the signal clears the drift by 7×.
+Board power is pinned at 179.9 W against 179.5 in the two arms, so this is a clean clock
+readout and not a power one. In time, round 2's payload costs **3.66 ms per pass** here
+against 1.69 ms at stock.
+
+The single most legible number in the run needs no arithmetic at all: the **unablated
+baseline holds 1890 MHz**, round 2 with its full record drags the card down to **1815**,
+and the same round with a 16 B record runs at **2025** — above the baseline. Round 2's
+stores are what set the clock of the whole solve.
+
+**Round 1 corroborates it for free.** Replaying round 1 — which is byte-light and which
+the ablation cannot change, since it already stores 16 B — lets the card clock *up*, to
+1935–1950 MHz against the 1890 baseline, with the ablated and unablated arms agreeing to
+within the drift. Same mechanism, opposite direction, no ablation involved.
+
+**This is the explanation for [the low-end deficit](#why-we-lose-the-low-end-watts-buy-us-less-clock).**
+That table records MXBM 570 MHz behind lolMiner at 180 W and only 60 MHz behind at stock,
+and the asymmetry was unexplained. It is the same asymmetry measured here from the other
+side: bytes are nearly free at 285 W and expensive at 180 W. One lever worth 210 MHz
+against a 570 MHz gap puts the whole deficit within reach of a traffic explanation —
+it needs ~2.7× the traffic reduction this ablation makes, and a 4 GB variant against our
+7.46 GiB is plausibly that. Plausibly, not demonstrably: nobody has measured lolMiner's
+traffic.
+
+**What it makes worth re-testing: the round-3 quad record.** `b360695` had round 3
+re-derive from a **24 B** record instead of storing 72 B of work state; `2584518` retired
+it, and the stated reason was entirely time — *"a genuine −3.6 ms at 86.8 ms is a +2.2 ms
+loss at 56."* Watts were not a term in that trade, because nothing had priced them yet.
+The record it removes is written by round 2 and read by round 3, ~5.1 GB of the solve's
+13.0, so at 24 B it takes out roughly **26 % of all traffic** — about 1.6× the lever
+measured above.
+
+That is a reason to re-measure it, **not** a prediction that it wins. Scaling 210 MHz by
+1.6 assumes a linearity nobody has established, the +2.2 ms was measured on a build two
+generations old, and the arithmetic it adds gets *more* expensive in wall time at a low
+clock, not less. What can be said is that the decision to retire it was made on a metric
+that is now known to be incomplete, at the operating point where the missing term is
+largest — and the code is in git history, so re-testing it costs a resurrection and a
+sweep rather than a design.
 
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
 

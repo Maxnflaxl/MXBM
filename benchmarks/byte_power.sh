@@ -150,9 +150,14 @@ PY
 printf "%-12s %9s %8s %8s %6s  %s\n" variant ms/solve sm_MHz watts temp drops
 printf -- "---------------------------------------------------------------\n"
 
-# Baseline once: the unablated build with no replay, for scale.
+# Baseline once: the unablated build with no replay. Its measured ms is also what
+# sizes every later run, because the per-round costs below were taken at stock and
+# a capped card is slower in proportion -- at 180 W a solve is 43.6 ms against
+# 33.8, so sizing from the stock constants overshoots every run by a third.
 B=$(run_one "$OUT/pipeline" base 35 MXBM_NONE=1) || exit 1
 echo "$B" | awk '{ printf "%-12s %9s %8s %8s %6s  %s\n", "baseline", $1, $2, $3, $4, $5 }'
+BASE_MS=$(echo "$B" | awk '{ print $1 }')
+SCALE=$(python3 -c "print(max(0.5, $BASE_MS / 33.8))")
 
 # Per round: full-with-replay against narrowed-with-replay, ALTERNATED, so a
 # thermal trend across the pair cannot land on one of them.
@@ -161,7 +166,7 @@ for r in $ROUNDS; do
     # A replayed round dominates the solve, so the sampled clock and watts are
     # very nearly "the card running that round".
     case $r in 1) rms=5.8 ;; 2) rms=10.5 ;; 3) rms=10.0 ;; 4) rms=5.7 ;; *) rms=8 ;; esac
-    est=$(python3 -c "print(35.2 + ($REPS-1)*$rms)")
+    est=$(python3 -c "print($BASE_MS + ($REPS-1)*$rms*$SCALE)")
 
     F=$(run_one "$OUT/pipeline"      "r$r.full"   "$est" MXBM_ROUND_REPS="$r:$REPS") || exit 1
     N=$(run_one "$OUT/pipeline.abl$r" "r$r.narrow" "$est" MXBM_ROUND_REPS="$r:$REPS") || exit 1

@@ -119,7 +119,7 @@ those do.
 
 | Next | What it delivers |
 |------|------------------|
-| **Narrower records** | lolMiner holds 0.3036 sol/s/W at 160 W where MXBM peaks at 0.2611, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock). Now measured: moving 16 % fewer bytes is worth [60 MHz at the same 285 W](docs/performance.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz) |
+| **Narrower records** | lolMiner holds 0.3036 sol/s/W at 160 W where MXBM peaks at 0.2611, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock). Now measured, and it is the explanation: moving 16 % fewer bytes buys [60 MHz at 285 W and 210 MHz at 180 W](docs/performance.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz) — bytes get 5× more expensive as the cap tightens |
 | **Smaller footprint** | 7.46 GiB against a 3 GB design target — puts MXBM on ≤ 8 GB cards ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). A separate project from the row above: in-place layer reuse moves the same bytes to reused addresses, so it buys reach, not watts |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
 | **Per-GPU verification** | Multi-GPU is built and tested, but has never run on a machine with more than one card |
