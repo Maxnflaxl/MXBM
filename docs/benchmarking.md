@@ -60,11 +60,42 @@ MXBM_SOLRATE=20 ./build/test_gpu_solver
 
 # Offline solver benchmark, no pool and no wallet.
 ./build/mxbm --benchmark BEAM-III --benchmark-seconds 120
+
+# The headline, under conditions that are held AND recorded. Use this one to
+# publish an absolute number; the bare --benchmark above is for quick A/Bs.
+benchmarks/headline.sh
 ```
 
 Both timings are noisy at the ~1 ms level, so **a single sample is not meaningful** —
 quote a median of at least 5, and prefer a spread. `MXBM_NO_ROWBUCKET=1` forces the
 fallback sort path.
+
+### 2b. Why the headline has its own harness
+
+An absolute figure is only as good as the conditions it was taken under, and this project
+has already published one that could not be reproduced: the same binaries measured 34.15 ms
+and 35.60 ms hours apart. `benchmarks/headline.sh` exists so that never happens silently
+again. It refuses to start if another process holds VRAM, discards a 240 s warmup and
+reports the residual temperature slope, repeats the run, and records NVML telemetry
+alongside every single run — SM clock, memory clock, watts, temperature, and the
+`clocks_event_reasons` bitmask.
+
+That last column is the point. The original measurement recorded a number and nothing
+else, so when it failed to reproduce there was nothing to diff. The controlled run of
+2026-07-28 was tight to **0.3 % across six repeats** with the clock, memory clock and
+power identical to the last digit — which establishes that a single run measures its own
+session well, and that the ~5 % spread across sessions is something else. It is still
+unexplained; see [performance.md](performance.md#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
+
+```sh
+benchmarks/headline.sh                                  # stock, no root
+RUNS=8 SECS=180 LONG=300 benchmarks/headline.sh
+sudo -v && LGC=2600 LMC=10501 benchmarks/headline.sh    # locked-clock reference
+```
+
+The locked-clock form is the one to track *builds* against: it removes the card's own
+day-to-day discretion over the V/f point, which is the leading suspect for the
+cross-session spread.
 
 The full measured history, including every failed experiment, is in
 [performance.md](performance.md).

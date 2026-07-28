@@ -116,17 +116,21 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 48.2 | 41.0 | fallback / `--solver opencl` |
-| **CUDA** | **58.0**[^drift] | **34.1**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **58.9 ± 0.4**[^drift] | **33.8**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row is **8,729 solves over 300 s** (`mxbm --benchmark BEAM-III`), at 1.99
-verified solutions per solve and a p5–p95 of 33.8–35.2 ms.
+The CUDA row is **8,866 solves over 300 s** (`benchmarks/headline.sh`, 2026-07-28), at
+1.990 verified solutions per solve and a p5–p95 of 33.6–34.7 ms, measured under stated
+conditions rather than opportunistically: stock 285 W, card at thermal equilibrium after a
+discarded 240 s warmup, 2685 MHz / 10251 MHz / 284.1 W / 67 °C throughout.
 
-[^drift]: **Not currently reproducible** — the same build measured 35.5–35.7 ms hours
-    later on the same machine, for reasons traced to the GPU and not the host but not yet
-    explained. See [the warning above](#-the-absolute-figures-on-this-page-are-not-currently-reproducible).
-    The −1.34 ms improvement that produced this row re-measures correctly in both regimes;
-    the absolute scale does not. OpenCL is the older 300-nonce measurement, ±4.1 % (1σ).
+[^drift]: **Carries a ~5 % cross-session band.** Within one session the measurement is
+    tight — six repeats spread 0.3 % — but four sessions of the same binaries have landed
+    between 33.7 and 35.6 ms and the cause is not yet known. See [how far these figures
+    reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
+    Every A/B on this page was interleaved, so the deltas are unaffected; only the scale
+    moves. OpenCL is the older 300-nonce measurement, ±4.1 % (1σ), and has not been
+    re-measured under these conditions.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
@@ -1895,44 +1899,84 @@ the kernels that do run never received the shared-memory preference — and the 
 blocks/SM column was reporting a different kernel than it timed, which is why r1 appeared
 stuck at 4. The arguments are now named once as `MXBM_Rn_ARGS` and used by all three.
 
-### ⚠ The absolute figures on this page are not currently reproducible
+### ⚠ The absolute figures reproduce to 0.3 % within a session and 5 % between sessions
 
-*(Open, 2026-07-26. Read before trusting any single-number claim here.)*
+*(Opened 2026-07-26, re-measured under controlled conditions 2026-07-28. Read before
+trusting any single-number claim here.)*
 
-The same binaries that measured **34.15–34.20 ms** early in the session measured
-**35.49–35.72 ms** a few hours later, on the same machine, unchanged. Every absolute
-figure in this document — including the 34.1 ms / 58.0 sol/s headline and the row in the
-progress table — was taken in the earlier regime and does not reproduce in the later one.
+**The original observation.** The same binaries that measured **34.15–34.20 ms** early in
+one session measured **35.49–35.72 ms** a few hours later, on the same machine,
+unchanged. Every absolute figure published before 2026-07-28 was taken in the earlier of
+those two regimes.
 
-**What this does NOT invalidate.** Every A/B in this session was run back-to-back and
-interleaved, so the deltas stand. Re-checking the session's main result on the drifted
-machine gives the same answer it gave before: pre-session config **36.85 ms** against
-current **35.51 ms**, a −1.34 ms win, versus −1.40 ms measured earlier. The *relative*
-method is sound; only the scale moved.
+**The controlled re-measurement.** `benchmarks/headline.sh` was built to answer this: it
+refuses to start if another process holds VRAM, runs a discarded 240 s warmup and reports
+the residual temperature slope, then repeats the measurement and records NVML telemetry
+*per run* — SM clock, memory clock, watts, temperature, and the
+`clocks_event_reasons` bitmask that the original measurement never captured.
 
-**What it is not.** Four explanations checked and rejected:
+Six runs of 120 s, stock 285 W board limit, card at equilibrium, host at 0.41 load:
+
+| | ms/solve | sol/s | SM | mem | W | °C | capped |
+|---|---|---|---|---|---|---|---|
+| run 1 | 33.80 | 59.1 | 2685 | 10251 | 284.1 | 67 | 99 % |
+| run 2 | 33.80 | 59.2 | 2685 | 10251 | 284.2 | 67 | 100 % |
+| run 3 | 33.70 | 59.3 | 2685 | 10251 | 284.1 | 67 | 99 % |
+| run 4 | 33.70 | 59.4 | 2685 | 10251 | 284.1 | 68 | 100 % |
+| run 5 | 33.70 | 59.4 | 2685 | 10251 | 284.1 | 67 | 100 % |
+| run 6 | 33.70 | 59.4 | 2685 | 10251 | 284.1 | 67 | 99 % |
+| **300 s** | **33.80** | **58.9** | 2685 | 10251 | 284.1 | 67 | 100 % |
+
+**What it settles.** Within a session the measurement is *tight*: 0.3 % across six runs,
+with the SM clock, memory clock and board power identical to the last digit. So the 4 %
+gap in the original observation is not run-to-run noise being mistaken for a regime — a
+single run does measure its own session to a few tenths of a percent.
+
+**What it does not settle.** There are now four sessions on record and no two agree:
+
+| session | ms/solve | vs fastest |
+|---|---|---|
+| 2026-07-26 early | 34.18 | +1.3 % |
+| 2026-07-26 later | 35.60 | +5.5 % |
+| 2026-07-28 sweep (285 W point) | ~33.7 | — |
+| 2026-07-28 controlled | 33.75 | — |
+
+The two 2026-07-28 sessions agree with each other and are the fastest; the slow regime has
+not recurred and is still unexplained. **Cross-session variation of up to ~5 % on
+identical binaries is therefore a property of this measurement setup, not a one-off**, and
+any absolute figure on this page should be read with that band around it. Deltas are
+unaffected — every A/B here was interleaved.
+
+**What it is not.** Four explanations checked and rejected in 2026-07-26:
 
 | candidate | evidence against |
 |---|---|
 | thermal throttling | card is *cooler and clocking higher* in the slow regime — 54 °C / 2760 MHz against 63 °C / 2685 MHz |
 | within-run drift | the 15 s windows of the published run show no trend: first five average 58.5, last five 58.1 |
-| memory clock | 10251 MHz in both regimes |
+| memory clock | 10251 MHz in both regimes, and 10251 again in the controlled run |
 | host CPU contention | the bench does host-side verification and the box has `tte` on 51 % of a core, but the **GPU kernel sum itself rose 34.49 → 35.41 ms** while host overhead is only +0.15 ms |
 
 That last row is the important one: the slowdown is **on the GPU**, not in the host path.
 Per-round, measured by replay in both regimes: entry 2.72→2.79, r1 5.33→5.37, r2
 10.38→10.58, r3 9.50→9.78, r4 5.49→5.77, terminal 1.07→1.12. Everything is ~2–3 % slower
 in step, which points at a global clock/power state the reported SM and memory clocks do
-not capture — the card is SW-power-capped at 285 W in both regimes
-(`clocks_throttle_reasons.active = 0x4`), so one candidate is that the same 285 W buys
-less work at a different point on the V/f curve, but that is a hypothesis and not a
-measurement.
+not capture. The controlled run adds one fact to that: the card is at
+`sw_power_cap` **99–100 % of the time** at stock, so the SM clock is not a free variable —
+it is whatever 285 W happens to buy. The surviving hypothesis is that the same 285 W buys
+a different point on the V/f curve on different days.
 
-**What to do before quoting a number again:** establish the reproducible steady state
-first — fixed power limit, card at thermal equilibrium, host quiet — and re-measure the
-headline and the progress-table row against it. Until then treat 34.1 ms / 58.0 sol/s as
-an upper bound and the −1.34 ms improvement as the solid result. This affects the
-previously published 56.4 sol/s equally; it was measured the same way.
+**The test that would settle it, not yet run:** lock the SM clock
+(`sudo -v && LGC=2600 benchmarks/headline.sh`) and repeat across sessions. At a locked
+clock the V/f point is pinned, so if ms/solve becomes stable across days the regime is a
+clock/voltage effect; if it still moves, the memory subsystem is implicated and the
+reported 10251 MHz is not telling the whole story. A locked-clock number is also the right
+thing to track *builds* against, since it removes the card's own day-to-day discretion
+from a regression test.
+
+**How to quote a number from this page:** use the controlled figure with its conditions
+attached — 33.8 ms / 58.9 sol/s at stock 285 W, 2685 MHz, 67 °C — and carry the ~5 %
+cross-session band. Do not re-derive a headline from a short run: see the note on
+solutions/solve under the progress table.
 
 ### Round 3 does not want a fourth block — occupancy pays only where a round is latency-bound
 

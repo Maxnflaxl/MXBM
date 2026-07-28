@@ -107,10 +107,10 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **56.4 sol/s** | 48.2 sol/s |
-| End-to-end solve | **35.1 ms** | 41.0 ms |
-| Board power | 284 W — the card's 285 W limit, hit continuously | — |
-| Efficiency | 0.202 sol/s/W stock, **0.245 at 220 W**, peak 0.253 at 200 W | — |
+| Throughput | **58.9 sol/s** | 48.2 sol/s |
+| End-to-end solve | **33.8 ms** | 41.0 ms |
+| Board power | 284 W — the card's 285 W limit, `sw_power_cap` active 99–100 % of the time | — |
+| Efficiency | 0.207 sol/s/W stock, **0.245 at 220 W**, peak 0.253 at 200 W | — |
 
 The card is power-limited, not thermally limited, in every kernel, so the board
 power limit is the most valuable knob on it: **at 220 W the solver does 55.4 sol/s for
@@ -144,6 +144,12 @@ Not by total VRAM. Worked through from `compute_budget()` and `rb_pick_geometry(
 | 11 GB | 10.60 / 2.65 GiB | full, but on the **sort path** (~5× slower) | full, (16,1), 35.1 ms |
 | 10 GB | 9.70 / 2.42 GiB | **refuses** — sort path fits only 0.93 × 2^25 | full, (16,1), 35.1 ms |
 | 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | full, (15,2), 37.8 ms |
+
+The CUDA millisecond figures are from the build of 2026-07-25 and are left as measured:
+what this table is about is the **ratio** between geometries, and both sides of that ratio
+came from the same session. The current build measures 33.8 ms at (16,1) — see
+[Reference measurements](#reference-measurements) — so read the rows as "(15,2) costs
+about 8 % over (16,1)", not as absolute timings.
 
 The 8 GB row changed on 2026-07-26. `CudaSolver::available()` used to demand the (16,1)
 footprint specifically, so those cards were refused by both backends and mined nothing;
