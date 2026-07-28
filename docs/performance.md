@@ -1851,21 +1851,37 @@ it needs ~2.7× the traffic reduction this ablation makes, and a 4 GB variant ag
 7.46 GiB is plausibly that. Plausibly, not demonstrably: nobody has measured lolMiner's
 traffic.
 
+**What this measures is the BENEFIT side only, and it is an upper bound.** The ablation
+removes 56 B/element and pays nothing for them: it stores garbage. Every real way of
+moving fewer bytes pays something — re-derivation arithmetic, an extra pass, or a worse
+access pattern — so 60 MHz and 210 MHz are the size of the prize, not a forecast of any
+change that could ship. **Nothing measured today priced the cost side**, and until
+something does, "narrow the records" is a lead with a known ceiling and an unknown floor.
+
 **What it makes worth re-testing: the round-3 quad record.** `b360695` had round 3
 re-derive from a **24 B** record instead of storing 72 B of work state; `2584518` retired
-it, and the stated reason was entirely time — *"a genuine −3.6 ms at 86.8 ms is a +2.2 ms
-loss at 56."* Watts were not a term in that trade, because nothing had priced them yet.
-The record it removes is written by round 2 and read by round 3, ~5.1 GB of the solve's
-13.0, so at 24 B it takes out roughly **26 % of all traffic** — about 1.6× the lever
-measured above.
+it at *"a genuine −3.6 ms at 86.8 ms is a +2.2 ms loss at 56."* The record it removes is
+written by round 2 and read by round 3, ~5.1 GB of the solve's 13.0, so at 24 B it takes
+out roughly **26 % of all traffic** — about 1.6× the lever measured above. It is the only
+existing implementation of the byte/arithmetic trade, which makes sweeping it the cheapest
+way to learn what the cost side is worth.
 
-That is a reason to re-measure it, **not** a prediction that it wins. Scaling 210 MHz by
-1.6 assumes a linearity nobody has established, the +2.2 ms was measured on a build two
-generations old, and the arithmetic it adds gets *more* expensive in wall time at a low
-clock, not less. What can be said is that the decision to retire it was made on a metric
-that is now known to be incomplete, at the operating point where the missing term is
-largest — and the code is in git history, so re-testing it costs a resurrection and a
-sweep rather than a design.
+> **Correction (2026-07-28).** An earlier version of this section, and the commit message
+> of `5960fd4`, said that trade was made "on a metric that did not price watts". **That is
+> wrong.** The +2.2 ms was end-to-end wall time on a card that is `sw_power_cap`-limited
+> ~100 % of the time, so it already included whatever clock the freed watts bought — a
+> wall-clock A/B on a capped card prices the power effect implicitly, without anyone
+> having to know it is there. The +2.2 ms is the *net*, meaning the gross arithmetic cost
+> was larger still, offset by a clock gain nobody had identified.
+>
+> What was never measured is the same trade **at a low cap**, and that is the whole
+> argument for re-testing it. The benefit scales 5× between 285 W and 180 W while the
+> arithmetic cost is roughly fixed in cycles. Taking the stock numbers at face value —
+> ~1.3 ms of clock gain implied by 26 % of traffic, so ~3.5 ms gross arithmetic — and
+> rescaling both to 1815 MHz gives ~6.5 ms of gain against ~5.0 ms of cost: a **~1.5 ms
+> net win at 180 W**, which is thin enough that it could land either side of zero. That is
+> a real prediction and it is the point of running the sweep; it is not a reason to expect
+> much.
 
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
 
