@@ -1939,13 +1939,42 @@ says every record is already at `ceil(bits/64)`, with the one free win
 place to stand than "footprint is the main efficiency lever available", which is what this
 document said before the experiment.
 
-**It also lowers the expectation for the low-cap test**, which is still worth running but
-is no longer promising. For the quad record to win at 180 W its clock gain would have to
-cover the arithmetic at that clock — ~7.2 ms, needing about **+358 MHz** — starting from
-the +0 MHz it manages at stock. The reason it is not simply zero is that the memory clock
-does *not* scale with a core power cap, so DRAM is a larger share of a tight budget than a
-loose one, which is exactly why the exchange rate steepened 5×. Whether that is worth
-358 MHz is a measurement; the honest prior is no.
+*(At stock. Under a cap the freed watts do start to show as clock — +128 MHz at 180 W —
+without ever covering the arithmetic. The cap sweep is below.)*
+
+#### Under a cap the effect appears — and the trade still never pays
+
+*(`benchmarks/quad_cap.sh`, 2026-07-28. Packed / quad / packed at each cap, so the two
+packed runs bracket the quad one and their spread is the drift the delta must beat.)*
+
+| cap | packed | quad | Δ time | Δ clock | drift |
+|---|---|---|---|---|---|
+| 285 W | 33.62 ms @ 2692 MHz | 38.47 @ 2670 | +4.85 ms | −22 MHz | 15 MHz |
+| 220 W | 35.73 ms @ 2460 MHz | 41.37 @ 2460 | +5.64 ms | ±0 MHz | 0 MHz |
+| 180 W | 43.68 ms @ 1882 MHz | 50.01 @ 2010 | +6.34 ms | **+128 MHz** | 15 MHz |
+
+**The byte→watt mechanism is real, and this is the first time it has been shown in a
+correctness-preserving change rather than an ablation.** At 180 W the quad record holds
+**128 MHz more clock** on the same board power — 6.8 % — for no reason other than moving
+26 % fewer bytes. The clock delta marches −22 → 0 → +128 as the cap tightens, exactly the
+direction the [5× steepening](#under-a-low-cap-the-same-bytes-cost-5-as-much-clock)
+predicts, and for the reason that predicts it: the memory clock does *not* scale with a
+core power cap (10251 MHz at 180 W and at 285), so DRAM is a far larger share of a tight
+budget than a loose one.
+
+**And the trade still loses at every cap — by MORE as the cap tightens.** +4.85, +5.64,
++6.34 ms. That is the part worth internalising: the clock gain grows, and the deficit
+grows faster, because the arithmetic's *wall-time* cost rises as the clock falls. At 180 W
+the rebuild costs 9.7 ms gross (quad at packed's clock would be 53.4 ms) and the 128 MHz
+hands back only 3.4 of it. The bar set before the run was +358 MHz to break even; it
+managed 128.
+
+Efficiency follows time, so it loses there too: at 180 W packed does 0.248 sol/s/W against
+quad's 0.217.
+
+**The question is closed.** The quad record is a **footprint lever and nothing else** —
+there is no cap at which it becomes a speed or efficiency win, and the trend runs away
+from one rather than toward it.
 
 #### What it IS: a new bottom rung on the geometry ladder
 
