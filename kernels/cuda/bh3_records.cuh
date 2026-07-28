@@ -36,6 +36,23 @@ __device__ __forceinline__ uint32_t r3_l2(uint64_t p0, uint64_t p1) {
 __device__ __forceinline__ uint32_t r3_l3(uint64_t p1) { return (uint32_t)((p1 >> 11) & kIdxMask); }
 __device__ __forceinline__ uint32_t r3_gi(uint64_t p1) { return (uint32_t)((p1 >> 36) & 0x3FFFFFFull); }
 
+// r2 -> r3, QUAD RECORD (MXBM_R3_QUAD): 24 B instead of the 72 B above. Same argument as
+// the pair record one round up -- a round-2 output element is a combine of two round-2
+// inputs, each of which is determined by two seed indices, so FOUR indices determine it
+// and those four ARE its leaves (sIn = 4). The 7 work words are then redundant: round 3
+// rebuilds them with rebuild_r3 instead of reading them.
+//   w0 = key | l0<<24      w1 = l1 | l2<<25      w2 = l3 | gi<<25
+// w0 is bit-identical to the pair record's, so the staging loop's `rec0 & 0xFFFFFF` key
+// extraction is unchanged and shared with every other mode.
+__device__ __forceinline__ uint64_t quad_w0(uint32_t key, uint32_t l0) { return (uint64_t)key | ((uint64_t)l0 << 24); }
+__device__ __forceinline__ uint64_t quad_w1(uint32_t l1, uint32_t l2)  { return (uint64_t)l1  | ((uint64_t)l2 << 25); }
+__device__ __forceinline__ uint64_t quad_w2(uint32_t l3, uint32_t gi)  { return (uint64_t)l3  | ((uint64_t)gi << 25); }
+__device__ __forceinline__ uint32_t quad_l0(uint64_t w0) { return (uint32_t)(w0 >> 24) & kIdxMask; }
+__device__ __forceinline__ uint32_t quad_l1(uint64_t w1) { return (uint32_t)(w1)       & kIdxMask; }
+__device__ __forceinline__ uint32_t quad_l2(uint64_t w1) { return (uint32_t)(w1 >> 25) & kIdxMask; }
+__device__ __forceinline__ uint32_t quad_l3(uint64_t w2) { return (uint32_t)(w2)       & kIdxMask; }
+__device__ __forceinline__ uint32_t quad_gi(uint64_t w2) { return (uint32_t)(w2 >> 25); }
+
 // Rebuild a ROUND-2 element from its two parent seed indices: two seeds mixed at
 // Lmix(1)=448, combined at Lout(1)=424, then mixed at Lmix(2)=424 over the 2-leaf tree.
 __device__ __forceinline__ void rebuild_r2(const uint64_t pp[4], uint32_t li, uint32_t ri,
@@ -46,6 +63,21 @@ __device__ __forceinline__ void rebuild_r2(const uint64_t pp[4], uint32_t li, ui
     bh3::seed_element(pp, ri, b); t1[0] = ri; bh3::apply_mix(b, t1, 1u, 448u);
     bh3::combine(a, b, 424u, out);
     t2[0] = li; t2[1] = ri; bh3::apply_mix(out, t2, 2u, 424u);
+}
+
+// Rebuild a ROUND-2 OUTPUT element (round 3's input) from its four leaves: two round-2
+// rebuilds, combined at Lout(2)=400, then mixed at Lmix(3)=400 over the 4-leaf tree.
+// Fourteen siphash rounds against the 48 B it saves reading -- which side wins is the
+// measurement, and it moved once already when compile-time round constants sped the
+// kernel up and the rebuild stopped hiding in its memory stalls.
+__device__ __forceinline__ void rebuild_r3(const uint64_t pp[4], const uint32_t l[4],
+                                           bh3::Elem& out) {
+    bh3::Elem a, b;
+    rebuild_r2(pp, l[0], l[1], a);
+    rebuild_r2(pp, l[2], l[3], b);
+    bh3::combine(a, b, 400u, out);
+    uint32_t t4[4] = { l[0], l[1], l[2], l[3] };
+    bh3::apply_mix(out, t4, 4u, 400u);
 }
 
 }} // namespace mxbm::cuda

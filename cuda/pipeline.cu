@@ -46,6 +46,13 @@ using namespace mxbm::cuda;
 #define MXBM_R1_ARGS 7,7,2,LM_SEEDF,424u,2u,1u,2u,2u, 1u,10u,kFCap
 #define MXBM_R2_ARGS 7,7,2,LM_RAW,  400u,4u,2u,4u,4u, 10u,10u,kFCap
 #define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u,kFCap
+#elif MXBM_R3_QUAD
+// Round 2 emits 3 u64 (key + 4 leaves + gi) and round 3 reads 3 and rebuilds. Only the
+// two strides and round 3's mode change; every L value, tree width and cap is the same,
+// because the record carries the same INFORMATION either way -- just not the same bytes.
+#define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
+#define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,3u,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_RD3,  376u,6u,4u,2u,8u, 3u,8u,kFCap
 #else
 #define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,8u,kFCap
@@ -113,7 +120,12 @@ struct CudaSolver {
         nslots = (size_t)nb * cap;
         // set 0: 8-u64 records + the 9th-word plane behind them (see kSetStride in
         // src/gpu/cuda_solver.cu). MXBM_R2_FULL keeps the old padded 10-u64 record.
-        const uint32_t setStride[2] = { MXBM_R2_FULL ? 10u : 9u, MXBM_R2_FULL ? 10u : 8u };
+        // MXBM_R3_QUAD takes set 0 to 3 u64 instead: round 2's output is then the whole
+        // of it (r4's is 2), so the set's stride is round 2's record and nothing else.
+        // This is where the ~2.1 GiB of the footprint cut actually happens.
+        const uint32_t setStride[2] = {
+            MXBM_R2_FULL ? 10u : (MXBM_R3_QUAD ? 3u : 9u),
+            MXBM_R2_FULL ? 10u : 8u };
         elem[0] = dalloc<uint64_t>(nslots*setStride[0]);
         elem[1] = dalloc<uint64_t>(nslots*setStride[1]);
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
@@ -302,8 +314,11 @@ int main(int argc, char** argv) {
     CudaSolver s;
     if (!s.init()) { printf("FAIL: allocation\n"); return 1; }
     printf("geometry : bb=%u sm=%u nb=%u cap=%u\n", s.bb, s.sm, s.nb, s.cap);
+    // The two set strides summed: 9+8 normally, 20 under R2_FULL's padded record, and
+    // 3+8 under R3_QUAD -- which is the whole of that variant's footprint claim, so it
+    // is printed rather than asserted from a comment.
     printf("footprint: %.2f GiB\n",
-           ((double)s.nslots*(MXBM_R2_FULL ? 20 : 17)*8
+           ((double)s.nslots*(MXBM_R2_FULL ? 20 : (MXBM_R3_QUAD ? 11 : 17))*8
             + (double)5*s.capacity*4*2)/(double)(1u<<30));
 
     // Why a second stream cannot overlap these kernels: concurrent execution needs the

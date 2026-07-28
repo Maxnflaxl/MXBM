@@ -189,11 +189,35 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #endif
 }
 
+// MXBM_R3_QUAD: round 2 emits a 24 B QUAD RECORD -- key, four leaves and gi -- and round
+// 3 rebuilds the 7 work words from those leaves instead of reading them. One level up
+// from what LM_RD2 already does, and the largest single traffic lever in the pipeline:
+// that record is written by r2 and read by r3, ~5.1 GB of the solve's 13.0, so at 24 B
+// instead of 72 it removes ~26 % of ALL DRAM traffic. It also collapses set 0's stride
+// from 9 u64 to 3 (see fb_set_stride), which is a ~2.1 GiB footprint cut -- the only
+// change in the tree that moves the reach lever and the efficiency lever at once.
+//
+// It existed once on the OpenCL path (b360695) and was retired (2584518) at "+2.2 ms at
+// 56", a NET figure that already contained whatever clock the freed watts bought, since
+// the card is power-capped ~100 % of the time. What was never measured is the trade
+// under a LOW cap, where a byte is worth 5x the clock it is worth at stock -- see
+// docs/performance.md, "bytes are not free in watts".
+//
+// Off by default: it is expected to LOSE at stock and the point is to measure where it
+// crosses over. Every figure it produces is still gated on the KAT and drops == 0.
+#ifndef MXBM_R3_QUAD
+#define MXBM_R3_QUAD 0
+#endif
+
 enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4,
              // A/B pair (MXBM_R2_FULL): round 1 emits a FULL packed record and round 2
              // reads it instead of rebuilding from two seed indices. Trades bytes for
              // compute in the two kernels that still have DRAM headroom.
-             LM_SEEDF = 5, LM_RAW = 6 };
+             LM_SEEDF = 5, LM_RAW = 6,
+             // MXBM_R3_QUAD: round 3's mode. Reads a 24 B quad record and rebuilds; its
+             // OUTPUT is byte-identical to LM_EMIT's, so every emit-side branch that
+             // names LM_EMIT names this too.
+             LM_RD3 = 7 };
 
 // MXBM_ABL_EMIT=R (1..4): skip round R's scattered record payload store. The bucket
 // atomic, the gi atomic, the back-refs, combine and apply_mix ALL still run, so element
@@ -286,7 +310,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     constexpr bool kNeedLead = (LMODE == LM_USE);
     // Derived, not passed: LM_EMIT is round 3's mode and nothing else uses it, so the
     // launch sites need no new argument.
-    constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT);
+    constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
     constexpr int  LWS     = NARROW6 ? INW - 1 : INW;      // lwork stride, u64
     __shared__ uint64_t lwork[LWS * FCAP];
     __shared__ uint16_t lw6[NARROW6 ? FCAP : 1];
@@ -401,6 +425,19 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             lgi[pos] = pair_gi(rec1);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;   // leaf 0 IS the lead
+        } else if constexpr (LMODE == LM_RD3) {
+            // 24 B quad record: three scalar loads, against LM_EMIT's five LD.128 below.
+            // Not vectorised, and deliberately not padded to make it so -- a 4th u64
+            // would buy one 128-bit load and give back a third of the bytes this mode
+            // exists to save. Fewer INSTRUCTIONS as well as fewer bytes, which matters
+            // because round 3's top stall is the MIO queue and not bandwidth.
+            const uint64_t w1 = in_belem[d + 1], w2 = in_belem[d + 2];
+            lgi[pos] = quad_gi(w2);
+            if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
+            lleaf[pos*LEAFW + 0] = quad_l0(rec0);   // leaf 0 IS the lead
+            lleaf[pos*LEAFW + 1] = quad_l1(w1);
+            lleaf[pos*LEAFW + 2] = quad_l2(w1);
+            lleaf[pos*LEAFW + 3] = quad_l3(w2);
         } else if constexpr (LMODE == LM_EMIT) {
             // 128-bit loads. The record stride is an even number of u64, so d*8 is 16 B
             // aligned and cudaMalloc's base is 256 B aligned -- but the compiler cannot
@@ -522,6 +559,17 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
             else
                 rebuild_r2(pp, lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], e);
             for (int w = 0; w < INW; ++w) lwork[pos*LWS + w] = e.w[w];
+        } else if constexpr (LMODE == LM_RD3) {
+            // Deferred, in the all-lanes loop, for the same reason round 2's rebuild is:
+            // the staging loop above is sub-mask filtered, so only ~1/2^submask_bits of
+            // the lanes are live in it, and the same arithmetic there measured +23.5 ms
+            // against +0.4 ms here.
+            uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+            const uint32_t l[4] = { lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1],
+                                    lleaf[pos*LEAFW + 2], lleaf[pos*LEAFW + 3] };
+            bh3::Elem e;
+            rebuild_r3(pp, l, e);
+            for (int w = 0; w < INW; ++w) lwork[pos*LWS + w] = e.w[w];
         }
         // lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode -- and
         // it is filled by this point (the two derive modes fill it just above).
@@ -565,7 +613,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                                              : lleaf[rightPos*LEAFW + (i - SIN)];
                     if constexpr (LMODE != kAblMix) {
                         bh3::apply_mix(c, ctree, PADN, LOUT);
-                        if constexpr (LMODE == LM_EMIT) {
+                        if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
                             bh3::Elem z{};
                             bh3::apply_mix(z, ctree, 8u, 288u);
                             contribOut = bh3::rotl64(z.w[0], 40);
@@ -601,6 +649,15 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
                               make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi)));
+                    } else if constexpr (MXBM_R3_QUAD && LMODE == LM_RD2) {
+                        // QUAD RECORD: key, four leaves, gi -- 3 u64 where the packed
+                        // record below takes 9. The work words are dropped entirely;
+                        // round 3 rebuilds them from these same four leaves. Three
+                        // scalar stores rather than 4 x ST.128 + 1 x ST.64, so this is
+                        // fewer store INSTRUCTIONS as well as fewer bytes.
+                        st_em(out_belem + od + 0, quad_w0(ckey, ctree[0]));
+                        st_em(out_belem + od + 1, quad_w1(ctree[1], ctree[2]));
+                        st_em(out_belem + od + 2, quad_w2(ctree[3], cgi));
                     } else if constexpr (LMODE == LM_RD2 || LMODE == LM_RAW) {
                         // Matching 128-bit stores; the even stride makes od*8 16 B
                         // aligned. 4 x ST.128 + 1 x ST.64 instead of 9 x ST.64.
@@ -626,7 +683,9 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                         st_em(v + 3, make_ulonglong2(c.w[6],
                                    ((uint64_t)cgi << 32) | (uint64_t)ctree[0]));
                         st_em(out_belem + od + 8, ((uint64_t)ctree[1] << 32) | (uint64_t)ctree[0]);
-                    } else if constexpr (LMODE == LM_EMIT) {
+                    } else if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
+                        // LM_RD3 differs from LM_EMIT only in how it READ its input; what
+                        // round 3 writes for round 4 is byte-identical either way.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
                         st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));

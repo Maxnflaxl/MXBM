@@ -1801,7 +1801,11 @@ that is power-capped 99 % of the time the second one is what reaches the headlin
 **What this changes about the roadmap** — and it splits an item the docs had as one:
 
 - **Narrowing records** cuts bytes moved → cuts watts → buys clock. This is the
-  **efficiency** lever, and it is now measured rather than suspected.
+  **efficiency** lever, and it is now measured rather than suspected. ⚠ **But see [the
+  quad record](#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation):
+  the one implemented narrowing buys 0 MHz, because re-derivation spends the freed watts
+  on the arithmetic that replaces the bytes.** The prize below is an upper bound reachable
+  only by a narrowing that costs nothing, and the record audit says none is left.
 - **Streaming / in-place layer reuse** cuts the 7.46 GiB *footprint* by writing the same
   bytes to reused addresses. Traffic is unchanged, so by this measurement it buys no
   clock at all. It is a **reach** lever — 8 GB cards — and nothing else.
@@ -1882,6 +1886,88 @@ way to learn what the cost side is worth.
 > net win at 180 W**, which is thin enough that it could land either side of zero. That is
 > a real prediction and it is the point of running the sweep; it is not a reason to expect
 > much.
+
+### The quad record: −29 % footprint, and the byte prize does NOT survive re-derivation
+
+*(Built and measured 2026-07-28. `MXBM_R3_QUAD`, off by default. This is the experiment
+the two sections above called for, and it answers them in the negative.)*
+
+Round 2 emits a **24 B quad record** — key, four leaves, `gi` — instead of the 72 B packed
+record, and round 3 rebuilds the seven work words from those leaves (`LM_RD3`,
+`rebuild_r3`: two `rebuild_r2` calls, combined at Lout(2)=400 and mixed at Lmix(3)=400).
+The information is identical; only the bytes differ. It is the same trick `LM_RD2` already
+plays one round higher, and it existed once on the OpenCL path (`b360695`, retired in
+`2584518`).
+
+Gate green at every geometry — KAT 3/3 survivors, goldens byte-identical, `bucketDrops`
+and `pairDrops` zero:
+
+| geometry | footprint | ms/solve | | footprint | ms/solve |
+|---|---|---|---|---|---|
+| | **packed record** | | | **quad record** | |
+| (16,1) | 7.46 GiB | 33.67 | | **5.28 GiB** | 38.39 |
+| (15,2) | 6.88 GiB | 36.01 | | **4.91 GiB** | 40.65 |
+| (14,3) | 6.50 GiB | 40.02 | | **4.66 GiB** | 44.75 |
+
+**−29 % of the footprint for +14 % of the time**, interleaved A/B, three repeats each,
+spread under 0.2 ms.
+
+#### The result that matters: the clock does not move
+
+Sampling NVML underneath both variants at stock, alternated:
+
+| | ms/solve | SM clock | W |
+|---|---|---|---|
+| packed | 33.72 / 33.56 | 2700 / 2715 | 283.8 / 283.5 |
+| quad | 38.53 / 38.61 | 2700 / 2692 | 284.1 / 284.8 |
+
+**Identical, at the same 284 W.** The quad record moves **26 % less traffic** than the
+packed one — more than the 16 % the ablation removed for +60 MHz — and buys **zero clock**.
+
+The reason is the thing the ablation could not tell us, and it retires the lead:
+**re-derivation spends the freed watts on the arithmetic that replaces the bytes.** The
+ablation removed 56 B/element and paid *nothing* for them, because it stored garbage; that
+is what made its 60 MHz an upper bound rather than a forecast. A real narrowing has to put
+something in the bytes' place, and fourteen siphash rounds cost about what the DRAM
+traffic they replace costs. Net power: unchanged. Net clock: unchanged. Net time: worse by
+the arithmetic.
+
+So **the byte→watt prize is real and is not reachable by re-derivation.** Harvesting it
+needs a narrowing that costs nothing — and [the record audit](#the-record-redundancy-audit)
+says every record is already at `ceil(bits/64)`, with the one free win
+([the alignment pad](#the-round-2-alignment-pad)) already taken. That is a much harder
+place to stand than "footprint is the main efficiency lever available", which is what this
+document said before the experiment.
+
+**It also lowers the expectation for the low-cap test**, which is still worth running but
+is no longer promising. For the quad record to win at 180 W its clock gain would have to
+cover the arithmetic at that clock — ~7.2 ms, needing about **+358 MHz** — starting from
+the +0 MHz it manages at stock. The reason it is not simply zero is that the memory clock
+does *not* scale with a core power cap, so DRAM is a larger share of a tight budget than a
+loose one, which is exactly why the exchange rate steepened 5×. Whether that is worth
+358 MHz is a measurement; the honest prior is no.
+
+#### What it IS: a new bottom rung on the geometry ladder
+
+The footprint half stands on its own, and the ladder is where it pays. Comparing on
+**memory budget** rather than on geometry:
+
+| a card that can host… | best packed option | best quad option |
+|---|---|---|
+| 6.9 GiB | (15,2), 36.01 ms | — *(packed wins)* |
+| 6.5 GiB | (14,3), 40.02 ms | **(16,1), 38.39 ms** |
+| 5.3 GiB | *refuses* | **(16,1), 38.39 ms** |
+| 4.7 GiB | *refuses* | **(14,3), 44.75 ms** |
+
+Below ~6.5 GiB the quad record is both **smaller and faster** than stepping the geometry
+down, because a coarser geometry pays in scatter locality what the quad record pays in
+arithmetic — and the arithmetic is cheaper. Above it, the packed record wins and should
+stay the default.
+
+That extends the CUDA path from a 7.46 GiB floor to **4.66 GiB**, which is the 6 GB card
+class (an RTX 3050 6 GB reports ~5.7 GiB). Not wired into `pick_geometry` yet: the ladder
+currently chooses a geometry, and this makes the record format a second axis it would have
+to choose on. See [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#current-footprint-full-225-search).
 
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
 
