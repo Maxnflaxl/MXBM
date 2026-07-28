@@ -1468,7 +1468,7 @@ the target. What is left is not more solver micro-optimization:
    gate every run is held to. So the geometry ladder, not a tighter cap, is the lever for
    fitting a smaller card — and the "8σ→6σ reduction" lead 5 records as moot-but-real was
    never real.
-4b. **Optimize the sort path.** *(Started 2026-07-28; **214.8 → 193.6 ms** so far — see
+4b. **Optimize the sort path.** *(Started 2026-07-28; **214.8 → 190.4 ms** so far — see
    [the round-4 mix anomaly](#the-round-4-mix-anomaly-was-a-runtime-constant-270--82-ms),
    which was the first thing on it and is now closed.)* It had been parked at ~214.6 ms
    since 2026-07-24, when the row-bucket path took over and every optimization since went
@@ -1939,8 +1939,40 @@ restores the old kernels so the A/B stays re-measurable.
 is not a small inefficiency here — it can be a 3× cliff, because it decides whether a
 private array lives in registers or in scratch. The row-bucket path learned this as
 "−32.5 % from compile-time round constants"; the sort path had the same three constants
-and only one of them had been fixed. **`padNum` and `Lmix` are still runtime arguments in
-`round_match` too**, which is 158 ms of the remaining 193.
+and only one of them had been fixed.
+
+### The same trick on `round_match` mostly does not work (−3.7 ms, and two rounds lose)
+
+*(2026-07-28. Ran because `Lout`, `lead_identity` and the leaf widths `s_in`/`s_out` were
+equally runtime in the match kernel — 158 ms of the then-193. The result corrects the
+lesson above rather than extending it.)*
+
+`MATCH_SORTED_K` bakes all three in alongside the work widths that were already constant.
+Per round, interleaved, reproduced on every run:
+
+| | r1 | r2 | r3 | r4 | r5 | total |
+|---|---|---|---|---|---|---|
+| runtime | 31.6 | 33.0 | 34.4 | 33.6 | 25.0 | 158.8 |
+| constant | 34.4 | 35.3 | **32.8** | **32.7** | **23.8** | 160.0 |
+| | +2.8 | +2.3 | −1.6 | −0.9 | −1.2 | **+1.4** |
+
+**It wins for r3/r4/r5 and loses for r1/r2**, so only those three are selected and rounds
+1–2 stay on the generic kernel: **155.3 ms, −3.7 ms on the solve.** `k1`/`k2` are kept,
+compiled and unused, so the null stays re-measurable; their presence costs nothing.
+
+The split tracks `s_out`, the leaf-copy loop — 8 / 9 / 0 for r3 / r4 / r5, where unrolling
+it (or deleting it outright at 0) pays, against 2 / 4 for r1 / r2 where it does not. **What
+costs r1/r2 those 2–3 ms is not explained.** It is not the redundant zero-fill (guarding it
+changed nothing), and `lead_identity` folding to 1 should if anything have *helped* r1,
+since it removes two global leaf loads per candidate pair.
+
+**This is the correction to the lesson, and it matters more than the 3.7 ms.** Baking a
+constant pays where it lets a **private array escape scratch** — `t[8]` above, 27 → 8 ms —
+and is roughly free-to-negative where it only removes comparisons. `round_match` has no
+dynamically-indexed private array: `ea`/`eb`/`ec` are indexed by unrolled loop counters.
+There was never a cliff here to find, and "compile-time round constants are worth −32.5 %"
+generalised from a case that had one. Look for the dynamic index first; the constants are
+the fix, not the diagnosis.
 
 ### The quad record: −29 % footprint, and the byte prize does NOT survive re-derivation
 

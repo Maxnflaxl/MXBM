@@ -309,3 +309,100 @@ __kernel void NAME(uint N, uint Lout, uint lead_identity,                       
 MATCH_SORTED_W(round_match_sorted_7_6, 7, 6)   // r3: in 7 words, child 6
 MATCH_SORTED_W(round_match_sorted_6_5, 6, 5)   // r4: in 6 words, child 5
 MATCH_SORTED_W(round_match_sorted_5_1, 5, 1)   // r5: in 5 words, child 1
+
+// FULLY CONSTANT match: Lout, lead_identity and the leaf-prefix widths baked in as
+// well as the work widths.
+//
+// The widths above were made compile-time because "the runtime-bound loop was the
+// measured loss"; the same reasoning applies to three more arguments that are equally
+// known per round and were left at runtime. Round 4's mix cost 27 ms against 8 for
+// exactly this reason (ROUND_MIX_K in round.cl), so the priors here are not theoretical:
+//
+//  * LOUT reaches bh3_combine, whose tail is `if (64*i >= Lout) out[i] = 0;` plus a
+//    partial-word mask -- seven runtime comparisons per combine, in the innermost loop.
+//  * LEADID picks between `sa` and a global leaf load, twice per candidate pair. As a
+//    constant, round 1 loses the load entirely and rounds 2-5 lose the branch.
+//  * SIN/SOUT bound the leaf-prefix copy -- a RUNTIME-bounded loop containing a RUNTIME
+//    branch (`i < s_in` chooses which parent to read), executed s_out times per emitted
+//    child, up to 9. Constant, it unrolls into nine unconditional loads from a known
+//    parent; at SOUT == 0 (round 5) it vanishes.
+//
+// Nothing else changes: this is the same contract, the same emission order, and the
+// goldens are byte-identical.
+#define MATCH_SORTED_K(NAME, INW, OUTW, LOUT, LEADID, SIN, SOUT)                  \
+__kernel void NAME(uint N, uint Lout, uint lead_identity,                         \
+                   uint out_off, uint out_capacity,                              \
+                   __global const ulong* sorted_pairs,                           \
+                   __global const uint* offsets,                                 \
+                   __global const ulong* in_work,                                \
+                   __global ulong* out_work,                                     \
+                   __global uint* all_left, __global uint* all_right,            \
+                   __global uint* counters,                                      \
+                   __global const uint* leaves_in,                              \
+                   __global uint* leaves_out,                                    \
+                   uint s_in, uint s_out) {                                       \
+    uint g = get_global_id(0);                                                   \
+    if (g >= N) return;                                                          \
+    uint ka = sort_key(sorted_pairs[g]);                                         \
+    if (g > 0 && sort_key(sorted_pairs[g - 1]) == ka) return;                    \
+    uint m = 1;                                                                  \
+    while (g + m < N && sort_key(sorted_pairs[g + m]) == ka) ++m;                \
+    uint o = offsets[g];                                                         \
+    for (uint a = 0; a < m; ++a) {                                               \
+        uint sa = sort_index(sorted_pairs[g + a]);                              \
+        uint la = (LEADID) ? sa : leaves_in[(size_t)sa*BH3_MAX_LEAVES];         \
+        for (uint bb = a + 1; bb < m; ++bb) {                                   \
+            uint sb = sort_index(sorted_pairs[g + bb]);                         \
+            uint lb = (LEADID) ? sb : leaves_in[(size_t)sb*BH3_MAX_LEAVES];     \
+            uint left = sa, right = sb;                                         \
+            if (lb < la || (lb == la && sb < sa)) { left = sb; right = sa; }    \
+            ulong ea[7], eb[7], ec[7];                                          \
+            /* Zero-fill only where there is something to fill. At INW == 7 the  \
+               next loop writes every word, and the redundant pass measured +2 ms \
+               per round rather than being eliminated -- the constant condition   \
+               folds away, an unconditional dead store apparently did not. */     \
+            if ((INW) < 7) for (int w = (INW); w < 7; ++w) { ea[w] = 0ul; eb[w] = 0ul; } \
+            for (int w = 0; w < (INW); ++w) {                                   \
+                ea[w] = in_work[(size_t)left*(INW)+w];                          \
+                eb[w] = in_work[(size_t)right*(INW)+w];                         \
+            }                                                                   \
+            bh3_combine(ea, eb, (LOUT), ec);                                    \
+            uint oi = o++;                                                      \
+            if (oi < out_capacity) {                                            \
+                for (int w = 0; w < (OUTW); ++w) out_work[(size_t)oi*(OUTW) + w] = ec[w]; \
+                all_left[out_off + oi] = left; all_right[out_off + oi] = right; \
+                for (uint i = 0; i < (SOUT); ++i) {                             \
+                    uint leaf = (i < (SIN)) ? leaves_in[(size_t)left*BH3_MAX_LEAVES + i]  \
+                                            : leaves_in[(size_t)right*BH3_MAX_LEAVES + (i - (SIN))]; \
+                    leaves_out[(size_t)oi*BH3_MAX_LEAVES + i] = leaf;          \
+                }                                                              \
+            } else atomic_inc(&counters[2]);                                   \
+        }                                                                      \
+    }                                                                          \
+}
+// MEASURED, and NOT what the mix result predicted: constant-folding these wins for
+// r3/r4/r5 and LOSES for r1/r2, reproducibly, on every interleaved run.
+//
+//        r1 +2.8   r2 +2.3   |   r3 -1.6   r4 -0.9   r5 -1.2   ms
+//
+// So only k3/k4/k5 are selected (round_pipeline.cpp); r1 and r2 stay on the generic
+// round_match_sorted. k1 and k2 are kept, compiled and unused, so the null stays
+// re-measurable -- their presence costs nothing measurable.
+//
+// The split tracks s_out, the leaf-copy loop: 8 / 9 / 0 for r3 / r4 / r5, where
+// unrolling it (or deleting it entirely at 0) pays, against 2 / 4 for r1 / r2 where
+// it does not. What costs r1/r2 the 2-3 ms is NOT explained -- it is not the zero-fill
+// (guarding it changed nothing) and LEADID=1 should if anything have helped r1, since
+// it removes two global leaf loads per candidate pair.
+//
+// The general lesson, which the mix result on its own would have got wrong: baking a
+// constant pays where it lets a PRIVATE ARRAY escape scratch (round.cl's t[8], 27 -> 8 ms)
+// and is roughly free-to-negative where it only removes comparisons. Match has no
+// dynamically-indexed private array -- ea/eb/ec are indexed by unrolled loop counters --
+// so there was never a cliff here to find.
+//                     name                  INW OUTW  Lout  leadId sIn sOut
+MATCH_SORTED_K(round_match_k1, 7, 7, 424u, 1, 1, 2)   // r1: LOSES, not selected
+MATCH_SORTED_K(round_match_k2, 7, 7, 400u, 0, 2, 4)   // r2: LOSES, not selected
+MATCH_SORTED_K(round_match_k3, 7, 6, 376u, 0, 4, 8)
+MATCH_SORTED_K(round_match_k4, 6, 5, 288u, 0, 8, 9)
+MATCH_SORTED_K(round_match_k5, 5, 1,  24u, 0, 9, 0)   // r5: no child leaves at all

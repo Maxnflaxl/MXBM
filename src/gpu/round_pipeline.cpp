@@ -604,9 +604,26 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
     {
         // Compaction: fixed-width match variant by round (r3:7->6, r4:6->5,
         // r5:5->1). r1,r2 stay full-width. All variants share this signature.
+        // Fully-constant variants are the default: Lout, lead_identity and the leaf
+        // widths are as compile-time-knowable as the work widths already were. See
+        // MATCH_SORTED_K in sort.cl. MXBM_MATCH_RUNTIME restores the partially-constant
+        // kernels, which is what the A/B was measured against.
+        static const bool runtimeMatch = std::getenv("MXBM_MATCH_RUNTIME") != nullptr;
         const char* matchName = "round_match_sorted";
         if (pb.compact) {
-            if      (r == 3) matchName = "round_match_sorted_7_6";
+            // MEASURED, and not what was expected: the constants win for r3/r4/r5
+            // (-1.6 / -0.9 / -1.2 ms) and LOSE for r1/r2 (+2.8 / +2.3), reproducibly,
+            // across every interleaved run. They are therefore used only where they pay.
+            // The split tracks the leaf-copy loop -- s_out is 8/9/0 for r3/r4/r5, where
+            // unrolling it (or deleting it, at 0) is worth real time, and 2/4 for r1/r2,
+            // where it is not and something else costs more. That "something else" is
+            // unexplained; see docs/performance.md.
+            if (!runtimeMatch && r >= 3) {
+                static const char* kK[6] = { "", "", "", "round_match_k3",
+                                             "round_match_k4", "round_match_k5" };
+                matchName = kK[r];
+            }
+            else if (r == 3) matchName = "round_match_sorted_7_6";
             else if (r == 4) matchName = "round_match_sorted_6_5";
             else if (r == 5) matchName = "round_match_sorted_5_1";
         }
