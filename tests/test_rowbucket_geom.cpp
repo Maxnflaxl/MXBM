@@ -135,6 +135,28 @@ int main() {
            &&  rb_geometry_for(cap, 0, gib(7.0), true ).viable,
               "the quad record takes the CUDA floor from 7.6 GiB down past 7.0");
 
+        // WHAT THE QUAD RECORD BUYS ON OPENCL, which is the point of porting it there:
+        // OpenCL is bound by CL_DEVICE_MAX_MEM_ALLOC_SIZE (VRAM/4 on NVIDIA), and the
+        // quad record takes the largest single allocation from 2.76 GiB to 2.45. A card
+        // that clears the smaller number runs the row-bucket path instead of falling
+        // back to the sort path, which measures ~190 ms against ~42.
+        struct { double vram; bool packed_ok; bool quad_ok; const char* why; } ocl[] = {
+            { 15.59, true,  true,  "16 GB: row-bucket either way" },
+            { 11.60, true,  true,  "12 GB: row-bucket either way" },
+            { 10.60, false, true,  "11 GB: SORT PATH without the quad record, row-bucket with it" },
+            {  9.70, false, false, "10 GB: max_alloc 2.42 GiB misses even quad (14,3)'s 2.45 -- still sort" },
+        };
+        for (const auto& c : ocl) {
+            const uint64_t ma = gib(c.vram) / 4;             // NVIDIA OpenCL reports VRAM/4
+            check(rb_geometry_for(cap, ma, gib(c.vram), false).viable == c.packed_ok
+               && rb_geometry_for(cap, ma, gib(c.vram), true ).viable == c.quad_ok, c.why);
+        }
+        // The 11 GB card specifically: name the rung, so a regression in the ordering
+        // shows up as this assertion rather than as a silent 4x slowdown for that class.
+        const RbGeometry g11 = rb_geometry_for(cap, gib(10.60)/4, gib(10.60), true);
+        check(g11.viable && g11.quad && g11.bb == 15,
+              "11 GB OpenCL lands on quad (15,2) -- the first rung under its 2.65 GiB ceiling");
+
         // Every rung stays on the line the compile-time kernel constants assume.
         int n = 0;
         const RbRung* rungs = rb_rungs(n);

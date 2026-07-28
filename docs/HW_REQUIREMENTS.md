@@ -17,7 +17,7 @@ report; BeamHash III yields ~1.9 solutions per solve.
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
 | **VRAM — CUDA backend (the default)** | **6 GB** — needs > 5.7 GiB *reported*. 10 GB and up get the fastest geometry; below that the ladder steps down, 7–33 % slower |
-| **VRAM — OpenCL backend (fallback)** | **12 GB** — the single-allocation ceiling binds first, see [limitation 1](#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit) |
+| **VRAM — OpenCL backend (fallback)** | **11 GB** — the single-allocation ceiling binds first, and the [quad record](performance.md#the-quad-record-on-opencl-takes-11-gb-cards-off-the-sort-path-190--45-ms) is what clears it at 11 GB; see [limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit) |
 | **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (CUDA, with the [quad record](performance.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)); 6.50 GiB is the OpenCL floor |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
@@ -51,7 +51,7 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
 | Row-bucket (default) | **7.46 GiB** | 239 B | 3.27 GiB |
-| Row-bucket, quad record (CUDA) | **5.28 GiB** | 169 B | 2.90 GiB |
+| Row-bucket, quad record (both backends) | **5.28 GiB** | 169 B | 2.90 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
 The largest single allocation matters independently of total VRAM: OpenCL reports
@@ -71,7 +71,7 @@ alone — and then checks the prediction against the allocator, stepping down ag
 memory is not actually free (a desktop compositor can be holding a gigabyte). It also
 walks **three further rungs OpenCL does not have**, using the 24 B quad record: the full
 six-rung table, with its measured times, is under
-[limitation 1](#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit). Every rung
+[limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit). Every rung
 is KAT-gated with drops zero, and the allocator retry walks the rung list rather than the
 geometry, so a card that loses a packed rung to a busy desktop falls through onto the quad
 ones instead of being refused.
@@ -139,7 +139,7 @@ See [performance.md](performance.md) for the full optimization history.
 
 These are open issues in MXBM, not properties of BeamHash III.
 
-### 1. Below 12 GB, OpenCL is capped by its single-allocation limit
+### 1. Below 11 GB, OpenCL is capped by its single-allocation limit
 
 Not by total VRAM. Worked through from `compute_budget()` and `rb_pick_geometry()`:
 

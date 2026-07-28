@@ -1422,7 +1422,7 @@ the target. What is left is not more solver micro-optimization:
 
    **What it reaches.** CUDA has no `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, which is the limit
    that binds OpenCL below 12 GB
-   ([limitation 1](HW_REQUIREMENTS.md#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit)),
+   ([limitation 1](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)),
    so the CUDA ladder is bounded by total VRAM alone:
 
    | card | OpenCL | CUDA before | CUDA now |
@@ -1477,7 +1477,7 @@ the target. What is left is not more solver micro-optimization:
    constants is in and was worth −9.8 %; the other two are untouched. It is
    not a dead path — it is what runs on any device that cannot host a row-bucket
    geometry, which per
-   [limitation 1](HW_REQUIREMENTS.md#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit)
+   [limitation 1](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)
    means 11 GB cards and anything whose OpenCL `max_alloc` is small, and the CUDA backend
    has no sort path at all. So this is reach and it is also the only path some users will
    ever run. Known starting points: the [record audit](#the-record-redundancy-audit)
@@ -1889,6 +1889,47 @@ way to learn what the cost side is worth.
 > a real prediction and it is the point of running the sweep; it is not a reason to expect
 > much.
 
+### The quad record on OpenCL takes 11 GB cards off the sort path (~190 → 45 ms)
+
+*(2026-07-28. The reason to port it: on OpenCL the quad record is not a footprint
+nicety, it is what clears a hard ceiling.)*
+
+OpenCL is bound by `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, VRAM/4 on NVIDIA, and that is what
+decides whether a card runs the row-bucket path at all. The quad record takes the
+**largest single allocation from 2.76 GiB to 2.45** — and an 11 GB card reports 2.65.
+
+| card | max_alloc | packed | with the quad record |
+|---|---|---|---|
+| 16 GB | 3.90 GiB | row-bucket (16,1) | (unchanged — packed wins) |
+| 12 GB | 2.90 | row-bucket (14,3) | (unchanged) |
+| **11 GB** | **2.65** | **sort path, ~190 ms** | **quad (15,2), 45.1 ms** |
+| 10 GB | 2.42 | sort path | sort path — 2.42 misses quad (14,3)'s 2.45 by 30 MB |
+
+**That is 4.2× for the 11 GB class**, and it is the largest single improvement available
+to those cards: the sort path is structurally ~4.7× the row-bucket path and
+[three separate attempts to close that by transplanting row-bucket wins](#index-only-round-1-does-not-transfer-to-the-sort-path-27-ms)
+have now returned −21 ms, −3.7 ms and +27 ms. Moving the card off the path beats tuning it.
+
+`LMODE_RD3` and `round_fused_rd2q`/`round_fused_rd3` mirror the CUDA implementation
+exactly — the `rd3_*` accessors and `rd_elem2` were still in `lds.cl`, having survived
+the 2026-07-24 revert of the original OpenCL attempt. Gate green on the first run at
+every rung:
+
+| geometry | packed | quad |
+|---|---|---|
+| (16,1) | 40.3 ms | 42.5 |
+| (15,2) | 43.6 | 45.1 |
+| (14,3) | — | 50.8 |
+
+**The record costs +4.4 % here against +14 % on CUDA**, which is the "idle issue slots"
+rule again: this path is more memory-stalled, so the two round-2 rebuilds hide in the
+deferred expand rather than landing on the critical path.
+
+One thing fixed on the way, unrelated but sharp: `MXBM_BB=15` alone left `sm` at its
+default of 1, putting the geometry off the `bb + sm == 17` line every compile-time kernel
+constant assumes — and the OpenCL path, unlike CUDA's, did not check, so it **silently
+produced wrong results** (0/3 goldens) rather than refusing. `sm` is now derived from `bb`.
+
 ### The round-4 mix anomaly was a runtime constant (27.0 → 8.2 ms)
 
 *(Closed 2026-07-28. Open since before the CUDA backend existed, and the fix is a
@@ -2168,7 +2209,7 @@ solutions/solve on that path, so the mining route is gated and not just the benc
 **Stated CUDA requirement drops from 8 GB to 6 GB**, and the cards between 6.3 and 7.9 GiB
 free get a *faster* rung than before — quad (16,1) at 38.4 ms where the packed ladder gave
 them (14,3) at 40.0. Full table in
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#1-below-12-gb-opencl-is-capped-by-its-single-allocation-limit).
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit).
 
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
 

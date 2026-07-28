@@ -131,14 +131,32 @@ bool compact_active();   // defined below; gates the compacted sort path
 // total leaves ~1 GB headroom under global_mem. Falls back to the sort path on any
 // device that can't hold the ~12 GB working set (8-12 GB cards). capacity==0 (some
 // synthetic Budgets) only honors an explicit force. MXBM_BB / MXBM_SM override.
-struct RbGeom { uint32_t bb, sm; };
+// `quad` rides along because it is a second axis of the same ladder, not a tuning
+// knob: it changes the record format, hence the strides, hence the allocation.
+struct RbGeom { uint32_t bb, sm; bool quad; };
 
 static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
-    if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM"))
-        return { rb_bucket_bits(), rb_submask_bits() };
+    if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM")) {
+        // MXBM_BB alone used to leave sm at its default of 1, putting the geometry OFF
+        // the bb + sm == 17 line every compile-time kernel constant assumes -- and the
+        // OpenCL path, unlike CUDA's, did not check: `MXBM_BB=15` silently produced
+        // wrong results (0/3 goldens) rather than refusing. Derive sm from bb the way
+        // CudaSolver::pick_geometry does, and let an explicit MXBM_SM override it.
+        const uint32_t bb = rb_bucket_bits();
+        const uint32_t sm = std::getenv("MXBM_SM") ? rb_submask_bits() : (17u - bb);
+        return { bb, sm, std::getenv("MXBM_QUAD") != nullptr };
+    }
     const DeviceInfo& d = rt.device();
-    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, d.global_mem);
-    return { g.bb, g.sm };
+    // allow_quad: the OpenCL row-bucket kernels now carry the 24 B quad record
+    // (round_fused_rd2q / round_fused_rd3), so this backend can reach the rungs that
+    // used to be CUDA-only. It matters far more here than on CUDA: the quad record
+    // takes the largest single allocation from 2.76 to 2.45 GiB, which is under the
+    // CL_DEVICE_MAX_MEM_ALLOC_SIZE of an 11 GB card -- a whole device class that was
+    // falling back to the ~5x slower sort path.
+    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, d.global_mem, /*allow_quad=*/true);
+    // MXBM_QUAD forces the record format on a card that would not otherwise need it,
+    // which is the only way to exercise this path on a 16 GB device.
+    return { g.bb, g.sm, g.quad || std::getenv("MXBM_QUAD") != nullptr };
 }
 
 bool rowbucket_viable(Runtime& rt, const Budget& b) {
@@ -154,7 +172,7 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
     const RbGeom g = rb_pick_geometry(rt, capacity);
     size_t total = 0, single = 0;
-    rowbucket_bytes(capacity, g.bb, total, single);
+    rowbucket_bytes(capacity, g.bb, total, single, g.quad);
     if (single > (size_t)d.max_alloc) return false;
     if (total + (size_t)(1ull << 30) > (size_t)d.global_mem) return false;
     return true;
@@ -168,10 +186,11 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     p.fb_num_buckets  = 1u << g.bb;
     p.fb_submask_bits = g.sm;
     p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
+    p.fb_quad = g.quad;
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     for (int i = 0; i < 2; ++i) {
-        p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * fb_set_stride((int)i) * 8);
-        p.fb_stride[i] = fb_set_stride((int)i);
+        p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * fb_set_stride((int)i, g.quad) * 8);
+        p.fb_stride[i] = fb_set_stride((int)i, g.quad);
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
@@ -922,10 +941,12 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         const uint32_t sIn = fc.sIn, sOut = fc.sOut, sBuild = fc.sBuild;
         uint32_t outOff = (uint32_t)(r - 1) * capacity;
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
+        // Rounds 2 and 3 switch TOGETHER between record formats -- r2's out-stride is
+        // r3's in-stride, so a mismatch would have r3 read a record r2 never wrote.
         const char* fusedName = "round_fused_lds";
         if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
-        else if (r == 2) fusedName = "round_fused_rd2";    // re-derives from the pair record
-        else if (r == 3) fusedName = "round_fused_7_6";
+        else if (r == 2) fusedName = pb.fb_quad ? "round_fused_rd2q" : "round_fused_rd2";
+        else if (r == 3) fusedName = pb.fb_quad ? "round_fused_rd3"  : "round_fused_7_6";
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
         cl_mem ic = pb.fb_counts[inSet].get(),  ie = pb.fb_elem[inSet].get();
@@ -937,7 +958,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, Lout); rt.set_arg(k.get(), a++, LmixNext); rt.set_arg(k.get(), a++, padNext);
         rt.set_arg(k.get(), a++, sIn); rt.set_arg(k.get(), a++, sOut); rt.set_arg(k.get(), a++, outOff);
         rt.set_arg(k.get(), a++, sBuild);
-        rt.set_arg(k.get(), a++, kFbStride[r]); rt.set_arg(k.get(), a++, kFbStride[r + 1]);
+        rt.set_arg(k.get(), a++, fb_round_stride(r - 1, pb.fb_quad));
+        rt.set_arg(k.get(), a++, fb_round_stride(r, pb.fb_quad));
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ie);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &oe);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);

@@ -480,6 +480,7 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 #define LMODE_USE  2   // stage the contrib, no leaf emit              (r4)
 #define LMODE_SEED 3   // RE-DERIVE from index; emit a 16 B PAIR record (r1)
 #define LMODE_RD2  4   // RE-DERIVE from that pair record                (r2)
+#define LMODE_RD3  5   // RE-DERIVE from a 24 B QUAD record              (r3)
 #define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
 
 // PAIR RECORD (round 1 -> round 2), 16 B instead of the 72 B packed element. A
@@ -599,6 +600,17 @@ void NAME(                                                                      
                 uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
                 lgi[pos] = rd2_gi(rec1); llead[pos] = li; lkey[pos] = key;            \
                 lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
+            } else if ((LMODE) == LMODE_RD3) {                                        \
+                /* 24 B QUAD record: key, four leaves, gi -- no work words. Three     \
+                   scalar loads where LMODE_EMIT below reads nine. Field extraction    \
+                   only; the two round-2 rebuilds are deferred to the expand loop. */  \
+                ulong w1 = in_belem[d + 1u], w2 = in_belem[d + 2u];                   \
+                uint l0 = rd2_left(rec0);                                             \
+                lgi[pos] = rd3_gi(w2); llead[pos] = l0; lkey[pos] = key;               \
+                lleaf[pos*(LEAFW) + 0] = l0;                                           \
+                lleaf[pos*(LEAFW) + 1] = rd3_i1(w1);                                   \
+                lleaf[pos*(LEAFW) + 2] = rd3_i2(w1);                                   \
+                lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                   \
             } else if ((LMODE) == LMODE_EMIT) {                                       \
                 /* 72 B round-3 record: 7 work words then the packed leaves+gi. */     \
                 for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
@@ -650,6 +662,23 @@ void NAME(                                                                      
             rd_elem2(pp, lleaf[pos*(LEAFW) + 0], lleaf[pos*(LEAFW) + 1], cc);         \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
         }                                                                             \
+        if (!ABL_HIT(2, LMODE) && (LMODE) == LMODE_RD3) {                                     \
+            /* DEFERRED EXPAND, round 3: TWO round-2 rebuilds, combined at Lout(2)=400 \
+               and mixed at Lmix(3)=400 over the 4-leaf tree. Deferred for the same     \
+               reason round 2's is -- this loop runs every lane, the staging loop runs  \
+               ~4/32 of them. Fourteen siphash rounds per parent against the 48 B it    \
+               saves reading; which side wins is measured, not argued. */                \
+            ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
+            uint t4[4];                                                                \
+            t4[0] = lleaf[pos*(LEAFW) + 0]; t4[1] = lleaf[pos*(LEAFW) + 1];            \
+            t4[2] = lleaf[pos*(LEAFW) + 2]; t4[3] = lleaf[pos*(LEAFW) + 3];            \
+            ulong a2[7], b2[7], cc[7];                                                 \
+            rd_elem2(pp, t4[0], t4[1], a2);                                            \
+            rd_elem2(pp, t4[2], t4[3], b2);                                            \
+            bh3_combine(a2, b2, 400u, cc);                                             \
+            cc[0] = bh3_apply_mix(cc, t4, 4u, 400u);                                   \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
+        }                                                                             \
         uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);                   \
         lchain[pos] = atomic_xchg(&tab[hk], pos);                                     \
     }                                                                                \
@@ -685,7 +714,7 @@ void NAME(                                                                      
                         ctree[i] = (i < (SIN)) ? lleaf[leftPos*(LEAFW) + i]           \
                                                : lleaf[rightPos*(LEAFW) + (i-(SIN))];  \
                     c[0] = bh3_apply_mix(c, ctree, (PADN), (LOUT));                   \
-                    if ((LMODE) == LMODE_EMIT) {                                                              \
+                    if ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3) {                                      \
                         ulong zw[7]; for (uint w = 0; w < 7u; ++w) zw[w] = 0ul;        \
                         contribOut = bh3_rotl64(                                       \
                             bh3_apply_mix(zw, ctree, 8u, BH3_LMIX5), 40);              \
@@ -712,6 +741,15 @@ void NAME(                                                                      
                            ctree[0]/ctree[1] are the two parent seed indices. */       \
                         out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
                         out_belem[od + 1u] = rd2_w1(ctree[1], cgi);                   \
+                    } else if ((LMODE) == LMODE_RD2 && (OUTSTR) == 3u) {              \
+                        /* QUAD RECORD: key, four leaves, gi in 3 u64 where the packed \
+                           record below takes 9. The work words are dropped entirely;  \
+                           round 3 rebuilds them from these same four leaves. Keyed on \
+                           OUTSTR rather than a mode of its own, so r2's staging and    \
+                           expand stay byte-identical between the two record formats. */ \
+                        out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
+                        out_belem[od + 1u] = rd3_w1(ctree[1], ctree[2]);              \
+                        out_belem[od + 2u] = rd3_w2(ctree[3], cgi);                   \
                     } else if ((LMODE) == LMODE_RD2) {                                \
                         /* 72 B: 7 work words + 4 leaves + gi, no separate meta word.  \
                            lead == ctree[0] == leaf 0, so storing it again was waste. */ \
@@ -721,7 +759,7 @@ void NAME(                                                                      
                     } else {                                                          \
                         for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
                         out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0]; \
-                        if ((LMODE) == LMODE_EMIT) {                                                          \
+                        if ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3) {                                  \
                             out_belem[od + (OUTW) + 1u] = contribOut;                 \
                         } else {                                                      \
                             for (uint j = 0; j*2u < (SOUT); ++j) {                    \
@@ -752,6 +790,13 @@ FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 9u)   
 // Lout(r) == Lmix(r+1) for every round, so `Lout` serves both roles.
 FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild, in_stride, out_stride)
 FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 9u, 8u)   // r3 fallback (full packed record)
+// QUAD-RECORD PAIR (rowbucket_geom.h `quad`). Only the strides and round 3's mode
+// change: the record carries the same INFORMATION either way, just not the same bytes.
+// r2 emits 3 u64 instead of 9, and set 0's stride collapses 9 -> 3 with it, which is
+// what takes the largest single allocation from 2.76 to 2.45 GiB -- under the
+// CL_DEVICE_MAX_MEM_ALLOC_SIZE of an 11 GB card, which is why this exists on OpenCL.
+FUSED_LDS(round_fused_rd2q, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 3u)    // r2: emits the 24 B quad record
+FUSED_LDS(round_fused_rd3,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 3u, 8u)    // r3: rebuilds from it
 FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u)    // r4: stages contrib, no leaf emit
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,

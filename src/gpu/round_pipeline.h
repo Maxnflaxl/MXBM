@@ -71,6 +71,7 @@ struct PipelineBuffers {
     uint32_t fb_num_buckets = 0, fb_bucket_cap = 0;
     uint32_t fb_submask_bits = 0;   // chosen with fb_num_buckets; see rb_pick_geometry
 
+    bool fb_quad = false;            // 24 B quad record for r2 -> r3; see rowbucket_geom.h
     uint32_t fb_stride[2] = {0, 0};  // u64/element actually allocated PER SET (the two
                                // differ) -- read this rather than re-deriving the width
     Mem fb_elem[2];            // ulong[nb*cap*fb_stride]
