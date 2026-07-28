@@ -54,23 +54,33 @@ runs pinned at the card's 285 W board limit in every kernel (verified: the drive
 one). lolMiner draws 239 W and is *not* capped — it leaves 46 W unused. Comparing sol/s/W
 at stock therefore rewards whichever miner fails to fill the card.
 
-At **equal power** the ranking reverses:
+At **equal power** the ranking reverses — but only inside a window, and by less than an
+earlier revision of this page claimed. Both miners capped to 220 W:
 
-| | MXBM at `--pl 220` | lolMiner (uncapped) | |
+| | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
-| Throughput | **53.8 sol/s** | 53.27 sol/s | **+1.0 %** |
-| Board power | **219.6 W** | 238.7 W | **−8 %** |
-| Efficiency | **0.245 sol/s/W** | 0.223 sol/s/W | **+9.8 %** |
+| Throughput | **55.4 sol/s** | 54.4 sol/s | **+1.9 %** |
+| Board power | 219.5 W | 219.6 W | — |
+| Efficiency | **0.252 sol/s/W** | 0.248 sol/s/W | **+1.9 %** |
 
-Same throughput, 19 W less. Across the curve MXBM is ahead of lolMiner on speed *and*
-efficiency simultaneously anywhere between roughly **217 W and 252 W**.
+MXBM is ahead on both between roughly **212 W and 257 W**. Below that lolMiner is ahead
+on both — at 180 W by over 14 % — and above it lolMiner is more efficient while MXBM is
+faster.
 
-**What this does not show.** lolMiner was measured only at its own uncapped draw, so this
-is MXBM's *curve* against lolMiner's single *point*. Capping lolMiner would very likely
-improve its efficiency too, and nobody has measured its curve. The claim is bounded to
-"against lolMiner as it ships", which is how people run it — not "MXBM's curve dominates".
-The two runs were also not simultaneous, and lolMiner's sol/s is its own counter whose
-definition relative to ours is [an open question](benchmarking.md#1-the-problem-with-comparing-reported-sols).
+**An earlier revision of this page warned that this comparison might not hold, and it was
+right.** It said: *"lolMiner was measured only at its own uncapped draw, so this is
+MXBM's curve against lolMiner's single point. Capping lolMiner would very likely improve
+its efficiency too, and nobody has measured its curve."* That has now been measured, and
+capping lolMiner improves its efficiency a great deal — enough to take the low end of the
+range outright and to cut the 220 W margin from ~10 % to 1.9 %. The numbers above are the
+corrected ones.
+
+**What this still does not show.** The two miners' `sol/s` are separate counters whose
+relationship is [an open question](benchmarking.md#1-the-problem-with-comparing-reported-sols)
+— MXBM reports CPU-verified solutions and lolMiner's basis is undocumented, a distinction
+worth ~17 % inside our own pipeline. The watts are trustworthy across miners because one
+instrument measured both; the sol/s columns are each miner against itself. Accepted pool
+shares over a fixed interval remain the only arbiter that needs neither counter.
 
 [^4g]: lolMiner selects "BeamHash III **4G** (CUDA)" on this card. MXBM needing 7.46 GiB
 is a known gap — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target).
@@ -91,6 +101,26 @@ against it. Measured with `benchmarks/power_sweep.sh`, 90 s per point:
 | 255 W | 56.3 | 35.6 | 254.4 W | 2625 MHz | 0.2213 | 4.52 |
 | 270 W | 57.1 | 35.1 | 269.2 W | 2670 MHz | 0.2121 | 4.71 |
 | 285 W *(stock)* | **57.5** | **34.8** | 284.1 W | 2700 MHz | 0.2024 | 4.94 |
+
+**Both miners have a `--pl`, and the honest comparison sweeps both.** The table above is
+MXBM's curve alone; lolMiner was only ever measured uncapped, which turned out to matter
+a great deal. Swept against each other at identical caps:
+
+![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
+
+**Where each one wins.** Below ~212 W lolMiner is ahead on speed *and* efficiency, by
+over 14 % at 180 W. Between ~212 W and ~257 W MXBM is ahead on both, by about 2 % at
+220 W and 6–7 % at 240 W. Above ~257 W MXBM is faster and lolMiner is more efficient.
+lolMiner barely responds to a cap at all — it gives up 1.8 % of its speed for 21 % less
+power, and above ~236 W the cap does nothing — so its best efficiency (0.2932 sol/s/W at
+180 W) beats MXBM's best anywhere (0.2611 at 200 W). What MXBM has is the ceiling:
+59.15 sol/s against ~54.4, which lolMiner cannot reach at any setting.
+
+Full numbers, the mechanism (we lose 570 MHz of core clock to it at 180 W) and what it
+implies for the roadmap are in
+[performance.md](performance.md#both-miners-under-the-same-cap). Reproduce with
+`benchmarks/compare_power.sh`; the chart is generated from that table by
+`python3 docs/tools/plot_power.py`.
 
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is

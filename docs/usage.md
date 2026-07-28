@@ -384,15 +384,25 @@ measured:
 
 | `--pl` | sol/s | draw | sol/s/W |
 |---|---|---|---|
-| 200 | 50.6 | 199.8 W | **0.253** — most efficient |
-| **220** | **53.8** | **219.6 W** | 0.245 — recommended |
-| 285 (stock) | 57.5 | 284.1 W | 0.202 — fastest |
+| 180 | 46.1 | 180.0 W | 0.256 |
+| 190 | 48.8 | 189.9 W | 0.257 |
+| 200 | 52.2 | 199.8 W | **0.261** — MXBM's own efficiency peak |
+| 210 | 54.2 | 209.6 W | 0.258 |
+| **220** | **55.4** | **219.5 W** | 0.252 — recommended |
+| 240 | 57.2 | 239.4 W | 0.239 |
+| 255 | 58.0 | 254.2 W | 0.228 |
+| 285 (stock) | 59.2 | 284.2 W | 0.208 — fastest |
 
 Dropping the limit from 285 W to 220 W costs 6 % of throughput and saves 23 % of the
 power. Going below ~200 W makes things *worse* on both counts, because by then the core
 clock has fallen far enough that the parts of the board which do not scale with it are
-being paid for out of less work. The full curve is in
-[performance.md](performance.md#the-equal-power-comparison).
+being paid for out of less work.
+
+**220 is recommended over MXBM's own 200 W efficiency peak**, and deliberately: below
+~212 W lolMiner is ahead of MXBM on speed *and* efficiency, so 200 W is where MXBM looks
+best against itself and worst against the alternative. The full curve, and both miners
+swept against each other at the same caps, is in
+[performance.md](performance.md#both-miners-under-the-same-cap).
 
 ```
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220

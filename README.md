@@ -16,15 +16,26 @@ implementation.
 > reference solver. Measured history, hardware limits and the caveats on comparing
 > miners: **[docs/performance.md](docs/performance.md)**.
 >
-> **Cap the board power.** MXBM runs pinned at the card's power limit in every
-> kernel, so at stock it looks less efficient than lolMiner purely
-> because it spends watts the other cannot reach. The measured speed/power curve
-> says otherwise: **at 220 W it does 53.8 sol/s drawing 219.6 W, against the
-> lolMiner's 53.27 at 238.7 W** — the same throughput for 19 W less, and
-> ~10 % better sol/s/W. Efficiency peaks around 200 W. Set it with `--pl 220`
-> (needs root; restored on exit). See
-> [Power and efficiency](docs/performance.md#the-equal-power-comparison) and
-> [usage.md](docs/usage.md#power-limit).
+> **Where MXBM wins, and where it does not.** Both MXBM and lolMiner can be given a
+> board power limit, and both were swept against each other at identical caps
+> ([the numbers](docs/performance.md#both-miners-under-the-same-cap)):
+>
+> | board cap | MXBM | lolMiner 1.98a | |
+> |---|---|---|---|
+> | 180 W | 46.1 sol/s · 0.256 sol/s/W | **52.7 sol/s · 0.293 sol/s/W** | lolMiner ahead on both |
+> | 220 W | **55.4 sol/s · 0.252 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
+> | 285 W | **59.2 sol/s** · 0.208 sol/s/W | 53.6 sol/s · **0.227 sol/s/W** | faster vs more efficient |
+>
+> **MXBM has the higher ceiling — 59.2 sol/s against ~54.4, which lolMiner cannot reach
+> at any setting — and it leads on both speed and efficiency between roughly 212 W and
+> 257 W.** Outside that window lolMiner is the better choice, and at the efficient end it
+> is clearly so: it gives up only 1.8 % of its speed for 21 % less power, so its best
+> efficiency beats MXBM's best by 12 %. Closing that is
+> [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
+>
+> If you run MXBM, **`--pl 220` is the setting to use** — its own efficiency peaks near
+> 200 W and its best speed-per-watt against the alternative is around 220. Needs root;
+> restored on exit. See [usage.md](docs/usage.md#power-limit).
 
 Licensed under the [Apache License 2.0](LICENSE).
 

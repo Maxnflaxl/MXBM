@@ -5,10 +5,15 @@ Everything below is the design both halves follow; the "To determine" section is
 still gates the rest.
 
 `--pl` was taken first because it is the only knob whose value is
-[measured](performance.md#the-equal-power-comparison) rather than assumed: the card runs
-pinned at its limit in every kernel, so the limit picks the operating point outright, and
-220 W matches the reference miner's throughput while drawing 19 W less. The clock offsets
-remain hypotheses — see "Whether the community's recommended OC is right *for MXBM*".
+[measured](performance.md#both-miners-under-the-same-cap) rather than assumed: the card
+runs pinned at its limit in every kernel, so the limit picks the operating point outright.
+The clock offsets remain hypotheses — see "Whether the community's recommended OC is right
+*for MXBM*".
+
+The head-to-head sweep also gave `--pl` a second job it was not designed for: it is the
+instrument that found MXBM losing **570 MHz of core clock to lolMiner at a 180 W cap**,
+against 60 MHz at stock. Whatever the clock knobs eventually do, that gap is the thing
+they would be working against.
 
 ```
 --pl W               board power limit in watts, per GPU ("240", "240,*,260"; * skips)

@@ -283,20 +283,36 @@ this table is for, is a property of the power curve and does not move.*
 | 270 W | 57.1 | 35.1 | 269.2 W | 2670 MHz | 0.2121 | 4.71 | +7.2 % | −5.0 % |
 | 285 W *(stock)* | **57.5** | **34.8** | 284.1 W | 2700 MHz | 0.2024 | 4.94 | +7.9 % | −9.3 % |
 
-Δ columns are against lolMiner at *its* operating point — 53.27 sol/s
-at 238.7 W = 0.2232 sol/s/W, uncapped, which is how people actually run it.
-Interpolating the crossings: MXBM overtakes it on **speed at ~217 W** and falls
-behind it on **efficiency at ~252 W**, so
+![Speed and efficiency against board power, with the band where MXBM leads on both](tools/power-curve.svg)
 
-> **between roughly 217 W and 252 W MXBM is ahead of lolMiner on
-> speed and efficiency at the same time.** At 220 W: 53.8 sol/s against 53.27,
-> drawing 219.6 W against 238.7 — the same throughput for **19 W less**.
+Generated from the table above by `python3 docs/tools/plot_power.py` — including
+lolMiner's operating point and both crossing powers, which it reads out of the
+paragraphs below, so a number cannot be edited here and left stale in the picture.
+Two panels rather than two y axes: sol/s and sol/s/W have no common scale, and an
+arbitrary alignment between them would put the crossings wherever the author liked,
+which is precisely what this section is arguing about.
 
-The 11 % deficit reported at stock was an operating-point artefact and nothing
-else. MXBM spends every watt the board allows and converts it into throughput;
-lolMiner cannot reach the limit in the first place. The asymmetry is
-one-directional and worth stating plainly — *we* can choose to draw less, *it*
-cannot choose to draw more.
+> **⚠ The Δ columns and the conclusion that used to follow them are superseded.** They
+> compare capped MXBM against **uncapped** lolMiner, on the assumption that lolMiner had
+> no choice about its operating point. It does — `--pl` is in its help — and once both
+> are swept the comparison changes shape. The MXBM measurements above stand as MXBM's
+> own curve; for the head-to-head read
+> [Both miners under the same cap](#both-miners-under-the-same-cap) instead.
+
+Δ columns are against lolMiner at *its* uncapped operating point — 53.27 sol/s
+at 238.7 W = 0.2232 sol/s/W. Interpolating the crossings against *that* point: MXBM
+overtakes it on **speed at ~217 W** and falls behind it on **efficiency at ~252 W**.
+Both crossings survive the proper head-to-head almost unchanged (212 W and 257 W), so the
+*band* was right — but the margin inside it does not survive, because at 220 W lolMiner
+capped to 220 W does 54.35 sol/s at 0.2476, not 53.27 at 0.2232. The advantage there is
+**1.9 %**, not the ~10 % this section used to report.
+
+The 11 % efficiency deficit at stock is still an operating-point artefact: MXBM spends
+every watt the board allows and converts it into throughput, and lolMiner does not reach
+the limit. **But the asymmetry claimed here was wrong in the other direction.** This
+document used to say *we* can choose to draw less while *it* cannot choose to draw more.
+It can also choose to draw *less* — and it loses almost nothing by it, 1.8 % of its speed
+for 21 % less power, which is the single most important thing the head-to-head found.
 
 **Efficiency has an interior optimum at ~200 W**, and the fact that it *falls
 again* at 180 W is the informative part: below ~200 W the core clock has dropped
@@ -331,6 +347,91 @@ is the open question the accepted-share protocol exists to settle.
 Reproducibility: the 240 W point appears in both sweeps, same build, an hour
 apart — 55.5 sol/s / 0.2318 and 55.2 / 0.2305. Run-to-run spread is ~0.6 %,
 smaller than every gap called out above. The table quotes the second run.
+
+### Both miners under the same cap
+
+*(Measured 2026-07-28 with `benchmarks/compare_power.sh`.)*
+
+The sweep above compares MXBM's whole curve against lolMiner at one **uncapped** point,
+on the reasoning that uncapped is how people run it. That reasoning was wrong. lolMiner
+1.98a has `--pl` too — it is in the installed binary's help — so it has a curve of its
+own, and nobody had measured it. This section is that measurement, and it revises the
+conclusion above rather than supporting it.
+
+Both miners, same session, interleaved, alternating which goes first, caps set externally
+with `nvidia-smi -pl` so neither miner's own OC code is a variable. Power is sampled from
+NVML for both — never taken from either miner's own statistics block, which averages in
+its ramp and reads ~20 W low. Two repeats per cell; the spread within a cell is ±0.1 sol/s.
+
+| cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
+|---|---|---|---|---|---|---|
+| 180 W | 46.05 | 180.0 | 0.2558 | **52.65** | 179.6 | **0.2932** |
+| 190 W | 48.75 | 189.9 | 0.2567 | **53.25** | 189.6 | **0.2809** |
+| 200 W | 52.15 | 199.8 | **0.2611** | **54.25** | 199.6 | **0.2718** |
+| 210 W | 54.15 | 209.6 | 0.2583 | 54.35 | 209.4 | 0.2595 |
+| 220 W | **55.40** | 219.5 | **0.2524** | 54.35 | 219.6 | 0.2476 |
+| 240 W | **57.20** | 239.4 | **0.2389** | 53.30 | 235.7 | 0.2261 |
+| 255 W | **58.00** | 254.2 | **0.2282** | 53.45 | 235.8 | 0.2267 |
+| 285 W | **59.15** | 284.2 | 0.2081 | 53.60 | 235.8 | **0.2274** |
+
+![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
+
+**The result is three-part, and only the middle part is the one this document used to
+claim.** Crossings are interpolated from the table:
+
+- **Below ~212 W, lolMiner wins on both, and the margin grows fast.** At 180 W it does
+  52.65 sol/s to MXBM's 46.05 (**+14.3 %**) at 0.2932 sol/s/W to MXBM's 0.2558
+  (**+14.6 %**).
+- **Between ~212 W and ~257 W, MXBM wins on both** — by 1.9 % on each at 220 W, widening
+  to 7.3 % speed and 5.7 % efficiency at 240 W. The previously published band of
+  217–252 W was right, and slightly conservative.
+- **Above ~257 W, MXBM is faster and lolMiner is more efficient**, which is what the
+  stock-versus-stock comparison always showed.
+
+Two facts that reframe the whole comparison:
+
+**lolMiner barely responds to the cap at all.** From 285 W down to 180 W it moves 53.6 →
+52.65 sol/s — it gives up **1.8 %** of its speed for **21 %** less power. MXBM over the
+same range gives up 22 %. And above ~236 W the cap stops doing anything: the 240, 255 and
+285 W rows all draw 235.7–235.8 W, which is why it never reaches the board limit.
+
+**Its best efficiency beats our best efficiency, by a lot.** 0.2932 sol/s/W at 180 W
+against MXBM's peak of 0.2611 at 200 W — **12.3 %**, and lolMiner's curve is still
+climbing at the left edge of what was measured, so its true peak is below 180 W and
+unmeasured. Put the other way: **lolMiner at 180 W delivers 52.65 sol/s for 179.6 W,
+where MXBM needs 199.8 W to deliver 52.15.** That is the same argument this document
+made in the other direction at 220 W, and it is now theirs.
+
+What MXBM keeps is the top end: **59.15 sol/s against a ceiling of ~54.4**, a **8.8 %**
+higher maximum throughput that lolMiner cannot reach at any setting.
+
+### Why we lose the low end: watts buy us less clock
+
+The mechanism is visible in the clocks, and it is the same story at every point:
+
+| cap | MXBM SM clock | lolMiner SM clock | gap |
+|---|---|---|---|
+| 180 W | 1905 MHz | 2475 MHz | **−570** |
+| 190 W | 2048 MHz | 2550 MHz | −502 |
+| 200 W | 2242 MHz | 2602 MHz | −360 |
+| 210 W | 2385 MHz | 2655 MHz | −270 |
+| 220 W | 2460 MHz | 2700 MHz | −240 |
+| 240 W | 2542 MHz | 2745 MHz | −203 |
+| 285 W | 2685 MHz | 2745 MHz | −60 |
+
+MXBM's kernels cost more power per clock, so a tightening cap takes clock away from us
+faster than from them — 60 MHz behind at stock, 570 MHz behind at 180 W. The suspect is
+DRAM traffic: MXBM moves [14.23 GB/solve](#current-focus-and-open-leads) at geometry
+(16,1), while lolMiner selects a **4G** variant that fits the search in 4 GB and must
+therefore move far less.
+
+**This inverts one of this document's own conclusions.** [Bytes are nearly
+free](#bytes-are-nearly-free-per-element-work-is-not) measured that narrowing records buys
+almost no *speed*, because the pipeline is latency- and occupancy-bound rather than
+bandwidth-bound, and that is why memory efficiency was filed under reach. Under a power
+cap bytes are not free at all: they are watts, watts are clock, and clock is speed. The
+footprint work is the main **efficiency** lever available, and nothing here had priced it
+as one.
 
 ### The memory traffic is compulsory
 
@@ -1249,9 +1350,11 @@ the target. What is left is not more solver micro-optimization:
    `--no-oc-reset`, per-GPU list syntax, clamped to the band the driver reports,
    restored on exit including on Ctrl+C. See [usage.md](usage.md#power-limit) and
    [overclocking.md](overclocking.md). **220 W is the operating point to recommend**:
-   53.8 sol/s against lolMiner's 53.27, for 19 W less. Two follow-ups:
-   **re-measure lolMiner under a cap of its own**, since it has only been
-   compared at its uncapped draw and its own curve is unknown; and whether MXBM should
+   55.4 sol/s for 219.5 W, and the point where MXBM's lead over a *equally capped*
+   lolMiner is at its best value. ~~re-measure lolMiner under a cap of its own~~ —
+   **done 2026-07-28, and it changed the answer**: see
+   [Both miners under the same cap](#both-miners-under-the-same-cap). Remaining follow-up:
+   whether MXBM should
    *default* to a cap rather than only offering one, which is a release decision rather
    than a technical one and is parked with the other pre-release questions. Note the
    general case is not settled by one card: a default derived from an RTX 4070 Ti SUPER
