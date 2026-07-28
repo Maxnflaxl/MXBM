@@ -199,15 +199,34 @@ std::string format_stats_block(const miner::Stats::Snapshot& s,
         device_rows += '\n';
     }
 
-    // Total row: same missing separator after %-18s. the reference miner's own Total omits
-    // the clock/temp/fan columns entirely rather than blanking them -- summing a
-    // temperature is meaningless and averaging one reports a figure no card
-    // measured. Speeds, iterations and share counts DO add, so those are summed.
+    // Total row: same missing separator after %-18s. The clock/temp/fan columns
+    // stay blank, as the reference miner's own Total does -- summing a temperature is
+    // meaningless and averaging one reports a figure no card measured.
+    //
+    // POWER IS DIFFERENT: watts add, and the rig's draw at the wall is the
+    // number that decides whether a PSU is big enough and what the electricity
+    // costs. So is the efficiency built from it -- total sol/s over total watts
+    // is the rig's real sol/s/W, not an average of per-card ratios.
+    //
+    // Summed only when EVERY device reports power. A partial sum labelled
+    // "Total" would understate the draw of a rig with one card NVML cannot see,
+    // and understating a power total is the direction that trips a breaker.
+    double total_w = 0.0;
+    bool all_have_power = !rows.empty();
+    for (const auto& d : rows) {
+        if (d.has_power) total_w += d.power_w;
+        else all_have_power = false;
+    }
+    char total_eff[16], total_pw[16];
+    dashf(total_pw,  sizeof total_pw,  "%.0f", all_have_power, total_w);
+    dashf(total_eff, sizeof total_eff, "%.3f", all_have_power && total_w > 0.0,
+          s.sol60 / (total_w > 0.0 ? total_w : 1.0));
+
     char total_row[256];
     std::snprintf(total_row, sizeof total_row,
         "%-18s%*.*f %*.*f %6.1f %8s %6s %8s %6s",
         "Total", speed_w, digits, s.sol60, speed_w, digits, s.pool_sol_session, s.iter60,
-        shares.c_str(), best.c_str(), "--", "--");
+        shares.c_str(), best.c_str(), total_eff, total_pw);
 
     // Dev-fee row: only when a fee is configured, so a build without one has an
     // unchanged table. What was really spent this session -- rounds, seconds, share

@@ -47,8 +47,16 @@ Licensed under the [Apache License 2.0](LICENSE).
   differentially tested against Beam's reference `IsValidSolution` over tens of
   thousands of fuzzed inputs.
 - **Real-pool stratum client** — TLS-first, wallet-address authentication,
-  nonce-prefix partitioning, automatic reconnect with backoff. Verified live
-  against [HeroMiners](https://beam.herominers.com/).
+  nonce-prefix partitioning, automatic reconnect with backoff, and failover across
+  several pools. Verified live against [HeroMiners](https://beam.herominers.com/).
+- **Multi-GPU** — one solver, worker thread and nonce lane per card, so no two ever
+  try the same nonce; `--devices` and `--list-devices` select by an index that means
+  the same card in every flag. Each card gets its own row in the statistics table and
+  in `/summary`, with the rig's totals underneath.
+- **Runs unattended** — a watchdog that spots a card which has stopped completing
+  solves and exits with a code a supervisor can restart on (or runs your script), and
+  overclock control (`--pl`, `--cclk`, `--mclk`, `--coff`, `--moff`, `--fan`) clamped
+  to the bands your driver reports and restored when MXBM exits.
 - **lolMiner-shaped UX** — a familiar console (per-interval speed line, periodic
   statistics block, share/accept lines), a compatible command-line surface, and
   both configuration-file formats.
@@ -104,22 +112,20 @@ files, and API.
 
 ## Roadmap
 
-| Milestone | What it delivers | Status |
-|-----------|------------------|--------|
-| Proof-of-work core | BeamHash III primitives + verifier, tested vs Beam | ✅ done |
-| Stratum client | Connect, authenticate, receive jobs from a real pool | ✅ done |
-| Miner shell | lolMiner-style console, CLI, config files, dashboard + `/summary` API | ✅ done |
-| GPU solver | OpenCL solver finding verified BeamHash III solutions | ✅ done |
-| Solver performance | Close the gap to the fastest closed-source miners | ✅ done (CUDA, +6 %) |
-| Multi-GPU | One solver, thread, nonce lane and stats row per card; `--devices` / `--list-devices` | ✅ done, untested on >1 card |
-| Rig robustness | Pool failover, hung-GPU watchdog (`--watchdog exit\|script\|off`) | ✅ done |
-| Memory efficiency | Run on ≤ 8 GB cards (see [HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) | next |
-| Overclocking | `--pl`, `--cclk`, `--mclk`, `--coff`, `--moff`, `--fan` — clamped to the driver's own bands, restored on exit (see [overclocking.md](docs/overclocking.md)) | ✅ done |
-| Optimized backends | Tuned CUDA (NVIDIA) ✅ done; HIP (AMD) | in progress |
+What is left. Everything not listed here — the proof-of-work core, the stratum client,
+the console and API, both GPU solvers, multi-GPU, overclocking, failover and the
+watchdog — is built and shipping; the [Features](#features) section describes what
+those do.
+
+| Next | What it delivers |
+|------|------------------|
+| **Efficiency at low power** | lolMiner holds 0.3036 sol/s/W at 160 W where MXBM peaks at 0.2611 — [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock), and DRAM traffic is the suspect |
+| **Memory efficiency** | 7.46 GiB against a 3 GB design target. Puts MXBM on ≤ 8 GB cards ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) — and per the row above, it is now an efficiency lever too |
+| **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
+| **Per-GPU verification** | Multi-GPU is built and tested, but has never run on a machine with more than one card |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline (runs on both), then
-vendor-tuned backends. The CUDA backend is done and shipping; HIP is not started. Both
-solvers are measured on NVIDIA only — AMD is untested so far.
+vendor-tuned backends. The CUDA backend is done and shipping; HIP is not started.
 
 ## The algorithm
 

@@ -465,8 +465,33 @@ is silent — two cards duplicating each other's work would each look perfectly 
 while the rig did half of what it was paid for.
 
 A card that fails to initialise is reported and skipped rather than taking the rig down;
-the others keep mining. Speed and share statistics are reported as the rig's **total**,
-not per card — per-device rows are still to come.
+the others keep mining. **Each card gets its own row** in the statistics block and its own
+entry in `/summary`, with the rig's totals underneath:
+
+```
+      Name        Speed   Pool  Iter.   Shares   Best     Eff.  Power  CCLK   MCLK  Core  Fan
+                  sol/s  sol/s   it/s    A/S/R  Share  sol/s/W      W   MHz    MHz  Temp  Pct
+GPU 0 RTX 4070 Ti 58.70     --   29.4   20/1/0  12.8k    0.207    284  2685  10251    64   50
+GPU 1 RTX 3080    53.70     --   27.4   14/0/0   9.8k    0.203    264  2585  10251    65   55
+---------------------------
+Total             112.40 110.20   56.8   34/1/0  12.8k    0.205    548
+```
+
+What the Total row does and does not add up is deliberate:
+
+- **Speed, iterations, share counts and power are summed.** Watts add, and the rig's
+  draw is what sizes a power supply and sets the electricity bill. If any card's power
+  cannot be read the wattage is blank rather than partial — understating a rig's draw is
+  the direction that trips a breaker.
+- **Efficiency on the Total is total speed over total watts**, the rig's real sol/s/W,
+  not the average of the per-card ratios.
+- **Clocks, temperature and fan are left blank.** A rig has no single core clock, and an
+  averaged temperature is a figure no card measured.
+- **The pool column appears only on the Total.** The pool credits shares without saying
+  which GPU found them, so a per-card share of that rate would be invented. Per-card
+  A/S/R comes from matching each result to the card that submitted it, which is
+  best-effort: Beam's results carry no submit id, so heavy overlap between cards can
+  mispair them. The rig totals never depend on that matching.
 
 > **Multi-GPU has never run on a multi-GPU machine.** It is built and tested — four
 > concurrent engines, disjoint nonces, verified against a deliberately broken lane

@@ -245,5 +245,63 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
               "--digits 4 renders the Speed column to four decimals");
     }
 
+    section("the Total row sums what adds and blanks what does not");
+    {
+        miner::Stats::Snapshot m{};
+        m.sol60 = 150.0; m.pool_sol_session = 140.0; m.iter60 = 75.0;
+        m.accepted = 30; m.stale = 1; m.rejected = 0; m.best_share_units = 8192;
+        m.uptime = std::chrono::seconds(600);
+        for (int i = 0; i < 2; ++i) {
+            miner::Stats::Device d;
+            d.label = "NVIDIA GeForce RTX 4070 Ti SUPER";
+            d.sol60 = 75.0; d.iter60 = 37.5;
+            d.accepted = 15; d.best_share_units = 8192;
+            d.has_power = true;  d.power_w = 250.0 + i * 30.0;   // 250 + 280 = 530
+            d.has_temp = true;   d.temp_c = 60 + (unsigned)i;
+            m.devices.push_back(d);
+        }
+        const std::string out = ui::format_stats_block(m, "0.1", "00:00:00", 2, 0);
+
+        check(out.find("GPU 0 RTX 4070 Ti") != std::string::npos
+              && out.find("GPU 1 RTX 4070 Ti") != std::string::npos,
+              "two devices produce two rows, each labelled with its index");
+
+        const size_t tot = out.find("Total");
+        check(tot != std::string::npos, "and a Total row");
+        const std::string total_line = out.substr(tot, out.find('\n', tot) - tot);
+        // 530 W: watts ADD, and the rig's draw is what sizes a PSU.
+        check(total_line.find("530") != std::string::npos,
+              "power is summed across devices on the Total row");
+        // 150 / 530 = 0.283: the rig's real efficiency, not the mean of the
+        // per-card ratios, which would be a different (and wrong) number.
+        check(total_line.find("0.283") != std::string::npos,
+              "and efficiency is total speed over total watts");
+        check(total_line.find("60") == std::string::npos
+              && total_line.find("61") == std::string::npos,
+              "temperature is NOT summed or averaged onto the Total");
+    }
+
+    section("a partial power reading is not passed off as a rig total");
+    {
+        // One card NVML cannot see. Summing the rest and calling it "Total"
+        // would understate the draw -- and understating a power total is the
+        // direction that trips a breaker.
+        miner::Stats::Snapshot m{};
+        m.sol60 = 100.0; m.uptime = std::chrono::seconds(60);
+        for (int i = 0; i < 2; ++i) {
+            miner::Stats::Device d;
+            d.label = "GPU";
+            d.sol60 = 50.0;
+            d.has_power = (i == 0);
+            d.power_w = 250.0;
+            m.devices.push_back(d);
+        }
+        const std::string out = ui::format_stats_block(m, "0.1", "00:00:00", 2, 0);
+        const size_t tot = out.find("Total");
+        const std::string total_line = out.substr(tot, out.find('\n', tot) - tot);
+        check(total_line.find("250") == std::string::npos,
+              "with one device's power unknown, the Total shows no wattage at all");
+    }
+
     return summary("format");
 }
