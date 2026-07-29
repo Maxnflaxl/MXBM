@@ -114,8 +114,10 @@ constexpr uint32_t kFCap    = (uint32_t)MXBM_FCAP;
 
 // Round 1's own cap. Folding its gi into its leaf and narrowing LEAFW to 1 took it to
 // 64 B/element AND its register count from 64 to 48, so at 288 it fits 5 blocks/SM where
-// 320 fits 4 -- 48 registers and 18980 B against the 51/19456 that 5 blocks needs, so no
-// launch bound is required to hold it there. Only r1 pays the higher spill rate a tighter
+// 320 fits 4 -- 48 registers and 18980 B against the 48/19456 that 5 blocks needs, so no
+// launch bound is required to hold it there. Note that is exactly ZERO register headroom:
+// 49 registers rounds to 1792 per warp (granularity 256), which is 9 warps per
+// sub-partition, 36 per SM, 4 blocks. tests/test_cuda_resources.cpp asserts it. Only r1 pays the higher spill rate a tighter
 // cap implies; it is worth 0.15 ms of r1's 5.28.
 #ifndef MXBM_R1_FCAP
 #define MXBM_R1_FCAP 288
@@ -167,10 +169,20 @@ __device__ __forceinline__ void abl_spread(uint32_t a, uint32_t b, bh3::Elem& e)
 
 // MXBM_WARPAGG: hand out the dense per-round id `gi` one atomic per WARP instead of one
 // per lane. Every emit needs a unique id and they all come from a single u32, so a fully
-// active warp serialises into 32 L2 round-trips on one address -- the SASS shows a plain
-// ATOMG.E.ADD per lane, with no aggregation prologue. Aggregating keeps gi a permutation
-// of [0,count) and makes the ids CONSECUTIVE within a warp, which is strictly better for
-// the back-ref writes that index on them.
+// active warp would serialise into 32 L2 round-trips on one address. Aggregating keeps gi
+// a permutation of [0,count) and makes the ids CONSECUTIVE within a warp, which is
+// strictly better for the back-ref writes that index on them.
+//
+// BUT PTXAS ALREADY DOES IT (verified 2026-07-29 with cuobjdump -sass on the shipping
+// archive; an earlier version of this comment said the SASS showed "a plain ATOMG.E.ADD
+// per lane, with no aggregation prologue", which is false). Round 2 packed, 0x98f0-0x9a90:
+// VOTEU.ANY -> FLO.U32 (leader) -> POPC (group size) -> @P0 ATOMG.E.ADD of the popcount
+// -> SR_LTMASK + POPC (rank) -> SHFL.IDX (broadcast). ptxas and not NVVM: -ptx emits a
+// bare atom.global.add.u32, -cubin emits the idiom. The negative control is the bucket
+// atomic at 0x9810, whose address is lane-varying and which gets no prologue at all.
+//
+// So MXBM_WARPAGG=1 stacks a SECOND aggregation on ptxas's, which is why it measures
+// +0.3 ms. Leave it off; it is not a lead.
 //
 // It does change which id a given emit gets, and gi is the tie-break when two elements
 // share a lead (LEADTIE_PROBE: ~17 per solve out of 134 M). The KAT gate is what settles

@@ -238,6 +238,14 @@ if(CMAKE_CUDA_COMPILER)
   # 186 = "pointless comparison of unsigned integer with zero", from template
   # instantiations where a leaf count is 0 and the loop compiles away.
   target_compile_options(mxbm_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=186>)
+  # Print what ptxas actually allocated, and say so out loud when it spills. Verified
+  # inert: the nine (REG, SHARED, STACK) triples are byte-identical with and without
+  # these two flags. --warn-on-spills is the cheap half of the occupancy contract; the
+  # load-bearing half is test_cuda_resources, because the regression that costs the most
+  # (64 -> 65 registers on r2) does not spill and warns about nothing.
+  target_compile_options(mxbm_cuda PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>
+      $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=--warn-on-spills>)
   target_compile_features(mxbm_cuda PRIVATE cuda_std_17)
   target_link_libraries(mxbm PRIVATE mxbm_cuda)
   target_compile_definitions(mxbm PRIVATE MXBM_HAVE_CUDA)
@@ -247,6 +255,34 @@ if(CMAKE_CUDA_COMPILER)
   target_link_libraries(test_cuda_solver PRIVATE mxbm_cuda)
   target_compile_features(test_cuda_solver PRIVATE cuda_std_17)
   add_test(NAME cuda_solver COMMAND test_cuda_solver)
+
+  # The register / shared-memory cliff contract. Host-only and GPU-free: it reads the
+  # linked library with cuobjdump -res-usage and asserts that each kernel still reaches
+  # the blocks/SM it was measured at. Three fused-round instantiations sit EXACTLY on a
+  # register cliff (r1 48, r2 64, r3-quad 80) and entry_scatter on a fourth (40); one
+  # more register on any of them silently costs a resident block, which is measured time
+  # (r1's fifth block -0.15 ms, r1+r2's fourth -1.13 ms together). __launch_bounds__ is
+  # NOT the instrument: it spills instead of failing, and it cannot see 64 -> 65 at all.
+  option(MXBM_CUDA_RESOURCE_GUARD
+         "Run the CUDA occupancy contract as a post-build step on mxbm_cuda" ON)
+  get_filename_component(MXBM_CUDA_BIN_DIR "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+  add_executable(test_cuda_resources tests/test_cuda_resources.cpp)
+  target_include_directories(test_cuda_resources PRIVATE tests)
+  target_compile_definitions(test_cuda_resources PRIVATE
+      MXBM_CUOBJDUMP="${MXBM_CUDA_BIN_DIR}/cuobjdump"
+      MXBM_CUDA_LIB="$<TARGET_FILE:mxbm_cuda>"
+      MXBM_KERNEL_DIR="${CMAKE_SOURCE_DIR}/kernels/cuda")
+  add_test(NAME cuda_resources COMMAND test_cuda_resources)
+  if(MXBM_CUDA_RESOURCE_GUARD)
+    # Fail the BUILD, not just the gate: a lost block is invisible in every other signal,
+    # so the person who caused it should be told while the change is still in their head.
+    # (mxbm_cuda depends on the checker, not the other way round -- the checker links
+    # nothing and only needs the .a to exist when it runs.)
+    add_dependencies(mxbm_cuda test_cuda_resources)
+    add_custom_command(TARGET mxbm_cuda POST_BUILD
+        COMMAND test_cuda_resources
+        COMMENT "Checking CUDA register/shared-memory occupancy contract")
+  endif()
 else()
   message(STATUS "CUDA not found: CUDA solver disabled (OpenCL path unaffected)")
 endif()
