@@ -17,8 +17,8 @@ report; BeamHash III yields ~1.9 solutions per solve.
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
 | **VRAM — CUDA backend (the default)** | **6 GB** — needs > 5.7 GiB *reported*. 10 GB and up get the fastest geometry; below that the ladder steps down, 7–33 % slower |
-| **VRAM — OpenCL backend (fallback)** | **11 GB** — the single-allocation ceiling binds first, and the [quad record](performance.md#the-quad-record-on-opencl-takes-11-gb-cards-off-the-sort-path-190--45-ms) is what clears it at 11 GB; see [limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit) |
-| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (CUDA, with the [quad record](performance.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)); 6.50 GiB is the OpenCL floor |
+| **VRAM — OpenCL backend (fallback)** | **11 GB** — the single-allocation ceiling binds first, and the [quad record](performance-research.md#the-quad-record-on-opencl-takes-11-gb-cards-off-the-sort-path-190--45-ms) is what clears it at 11 GB; see [limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit) |
+| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (CUDA, with the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)); 6.50 GiB is the OpenCL floor |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -131,7 +131,8 @@ BeamHash III yields ~1.98 *verified* solutions per solve, measured independently
 backends. `./build/bench_rounds 20` reports the pipeline-only median instead (40.3 ms on
 OpenCL), which is the controlled number used to make optimization decisions.
 
-See [performance.md](performance.md) for the full optimization history.
+See [performance.md](performance.md) for the measured state, and
+[performance-research.md](performance-research.md) for the full optimization history.
 
 ---
 
@@ -172,7 +173,7 @@ is cheaper. A ladder sorted by footprint would hand those cards the slower rung.
 2.90), which a `max_alloc`-bound backend can still need.
 
 The quad record buys no speed and no watts at any power limit — that is
-[measured, not assumed](performance.md#under-a-cap-the-effect-appears--and-the-trade-still-never-pays) —
+[measured, not assumed](performance-research.md#under-a-cap-the-effect-appears--and-the-trade-still-never-pays) —
 so the ladder reaches for it only when no packed rung fits. It is purely what lets a
 smaller card run at all. `MXBM_QUAD=0|1` forces the choice.
 
@@ -230,12 +231,13 @@ structurally different, such as:
 > compile-time round constants sped the kernel up, its 4-seed rebuild no longer hid in
 > memory stalls and cost more than the bytes it saved. Rounds 1–2 keep index-only
 > storage; round 3 stores work state again. Solve time is now 40.4 ms and the footprint
-> 7.46 GiB. See "retiring the round-3 quad record" in [performance.md](performance.md).
+> 7.46 GiB. See [retiring the round-3 quad
+> record](performance-research.md#retiring-the-round-3-quad-record).
 >
 > It does **not** extend to rounds 4–5. Rebuild cost doubles per round while the record
 > it replaces shrinks, and round 3 already sits at the point where the recompute stops
 > hiding inside the kernel's memory stalls (see "the compute-hiding budget" in
-> [docs/performance.md](performance.md)). Reaching 3 GB needs the *first* route —
+> [performance.md](performance.md#established-limits)). Reaching 3 GB needs the *first* route —
 > streaming / in-place reuse — not more re-derivation.
 
 This is correctness-neutral, but it is **also an energy cost**, and that half is now
@@ -259,7 +261,7 @@ when capped and behind when not, and the margin either way is set by the bytes. 
 > 16 B, so the solve moves 16 % fewer bytes, raises the clock the card sustains at a fixed
 > 285 W by **60 MHz** — with a positive control at ±0 MHz, since rounds 1 and 4 already
 > store 16 B and ablating them changes nothing. See ["bytes are not free in
-> watts"](performance.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
+> watts"](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
 >
 > So: **narrowing records is the efficiency lever** (measured, and it is the one that
 > widens the lead against lolMiner under a cap). **In-place reuse is the reach lever** —

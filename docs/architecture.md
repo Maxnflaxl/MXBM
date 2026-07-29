@@ -106,5 +106,5 @@ differential oracle.
 
 The GPU collision-finding pipeline — its two paths, the per-round schedule, and the
 measured hardware limits that shape it — is documented in
-[performance.md](performance.md), which also keeps the running log of every
-optimization and every failed experiment.
+[performance.md](performance.md); the running log of every optimization and every
+failed experiment is in [performance-research.md](performance-research.md).

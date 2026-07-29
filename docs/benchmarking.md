@@ -98,7 +98,7 @@ day-to-day discretion over the V/f point, which is the leading suspect for the
 cross-session spread.
 
 The full measured history, including every failed experiment, is in
-[performance.md](performance.md).
+[performance-research.md](performance-research.md).
 
 ---
 
@@ -219,8 +219,10 @@ either direction, including our own favour.
 
 ## References
 
-- [performance.md](performance.md) — the measured optimization history and the hardware
-  limits that bound it.
+- [performance.md](performance.md) — the measured state, the power curves and the hardware
+  limits that bound further work.
+- [performance-research.md](performance-research.md) — the experiment log: every
+  optimization tried, what it measured, and why.
 - [overclocking.md](overclocking.md) — why OC must be excluded from a like-for-like run.
 - [\[bh2\]][bh2] Wilke Trei, *BeamHash II Specification*, 17 June 2019 — §2.4 tabulates
   solutions per iteration across the EquihashR family.

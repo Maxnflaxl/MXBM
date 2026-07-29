@@ -19,7 +19,7 @@ For *why* comparing miners is harder than reading two numbers off two screens, s
 | | |
 |---|---|
 | GPU | NVIDIA GeForce RTX 4070 Ti SUPER (Ada, sm_89, 66 SMs) |
-| VRAM | 16 GiB GDDR6X, 10251 MHz, 256-bit (~672 GB/s peak, ~510 GB/s achievable) |
+| VRAM | 16 GiB GDDR6X, 10251 MHz, 256-bit (**656 GB/s peak at that rung**, ~510 GB/s achievable) |
 | Board power limit | 285 W default, 100–366 W permitted by the driver |
 | Driver | 610.43.03 · CUDA 13.3 |
 | OS | Linux 7.1.4 (Arch) |

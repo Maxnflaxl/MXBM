@@ -69,7 +69,8 @@ Licensed under the [Apache License 2.0](LICENSE).
   five rounds' collisions in local memory. The best available backend is selected
   automatically, with fallback all the way down to the CPU reference. Every optimization
   is gated on byte-identical known-answer solutions; see
-  [docs/performance.md](docs/performance.md).
+  [docs/performance.md](docs/performance.md) and
+  [docs/performance-research.md](docs/performance-research.md).
 - **Self-contained** — no Boost, no Beam runtime. The only dependencies are a
   vendored single-header JSON library and your system OpenSSL.
 
@@ -119,8 +120,8 @@ those do.
 
 | Next | What it delivers |
 |------|------------------|
-| **Efficiency at low power** | lolMiner holds 0.3036 sol/s/W at 160 W where MXBM peaks at 0.2611, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock) — measured: moving 16 % fewer bytes buys [60 MHz at 285 W and 210 MHz at 180 W](docs/performance.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz). **How to collect it is open** — the one narrowing built so far pays for the bytes in arithmetic and nets zero |
-| **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the CUDA floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — what is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
+| **Efficiency at low power** | lolMiner holds 0.3036 sol/s/W at 160 W where MXBM peaks at 0.2611, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock) — measured: moving 16 % fewer bytes buys [60 MHz at 285 W and 210 MHz at 180 W](docs/performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz). **How to collect it is open** — the one narrowing built so far pays for the bytes in arithmetic and nets zero |
+| **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the CUDA floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — what is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
 | **Per-GPU verification** | Multi-GPU is built and tested, but has never run on a machine with more than one card |
 
@@ -147,9 +148,10 @@ shell. See **[docs/architecture.md](docs/architecture.md)** for the full map.
 
 ## Performance
 
-The GPU solver's optimization history — every change, its measured effect, and the
-experiments that failed — is tracked in **[docs/performance.md](docs/performance.md)**,
-along with the measured hardware limits that bound further work. Hardware
+The GPU solver's measured state — speed, power curves, hardware limits and the open
+leads — is **[docs/performance.md](docs/performance.md)**; the experiment log behind it,
+every change and every failure with the mechanism that explains it, is
+**[docs/performance-research.md](docs/performance-research.md)**. Hardware
 requirements, including the per-backend VRAM thresholds, are in
 **[HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)**.
 
