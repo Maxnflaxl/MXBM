@@ -31,6 +31,7 @@
 set -uf
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/benchmarks/lib.sh"
 CAPS=${CAPS:-stock}
 FCAPS=${FCAPS:-"288 320"}
 REPS=${REPS:-9}          # round-1 replays, to amplify a sub-ms difference
@@ -45,7 +46,7 @@ mkdir -p "$OUT"
 echo "building (cached in $OUT) ..."
 for f in $FCAPS; do
     out="$OUT/pipeline.f$f"
-    [ -x "$out" ] && continue
+    bench_stale "$out" || continue
     echo "  building r1 FCAP=$f ..."
     "$NVCC" -O3 -arch="$ARCH" -std=c++17 -diag-suppress 186 -DMXBM_R1_FCAP="$f" \
         -I "$ROOT/src" -I "$ROOT/kernels/cuda" -I "$ROOT/tests" -I "$ROOT/third_party/blake2b" \
@@ -108,7 +109,10 @@ printf "%-7s %-7s %9s %8s %8s %8s  %s\n" cap FCAP ms/solve blocks/SM sm_MHz watt
 printf -- "----------------------------------------------------------------------\n"
 for cap in $CAPS; do
     if [ "$cap" != "stock" ]; then
-        sudo -n nvidia-smi -pl "$cap" >/dev/null 2>&1 || { echo "could not set -pl $cap"; continue; }
+        sudo -n nvidia-smi -pl "$cap" >/dev/null 2>&1 \
+            || { echo "ABORT: could not set -pl $cap (no cached sudo credentials?)."; \
+                 echo "  Skipping it would drop the point silently and leave the"; \
+                 echo "  remaining rows looking like a complete sweep."; exit 1; }
         sleep 3
     fi
     r=0

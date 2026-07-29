@@ -47,6 +47,7 @@
 set -uf
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/benchmarks/lib.sh"
 ROUNDS=${ROUNDS:-"1 2"}     # 1 is the control; 2 is the round with the bytes
 REPS=${REPS:-8}             # replays of the round inside one solve
 SECS=${SECS:-40}            # per run, after which the sampled median is steady state
@@ -67,7 +68,7 @@ build() {   # build <suffix> <extra-defines...>
     # captured rather than read back out of $1 -- which under `set -u` is an
     # unbound variable once the last argument has been shifted away.
     local sfx=$1 out="$OUT/pipeline$1"; shift
-    [ -x "$out" ] && return 0
+    bench_stale "$out" || return 0
     echo "  building $(basename "$out") ..."
     "$NVCC" -O3 -arch="$ARCH" -std=c++17 -diag-suppress 186 \
         -I "$ROOT/src" -I "$ROOT/kernels/cuda" -I "$ROOT/tests" -I "$ROOT/third_party/blake2b" \

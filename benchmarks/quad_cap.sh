@@ -37,6 +37,7 @@
 set -uf
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/benchmarks/lib.sh"
 CAPS=${CAPS:-stock}
 SECS=${SECS:-30}            # target seconds of SOLVING per run, after calibration
 REPEATS=${REPEATS:-1}
@@ -49,7 +50,7 @@ mkdir -p "$OUT"
 
 build() {   # build <suffix> <extra-defines...>
     local sfx=$1 out="$OUT/pipeline$1"; shift
-    [ -x "$out" ] && return 0
+    bench_stale "$out" || return 0
     echo "  building $(basename "$out") ..."
     "$NVCC" -O3 -arch="$ARCH" -std=c++17 -diag-suppress 186 \
         -I "$ROOT/src" -I "$ROOT/kernels/cuda" -I "$ROOT/tests" -I "$ROOT/third_party/blake2b" \

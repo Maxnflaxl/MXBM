@@ -20,6 +20,7 @@ set -u
 REPS=${1:-8}
 SECONDS_PER_RUN=${2:-45}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/benchmarks/lib.sh"
 OUT=${OUT_DIR:-/tmp/mxbm-stage}
 mkdir -p "$OUT"
 
@@ -37,6 +38,10 @@ run() {   # run <label> <solves> <env-assignment...>
 }
 
 solves_for() { python3 -c "print(max(20,int($SECONDS_PER_RUN*1000/$1)))"; }
+
+# Before anything is measured, and never while a run is in flight -- this script
+# used to run whatever cuda/pipeline happened to be in the tree.
+bench_build_pipeline
 
 echo "baseline ($(solves_for $BASE_MS) solves) ..."
 run baseline "$(solves_for $BASE_MS)" MXBM_NONE=1
