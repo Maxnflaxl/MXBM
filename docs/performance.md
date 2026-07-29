@@ -543,6 +543,68 @@ cap bytes are not free at all: they are watts, watts are clock, and clock is spe
 that promotes is **narrowing records**, which cuts bytes moved; in-place layer reuse cuts
 the footprint while moving the same bytes, so it stays a reach lever.
 
+#### ⚠ Closed 2026-07-29: the low end is not reachable by traffic, and no other mechanism has been found
+
+**The "2.7× our lever" arithmetic above is withdrawn.** It divided a whole-solve clock
+deficit by a lever measured on a `MXBM_ROUND_REPS=2:24` replay timeline, and it priced
+that lever against a denominator nobody had measured. Both terms were wrong, and both in
+the optimistic direction.
+
+**The denominator, measured.** `benchmarks/abl_bytes.sh` profiles the two builds the byte
+experiment already used. Ablating round 2's payload removes **1.47 GB**, not the 2.09 GB
+the derivation gave — that figure scaled round 2's *compulsory* write and charged the
+ablation with 268 MB of back-refs it never touches. Two mechanism questions closed with
+it: a 16 B store costs a full **32 B sector** (805 MB predicted at 16 B, 1342 at 32 B,
+1330 measured), and there is **no read-for-ownership** (that would have added ~1074 MB of
+read; read moved +7.8 MB).
+
+**The numerator is still a replay clock.** The 210 MHz was measured on a timeline that is
+~91 % round 2, while round 2 is 30 % of a real solve — and this document's own rows show
+what that costs: at 285 W the narrowed ×24 replay clocks 2670 against a real-solve
+baseline of 2685, so the whole-solve gain there is ≤ 0, not +60. Until a no-replay A/B
+exists the whole-solve rate is a bound, not a number.
+
+| | replay timeline | whole solve |
+|---|---|---|
+| exchange rate | 210 / 1.47 = **143 MHz/GB** | **≤ 92 MHz/GB** |
+
+**What that leaves.** Closing 570 MHz at ≤ 92 MHz/GB needs **≥ 6.2 GB of a 13.0 GB solve
+— 48 % of all traffic**. Every narrowing the [record
+audit](performance-research.md#the-record-redundancy-audit) leaves available totals
+1.07 GB: **≤ 98 MHz, 17 % of the deficit**. Traffic cannot close the low end, and the
+remaining 83 % has no identified mechanism behind it.
+
+**Two other candidates died in the same week**, which is why this is recorded as closed
+rather than open:
+
+- **Instruction issue.** Moving siphash's four 64-bit adds off the saturated ALU pipe is
+  arithmetically impossible on this ISA: sm_89 has no `IMAD` form that writes a
+  carry-out, so `ptxas` lowers `mad.lo.cc.u32` to `IMAD.IADD` **plus** a carry-synthesising
+  `LEA`, and the ALU pipe gets *busier* (`entry_scatter` 855 → 876). The high halves were
+  already on FMA as `IMAD.X`, 157 of 160. The surviving rotate-only form is −5.1 %
+  static, ≈0.18 ms, under this project's 1 %-of-a-solve floor.
+- **Undervolting.** A curve-shift offset is the one lever that acts on clock directly, and
+  it is **not testable on the reference machine**: the benchmark card also drives the
+  display, so an unstable offset corrupts the screen and needs a hard restart, and it does
+  so *before* it corrupts a solve — the KAT gate cannot protect against a failure that
+  arrives ahead of it. `--coff 300` did exactly this. See
+  [overclocking.md](overclocking.md).
+
+**The practical conclusion, which is a real answer and not a placeholder.** MXBM's
+advantage is a band, and the band is where it was measured: **lolMiner below ~212 W,
+MXBM between ~212 W and ~257 W, and MXBM alone above it** at a ceiling lolMiner cannot
+reach at any setting (59.15 sol/s against ~54.4). Recommending MXBM for a rig capped
+below 212 W is not supportable on this hardware, and no change in this document's reach
+would make it so. **Effort belongs on goals 2 and 3**, where the pipeline runs at 57 % of
+its 19.8 ms floor and rounds 1 and 2 hold 65 % of the gap.
+
+*Reopening conditions, since the ledger's own rule is that a closure states them: a
+no-replay 180 W A/B that puts the whole-solve rate materially above 92 MHz/GB; a
+narrowing worth more than the 1.07 GB the audit allows; a machine where the compute GPU
+does not drive the display, which makes undervolting measurable; or a mechanism nobody
+has proposed. The first two would move the arithmetic, not the conclusion — 48 % of all
+traffic is a long way from 1.07 GB.*
+
 ### The memory traffic is compulsory
 
 Per solve, against the minimum the round schedule and record widths require —
@@ -895,7 +957,7 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | lever | status |
 |---|---|
 | fewer bytes | every record is `ceil(bits/64)` ([audit](performance-research.md#the-record-redundancy-audit)) — except one that was *stored* wider than that, [since fixed](performance-research.md#the-round-2-alignment-pad). And bytes buy almost no **time**: shrinking r2's and r3's records to 16 B, well past what the audit allows, is worth ~4 ms of 34 ([measured](performance-research.md#bytes-are-nearly-free-per-element-work-is-not)) |
-| bytes as **watts** | where that lever moved to. Under a cap bytes are clock: 16 % less traffic is worth [60 MHz at 285 W and 210 MHz at 180 W](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz) — but that is the prize for a *free* narrowing, and the [one built](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) spends the freed watts on the arithmetic replacing the bytes. **Open, with a known ceiling and an unknown floor** |
+| bytes as **watts** | where that lever moved to. Under a cap bytes are clock: 16 % less traffic is worth [60 MHz at 285 W and 210 MHz at 180 W](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz) — but that is the prize for a *free* narrowing, and the [one built](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) spends the freed watts on the arithmetic replacing the bytes. **CLOSED 2026-07-29.** The denominator is 1.47 GB measured, not 2.09 derived, and the numerator is a replay clock — so the whole-solve rate is ≤ 92 MHz/GB and closing 570 MHz needs 48 % of all traffic against the 1.07 GB the audit allows. [Details](#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found) |
 | redundant rescan | removing it entirely buys nothing over halving it ([geometry](performance-research.md#row-bucket-geometry)); re-confirmed on CUDA, where (17,0) is −9 % traffic and +9 % time |
 | occupancy | ⚠ **reopened on CUDA, and partly collected.** OpenCL's 48 KB LDS made it structurally unreachable ([details](performance-research.md#occupancy-again)); CUDA exposes 100 KB/SM, where [3 → 4 blocks/SM is worth ~1.6 ms](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate). r1/r2 crossed at `kFCap` 320 (**−1.25 ms**) and [r1 took a fifth block](performance-research.md#round-1-takes-a-fifth-block-015-ms-via-a-per-round-group-cap) (−0.15). r3 reaches 4 blocks and [does not care](performance-research.md#round-3-does-not-want-a-fourth-block--occupancy-pays-only-where-a-round-is-latency-bound) — occupancy pays where a round is latency-bound, not where it is bandwidth-bound. **Shared memory per staged element (`B`) is the only term left** |
 | coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](performance-research.md#two-level-bucketing)) |
@@ -903,10 +965,13 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined on OpenCL and less on CUDA — nothing left to win |
 | phase overlap | closed by two mechanisms — grid depth and warp slots ([details](performance-research.md#phase-overlap-cannot-reach-the-roofline)) |
 
-**Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.12× short. Of
-the ~14.5 ms between the shipping time and the hardware floor, r1 and r2 hold 65 %, and
-what they are spending it on is BeamHash III's own hash rather than anything tunable. So
-what is left is mostly not solver micro-optimization:
+**Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.12× short.
+**Goal 1 — the low-power gap — is closed by measurement**, not by exhaustion of effort:
+traffic supplies at most 17 % of the 570 MHz deficit, the instruction-issue route is
+impossible on this ISA, and undervolting is untestable on a card that drives its own
+display. See [the closure](#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found).
+What remains is speed and efficiency at and above the band, where the pipeline sits at
+57 % of a 19.8 ms floor and r1 and r2 hold 65 % of the gap:
 
 0. ~~**Ship the power cap as a setting.**~~ **Done 2026-07-25** — `--pl W` and
    `--no-oc-reset`, per-GPU list syntax, clamped to the band the driver reports,
