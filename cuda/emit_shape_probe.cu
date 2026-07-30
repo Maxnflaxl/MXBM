@@ -7,8 +7,17 @@
 // atomicAdd exactly as the real emit does; PRECOMP variants write to the SAME addresses
 // from a precomputed slot table, so the memory pattern is identical and only the atomic
 // differs.
+//
+// `sweep` mode (P2 of the solver-reorg plan): same atomic emit, but across bucket
+// counts 2^16..2^21 at the three record widths the pipeline actually writes
+// (8 B seed / 16 B pair / 72 B packed). The warp-per-bucket design needs ~2^21
+// buckets (mean 16); its 2M bucket-tail lines are ~64 MB, larger than L2, so the
+// question is how much of today's scatter rate survives losing tail-line residency.
+// Same caveat as above: only the ratio of each width's rate to its own bb=16 row
+// transfers to the real pipeline.
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 #define CK(x) do { cudaError_t e=(x); if(e){printf("CUDA %s @%d\n",cudaGetErrorString(e),__LINE__);return 1;} } while(0)
 
@@ -44,7 +53,47 @@ template<typename F> static double best_of(F f) {
         float ms=0; cudaEventElapsedTime(&ms,a,b); if(ms<best) best=ms; }
     cudaEventDestroy(a); cudaEventDestroy(b); return best;
 }
-int main() {
+static int sweep() {
+    const uint32_t n = 33554432u;                       // 2^25, entry-stage population
+    // cap tracks the design at each bucket count: 744 is today's real bb=16 layout,
+    // 32 is the warp-per-bucket target (mean 16 + 4 sigma; Poisson drop ~1e-5).
+    // Intermediates keep >=4 sigma headroom so drops never skew the byte counts.
+    struct Cfg { int bb; uint32_t cap; };
+    const Cfg cfgs[] = { {16,744},{17,380},{18,196},{19,104},{20,56},{21,32} };
+    std::vector<uint32_t> hk(n);
+    uint64_t s = 88172645463325252ull;
+    for (uint32_t i=0;i<n;++i){ s^=s<<13; s^=s>>7; s^=s<<17; hk[i]=(uint32_t)s; }
+    uint32_t *dk,*dc; uint64_t *dout;
+    const uint64_t maxSlots = (uint64_t)(1u<<21)*32u;   // largest nb*cap in cfgs
+    CK(cudaMalloc(&dk,(size_t)n*4));
+    CK(cudaMalloc(&dc,(size_t)(1u<<21)*4));
+    CK(cudaMalloc(&dout, maxSlots*9*8));
+    CK(cudaMemcpy(dk,hk.data(),(size_t)n*4,cudaMemcpyHostToDevice));
+    printf("P2 sweep: atomic scatter emit, n=2^25, best of 5. vs16 = rate / same width's bb=16 rate\n");
+    printf("bb   mean  cap |  8B ms   GB/s  vs16 | 16B ms   GB/s  vs16 | 72B ms   GB/s  vs16 | drop%%\n");
+    double base[3] = {0,0,0};
+    std::vector<uint32_t> hc(1u<<21);
+    for (const Cfg& c : cfgs) {
+        const uint32_t nb = 1u<<c.bb, cap = c.cap;
+        double ms[3];
+        ms[0] = best_of([&]{ cudaMemset(dc,0,(size_t)nb*4); emit_atomic<1><<<(n+255)/256,256>>>(dk,dc,dout,n,nb,cap); });
+        ms[1] = best_of([&]{ cudaMemset(dc,0,(size_t)nb*4); emit_atomic<2><<<(n+255)/256,256>>>(dk,dc,dout,n,nb,cap); });
+        ms[2] = best_of([&]{ cudaMemset(dc,0,(size_t)nb*4); emit_atomic<9><<<(n+255)/256,256>>>(dk,dc,dout,n,nb,cap); });
+        if (c.bb == 16) { base[0]=ms[0]; base[1]=ms[1]; base[2]=ms[2]; }
+        // counts run free past cap, so the last rep's counters give the exact drop total
+        CK(cudaMemcpy(hc.data(),dc,(size_t)nb*4,cudaMemcpyDeviceToHost));
+        uint64_t drops = 0;
+        for (uint32_t b=0;b<nb;++b) if (hc[b] > cap) drops += hc[b]-cap;
+        const int wb[3] = {8,16,72};
+        printf("%2d %6u %4u |", c.bb, n/nb, cap);
+        for (int w=0;w<3;++w)
+            printf(" %6.2f %6.1f %5.2f |", ms[w], (double)n*wb[w]/(ms[w]*1e-3)/1e9, base[w]/ms[w]);
+        printf(" %.4f\n", 100.0*drops/n);
+    }
+    return 0;
+}
+int main(int argc, char** argv) {
+    if (argc > 1 && !strcmp(argv[1],"sweep")) return sweep();
     const uint32_t n=33554432, nb=65536, cap=744;
     std::vector<uint32_t> hk(n); std::vector<uint64_t> hs(n); std::vector<uint32_t> cnt(nb,0);
     uint64_t s=88172645463325252ull;
@@ -94,3 +143,23 @@ int main() {
 // faster than this probe, which is a pure write burst with no reads or compute to
 // overlap. Trust the RATIOS here, not the absolute rates. Getting trustworthy absolutes
 // is what the CUDA port plus Nsight is for.
+//
+// SWEEP RESULTS (RTX 4070 Ti SUPER, 2026-07-31) — P2 of the solver-reorg plan
+//   bb   mean  cap |  8B GB/s vs16 | 16B GB/s vs16 | 72B GB/s vs16 | drop%
+//   16    512  744 |  131.1  1.00  |  128.1  1.00  |  127.8  1.00  | 0.0000
+//   17    256  380 |  131.1  1.00  |  132.7  1.04  |  132.8  1.04  | 0.0000
+//   18    128  196 |   70.6  0.54  |  117.0  0.91  |  132.8  1.04  | 0.0000
+//   19     64  104 |   43.4  0.33  |   79.8  0.62  |  132.7  1.04  | 0.0000
+//   20     32   56 |   34.7  0.26  |   65.7  0.51  |  132.3  1.03  | 0.0003
+//   21     16   32 |   28.6  0.22  |   54.4  0.42  |  130.5  1.02  | 0.0016
+//
+// Verdict: warp-per-bucket's global-memory form (bb=21) is DEAD at the pre-registered
+// <0.7x gate. Thin scattered records need their bucket-tail sectors resident in L2 so
+// sibling writes merge; 2^21 tails x 32 B = 64 MB > 48 MB L2, and once merging fails
+// every 8 B write pays a read-modify-write sector — a 4.5x rate collapse that no match-
+// side saving can buy back (entry's emit alone would grow by ~7 ms against a 5.2 ms
+// prize). The cliff starts at bb=18; only bb=17 is free. Wide records never merge much
+// to begin with (72 B is flat), which is why today's coarse layout never saw this.
+// Consequence: fine bucketing must live in SHARED at match time (counting-sort runs
+// inside a coarse bucket), not in the global layout. The drop column doubles as P4:
+// measured overflow matches Poisson (0.0016% at mean 16, cap 32).
