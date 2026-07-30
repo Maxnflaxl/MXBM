@@ -18,13 +18,21 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <stdexcept>
 
 namespace {
 constexpr uint32_t kElems    = 1u << 25;
 constexpr uint32_t kCapacity = kElems + kElems / 32;      // 34,603,008
 constexpr uint32_t kSurvCap  = 1024;
-constexpr uint32_t kWG       = 256;                       // matches fused_round.metal
+// Threadgroup size. MUST equal the kWG the kernels were compiled with -- it is the
+// stride of their staging loops, and a mismatch silently skips elements rather than
+// failing. CMake passes the same MXBM_METAL_WG to both this file and the metallib;
+// the constructor then asserts it against the pipeline rather than trusting that.
+#ifndef MXBM_METAL_WG
+#define MXBM_METAL_WG 256
+#endif
+constexpr uint32_t kWG = MXBM_METAL_WG;
 }
 
 namespace mxbm { namespace gpu {
@@ -156,6 +164,13 @@ struct MetalSolver::Impl {
     std::atomic<bool> abort_{false};
     DeviceInfo info;
 
+    // Per-phase GPU time, in ms, from MTLCommandBuffer's GPUStartTime/GPUEndTime --
+    // the time the GPU was actually executing, not the wall clock around the submit.
+    // Populated only when MXBM_METAL_TIMING is set; zero cost otherwise.
+    bool  timing = false;
+    double phase_ms[7] = {0,0,0,0,0,0,0};   // entry, r1..r4, terminal, recover
+    double wall_ms = 0.0;
+
     bool alloc_geometry(uint32_t bb_, uint32_t sm_) {
         bb = bb_; sm = sm_; nb = 1u << bb_;
         cap    = fb_cap_for(kCapacity / nb);
@@ -180,6 +195,7 @@ MetalSolver::MetalSolver(int index) : p_(new Impl) {
         NSArray<id<MTLDevice>>* devs = all_devices();
         if (index < 0 || (NSUInteger)index >= devs.count)
             throw std::runtime_error("Metal: no device at index " + std::to_string(index));
+        p_->timing = std::getenv("MXBM_METAL_TIMING") != nullptr;
         p_->dev   = devs[index];
         p_->queue = [p_->dev newCommandQueue];
         p_->info  = info_for(p_->dev, index);
@@ -209,6 +225,18 @@ MetalSolver::MetalSolver(int index) : p_(new Impl) {
         p_->psR3      = make("fused_round_r3");
         p_->psR4      = make("fused_round_r4");
         p_->psTerm    = make("terminal_round");
+        // The kernels stride their staging loops by their compile-time kWG. If this
+        // binary and the metallib were built with different values the loops skip
+        // elements and solutions vanish with no error -- so refuse to run rather than
+        // mine quietly wrong. maxTotalThreadsPerThreadgroup is the one cross-check
+        // available: a kernel that cannot host kWG threads certainly was not built
+        // for it.
+        for (id<MTLComputePipelineState> ps : { p_->psR1, p_->psR2, p_->psR3,
+                                                p_->psR4, p_->psTerm }) {
+            if (ps.maxTotalThreadsPerThreadgroup < kWG)
+                throw std::runtime_error("Metal: kernel cannot host the configured "
+                                         "threadgroup size (" + std::to_string(kWG) + ")");
+        }
         p_->psRecover = make("recover");
 
         auto buf = [&](size_t bytes) {
@@ -291,6 +319,7 @@ std::vector<std::array<uint8_t, 104>> MetalSolver::solve(const uint8_t input[32]
 
         // One command buffer per round. That granularity is what gives the abort poll
         // its seam, and it matches the CUDA path's implicit stream ordering.
+        int phase = 0;
         auto encode = [&](id<MTLComputePipelineState> ps, NSUInteger groups,
                           NSUInteger threadsPerGroup, NSArray* bufs) {
             id<MTLCommandBuffer> cb = [I.queue commandBuffer];
@@ -313,8 +342,12 @@ std::vector<std::array<uint8_t, 104>> MetalSolver::solve(const uint8_t input[32]
                              cb.error.localizedDescription.UTF8String);
                 return false;
             }
+            if (I.timing && phase < 7)
+                I.phase_ms[phase] = (cb.GPUEndTime - cb.GPUStartTime) * 1000.0;
+            ++phase;
             return true;
         };
+        const auto wall0 = std::chrono::steady_clock::now();
 
         if (!encode(I.psEntry, (kElems + 255) / 256, 256,
                     @[ I.dpp, I.entryCfg[0], I.entryCfg[1], I.entryCfg[2], I.entryCfg[3],
@@ -340,6 +373,22 @@ std::vector<std::array<uint8_t, 104>> MetalSolver::solve(const uint8_t input[32]
                     @[ I.cfg[4], I.counts[inSet], I.elem[inSet], I.left, I.right,
                        I.survSlots, I.survCount, I.drops ]))
             return out;
+
+        // Report BEFORE the survivor check: a solve that finds nothing still took the
+        // same five rounds, and an attribution build (which deliberately finds nothing)
+        // is exactly when the per-phase numbers are wanted.
+        if (I.timing) {
+            I.wall_ms = std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - wall0).count();
+            const char* names[7] = { "entry", "r1", "r2", "r3", "r4", "terminal", "recover" };
+            double gpu = 0;
+            for (int i = 0; i < 7; ++i) gpu += I.phase_ms[i];
+            std::fprintf(stderr, "  [metal] ");
+            for (int i = 0; i < 7; ++i)
+                std::fprintf(stderr, "%s %.1f  ", names[i], I.phase_ms[i]);
+            std::fprintf(stderr, "| GPU %.1f  wall %.1f  (%.1f outside)\n",
+                         gpu, I.wall_ms, I.wall_ms - gpu);
+        }
 
         uint32_t hs = *(const uint32_t*)I.survCount.contents;   // unified: a plain read
         if (hs > kSurvCap) hs = kSurvCap;

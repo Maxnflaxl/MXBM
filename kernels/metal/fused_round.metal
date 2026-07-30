@@ -26,12 +26,21 @@ namespace mxbm { namespace metalk {
 // Threadgroup size. The staged group is mean_bucket / 2^submaskBits = 264 elements,
 // so a 256-thread group runs a second loop iteration with 8 of 256 lanes busy. Kept
 // at CUDA's value as a STARTING POINT; Apple's optimum is unmeasured.
-constant constexpr uint32_t kWG = 256;
+#ifndef MXBM_METAL_WG
+#define MXBM_METAL_WG 256
+#endif
+constant constexpr uint32_t kWG = MXBM_METAL_WG;
 
 // Group cap -- the single number that sets threadgroup memory and therefore occupancy.
 // Ada wants 320 (and 288 for round 1). Carried over as a starting value only.
-constant constexpr uint32_t kFCap   = 320;
-constant constexpr uint32_t kR1FCap = 288;
+#ifndef MXBM_METAL_FCAP
+#define MXBM_METAL_FCAP 320
+#endif
+#ifndef MXBM_METAL_R1FCAP
+#define MXBM_METAL_R1FCAP 288
+#endif
+constant constexpr uint32_t kFCap   = MXBM_METAL_FCAP;
+constant constexpr uint32_t kR1FCap = MXBM_METAL_R1FCAP;
 
 // 128 entries is a PERFECT hash on the bucket_bits + submask_bits = 17 line: the
 // bucket fixes the key's high bits and the sub-mask its low ones, leaving exactly
@@ -51,6 +60,20 @@ constant constexpr uint32_t kEmpty   = 0xFFFFFFFFu;
 constant constexpr uint32_t kMaxSpill = 3;
 
 enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4, LM_RD3 = 5 };
+
+// MXBM_METAL_ABL_DERIVE: attribution only, RESULTS ARE INTENTIONALLY WRONG.
+// Bit 1 replaces round 2's 14-siphash rebuild_r2 with a cheap spread. Safe to ablate
+// because the rebuild reads only threadgroup memory and registers, so the GLOBAL
+// access footprint is untouched and the number measures compute, not traffic.
+// This is what established that rebuild_r2 costs 21.0 ms of EXPOSED compute here
+// (r2 43.9 -> 22.9) against 0.4 ms on Ada -- see docs/performance.md.
+#ifndef MXBM_METAL_ABL_DERIVE
+#define MXBM_METAL_ABL_DERIVE 0
+#endif
+inline void abl_spread(uint32_t a, uint32_t b, thread bh3::Elem& e) {
+    uint64_t x = ((uint64_t)a << 32 | b) * 0x9E3779B97F4A7C15ul;
+    for (int w = 0; w < 7; ++w) { x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ul; e.w[w] = x; }
+}
 
 // Dense per-round id allocation, one atomic per SIMD group instead of one per lane.
 // Every emit needs a unique id and they all come from a single u32, so a fully active
@@ -246,7 +269,10 @@ void fused_round_body(
                 for (int w = 0; w < INW; ++w) lwork[pos * INW + w] = e.w[w];
             } else if (LMODE == LM_RD2) {
                 bh3::Elem e;
-                rebuild_r2(pp, lleaf[pos * LEAFW + 0], lleaf[pos * LEAFW + 1], e);
+                if (MXBM_METAL_ABL_DERIVE & 2)
+                    abl_spread(lleaf[pos * LEAFW + 0], lleaf[pos * LEAFW + 1], e);
+                else
+                    rebuild_r2(pp, lleaf[pos * LEAFW + 0], lleaf[pos * LEAFW + 1], e);
                 for (int w = 0; w < INW; ++w) lwork[pos * INW + w] = e.w[w];
             } else if (LMODE == LM_RD3) {
                 const uint32_t l[4] = { lleaf[pos * LEAFW + 0], lleaf[pos * LEAFW + 1],

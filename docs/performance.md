@@ -58,10 +58,78 @@ measured):
 The r1/r3 agreement to within 12 B (the `gcount`/`cnt8` atomics rounding) is the
 strongest available evidence that the two ports allocate the same shape.
 
-Not tuned: `kFCap`, `kR1FCap`, `kWG` and the `bb + sm = 17` line are all carried over
-from Ada as starting values. Register counts are not observable on Metal (see
-`tests/test_metal_resources.mm`), so the occupancy work that produced those numbers on
-CUDA has no direct equivalent here.
+### Where the 117 ms goes
+
+Per-phase GPU time (`MXBM_METAL_TIMING=1`, from `MTLCommandBuffer`'s
+GPUStartTime/GPUEndTime, so this is GPU execution and not the wall clock around the
+submit):
+
+| phase | ms | |
+|---|---:|---|
+| entry | 12.0 | |
+| r1 | 23.4 | |
+| **r2** | **44.0** | **38 % of the solve** |
+| r3 | 17.1 | |
+| r4 | 14.0 | |
+| terminal | 4.4 | |
+| recover | 0.0 | |
+| **GPU** | **115.0** | wall 116.5 — only **1.6 ms outside** |
+
+Two things fall out immediately. The six per-round command buffers, each with a
+`waitUntilCompleted`, cost **1.6 ms total** — batching them is not a lead. And r2 is
+the whole story.
+
+### r2's rebuild does not hide on Apple — 21 ms exposed, against 0.4 ms on Ada
+
+`-DMXBM_METAL_ABL_DERIVE=2` replaces `rebuild_r2`'s 14 `siphash24` calls with a cheap
+spread. Results are intentionally wrong; the ablation is safe because the rebuild reads
+only threadgroup memory and registers, so the global access footprint is untouched and
+the number measures compute alone.
+
+```
+baseline   entry 12.1  r1 23.4  r2 43.9  r3 17.1  r4 13.9  terminal 4.4  | GPU 115.0
+ABL=2      entry 12.2  r1 23.4  r2 22.9  r3 17.1  r4 13.9  terminal 4.4  | GPU  93.9
+```
+
+**21.0 ms of exposed compute.** The same rebuild costs **0.4 ms** on Ada
+(performance-research.md, "Register cap tuning") because Ada's memory-level parallelism
+absorbs it. This is the single largest architectural divergence found between the two
+backends, and it is where any further Apple work should start.
+
+### Four nulls, so they are not re-proposed
+
+- **Threadgroup size.** Bracketed medians over 10 solves: 128 → 144.6, 192 → 126.7,
+  256 → 117.0/117.3, 288 → 116.6, 320 → 116.8/116.9, 352 → 118.3, 384 → 136.0,
+  512 → 144.8. Flat across 256–320; the 0.3 ms between them is inside the spread. An
+  earlier single-solve sweep read 320 as a 1.2 % win — it did not replicate.
+- **Occupancy via smaller groups.** Cutting `kFCap` to fit two threadgroups per core's
+  32 KB, with `sm` raised to keep groups full, makes r2 monotonically *worse*:
+  (FCAP, sm) = (320,1) → 118.5, (192,2) → 125.3, (160,2) → 129.1, (128,3) → 178.0.
+  The extra groups pay table-init, barriers and sub-mask passes that outweigh anything
+  the occupancy buys. Apple is not occupancy-limited here in the way Ada is.
+- **128-bit vector loads and stores.** CUDA documents `4 x ST.128 + 1 x ST.64` beating
+  `9 x ST.64`, because round 3's top stall there is MIO-queue *instruction* issue.
+  Ported to `ulong2` on Metal it measures **neutral to slightly worse** (117.9 vs 117.1
+  median), so the scalar form is kept and the complexity is not. Apple's compiler
+  appears to coalesce these already.
+- **Trading r2's rebuild for bandwidth (`LM_SEEDF`).** Having r1 emit a full packed
+  record so r2 reads instead of rebuilding would recover the 21 ms, at the cost of
+  ~4.3 GB more traffic (r1 writes 16 B/element today, 80 B under SEEDF; r2 reads the
+  same). Round 3 moves 4.3 GB in 17.1 ms, i.e. ~251 GB/s effective, so that traffic
+  costs ~17 ms. Net ~4 ms for a substantial change to record formats, strides and
+  allocation. Not attempted; recorded so the arithmetic does not have to be redone.
+
+### A measurement hazard worth knowing
+
+Single-solve timings on this machine are thermally confounded. An identical
+configuration read 115 ms early in a sweep and 133 ms late, and one FCAP sweep drifted
+16.7 ms end to end — enough to invent a 14 % "win" out of nothing. Every figure above
+is a median over >= 10 solves with the baseline configuration repeated first *and last*;
+if the two brackets disagree by more than a millisecond or two, the run is discarded.
+
+Not tuned beyond the above: the `bb + sm = 17` line is carried over from Ada. Register
+counts are not observable on Metal (see `tests/test_metal_resources.mm`), so the
+occupancy work that produced Ada's numbers has no direct equivalent here.
 
 ---
 

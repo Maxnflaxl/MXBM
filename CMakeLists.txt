@@ -559,6 +559,11 @@ if(MXBM_HAVE_METAL)
   add_dependencies(mxbm_metal mxbm_metallib_gen)
   target_include_directories(mxbm_metal PUBLIC src
                              PRIVATE ${CMAKE_BINARY_DIR}/generated)
+  # ONE source of truth for the threadgroup size: the same value reaches the metallib
+  # (via mxbm_build_metallib) and this library. They must not be able to disagree.
+  if(NOT MXBM_METAL_WG STREQUAL "")
+    target_compile_definitions(mxbm_metal PRIVATE MXBM_METAL_WG=${MXBM_METAL_WG})
+  endif()
   target_link_libraries(mxbm_metal PUBLIC mxbm_beamhash mxbm_geom
       "-framework Metal" "-framework Foundation" "-framework IOKit")
   set_source_files_properties(src/gpu/metal_solver.mm src/gpu/metal_telemetry.mm

@@ -5,10 +5,14 @@
 using namespace metal;
 
 namespace mxbm { namespace metalk {
-constant constexpr uint32_t kWGT      = 256;
+
 // terminal_round stages only word 0 + 4 meta u32 = 24 B/element, an eighth of a round
 // block, so its group cap was never what constrained occupancy and must not be dragged
 // down when the round cap is tuned. It keeps the full tail cap.
+#ifndef MXBM_METAL_WG
+#define MXBM_METAL_WG 256
+#endif
+constant constexpr uint32_t kWGT      = MXBM_METAL_WG;
 constant constexpr uint32_t kTCap     = 384;
 constant constexpr uint32_t kTabSizeT = 128;
 constant constexpr uint32_t kEmptyT   = 0xFFFFFFFFu;
