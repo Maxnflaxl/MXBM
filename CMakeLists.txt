@@ -544,6 +544,11 @@ if(MXBM_HAVE_METAL)
   set_source_files_properties(src/gpu/metal_solver.mm PROPERTIES
                               COMPILE_FLAGS "-fobjc-arc")
 
+  # Wire the Metal solver into the mxbm binary itself. The target already exists
+  # (defined above), so this just adds mxbm_metal's PUBLIC requirements to it.
+  target_link_libraries(mxbm PRIVATE mxbm_metal)
+  target_compile_definitions(mxbm PRIVATE MXBM_HAVE_METAL)
+
   add_executable(test_metal_device tests/test_metal_device.mm)
   target_include_directories(test_metal_device PRIVATE tests src)
   target_link_libraries(test_metal_device PRIVATE mxbm_metal)

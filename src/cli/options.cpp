@@ -37,8 +37,9 @@ std::string usage_text() {
         "  --watchdogscript PATH  script to run when ACTION is script\n"
         "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
         "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
-        "  --solver cuda|opencl|gpu|ref|auto\n"
-        "                         solver backend. gpu = any GPU (CUDA preferred), cuda/opencl\n"
+        "  --solver cuda|metal|opencl|gpu|ref|auto\n"
+        "                         solver backend. gpu = any GPU (CUDA, then Metal, then\n"
+        "                         OpenCL), cuda/metal/opencl\n"
         "                         pin one, ref = CPU reference. Default: auto\n"
         "  --dev-fee PCT          raise the developer fee above its built-in rate, as a\n"
         "                         percentage (e.g. 2.5). Can only be raised, never lowered;\n"
@@ -389,8 +390,8 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         if (arg == "--solver") {
             if (i + 1 >= argc) { err = "missing value for --solver\n\n" + usage_text(); return false; }
             std::string v = argv[++i];
-            if (v != "gpu" && v != "cuda" && v != "opencl" && v != "ref" && v != "auto") {
-                err = "invalid --solver (must be cuda, opencl, gpu, ref, or auto)\n\n" + usage_text();
+            if (v != "gpu" && v != "cuda" && v != "metal" && v != "opencl" && v != "ref" && v != "auto") {
+                err = "invalid --solver (must be cuda, metal, opencl, gpu, ref, or auto)\n\n" + usage_text();
                 return false;
             }
             out.solver = v;

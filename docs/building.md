@@ -30,6 +30,18 @@ sudo apt install build-essential cmake libssl-dev
 brew install cmake openssl@3
 ```
 
+For the **Metal backend** (Apple Silicon), also install the Metal toolchain — it
+ships separately from Xcode:
+
+```sh
+xcodebuild -downloadComponent MetalToolchain
+```
+
+This is optional. Without it CMake reports `Metal solver disabled` and every
+other target still builds and tests; with it you get `--solver metal`, which is
+roughly 4× faster than the OpenCL path on Apple Silicon (see
+[performance.md](performance.md)).
+
 If CMake does not find Homebrew's OpenSSL automatically, point it at the keg:
 
 ```sh

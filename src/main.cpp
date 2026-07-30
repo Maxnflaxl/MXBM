@@ -32,6 +32,9 @@
 #ifdef MXBM_HAVE_OPENCL
 #include "gpu/gpu_solver.h"
 #endif
+#ifdef MXBM_HAVE_METAL
+#include "gpu/metal_solver.h"
+#endif
 #ifdef MXBM_HAVE_CUDA
 #include "gpu/cuda_solver.h"
 #endif
@@ -158,6 +161,9 @@ int main(int argc, char** argv) {
 #ifdef MXBM_HAVE_CUDA
     if (gpu::CudaSolver::available()) ui::console::driver_detected("Cuda", 1);
 #endif
+#ifdef MXBM_HAVE_METAL
+    if (gpu::MetalSolver::available()) ui::console::driver_detected("Metal", 1);
+#endif
 #ifdef MXBM_HAVE_OPENCL
     if (gpu::GpuSolver::available()) ui::console::driver_detected("OpenCL", 1);
 #endif
@@ -275,6 +281,29 @@ int main(int argc, char** argv) {
                 ui::console::error("Device " + std::to_string(pos) + " could not be initialised ("
                                    + e.what() + ") - continuing without it");
             }
+        }
+    }
+#endif
+#ifdef MXBM_HAVE_METAL
+    // Metal before OpenCL on Apple Silicon, and this is measured rather than assumed.
+    // Apple's OpenCL is a deprecated 1.2-era shim that cannot build the fused
+    // row-bucket kernels AT ALL (clCreateKernel -> CL_INVALID_KERNEL), so it is
+    // confined to the sort path -- the slowest of the three collision finders. On an
+    // M3 Max that is ~505 ms/solve against Metal's ~117 ms, a 4.3x difference.
+    // --solver opencl still forces the portable path.
+    const int metal_index = device_index >= 0 ? device_index : 0;
+    if (!solver && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
+        && gpu::MetalSolver::available(metal_index)) {
+        try {
+            auto ms = std::make_unique<gpu::MetalSolver>(metal_index);
+            worker_label = ms->device().name;
+            dev_name = ms->device().name;
+            dev_mem = ms->device().global_mem;
+            dev_driver = "Metal";
+            solver = std::move(ms);
+        } catch (const std::exception& e) {
+            ui::console::error(std::string("Metal solver initialization failed: ") + e.what());
+            gpu_attempt_failed = true;
         }
     }
 #endif
@@ -418,6 +447,9 @@ int main(int argc, char** argv) {
             ui::console::error("--solver cuda requested but no usable CUDA device is available "
                                "(needs Ampere or newer with room for the full 2^25 seed layer, "
                                "or this build has no CUDA support) - monitoring jobs only (no solving)");
+        } else if (opts.solver == "metal") {
+            ui::console::error("--solver metal requested but no usable Metal device is available "
+                               "(or this build has no Metal backend) - monitoring jobs only (no solving)");
         } else if (opts.solver == "opencl") {
             ui::console::error("--solver opencl requested but no OpenCL device is available "
                                "(or built without OpenCL support) - monitoring jobs only (no solving)");

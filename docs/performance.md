@@ -15,6 +15,56 @@ proposing a new lever, because most of them have already been tried.
 special configuration** (user-measured). BeamHash III yields ~1.9 solutions per solve,
 so 53 sol/s ÷ 1.9 ≈ **28 solve/s ≈ 36 ms/solve**. That is the bar.
 
+## Apple Silicon (Metal) — M3 Max, 2026-07-30
+
+A second reference platform. Everything else in this document is the 4070 Ti; this
+section is the Mac, and the two are not comparable except in shape.
+
+| path | median ms/solve | sol/s | notes |
+|---|---|---|---|
+| OpenCL, sort | ~505 (494.6 / 516.6) | ~3.8 | the only OpenCL path that runs here |
+| OpenCL, LDS | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
+| OpenCL, row-bucket | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
+| **Metal, fused row-bucket** | **117** (117.4 / 116.9) | **16.2** | 20/20 clean, spread 0.4 % |
+
+**Apple's OpenCL cannot build the fused kernels at all.** Both the LDS and row-bucket
+collision finders fail at `newComputePipelineState`, which is why every macOS-relevant
+GPU test in `CMakeLists.txt` is pinned to `MXBM_NO_ROWBUCKET=1`. So on this hardware
+OpenCL is confined to the slowest of the three finders, and Metal is not a faster
+dialect of the same pipeline — it is the only way to run the fused one.
+
+`bench_rounds`-equivalent figures above come from `MXBM_BENCH=20 test_metal_solver`,
+median over 20 solves across two sessions, per this document's own rule that a maximum
+of noisy draws reads high.
+
+**The miner delivers less than the pipeline**, and by the same margin this document
+records for CUDA: `--benchmark BEAM-III` reports **155.2 ms/solve median (p5 148.7,
+p95 310.5), 8.5 sol/s** against the pipeline's 117 ms. Roughly 38 ms per solve is spent
+outside the measured region — nonce iteration, stats, the difficulty filter — and the
+long p95 tail is not yet attributed. Quote 117 ms for the *pipeline* and 155 ms for the
+*miner*; they answer different questions.
+
+Threadgroup memory, the resource the fused rounds are bound by (32 768 B ceiling,
+measured):
+
+| kernel | Metal | CUDA | of ceiling |
+|---|---|---|---|
+| `fused_round_r1` | 18 992 B | 18 980 B | 58.0 % |
+| `fused_round_r2` | 23 600 B | — | 72.0 % |
+| `fused_round_r3` | 26 160 B | 26 148 B | 79.8 % |
+| `fused_round_r4` | 22 320 B | — | 68.1 % |
+| `terminal_round` | 9 744 B | — | 29.7 % |
+
+The r1/r3 agreement to within 12 B (the `gcount`/`cnt8` atomics rounding) is the
+strongest available evidence that the two ports allocate the same shape.
+
+Not tuned: `kFCap`, `kR1FCap`, `kWG` and the `bb + sm = 17` line are all carried over
+from Ada as starting values. Register counts are not observable on Metal (see
+`tests/test_metal_resources.mm`), so the occupancy work that produced those numbers on
+CUDA has no direct equivalent here.
+
+---
+
 **Reference hardware** for every measurement below: RTX 4070 Ti SUPER (Ada, sm_89,
 66 CUs, 16 GB, 48 KB LDS/workgroup, ~510 GB/s achievable copy bandwidth).
 

@@ -37,7 +37,7 @@ struct Options {
     bool watchdog_requested = false;
     std::string watchdog_action = "exit";
     std::string watchdog_script;     // --watchdogscript PATH, for action=script
-    std::string solver = "auto";     // --solver gpu|ref|auto (default: prefer gpu, fall back to ref)
+    std::string solver = "auto";     // --solver cuda|metal|opencl|gpu|ref|auto (default: prefer gpu, fall back to ref)
 
     // Console transcript (the reference miner's --log/--logfile). An explicit --logfile
     // turns logging on; an empty log_path means "logs/mxbm_<timestamp>.log".

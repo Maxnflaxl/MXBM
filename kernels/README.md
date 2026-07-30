@@ -4,9 +4,11 @@ Device code, one dir per backend (see [`../docs/architecture.md`](../docs/archit
 
 - `opencl/` — cross-vendor baseline, built first per the [roadmap](../README.md#roadmap).
 - `cuda/` — NVIDIA, primary optimized backend (`sm_89` / Ada), planned after the baseline.
+- `metal/` — Apple Silicon (M-series). The fused row-bucket pipeline ported to MSL;
+  the only way to run it on a Mac, since Apple's OpenCL cannot build those kernels.
 - `hip/` — AMD (ROCm), CUDA-alike, planned after the baseline.
 
-All three implement the same BeamHash III pipeline (see
+All implement the same BeamHash III pipeline (see
 [`../docs/architecture.md`](../docs/architecture.md)): SipHash-2-4 seed → 5
 Wagner rounds (bucket + collide + mix) → isZero() candidates → on-device
 SHA-256 difficulty filter.
