@@ -22,15 +22,15 @@ implementation.
 >
 > | board cap | MXBM | lolMiner 1.98a | |
 > |---|---|---|---|
-> | 180 W | 46.1 sol/s · 0.256 sol/s/W | **52.7 sol/s · 0.293 sol/s/W** | lolMiner ahead on both |
-> | 220 W | **55.4 sol/s · 0.252 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
-> | 285 W | **59.2 sol/s** · 0.208 sol/s/W | 53.6 sol/s · **0.227 sol/s/W** | faster vs more efficient |
+> | 180 W | 45.2 sol/s · 0.251 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | lolMiner ahead on both |
+> | 220 W | **54.9 sol/s · 0.250 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
+> | 285 W | **59.1 sol/s** · 0.208 sol/s/W | 53.7 sol/s · **0.226 sol/s/W** | faster vs more efficient |
 >
-> **MXBM has the higher ceiling — 59.2 sol/s against ~54.4, which lolMiner cannot reach
-> at any setting — and it leads on both speed and efficiency between roughly 212 W and
-> 257 W.** Outside that window lolMiner is the better choice, and at the efficient end it
-> is clearly so: it gives up only 1.8 % of its speed for 21 % less power, so its best
-> efficiency beats MXBM's best by 12 %. Closing that is
+> **MXBM has the higher ceiling — 59.1 sol/s against ~54.0, which lolMiner cannot reach
+> at any setting — and it leads on both speed and efficiency between roughly 210 W and
+> 256 W.** Outside that window lolMiner is the better choice, and at the efficient end it
+> is clearly so: it gives up only 2.4 % of its speed for 24 % less power, so its best
+> efficiency beats MXBM's best by 16 %. Closing that is
 > [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
 >
 > If you run MXBM, **`--pl 220` is the setting to use** — its own efficiency peaks near
@@ -123,7 +123,7 @@ those do.
 
 | Next | What it delivers |
 |------|------------------|
-| **Efficiency at low power** | lolMiner holds 0.3036 sol/s/W at 160 W where MXBM peaks at 0.2611, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock) — measured: moving 16 % fewer bytes buys [60 MHz at 285 W and 210 MHz at 180 W](docs/performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz). **How to collect it is open** — the one narrowing built so far pays for the bytes in arithmetic and nets zero |
+| **Efficiency at low power** | lolMiner holds 0.2991 sol/s/W at 175 W where MXBM peaks at 0.2575, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock) — measured: moving 16 % fewer bytes buys [60 MHz at 285 W and 210 MHz at 180 W](docs/performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz). **How to collect it is open** — the one narrowing built so far pays for the bytes in arithmetic and nets zero |
 | **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the CUDA floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — what is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
 | **Per-GPU verification** | Multi-GPU is built and tested, but has never run on a machine with more than one card |

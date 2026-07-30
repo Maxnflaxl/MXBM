@@ -419,13 +419,93 @@ not capture. The controlled run adds one fact to that: the card is at
 it is whatever 285 W happens to buy. The surviving hypothesis is that the same 285 W buys
 a different point on the V/f curve on different days.
 
-**The test that would settle it, not yet run:** lock the SM clock
-(`sudo -v && LGC=2600 benchmarks/headline.sh`) and repeat across sessions. At a locked
-clock the V/f point is pinned, so if ms/solve becomes stable across days the regime is a
-clock/voltage effect; if it still moves, the memory subsystem is implicated and the
-reported 10251 MHz is not telling the whole story. A locked-clock number is also the right
-thing to track *builds* against, since it removes the card's own day-to-day discretion
-from a regression test.
+### The locked-clock reference is stable to the digit — run it 2026-07-30
+
+The test proposed for this has now been run: lock the SM and memory clocks
+(`LGC=2600 LMC=10251 benchmarks/headline.sh`) and repeat, so the V/f point is pinned
+rather than left to the card's discretion. **Two runs, bracketing 70 minutes of
+continuous varied load** — the full 100–285 W head-to-head sweep, both miners, ran
+between them.
+
+| | ms/solve | sol/s | SM | mem | W | °C | capped |
+|---|---|---|---|---|---|---|---|
+| **run A** (21:20) | **34.30** | 58.35 | 2610 | 10251 | 261.8 | 67 | **none** |
+| **run B** (22:49) | **34.30** | 58.45 | 2610 | 10251 | 262.1 | 67 | **none** |
+| Δ | **0.00 %** | +0.17 % | 0 | 0 | +0.11 % | | |
+
+Six runs of 120 s each, 0.3 % within-run spread on both.
+
+**The pin removes the suspected mechanism by construction, and that is the point.** At
+stock the card sits at `sw_power_cap` **99–100 % of the time**, so the SM clock is not a
+free variable — it is whatever 285 W happens to buy, and the surviving hypothesis for the
+cross-session drift was that the same 285 W buys a different point on the V/f curve on
+different days. At a locked 2610 MHz the card draws **262 W against a 285 W limit with
+`clocks_event_reasons: none`** — no throttle of any kind, 23 W of headroom unused. The
+card is no longer buying clock with watts at all.
+
+**And the timescale matters.** The original anomaly was not a day-to-day effect: it was
+34.15–34.20 ms early in a session and 35.49–35.72 ms *a few hours later*, same machine,
+unchanged. Runs A and B here are 106 minutes apart with the card driven across its whole
+power range in between — the same timescale, and a far more hostile one — and ms/solve
+did not move at all. Against up to **5 %** unlocked, that is the difference between a
+number that describes the build and a number that describes the afternoon.
+
+**So: use the locked-clock figure to regression-test builds.** `34.30 ms at LGC=2600
+LMC=10251` is now the reference, and a build that moves it has moved. Quote the *stock*
+figure when the question is what the card actually does for a user, and carry the ~5 %
+band with it.
+
+**What is still not settled.** Both runs are the same calendar day. This is strong
+evidence that the regime is a clock/voltage effect — pinning the clock pinned the number
+across exactly the interval on which the anomaly first appeared — but a genuine
+cross-day repeat is still owed, and the slow regime has not recurred since 2026-07-26 to
+be caught in the act.
+
+### The memory junction temperature is not observable on this card — dead end
+
+*(Probed 2026-07-30.)* The memory half of that hypothesis had a specific, cheap test
+behind it. GDDR6X raises its refresh rate as it heats, which lowers *effective* bandwidth
+while the reported memory clock sits still at 10251 MHz — which is exactly the signature
+above: a slowdown that is on the GPU, ~2–3 % in step across every round, and invisible in
+every clock we log. `nvidia-smi` reports `temperature.memory` as N/A here, but that only
+says its own query does not resolve; NVML might still answer `NVML_FI_DEV_MEMORY_TEMP`
+(field 82) through `nvmlDeviceGetFieldValues`, which `src/gpu/nvml.cpp` has never called.
+
+**It does not.** Field 82 returns `Not Supported`, idle and under full load alike.
+
+The probe was positive-controlled, because a bare "Not Supported" is indistinguishable
+from a wrong struct layout, a failed `dlsym`, or a handle that is not really a device. The
+same call, in the same array, also asked for fields this card certainly does answer:
+
+| field | | result |
+|---|---|---|
+| 82 | `MEMORY_TEMP` | **Not Supported** |
+| 186 | `POWER_INSTANT` (control) | Success — 8 852 mW idle, 285 779 mW under load |
+| 83 | `TOTAL_ENERGY` (control) | Success — monotonic mJ counter |
+| 193–196 | the whole `T.Limit` family | **Not Supported** |
+
+The controls resolve to the right values to three digits — 285.8 W under load against a
+285 W board limit — so the mechanism is proven and the field is genuinely absent rather
+than mis-called. `nvidia-smi -q -d TEMPERATURE` agrees from the other side: `Memory
+Current Temp: N/A`, `Memory Max Operating Temp: N/A`, and `GPU Current T.Limit Temp: N/A`.
+This is a GeForce restriction, not a driver-version or an API-surface problem, and no
+amount of NVML gets around it.
+
+**Two consequences.** The VRAM-temperature column lolMiner has and we do not is **not
+available to us on this class of card** — that item should stop being carried as work.
+And the GDDR6X-refresh explanation of the cross-session regime is not *disprovable* with
+the instruments this card exposes; it stays a hypothesis, and the locked-clock reference
+below is what has to carry the question instead. Testing it directly would need
+out-of-band telemetry the card does not offer.
+
+**One thing worth keeping from the probe.** Field 83,
+`NVML_FI_DEV_TOTAL_ENERGY_CONSUMPTION`, *is* supported: a monotonic millijoule counter
+since driver load. Every efficiency figure on this page is currently integrated from
+`power.draw` samples at 5 Hz, which is a reconstruction of exactly what that counter
+already holds exactly. Reading it before and after a run would give J/solution directly,
+with no sampling error and no dependence on sample rate. Not done here — it would change
+the basis of numbers mid-sweep, which is the one thing a reproducibility section must not
+do — but it is the right instrument for the next one.
 
 **How to quote a number from this page:** use the controlled figure with its conditions
 attached — 33.8 ms / 58.9 sol/s at stock 285 W, 2685 MHz, 67 °C — and carry the ~5 %
@@ -556,10 +636,10 @@ which is precisely what this section is arguing about.
 Δ columns are against lolMiner at *its* uncapped operating point — 53.27 sol/s
 at 238.7 W = 0.2232 sol/s/W. Interpolating the crossings against *that* point: MXBM
 overtakes it on **speed at ~217 W** and falls behind it on **efficiency at ~252 W**.
-Both crossings survive the proper head-to-head almost unchanged (212 W and 257 W), so the
+Both crossings survive the proper head-to-head almost unchanged (210 W and 256 W), so the
 *band* was right — but the margin inside it does not survive, because at 220 W lolMiner
-capped to 220 W does 54.35 sol/s at 0.2476, not 53.27 at 0.2232. The advantage there is
-**1.9 %**, not the ~10 % this section used to report.
+capped to 220 W does 54.35 sol/s at 0.2477, not 53.27 at 0.2232. The advantage there is
+**0.9 %**, not the ~10 % this section used to report.
 
 The 11 % efficiency deficit at stock is still an operating-point artefact: MXBM spends
 every watt the board allows and converts it into throughput, and lolMiner does not reach
@@ -617,73 +697,137 @@ with `nvidia-smi -pl` so neither miner's own OC code is a variable. Power is sam
 NVML for both — never taken from either miner's own statistics block, which averages in
 its ramp and reads ~20 W low. Two repeats per cell; the spread within a cell is ±0.1 sol/s.
 
+**Re-measured 2026-07-30** on a second session, and extended down to the card's 100 W
+floor. The table below is that second session; the reproducibility check against the
+first is the subsection that follows.
+
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|
-| 120 W | 26.30 | 119.8 | 0.2196 | **33.50** | 119.5 | **0.2805** |
-| 140 W | 32.65 | 139.9 | 0.2334 | **40.60** | 139.6 | **0.2908** |
-| 160 W | 39.35 | 160.1 | 0.2458 | **48.60** | 160.1 | **0.3036** |
-| 175 W | 43.95 | 175.2 | 0.2509 | **52.00** | 174.6 | **0.2978** |
-| 180 W | 46.05 | 180.0 | 0.2558 | **52.65** | 179.6 | **0.2932** |
-| 190 W | 48.75 | 189.9 | 0.2567 | **53.25** | 189.6 | **0.2809** |
-| 200 W | 52.15 | 199.8 | **0.2611** | **54.25** | 199.6 | **0.2718** |
-| 210 W | 54.15 | 209.6 | 0.2583 | 54.35 | 209.4 | 0.2595 |
-| 220 W | **55.40** | 219.5 | **0.2524** | 54.35 | 219.6 | 0.2476 |
-| 240 W | **57.20** | 239.4 | **0.2389** | 53.30 | 235.7 | 0.2261 |
-| 255 W | **58.00** | 254.2 | **0.2282** | 53.45 | 235.8 | 0.2267 |
-| 285 W | **59.15** | 284.2 | 0.2081 | 53.60 | 235.8 | **0.2274** |
+| 100 W | 19.10 | 99.5 | 0.1919 | **23.05** | 99.3 | **0.2320** |
+| 110 W | 22.30 | 109.5 | 0.2036 | **27.75** | 109.2 | **0.2541** |
+| 120 W | 25.65 | 119.8 | 0.2142 | **33.40** | 119.5 | **0.2794** |
+| 140 W | 32.45 | 139.9 | 0.2320 | **40.45** | 139.6 | **0.2898** |
+| 160 W | 38.80 | 160.1 | 0.2423 | **47.60** | 160.1 | **0.2973** |
+| 175 W | 43.75 | 175.2 | 0.2497 | **52.25** | 174.7 | **0.2991** |
+| 180 W | 45.15 | 180.1 | 0.2508 | **52.35** | 179.6 | **0.2914** |
+| 190 W | 48.15 | 189.9 | 0.2536 | **53.05** | 189.8 | **0.2796** |
+| 200 W | 51.25 | 199.8 | 0.2566 | **54.00** | 199.6 | **0.2706** |
+| 210 W | **53.95** | 209.6 | **0.2575** | 53.90 | 209.6 | 0.2572 |
+| 220 W | **54.85** | 219.5 | **0.2499** | 54.35 | 219.4 | 0.2477 |
+| 240 W | **56.95** | 239.5 | **0.2378** | 53.75 | 236.6 | 0.2272 |
+| 255 W | **57.85** | 254.3 | **0.2275** | 53.90 | 237.5 | 0.2269 |
+| 285 W | **59.05** | 284.0 | 0.2079 | 53.65 | 237.4 | **0.2259** |
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
 **The result is three-part, and only the middle part is the one this document used to
 claim.** Crossings are interpolated from the table:
 
-- **Below ~212 W, lolMiner wins on both, and the margin grows as the cap tightens.**
-  At 180 W it does 52.65 sol/s to MXBM's 46.05 (**+14.3 %**); at 160 W, 48.60 to 39.35
-  (**+23.5 %**); at 120 W, 33.50 to 26.30 (**+27.4 %**).
-- **Between ~212 W and ~257 W, MXBM wins on both** — by 1.9 % on each at 220 W, widening
-  to 7.3 % speed and 5.7 % efficiency at 240 W. The previously published band of
-  217–252 W was right, and slightly conservative.
-- **Above ~257 W, MXBM is faster and lolMiner is more efficient**, which is what the
+- **Below ~210 W, lolMiner wins on both, and the margin grows as the cap tightens —
+  until the very bottom, where it does not.** At 180 W it does 52.35 sol/s to MXBM's
+  45.15 (**+15.9 %**); at 160 W, 47.60 to 38.80 (**+22.7 %**); at 120 W, 33.40 to 25.65
+  (**+30.2 %**). Then at 100 W the gap *narrows* to **+20.7 %** — see the floor below.
+- **Between ~210 W and ~256 W, MXBM wins on both** — by 0.9 % on each at 220 W, widening
+  to 6.0 % speed and 4.7 % efficiency at 240 W. (Band computed on a fine grid by
+  `docs/tools/plot_power.py`, which reads this same table: 209.9–255.9 W.)
+- **Above ~256 W, MXBM is faster and lolMiner is more efficient**, which is what the
   stock-versus-stock comparison always showed.
 
-Two facts that reframe the whole comparison:
+Three facts that reframe the whole comparison:
 
-**lolMiner barely responds to the cap at all.** From 285 W down to 180 W it moves 53.6 →
-52.65 sol/s — it gives up **1.8 %** of its speed for **21 %** less power. MXBM over the
-same range gives up 22 %. And above ~236 W the cap stops doing anything: the 240, 255 and
-285 W rows all draw 235.7–235.8 W, which is why it never reaches the board limit.
+**lolMiner barely responds to the cap at all.** From 285 W down to 180 W it moves 53.65 →
+52.35 sol/s — it gives up **2.4 %** of its speed for **24 %** less power. MXBM over the
+same range gives up 24 %. And above ~237 W the cap stops doing anything: the 240, 255 and
+285 W rows all draw 236.6–237.5 W, which is why it never reaches the board limit.
 
 **Both miners have an interior efficiency optimum; lolMiner's is higher and further
-left.** MXBM peaks at **0.2611 sol/s/W at 200 W**, lolMiner at **0.3036 at 160 W** — a
-**16.3 %** gap between one miner at its best and the other at its best. Both fall away
-below their peak, for the same reason: past a certain point the core clock has dropped
-far enough that the parts of the board which do not scale with it are being paid for out
-of less work.
+left.** MXBM peaks at **0.2575 sol/s/W at 210 W**, lolMiner at **0.2991 at 175 W** — a
+**16.2 %** gap between one miner at its best and the other at its best. Read both peaks
+as *regions*, not points: MXBM's 200 and 210 W rows are 0.35 % apart and lolMiner's 160
+and 175 W rows 0.6 %, which is inside this measurement's own repeatability.
 
-Put the other way, and this is the sharpest form of it: **lolMiner at 160 W delivers
-48.60 sol/s for 160.1 W, where MXBM needs 199.8 W to deliver 52.15.** Nearly the same
-throughput for 40 W less. That is the argument this document used to make in the other
-direction at 220 W, and at the efficient end of the curve it now belongs to them.
+**The left edge is now the card's, not the sweep's — and there is nothing hiding down
+there.** This was the open question: lolMiner's efficiency was still climbing at 180 W
+when the sweep stopped, so its peak might have been unmeasured and its low-power
+advantage larger than recorded. Taking the sweep to the card's 100 W floor settles it.
+**Both curves fall away monotonically below their peak**, and lolMiner falls *faster*:
+its advantage over MXBM peaks at +30.2 % around 120 W and then shrinks to +20.7 % at
+100 W. Its peak is genuinely interior and genuinely measured, and no hidden low-power
+regime exists for either miner.
 
-What MXBM keeps is the top end: **59.15 sol/s against a ceiling of ~54.4**, a **8.8 %**
+Put the other way, and this is the sharpest form of it: **lolMiner at 175 W delivers
+52.25 sol/s for 174.7 W, where MXBM needs 209.6 W to deliver 53.95.** Nearly the same
+throughput for 35 W less. That is the argument this document used to make in the other
+direction at 220 W, and at the efficient end of the curve it belongs to them.
+
+What MXBM keeps is the top end: **59.05 sol/s against a ceiling of ~54.0**, a **9.4 %**
 higher maximum throughput that lolMiner cannot reach at any setting.
+
+### The sweep reproduces across sessions to ~1 %
+
+*(The `cad8fde` question, answered for the comparison rather than for a single number.)*
+
+Everything above was one interleaved session, which is exactly right for the *comparison*
+and says nothing about whether the absolute numbers survive a different day. The whole
+sweep was therefore re-run on 2026-07-30, two days after the first, on the same binaries.
+
+| cap | MXBM 07-28 → 07-30 | Δ | lolMiner 07-28 → 07-30 | Δ |
+|---|---|---|---|---|
+| 120 W | 26.30 → 25.65 | −2.5 % | 33.50 → 33.40 | −0.3 % |
+| 140 W | 32.65 → 32.45 | −0.6 % | 40.60 → 40.45 | −0.4 % |
+| 160 W | 39.35 → 38.80 | −1.4 % | 48.60 → 47.60 | −2.1 % |
+| 175 W | 43.95 → 43.75 | −0.5 % | 52.00 → 52.25 | +0.5 % |
+| 180 W | 46.05 → 45.15 | −2.0 % | 52.65 → 52.35 | −0.6 % |
+| 190 W | 48.75 → 48.15 | −1.2 % | 53.25 → 53.05 | −0.4 % |
+| 200 W | 52.15 → 51.25 | −1.7 % | 54.25 → 54.00 | −0.5 % |
+| 210 W | 54.15 → 53.95 | −0.4 % | 54.35 → 53.90 | −0.8 % |
+| 220 W | 55.40 → 54.85 | −1.0 % | 54.35 → 54.35 | 0.0 % |
+| 240 W | 57.20 → 56.95 | −0.4 % | 53.30 → 53.75 | +0.8 % |
+| 255 W | 58.00 → 57.85 | −0.3 % | 53.45 → 53.90 | +0.8 % |
+| 285 W | 59.15 → 59.05 | −0.2 % | 53.60 → 53.65 | +0.1 % |
+
+**This is much better than the ~5 % band the headline section warns about.** Every point
+of both miners reproduces within 2.5 %, and all but three within ~1 %. The board power
+drawn at each cap is identical to a tenth of a watt.
+
+Two things are worth separating in it. **MXBM's deltas are all the same sign** — twelve
+of twelve slightly slower on the second day, mean about −1.0 % — which is a small session
+offset, not noise; noise would change sign. **lolMiner's are mixed** (+0.8 % to −2.1 %,
+mean ≈ −0.2 %), i.e. genuinely noise-like. So the second session was marginally
+unfavourable to MXBM, and every conclusion above is drawn from *that* session, which
+makes them conservative rather than flattering.
+
+**No conclusion changed.** Both crossings moved by less than one grid spacing (~212 →
+~210 W, ~257 → ~256 W), both efficiency peaks moved one row within a flat region, and
+lolMiner's saturation ceiling reproduced at 236.6–237.5 W against 235.7–235.8 W. The
+band to attach to any single *absolute* number from this page is still the headline
+section's ~5 %; what this shows is that the *comparison* is stable well inside it.
 
 ### Why we lose the low end: watts buy us less clock
 
-The mechanism is visible in the clocks, and it is the same story at every point:
+The mechanism is visible in the clocks — **down to 160 W, below which it inverts.**
+Mean SM clock per cap, both repeats, 2026-07-30:
 
 | cap | MXBM SM clock | lolMiner SM clock | gap |
 |---|---|---|---|
-| 180 W | 1905 MHz | 2475 MHz | **−570** |
-| 190 W | 2048 MHz | 2550 MHz | −502 |
-| 200 W | 2242 MHz | 2602 MHz | −360 |
-| 210 W | 2385 MHz | 2655 MHz | −270 |
-| 220 W | 2460 MHz | 2700 MHz | −240 |
-| 240 W | 2542 MHz | 2745 MHz | −203 |
-| 285 W | 2685 MHz | 2745 MHz | −60 |
+| 100 W | 795 MHz | 435 MHz | **+360** |
+| 110 W | 922 MHz | 548 MHz | **+374** |
+| 120 W | 1035 MHz | 678 MHz | **+357** |
+| 140 W | 1320 MHz | 956 MHz | **+364** |
+| 160 W | 1560 MHz | 1556 MHz | +4 |
+| 175 W | 1792 MHz | 2392 MHz | **−600** |
+| 180 W | 1882 MHz | 2468 MHz | −586 |
+| 190 W | 2025 MHz | 2535 MHz | −510 |
+| 200 W | 2205 MHz | 2595 MHz | −390 |
+| 210 W | 2378 MHz | 2640 MHz | −262 |
+| 220 W | 2452 MHz | 2685 MHz | −233 |
+| 240 W | 2535 MHz | 2745 MHz | −210 |
+| 255 W | 2588 MHz | 2745 MHz | −157 |
+| 285 W | 2670 MHz | 2745 MHz | −75 |
 
-MXBM's kernels cost more power per clock, so a tightening cap takes clock away from us
-faster than from them — 60 MHz behind at stock, 570 MHz behind at 180 W. The suspect was
+**Above 160 W this is the story the section was written to tell.** MXBM's kernels cost
+more power per clock, so a tightening cap takes clock away from us faster than from them
+— 75 MHz behind at stock, 600 MHz behind at 175 W. The suspect was
 DRAM traffic: MXBM moves [14.23 GB/solve](#current-focus-and-open-leads) at geometry
 (16,1), while lolMiner selects a **4G** variant that fits the search in 4 GB and must
 therefore move far less.
@@ -703,6 +847,43 @@ bandwidth-bound, and that is why memory efficiency was filed under reach. Under 
 cap bytes are not free at all: they are watts, watts are clock, and clock is speed. What
 that promotes is **narrowing records**, which cuts bytes moved; in-place layer reuse cuts
 the footprint while moving the same bytes, so it stays a reach lever.
+
+#### ⚠ Below 160 W the clock gap INVERTS, and the clock explanation stops applying
+
+*(New 2026-07-30, from extending the sweep to the card's 100 W floor. Unexplained.)*
+
+Everything above is a story about clock: lolMiner clocks higher under a cap, and that is
+why it wins. **Below 160 W that is simply not what happens.** At 140 W and under, **MXBM
+holds a ~360 MHz HIGHER SM clock than lolMiner and still loses by 20–30 % on sol/s.** The
+sign flips cleanly at 160 W, where the two are within 4 MHz of each other, and the
+inversion is present in both repeats at every point below it — it is not one bad sample.
+
+| cap | clock gap | sol/s gap |
+|---|---|---|
+| 100 W | MXBM **+360 MHz** | lolMiner **+20.7 %** |
+| 120 W | MXBM **+357 MHz** | lolMiner **+30.2 %** |
+| 140 W | MXBM **+364 MHz** | lolMiner **+24.7 %** |
+| 160 W | +4 MHz | lolMiner +22.7 % |
+| 180 W | MXBM −586 MHz | lolMiner +15.9 % |
+
+So in the bottom third of the range our deficit is **not a clock deficit at all** — it is
+work done per clock, and lolMiner is getting roughly twice as much of it while running
+its core far slower. Whatever explains 175 W and above does not explain this, and the
+"bytes → watts → clock" chain cannot: it predicts the miner moving fewer bytes clocks
+*higher* under a cap, and below 160 W lolMiner clocks lower.
+
+**Two candidate readings, neither tested.** Either lolMiner is duty-cycling at these caps
+— bursting and idling, so a median `clocks.sm` samples a mixture rather than the clock
+during work, which would make the whole column mean something different for it than for
+us — or its 4G variant genuinely does far more useful work per cycle at low clock in a
+way that only becomes visible once the clock is low enough. The first is testable cheaply
+from the 5 Hz telemetry already captured, by looking at the *distribution* of the clock
+samples rather than their median: a duty-cycling miner is bimodal.
+
+**What it does not change.** Every conclusion in the sections above is drawn at 175 W and
+higher, where the clock story holds and is confirmed by this session. What it removes is
+the temptation to extrapolate that story downward — the low end has a different mechanism
+and nobody has identified it.
 
 #### ⚠ Closed 2026-07-29: the low end is not reachable by traffic, and no other mechanism has been found
 
@@ -752,10 +933,10 @@ rather than open:
   [overclocking.md](overclocking.md).
 
 **The practical conclusion, which is a real answer and not a placeholder.** MXBM's
-advantage is a band, and the band is where it was measured: **lolMiner below ~212 W,
-MXBM between ~212 W and ~257 W, and MXBM alone above it** at a ceiling lolMiner cannot
-reach at any setting (59.15 sol/s against ~54.4). Recommending MXBM for a rig capped
-below 212 W is not supportable on this hardware, and no change in this document's reach
+advantage is a band, and the band is where it was measured: **lolMiner below ~210 W,
+MXBM between ~210 W and ~256 W, and MXBM alone above it** at a ceiling lolMiner cannot
+reach at any setting (59.05 sol/s against ~54.0). Recommending MXBM for a rig capped
+below 210 W is not supportable on this hardware, and no change in this document's reach
 would make it so. **Effort belongs on goals 2 and 3**, where the pipeline runs at 57 % of
 its 19.8 ms floor and rounds 1 and 2 hold 65 % of the gap.
 

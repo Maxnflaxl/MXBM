@@ -61,12 +61,12 @@ earlier revision of this page claimed. Both miners capped to 220 W:
 
 | | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
-| Throughput | **55.4 sol/s** | 54.4 sol/s | **+1.9 %** |
-| Board power | 219.5 W | 219.6 W | — |
-| Efficiency | **0.252 sol/s/W** | 0.248 sol/s/W | **+1.9 %** |
+| Throughput | **54.9 sol/s** | 54.4 sol/s | **+0.9 %** |
+| Board power | 219.5 W | 219.4 W | — |
+| Efficiency | **0.250 sol/s/W** | 0.248 sol/s/W | **+0.9 %** |
 
-MXBM is ahead on both between roughly **212 W and 257 W**. Below that lolMiner is ahead
-on both — at 180 W by over 14 % — and above it lolMiner is more efficient while MXBM is
+MXBM is ahead on both between roughly **210 W and 256 W**. Below that lolMiner is ahead
+on both — at 180 W by about 16 % — and above it lolMiner is more efficient while MXBM is
 faster.
 
 **An earlier revision of this page warned that this comparison might not hold, and it was
@@ -110,13 +110,19 @@ a great deal. Swept against each other at identical caps:
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
-**Where each one wins.** Below ~212 W lolMiner is ahead on speed *and* efficiency, by
-over 14 % at 180 W. Between ~212 W and ~257 W MXBM is ahead on both, by about 2 % at
-220 W and 6–7 % at 240 W. Above ~257 W MXBM is faster and lolMiner is more efficient.
-lolMiner barely responds to a cap at all — it gives up 1.8 % of its speed for 21 % less
-power, and above ~236 W the cap does nothing — so its best efficiency (0.2932 sol/s/W at
-180 W) beats MXBM's best anywhere (0.2611 at 200 W). What MXBM has is the ceiling:
-59.15 sol/s against ~54.4, which lolMiner cannot reach at any setting.
+**Where each one wins.** Below ~210 W lolMiner is ahead on speed *and* efficiency, by
+about 16 % at 180 W. Between ~210 W and ~256 W MXBM is ahead on both, by about 1 % at
+220 W and 5–6 % at 240 W. Above ~256 W MXBM is faster and lolMiner is more efficient.
+lolMiner barely responds to a cap at all — it gives up 2.4 % of its speed for 24 % less
+power, and above ~237 W the cap does nothing — so its best efficiency (0.2991 sol/s/W at
+175 W) beats MXBM's best anywhere (0.2575 at 210 W). What MXBM has is the ceiling:
+59.05 sol/s against ~54.0, which lolMiner cannot reach at any setting.
+
+The sweep was run twice, two days apart, and **reproduces within ~1 %** at every cap —
+so these crossings are a property of the two miners, not of the day they were measured.
+It now runs down to the card's **100 W floor**, which settles the question of whether
+lolMiner had a better efficiency point hiding below the old 120 W left edge: it does not.
+Both curves fall away monotonically below their peak.
 
 Full numbers, the mechanism (we lose 570 MHz of core clock to it at 180 W) and what it
 implies for the roadmap are in
@@ -134,9 +140,10 @@ observed.
 
 Two things worth knowing before you cap your own card:
 
-- **Efficiency peaks around 200 W and gets *worse* below it.** At 180 W the core clock has
-  fallen to 1905 MHz and the parts of the board that do not scale with it — memory,
-  uncore, leakage — are being paid for out of less work. Lower is not always better.
+- **Efficiency peaks around 200–210 W and gets *worse* below it.** At 180 W the core clock
+  has fallen to 1905 MHz and the parts of the board that do not scale with it — memory,
+  uncore, leakage — are being paid for out of less work. Lower is not always better, and
+  the head-to-head sweep now shows this holds all the way down to the card's 100 W floor.
 - **The last watts are the worst value.** Going 240 → 285 W buys 2.3 sol/s for 45 W; the
   first 20 W above 180 buys 5.4. Where to sit is an economic choice about your power
   price, not a technical one.

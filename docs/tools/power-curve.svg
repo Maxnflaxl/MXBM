@@ -1,299 +1,338 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="720" viewBox="0 0 1000 720" font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
 <rect width="1000" height="720" fill="#fcfcfb"/>
-<text x="74" y="28" font-size="15" font-weight="bold" fill="#0b0b0b">At the same cap, MXBM leads on speed and efficiency between 212 W and 257 W -- and only there</text>
+<text x="74" y="28" font-size="15" font-weight="bold" fill="#0b0b0b">At the same cap, MXBM leads on speed and efficiency between 210 W and 256 W -- and only there</text>
 <text x="74" y="48" font-size="11" fill="#52514e">RTX 4070 Ti SUPER, one session, runs interleaved and alternating. Caps set externally with nvidia-smi so neither miner's own</text>
 <text x="74" y="63" font-size="11" fill="#52514e">overclock code is a variable; power sampled from NVML for both, never from a miner's own stats block. 2 repeats per point.</text>
 <text x="74" y="78" font-size="11" fill="#52514e">Each miner's sol/s is its OWN definition and the two are not strictly comparable. The watts are one instrument for both.</text>
-<rect x="417.9" y="104" width="148.7" height="196" fill="#2a78d6" fill-opacity="0.085"/>
-<rect x="417.9" y="352" width="148.7" height="134" fill="#2a78d6" fill-opacity="0.085"/>
-<rect x="417.9" y="538" width="148.7" height="86" fill="#2a78d6" fill-opacity="0.085"/>
-<line x1="417.9" y1="104" x2="417.9" y2="300" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<line x1="417.9" y1="352" x2="417.9" y2="486" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<line x1="417.9" y1="538" x2="417.9" y2="624" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<line x1="566.6" y1="104" x2="566.6" y2="300" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<line x1="566.6" y1="352" x2="566.6" y2="486" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<line x1="566.6" y1="538" x2="566.6" y2="624" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<text x="492.2" y="121" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="middle">MXBM ahead on BOTH, 212-257 W</text>
-<line x1="74" y1="266.2" x2="966" y2="266.2" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="269.2" font-size="10" fill="#898781" text-anchor="end">30</text>
-<line x1="74" y1="215.9" x2="966" y2="215.9" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="218.9" font-size="10" fill="#898781" text-anchor="end">40</text>
-<line x1="74" y1="165.5" x2="966" y2="165.5" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="168.5" font-size="10" fill="#898781" text-anchor="end">50</text>
-<line x1="74" y1="115.1" x2="966" y2="115.1" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="118.1" font-size="10" fill="#898781" text-anchor="end">60</text>
+<rect x="448.9" y="104" width="141.5" height="196" fill="#2a78d6" fill-opacity="0.085"/>
+<rect x="448.9" y="352" width="141.5" height="134" fill="#2a78d6" fill-opacity="0.085"/>
+<rect x="448.9" y="538" width="141.5" height="86" fill="#2a78d6" fill-opacity="0.085"/>
+<line x1="448.9" y1="104" x2="448.9" y2="300" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="448.9" y1="352" x2="448.9" y2="486" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="448.9" y1="538" x2="448.9" y2="624" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="590.4" y1="104" x2="590.4" y2="300" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="590.4" y1="352" x2="590.4" y2="486" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="590.4" y1="538" x2="590.4" y2="624" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="519.7" y="121" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="middle">MXBM ahead on BOTH, 210-256 W</text>
+<line x1="74" y1="283.4" x2="966" y2="283.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="286.4" font-size="10" fill="#898781" text-anchor="end">20</text>
+<line x1="74" y1="240.9" x2="966" y2="240.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="243.9" font-size="10" fill="#898781" text-anchor="end">30</text>
+<line x1="74" y1="198.4" x2="966" y2="198.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="201.4" font-size="10" fill="#898781" text-anchor="end">40</text>
+<line x1="74" y1="155.9" x2="966" y2="155.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="158.9" font-size="10" fill="#898781" text-anchor="end">50</text>
+<line x1="74" y1="113.4" x2="966" y2="113.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="116.4" font-size="10" fill="#898781" text-anchor="end">60</text>
 <line x1="74" y1="104" x2="74" y2="300" stroke="#c3c2b7" stroke-width="1"/>
 <line x1="74" y1="300" x2="966" y2="300" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="113.6" y1="300" x2="113.6" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="179.7" y1="300" x2="179.7" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="245.8" y1="300" x2="245.8" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="295.3" y1="300" x2="295.3" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="311.9" y1="300" x2="311.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="344.9" y1="300" x2="344.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="377.9" y1="300" x2="377.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="411.0" y1="300" x2="411.0" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="444.0" y1="300" x2="444.0" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="510.1" y1="300" x2="510.1" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="559.6" y1="300" x2="559.6" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="658.8" y1="300" x2="658.8" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="658.8" y1="300" x2="658.8" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="708.3" y1="300" x2="708.3" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="757.9" y1="300" x2="757.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="807.4" y1="300" x2="807.4" y2="304" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="926.4" y1="300" x2="926.4" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="110.9" y1="300" x2="110.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="141.7" y1="300" x2="141.7" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="172.4" y1="300" x2="172.4" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="233.9" y1="300" x2="233.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="295.5" y1="300" x2="295.5" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="341.6" y1="300" x2="341.6" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="357.0" y1="300" x2="357.0" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="387.7" y1="300" x2="387.7" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="418.5" y1="300" x2="418.5" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="449.3" y1="300" x2="449.3" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="480.0" y1="300" x2="480.0" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="541.5" y1="300" x2="541.5" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="587.7" y1="300" x2="587.7" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="679.9" y1="300" x2="679.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="679.9" y1="300" x2="679.9" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="726.1" y1="300" x2="726.1" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="772.2" y1="300" x2="772.2" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="818.4" y1="300" x2="818.4" y2="304" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="929.1" y1="300" x2="929.1" y2="304" stroke="#c3c2b7" stroke-width="1"/>
 <text x="74" y="94" font-size="11" fill="#52514e">sol/s</text>
-<polyline points="113.6,248.6 179.7,212.8 245.8,172.5 295.3,155.4 311.9,152.1 344.9,149.1 377.9,144.1 411.0,143.6 444.0,143.6 510.1,148.8 559.6,148.1 658.8,147.3" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="113.6" cy="248.6" r="6" fill="#fcfcfb"/>
-<circle cx="113.6" cy="248.6" r="4" fill="#eb6834"><title>cap 120 W: 33.5 (drew 119.5 W)</title></circle>
-<circle cx="179.7" cy="212.8" r="6" fill="#fcfcfb"/>
-<circle cx="179.7" cy="212.8" r="4" fill="#eb6834"><title>cap 140 W: 40.6 (drew 139.6 W)</title></circle>
-<circle cx="245.8" cy="172.5" r="6" fill="#fcfcfb"/>
-<circle cx="245.8" cy="172.5" r="4" fill="#eb6834"><title>cap 160 W: 48.6 (drew 160.1 W)</title></circle>
-<circle cx="295.3" cy="155.4" r="6" fill="#fcfcfb"/>
-<circle cx="295.3" cy="155.4" r="4" fill="#eb6834"><title>cap 175 W: 52 (drew 174.6 W)</title></circle>
-<circle cx="311.9" cy="152.1" r="6" fill="#fcfcfb"/>
-<circle cx="311.9" cy="152.1" r="4" fill="#eb6834"><title>cap 180 W: 52.65 (drew 179.6 W)</title></circle>
-<circle cx="344.9" cy="149.1" r="6" fill="#fcfcfb"/>
-<circle cx="344.9" cy="149.1" r="4" fill="#eb6834"><title>cap 190 W: 53.25 (drew 189.6 W)</title></circle>
-<circle cx="377.9" cy="144.1" r="6" fill="#fcfcfb"/>
-<circle cx="377.9" cy="144.1" r="4" fill="#eb6834"><title>cap 200 W: 54.25 (drew 199.6 W)</title></circle>
-<circle cx="411.0" cy="143.6" r="6" fill="#fcfcfb"/>
-<circle cx="411.0" cy="143.6" r="4" fill="#eb6834"><title>cap 210 W: 54.35 (drew 209.4 W)</title></circle>
-<circle cx="444.0" cy="143.6" r="6" fill="#fcfcfb"/>
-<circle cx="444.0" cy="143.6" r="4" fill="#eb6834"><title>cap 220 W: 54.35 (drew 219.6 W)</title></circle>
-<circle cx="510.1" cy="148.8" r="6" fill="#fcfcfb"/>
-<circle cx="510.1" cy="148.8" r="4" fill="#eb6834"><title>cap 240 W: 53.3 (drew 235.7 W)</title></circle>
-<circle cx="559.6" cy="148.1" r="6" fill="#fcfcfb"/>
-<circle cx="559.6" cy="148.1" r="4" fill="#eb6834"><title>cap 255 W: 53.45 (drew 235.8 W)</title></circle>
-<circle cx="658.8" cy="147.3" r="6" fill="#fcfcfb"/>
-<circle cx="658.8" cy="147.3" r="4" fill="#eb6834"><title>cap 285 W: 53.6 (drew 235.8 W)</title></circle>
-<polyline points="113.6,284.9 179.7,252.9 245.8,219.1 295.3,196.0 311.9,185.4 344.9,171.8 377.9,154.6 411.0,144.6 444.0,138.3 510.1,129.2 559.6,125.2 658.8,119.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="113.6" cy="284.9" r="6" fill="#fcfcfb"/>
-<circle cx="113.6" cy="284.9" r="4" fill="#2a78d6"><title>cap 120 W: 26.3 (drew 119.8 W)</title></circle>
-<circle cx="179.7" cy="252.9" r="6" fill="#fcfcfb"/>
-<circle cx="179.7" cy="252.9" r="4" fill="#2a78d6"><title>cap 140 W: 32.65 (drew 139.9 W)</title></circle>
-<circle cx="245.8" cy="219.1" r="6" fill="#fcfcfb"/>
-<circle cx="245.8" cy="219.1" r="4" fill="#2a78d6"><title>cap 160 W: 39.35 (drew 160.1 W)</title></circle>
-<circle cx="295.3" cy="196.0" r="6" fill="#fcfcfb"/>
-<circle cx="295.3" cy="196.0" r="4" fill="#2a78d6"><title>cap 175 W: 43.95 (drew 175.2 W)</title></circle>
-<circle cx="311.9" cy="185.4" r="6" fill="#fcfcfb"/>
-<circle cx="311.9" cy="185.4" r="4" fill="#2a78d6"><title>cap 180 W: 46.05 (drew 180 W)</title></circle>
-<circle cx="344.9" cy="171.8" r="6" fill="#fcfcfb"/>
-<circle cx="344.9" cy="171.8" r="4" fill="#2a78d6"><title>cap 190 W: 48.75 (drew 189.9 W)</title></circle>
-<circle cx="377.9" cy="154.6" r="6" fill="#fcfcfb"/>
-<circle cx="377.9" cy="154.6" r="4" fill="#2a78d6"><title>cap 200 W: 52.15 (drew 199.8 W)</title></circle>
-<circle cx="411.0" cy="144.6" r="6" fill="#fcfcfb"/>
-<circle cx="411.0" cy="144.6" r="4" fill="#2a78d6"><title>cap 210 W: 54.15 (drew 209.6 W)</title></circle>
-<circle cx="444.0" cy="138.3" r="6" fill="#fcfcfb"/>
-<circle cx="444.0" cy="138.3" r="4" fill="#2a78d6"><title>cap 220 W: 55.4 (drew 219.5 W)</title></circle>
-<circle cx="510.1" cy="129.2" r="6" fill="#fcfcfb"/>
-<circle cx="510.1" cy="129.2" r="4" fill="#2a78d6"><title>cap 240 W: 57.2 (drew 239.4 W)</title></circle>
-<circle cx="559.6" cy="125.2" r="6" fill="#fcfcfb"/>
-<circle cx="559.6" cy="125.2" r="4" fill="#2a78d6"><title>cap 255 W: 58 (drew 254.2 W)</title></circle>
-<circle cx="658.8" cy="119.4" r="6" fill="#fcfcfb"/>
-<circle cx="658.8" cy="119.4" r="4" fill="#2a78d6"><title>cap 285 W: 59.15 (drew 284.2 W)</title></circle>
-<polyline points="658.8,121.6 708.3,119.1 757.9,117.1 807.4,117.1 926.4,116.6" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
-<circle cx="658.8" cy="121.6" r="5.5" fill="#fcfcfb"/>
-<circle cx="658.8" cy="121.6" r="3.5" fill="#2a78d6"><title>cap 285 W (MXBM only, later session): 58.7 (drew 284 W)</title></circle>
-<circle cx="708.3" cy="119.1" r="5.5" fill="#fcfcfb"/>
-<circle cx="708.3" cy="119.1" r="3.5" fill="#2a78d6"><title>cap 300 W (MXBM only, later session): 59.2 (drew 299.1 W)</title></circle>
-<circle cx="757.9" cy="117.1" r="5.5" fill="#fcfcfb"/>
-<circle cx="757.9" cy="117.1" r="3.5" fill="#2a78d6"><title>cap 315 W (MXBM only, later session): 59.6 (drew 309.4 W)</title></circle>
-<circle cx="807.4" cy="117.1" r="5.5" fill="#fcfcfb"/>
-<circle cx="807.4" cy="117.1" r="3.5" fill="#2a78d6"><title>cap 330 W (MXBM only, later session): 59.6 (drew 311.2 W)</title></circle>
-<circle cx="926.4" cy="116.6" r="5.5" fill="#fcfcfb"/>
-<circle cx="926.4" cy="116.6" r="3.5" fill="#2a78d6"><title>cap 366 W (MXBM only, later session): 59.7 (drew 311.2 W)</title></circle>
-<line x1="74" y1="470.8" x2="966" y2="470.8" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="473.8" font-size="10" fill="#898781" text-anchor="end">0.20</text>
-<line x1="74" y1="418.5" x2="966" y2="418.5" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="421.5" font-size="10" fill="#898781" text-anchor="end">0.25</text>
-<line x1="74" y1="366.2" x2="966" y2="366.2" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="369.2" font-size="10" fill="#898781" text-anchor="end">0.30</text>
+<polyline points="110.9,270.5 141.7,250.5 172.4,226.4 233.9,196.5 295.5,166.1 341.6,146.3 357.0,145.9 387.7,142.9 418.5,138.9 449.3,139.3 480.0,137.4 541.5,139.9 587.7,139.3 679.9,140.4" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="110.9" cy="270.5" r="6" fill="#fcfcfb"/>
+<circle cx="110.9" cy="270.5" r="4" fill="#eb6834"><title>cap 100 W: 23.05 (drew 99.3 W)</title></circle>
+<circle cx="141.7" cy="250.5" r="6" fill="#fcfcfb"/>
+<circle cx="141.7" cy="250.5" r="4" fill="#eb6834"><title>cap 110 W: 27.75 (drew 109.2 W)</title></circle>
+<circle cx="172.4" cy="226.4" r="6" fill="#fcfcfb"/>
+<circle cx="172.4" cy="226.4" r="4" fill="#eb6834"><title>cap 120 W: 33.4 (drew 119.5 W)</title></circle>
+<circle cx="233.9" cy="196.5" r="6" fill="#fcfcfb"/>
+<circle cx="233.9" cy="196.5" r="4" fill="#eb6834"><title>cap 140 W: 40.45 (drew 139.6 W)</title></circle>
+<circle cx="295.5" cy="166.1" r="6" fill="#fcfcfb"/>
+<circle cx="295.5" cy="166.1" r="4" fill="#eb6834"><title>cap 160 W: 47.6 (drew 160.1 W)</title></circle>
+<circle cx="341.6" cy="146.3" r="6" fill="#fcfcfb"/>
+<circle cx="341.6" cy="146.3" r="4" fill="#eb6834"><title>cap 175 W: 52.25 (drew 174.7 W)</title></circle>
+<circle cx="357.0" cy="145.9" r="6" fill="#fcfcfb"/>
+<circle cx="357.0" cy="145.9" r="4" fill="#eb6834"><title>cap 180 W: 52.35 (drew 179.6 W)</title></circle>
+<circle cx="387.7" cy="142.9" r="6" fill="#fcfcfb"/>
+<circle cx="387.7" cy="142.9" r="4" fill="#eb6834"><title>cap 190 W: 53.05 (drew 189.8 W)</title></circle>
+<circle cx="418.5" cy="138.9" r="6" fill="#fcfcfb"/>
+<circle cx="418.5" cy="138.9" r="4" fill="#eb6834"><title>cap 200 W: 54 (drew 199.6 W)</title></circle>
+<circle cx="449.3" cy="139.3" r="6" fill="#fcfcfb"/>
+<circle cx="449.3" cy="139.3" r="4" fill="#eb6834"><title>cap 210 W: 53.9 (drew 209.6 W)</title></circle>
+<circle cx="480.0" cy="137.4" r="6" fill="#fcfcfb"/>
+<circle cx="480.0" cy="137.4" r="4" fill="#eb6834"><title>cap 220 W: 54.35 (drew 219.4 W)</title></circle>
+<circle cx="541.5" cy="139.9" r="6" fill="#fcfcfb"/>
+<circle cx="541.5" cy="139.9" r="4" fill="#eb6834"><title>cap 240 W: 53.75 (drew 236.6 W)</title></circle>
+<circle cx="587.7" cy="139.3" r="6" fill="#fcfcfb"/>
+<circle cx="587.7" cy="139.3" r="4" fill="#eb6834"><title>cap 255 W: 53.9 (drew 237.5 W)</title></circle>
+<circle cx="679.9" cy="140.4" r="6" fill="#fcfcfb"/>
+<circle cx="679.9" cy="140.4" r="4" fill="#eb6834"><title>cap 285 W: 53.65 (drew 237.4 W)</title></circle>
+<polyline points="110.9,287.2 141.7,273.6 172.4,259.4 233.9,230.5 295.5,203.5 341.6,182.4 357.0,176.5 387.7,163.7 418.5,150.6 449.3,139.1 480.0,135.2 541.5,126.3 587.7,122.5 679.9,117.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="110.9" cy="287.2" r="6" fill="#fcfcfb"/>
+<circle cx="110.9" cy="287.2" r="4" fill="#2a78d6"><title>cap 100 W: 19.1 (drew 99.5 W)</title></circle>
+<circle cx="141.7" cy="273.6" r="6" fill="#fcfcfb"/>
+<circle cx="141.7" cy="273.6" r="4" fill="#2a78d6"><title>cap 110 W: 22.3 (drew 109.5 W)</title></circle>
+<circle cx="172.4" cy="259.4" r="6" fill="#fcfcfb"/>
+<circle cx="172.4" cy="259.4" r="4" fill="#2a78d6"><title>cap 120 W: 25.65 (drew 119.8 W)</title></circle>
+<circle cx="233.9" cy="230.5" r="6" fill="#fcfcfb"/>
+<circle cx="233.9" cy="230.5" r="4" fill="#2a78d6"><title>cap 140 W: 32.45 (drew 139.9 W)</title></circle>
+<circle cx="295.5" cy="203.5" r="6" fill="#fcfcfb"/>
+<circle cx="295.5" cy="203.5" r="4" fill="#2a78d6"><title>cap 160 W: 38.8 (drew 160.1 W)</title></circle>
+<circle cx="341.6" cy="182.4" r="6" fill="#fcfcfb"/>
+<circle cx="341.6" cy="182.4" r="4" fill="#2a78d6"><title>cap 175 W: 43.75 (drew 175.2 W)</title></circle>
+<circle cx="357.0" cy="176.5" r="6" fill="#fcfcfb"/>
+<circle cx="357.0" cy="176.5" r="4" fill="#2a78d6"><title>cap 180 W: 45.15 (drew 180.1 W)</title></circle>
+<circle cx="387.7" cy="163.7" r="6" fill="#fcfcfb"/>
+<circle cx="387.7" cy="163.7" r="4" fill="#2a78d6"><title>cap 190 W: 48.15 (drew 189.9 W)</title></circle>
+<circle cx="418.5" cy="150.6" r="6" fill="#fcfcfb"/>
+<circle cx="418.5" cy="150.6" r="4" fill="#2a78d6"><title>cap 200 W: 51.25 (drew 199.8 W)</title></circle>
+<circle cx="449.3" cy="139.1" r="6" fill="#fcfcfb"/>
+<circle cx="449.3" cy="139.1" r="4" fill="#2a78d6"><title>cap 210 W: 53.95 (drew 209.6 W)</title></circle>
+<circle cx="480.0" cy="135.2" r="6" fill="#fcfcfb"/>
+<circle cx="480.0" cy="135.2" r="4" fill="#2a78d6"><title>cap 220 W: 54.85 (drew 219.5 W)</title></circle>
+<circle cx="541.5" cy="126.3" r="6" fill="#fcfcfb"/>
+<circle cx="541.5" cy="126.3" r="4" fill="#2a78d6"><title>cap 240 W: 56.95 (drew 239.5 W)</title></circle>
+<circle cx="587.7" cy="122.5" r="6" fill="#fcfcfb"/>
+<circle cx="587.7" cy="122.5" r="4" fill="#2a78d6"><title>cap 255 W: 57.85 (drew 254.3 W)</title></circle>
+<circle cx="679.9" cy="117.4" r="6" fill="#fcfcfb"/>
+<circle cx="679.9" cy="117.4" r="4" fill="#2a78d6"><title>cap 285 W: 59.05 (drew 284 W)</title></circle>
+<polyline points="679.9,118.9 726.1,116.8 772.2,115.1 818.4,115.1 929.1,114.6" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="679.9" cy="118.9" r="5.5" fill="#fcfcfb"/>
+<circle cx="679.9" cy="118.9" r="3.5" fill="#2a78d6"><title>cap 285 W (MXBM only, later session): 58.7 (drew 284 W)</title></circle>
+<circle cx="726.1" cy="116.8" r="5.5" fill="#fcfcfb"/>
+<circle cx="726.1" cy="116.8" r="3.5" fill="#2a78d6"><title>cap 300 W (MXBM only, later session): 59.2 (drew 299.1 W)</title></circle>
+<circle cx="772.2" cy="115.1" r="5.5" fill="#fcfcfb"/>
+<circle cx="772.2" cy="115.1" r="3.5" fill="#2a78d6"><title>cap 315 W (MXBM only, later session): 59.6 (drew 309.4 W)</title></circle>
+<circle cx="818.4" cy="115.1" r="5.5" fill="#fcfcfb"/>
+<circle cx="818.4" cy="115.1" r="3.5" fill="#2a78d6"><title>cap 330 W (MXBM only, later session): 59.6 (drew 311.2 W)</title></circle>
+<circle cx="929.1" cy="114.6" r="5.5" fill="#fcfcfb"/>
+<circle cx="929.1" cy="114.6" r="3.5" fill="#2a78d6"><title>cap 366 W (MXBM only, later session): 59.7 (drew 311.2 W)</title></circle>
+<line x1="74" y1="470.3" x2="966" y2="470.3" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="473.3" font-size="10" fill="#898781" text-anchor="end">0.20</text>
+<line x1="74" y1="443.2" x2="966" y2="443.2" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="446.2" font-size="10" fill="#898781" text-anchor="end">0.23</text>
+<line x1="74" y1="416.1" x2="966" y2="416.1" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="419.1" font-size="10" fill="#898781" text-anchor="end">0.25</text>
+<line x1="74" y1="389.0" x2="966" y2="389.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="392.0" font-size="10" fill="#898781" text-anchor="end">0.28</text>
+<line x1="74" y1="361.9" x2="966" y2="361.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="364.9" font-size="10" fill="#898781" text-anchor="end">0.30</text>
 <line x1="74" y1="352" x2="74" y2="486" stroke="#c3c2b7" stroke-width="1"/>
 <line x1="74" y1="486" x2="966" y2="486" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="113.6" y1="486" x2="113.6" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="179.7" y1="486" x2="179.7" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="245.8" y1="486" x2="245.8" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="295.3" y1="486" x2="295.3" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="311.9" y1="486" x2="311.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="344.9" y1="486" x2="344.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="377.9" y1="486" x2="377.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="411.0" y1="486" x2="411.0" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="444.0" y1="486" x2="444.0" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="510.1" y1="486" x2="510.1" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="559.6" y1="486" x2="559.6" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="658.8" y1="486" x2="658.8" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="658.8" y1="486" x2="658.8" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="708.3" y1="486" x2="708.3" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="757.9" y1="486" x2="757.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="807.4" y1="486" x2="807.4" y2="490" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="926.4" y1="486" x2="926.4" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="110.9" y1="486" x2="110.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="141.7" y1="486" x2="141.7" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="172.4" y1="486" x2="172.4" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="233.9" y1="486" x2="233.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="295.5" y1="486" x2="295.5" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="341.6" y1="486" x2="341.6" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="357.0" y1="486" x2="357.0" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="387.7" y1="486" x2="387.7" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="418.5" y1="486" x2="418.5" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="449.3" y1="486" x2="449.3" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="480.0" y1="486" x2="480.0" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="541.5" y1="486" x2="541.5" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="587.7" y1="486" x2="587.7" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="679.9" y1="486" x2="679.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="679.9" y1="486" x2="679.9" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="726.1" y1="486" x2="726.1" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="772.2" y1="486" x2="772.2" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="818.4" y1="486" x2="818.4" y2="490" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="929.1" y1="486" x2="929.1" y2="490" stroke="#c3c2b7" stroke-width="1"/>
 <text x="74" y="342" font-size="11" fill="#52514e">sol/s per watt</text>
-<polyline points="113.6,386.6 179.7,375.9 245.8,362.5 295.3,368.5 311.9,373.3 344.9,386.2 377.9,395.7 411.0,408.6 444.0,421.0 510.1,443.5 559.6,442.9 658.8,442.2" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="113.6" cy="386.6" r="6" fill="#fcfcfb"/>
-<circle cx="113.6" cy="386.6" r="4" fill="#eb6834"><title>cap 120 W: 0.2805 (drew 119.5 W)</title></circle>
-<circle cx="179.7" cy="375.9" r="6" fill="#fcfcfb"/>
-<circle cx="179.7" cy="375.9" r="4" fill="#eb6834"><title>cap 140 W: 0.2908 (drew 139.6 W)</title></circle>
-<circle cx="245.8" cy="362.5" r="6" fill="#fcfcfb"/>
-<circle cx="245.8" cy="362.5" r="4" fill="#eb6834"><title>cap 160 W: 0.3036 (drew 160.1 W)</title></circle>
-<circle cx="295.3" cy="368.5" r="6" fill="#fcfcfb"/>
-<circle cx="295.3" cy="368.5" r="4" fill="#eb6834"><title>cap 175 W: 0.2978 (drew 174.6 W)</title></circle>
-<circle cx="311.9" cy="373.3" r="6" fill="#fcfcfb"/>
-<circle cx="311.9" cy="373.3" r="4" fill="#eb6834"><title>cap 180 W: 0.2932 (drew 179.6 W)</title></circle>
-<circle cx="344.9" cy="386.2" r="6" fill="#fcfcfb"/>
-<circle cx="344.9" cy="386.2" r="4" fill="#eb6834"><title>cap 190 W: 0.2809 (drew 189.6 W)</title></circle>
-<circle cx="377.9" cy="395.7" r="6" fill="#fcfcfb"/>
-<circle cx="377.9" cy="395.7" r="4" fill="#eb6834"><title>cap 200 W: 0.2718 (drew 199.6 W)</title></circle>
-<circle cx="411.0" cy="408.6" r="6" fill="#fcfcfb"/>
-<circle cx="411.0" cy="408.6" r="4" fill="#eb6834"><title>cap 210 W: 0.2595 (drew 209.4 W)</title></circle>
-<circle cx="444.0" cy="421.0" r="6" fill="#fcfcfb"/>
-<circle cx="444.0" cy="421.0" r="4" fill="#eb6834"><title>cap 220 W: 0.2476 (drew 219.6 W)</title></circle>
-<circle cx="510.1" cy="443.5" r="6" fill="#fcfcfb"/>
-<circle cx="510.1" cy="443.5" r="4" fill="#eb6834"><title>cap 240 W: 0.2261 (drew 235.7 W)</title></circle>
-<circle cx="559.6" cy="442.9" r="6" fill="#fcfcfb"/>
-<circle cx="559.6" cy="442.9" r="4" fill="#eb6834"><title>cap 255 W: 0.2267 (drew 235.8 W)</title></circle>
-<circle cx="658.8" cy="442.2" r="6" fill="#fcfcfb"/>
-<circle cx="658.8" cy="442.2" r="4" fill="#eb6834"><title>cap 285 W: 0.2274 (drew 235.8 W)</title></circle>
-<polyline points="113.6,450.3 179.7,435.9 245.8,422.9 295.3,417.6 311.9,412.5 344.9,411.5 377.9,406.9 411.0,409.8 444.0,416.0 510.1,430.1 559.6,441.3 658.8,462.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="113.6" cy="450.3" r="6" fill="#fcfcfb"/>
-<circle cx="113.6" cy="450.3" r="4" fill="#2a78d6"><title>cap 120 W: 0.2196 (drew 119.8 W)</title></circle>
-<circle cx="179.7" cy="435.9" r="6" fill="#fcfcfb"/>
-<circle cx="179.7" cy="435.9" r="4" fill="#2a78d6"><title>cap 140 W: 0.2334 (drew 139.9 W)</title></circle>
-<circle cx="245.8" cy="422.9" r="6" fill="#fcfcfb"/>
-<circle cx="245.8" cy="422.9" r="4" fill="#2a78d6"><title>cap 160 W: 0.2458 (drew 160.1 W)</title></circle>
-<circle cx="295.3" cy="417.6" r="6" fill="#fcfcfb"/>
-<circle cx="295.3" cy="417.6" r="4" fill="#2a78d6"><title>cap 175 W: 0.2509 (drew 175.2 W)</title></circle>
-<circle cx="311.9" cy="412.5" r="6" fill="#fcfcfb"/>
-<circle cx="311.9" cy="412.5" r="4" fill="#2a78d6"><title>cap 180 W: 0.2558 (drew 180 W)</title></circle>
-<circle cx="344.9" cy="411.5" r="6" fill="#fcfcfb"/>
-<circle cx="344.9" cy="411.5" r="4" fill="#2a78d6"><title>cap 190 W: 0.2567 (drew 189.9 W)</title></circle>
-<circle cx="377.9" cy="406.9" r="6" fill="#fcfcfb"/>
-<circle cx="377.9" cy="406.9" r="4" fill="#2a78d6"><title>cap 200 W: 0.2611 (drew 199.8 W)</title></circle>
-<circle cx="411.0" cy="409.8" r="6" fill="#fcfcfb"/>
-<circle cx="411.0" cy="409.8" r="4" fill="#2a78d6"><title>cap 210 W: 0.2583 (drew 209.6 W)</title></circle>
-<circle cx="444.0" cy="416.0" r="6" fill="#fcfcfb"/>
-<circle cx="444.0" cy="416.0" r="4" fill="#2a78d6"><title>cap 220 W: 0.2524 (drew 219.5 W)</title></circle>
-<circle cx="510.1" cy="430.1" r="6" fill="#fcfcfb"/>
-<circle cx="510.1" cy="430.1" r="4" fill="#2a78d6"><title>cap 240 W: 0.2389 (drew 239.4 W)</title></circle>
-<circle cx="559.6" cy="441.3" r="6" fill="#fcfcfb"/>
-<circle cx="559.6" cy="441.3" r="4" fill="#2a78d6"><title>cap 255 W: 0.2282 (drew 254.2 W)</title></circle>
-<circle cx="658.8" cy="462.4" r="6" fill="#fcfcfb"/>
-<circle cx="658.8" cy="462.4" r="4" fill="#2a78d6"><title>cap 285 W: 0.2081 (drew 284.2 W)</title></circle>
-<polyline points="658.8,463.8 708.3,473.0 757.9,478.6 807.4,479.7 926.4,479.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
-<circle cx="658.8" cy="463.8" r="5.5" fill="#fcfcfb"/>
-<circle cx="658.8" cy="463.8" r="3.5" fill="#2a78d6"><title>cap 285 W (MXBM only, later session): 0.2067 (drew 284 W)</title></circle>
-<circle cx="708.3" cy="473.0" r="5.5" fill="#fcfcfb"/>
-<circle cx="708.3" cy="473.0" r="3.5" fill="#2a78d6"><title>cap 300 W (MXBM only, later session): 0.1979 (drew 299.1 W)</title></circle>
-<circle cx="757.9" cy="478.6" r="5.5" fill="#fcfcfb"/>
-<circle cx="757.9" cy="478.6" r="3.5" fill="#2a78d6"><title>cap 315 W (MXBM only, later session): 0.1926 (drew 309.4 W)</title></circle>
-<circle cx="807.4" cy="479.7" r="5.5" fill="#fcfcfb"/>
-<circle cx="807.4" cy="479.7" r="3.5" fill="#2a78d6"><title>cap 330 W (MXBM only, later session): 0.1915 (drew 311.2 W)</title></circle>
-<circle cx="926.4" cy="479.4" r="5.5" fill="#fcfcfb"/>
-<circle cx="926.4" cy="479.4" r="3.5" fill="#2a78d6"><title>cap 366 W (MXBM only, later session): 0.1918 (drew 311.2 W)</title></circle>
-<line x1="74" y1="587.0" x2="966" y2="587.0" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="590.0" font-size="10" fill="#898781" text-anchor="end">200</text>
-<line x1="74" y1="548.2" x2="966" y2="548.2" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="551.2" font-size="10" fill="#898781" text-anchor="end">300</text>
+<polyline points="110.9,435.6 141.7,411.6 172.4,384.2 233.9,372.9 295.5,364.8 341.6,362.8 357.0,371.2 387.7,384.0 418.5,393.7 449.3,408.3 480.0,418.6 541.5,440.8 587.7,441.1 679.9,442.2" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="110.9" cy="435.6" r="6" fill="#fcfcfb"/>
+<circle cx="110.9" cy="435.6" r="4" fill="#eb6834"><title>cap 100 W: 0.232 (drew 99.3 W)</title></circle>
+<circle cx="141.7" cy="411.6" r="6" fill="#fcfcfb"/>
+<circle cx="141.7" cy="411.6" r="4" fill="#eb6834"><title>cap 110 W: 0.2541 (drew 109.2 W)</title></circle>
+<circle cx="172.4" cy="384.2" r="6" fill="#fcfcfb"/>
+<circle cx="172.4" cy="384.2" r="4" fill="#eb6834"><title>cap 120 W: 0.2794 (drew 119.5 W)</title></circle>
+<circle cx="233.9" cy="372.9" r="6" fill="#fcfcfb"/>
+<circle cx="233.9" cy="372.9" r="4" fill="#eb6834"><title>cap 140 W: 0.2898 (drew 139.6 W)</title></circle>
+<circle cx="295.5" cy="364.8" r="6" fill="#fcfcfb"/>
+<circle cx="295.5" cy="364.8" r="4" fill="#eb6834"><title>cap 160 W: 0.2973 (drew 160.1 W)</title></circle>
+<circle cx="341.6" cy="362.8" r="6" fill="#fcfcfb"/>
+<circle cx="341.6" cy="362.8" r="4" fill="#eb6834"><title>cap 175 W: 0.2991 (drew 174.7 W)</title></circle>
+<circle cx="357.0" cy="371.2" r="6" fill="#fcfcfb"/>
+<circle cx="357.0" cy="371.2" r="4" fill="#eb6834"><title>cap 180 W: 0.2914 (drew 179.6 W)</title></circle>
+<circle cx="387.7" cy="384.0" r="6" fill="#fcfcfb"/>
+<circle cx="387.7" cy="384.0" r="4" fill="#eb6834"><title>cap 190 W: 0.2796 (drew 189.8 W)</title></circle>
+<circle cx="418.5" cy="393.7" r="6" fill="#fcfcfb"/>
+<circle cx="418.5" cy="393.7" r="4" fill="#eb6834"><title>cap 200 W: 0.2706 (drew 199.6 W)</title></circle>
+<circle cx="449.3" cy="408.3" r="6" fill="#fcfcfb"/>
+<circle cx="449.3" cy="408.3" r="4" fill="#eb6834"><title>cap 210 W: 0.2572 (drew 209.6 W)</title></circle>
+<circle cx="480.0" cy="418.6" r="6" fill="#fcfcfb"/>
+<circle cx="480.0" cy="418.6" r="4" fill="#eb6834"><title>cap 220 W: 0.2477 (drew 219.4 W)</title></circle>
+<circle cx="541.5" cy="440.8" r="6" fill="#fcfcfb"/>
+<circle cx="541.5" cy="440.8" r="4" fill="#eb6834"><title>cap 240 W: 0.2272 (drew 236.6 W)</title></circle>
+<circle cx="587.7" cy="441.1" r="6" fill="#fcfcfb"/>
+<circle cx="587.7" cy="441.1" r="4" fill="#eb6834"><title>cap 255 W: 0.2269 (drew 237.5 W)</title></circle>
+<circle cx="679.9" cy="442.2" r="6" fill="#fcfcfb"/>
+<circle cx="679.9" cy="442.2" r="4" fill="#eb6834"><title>cap 285 W: 0.2259 (drew 237.4 W)</title></circle>
+<polyline points="110.9,479.1 141.7,466.4 172.4,454.9 233.9,435.6 295.5,424.4 341.6,416.4 357.0,415.2 387.7,412.2 418.5,408.9 449.3,407.9 480.0,416.2 541.5,429.3 587.7,440.5 679.9,461.7" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="110.9" cy="479.1" r="6" fill="#fcfcfb"/>
+<circle cx="110.9" cy="479.1" r="4" fill="#2a78d6"><title>cap 100 W: 0.1919 (drew 99.5 W)</title></circle>
+<circle cx="141.7" cy="466.4" r="6" fill="#fcfcfb"/>
+<circle cx="141.7" cy="466.4" r="4" fill="#2a78d6"><title>cap 110 W: 0.2036 (drew 109.5 W)</title></circle>
+<circle cx="172.4" cy="454.9" r="6" fill="#fcfcfb"/>
+<circle cx="172.4" cy="454.9" r="4" fill="#2a78d6"><title>cap 120 W: 0.2142 (drew 119.8 W)</title></circle>
+<circle cx="233.9" cy="435.6" r="6" fill="#fcfcfb"/>
+<circle cx="233.9" cy="435.6" r="4" fill="#2a78d6"><title>cap 140 W: 0.232 (drew 139.9 W)</title></circle>
+<circle cx="295.5" cy="424.4" r="6" fill="#fcfcfb"/>
+<circle cx="295.5" cy="424.4" r="4" fill="#2a78d6"><title>cap 160 W: 0.2423 (drew 160.1 W)</title></circle>
+<circle cx="341.6" cy="416.4" r="6" fill="#fcfcfb"/>
+<circle cx="341.6" cy="416.4" r="4" fill="#2a78d6"><title>cap 175 W: 0.2497 (drew 175.2 W)</title></circle>
+<circle cx="357.0" cy="415.2" r="6" fill="#fcfcfb"/>
+<circle cx="357.0" cy="415.2" r="4" fill="#2a78d6"><title>cap 180 W: 0.2508 (drew 180.1 W)</title></circle>
+<circle cx="387.7" cy="412.2" r="6" fill="#fcfcfb"/>
+<circle cx="387.7" cy="412.2" r="4" fill="#2a78d6"><title>cap 190 W: 0.2536 (drew 189.9 W)</title></circle>
+<circle cx="418.5" cy="408.9" r="6" fill="#fcfcfb"/>
+<circle cx="418.5" cy="408.9" r="4" fill="#2a78d6"><title>cap 200 W: 0.2566 (drew 199.8 W)</title></circle>
+<circle cx="449.3" cy="407.9" r="6" fill="#fcfcfb"/>
+<circle cx="449.3" cy="407.9" r="4" fill="#2a78d6"><title>cap 210 W: 0.2575 (drew 209.6 W)</title></circle>
+<circle cx="480.0" cy="416.2" r="6" fill="#fcfcfb"/>
+<circle cx="480.0" cy="416.2" r="4" fill="#2a78d6"><title>cap 220 W: 0.2499 (drew 219.5 W)</title></circle>
+<circle cx="541.5" cy="429.3" r="6" fill="#fcfcfb"/>
+<circle cx="541.5" cy="429.3" r="4" fill="#2a78d6"><title>cap 240 W: 0.2378 (drew 239.5 W)</title></circle>
+<circle cx="587.7" cy="440.5" r="6" fill="#fcfcfb"/>
+<circle cx="587.7" cy="440.5" r="4" fill="#2a78d6"><title>cap 255 W: 0.2275 (drew 254.3 W)</title></circle>
+<circle cx="679.9" cy="461.7" r="6" fill="#fcfcfb"/>
+<circle cx="679.9" cy="461.7" r="4" fill="#2a78d6"><title>cap 285 W: 0.2079 (drew 284 W)</title></circle>
+<polyline points="679.9,463.0 726.1,472.6 772.2,478.3 818.4,479.5 929.1,479.2" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="679.9" cy="463.0" r="5.5" fill="#fcfcfb"/>
+<circle cx="679.9" cy="463.0" r="3.5" fill="#2a78d6"><title>cap 285 W (MXBM only, later session): 0.2067 (drew 284 W)</title></circle>
+<circle cx="726.1" cy="472.6" r="5.5" fill="#fcfcfb"/>
+<circle cx="726.1" cy="472.6" r="3.5" fill="#2a78d6"><title>cap 300 W (MXBM only, later session): 0.1979 (drew 299.1 W)</title></circle>
+<circle cx="772.2" cy="478.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="772.2" cy="478.3" r="3.5" fill="#2a78d6"><title>cap 315 W (MXBM only, later session): 0.1926 (drew 309.4 W)</title></circle>
+<circle cx="818.4" cy="479.5" r="5.5" fill="#fcfcfb"/>
+<circle cx="818.4" cy="479.5" r="3.5" fill="#2a78d6"><title>cap 330 W (MXBM only, later session): 0.1915 (drew 311.2 W)</title></circle>
+<circle cx="929.1" cy="479.2" r="5.5" fill="#fcfcfb"/>
+<circle cx="929.1" cy="479.2" r="3.5" fill="#2a78d6"><title>cap 366 W (MXBM only, later session): 0.1918 (drew 311.2 W)</title></circle>
+<line x1="74" y1="618.4" x2="966" y2="618.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="621.4" font-size="10" fill="#898781" text-anchor="end">100</text>
+<line x1="74" y1="582.9" x2="966" y2="582.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="585.9" font-size="10" fill="#898781" text-anchor="end">200</text>
+<line x1="74" y1="547.3" x2="966" y2="547.3" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="550.3" font-size="10" fill="#898781" text-anchor="end">300</text>
 <line x1="74" y1="538" x2="74" y2="624" stroke="#c3c2b7" stroke-width="1"/>
 <line x1="74" y1="624" x2="966" y2="624" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="113.6" y1="624" x2="113.6" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="113.6" y="640" font-size="10" fill="#898781" text-anchor="middle">120 W</text>
-<line x1="179.7" y1="624" x2="179.7" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="179.7" y="640" font-size="10" fill="#898781" text-anchor="middle">140 W</text>
-<line x1="245.8" y1="624" x2="245.8" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="245.8" y="640" font-size="10" fill="#898781" text-anchor="middle">160 W</text>
-<line x1="295.3" y1="624" x2="295.3" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="295.3" y="640" font-size="10" fill="#898781" text-anchor="middle">175 W</text>
-<line x1="311.9" y1="624" x2="311.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="344.9" y1="624" x2="344.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="344.9" y="640" font-size="10" fill="#898781" text-anchor="middle">190 W</text>
-<line x1="377.9" y1="624" x2="377.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="411.0" y1="624" x2="411.0" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="411.0" y="640" font-size="10" fill="#898781" text-anchor="middle">210 W</text>
-<line x1="444.0" y1="624" x2="444.0" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="510.1" y1="624" x2="510.1" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="510.1" y="640" font-size="10" fill="#898781" text-anchor="middle">240 W</text>
-<line x1="559.6" y1="624" x2="559.6" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="559.6" y="640" font-size="10" fill="#898781" text-anchor="middle">255 W</text>
-<line x1="658.8" y1="624" x2="658.8" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="658.8" y="640" font-size="10" fill="#898781" text-anchor="middle">285 W</text>
-<line x1="658.8" y1="624" x2="658.8" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<line x1="708.3" y1="624" x2="708.3" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="708.3" y="640" font-size="10" fill="#898781" text-anchor="middle">300 W</text>
-<line x1="757.9" y1="624" x2="757.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="757.9" y="640" font-size="10" fill="#898781" text-anchor="middle">315 W</text>
-<line x1="807.4" y1="624" x2="807.4" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="807.4" y="640" font-size="10" fill="#898781" text-anchor="middle">330 W</text>
-<line x1="926.4" y1="624" x2="926.4" y2="628" stroke="#c3c2b7" stroke-width="1"/>
-<text x="926.4" y="640" font-size="10" fill="#898781" text-anchor="middle">366 W</text>
+<line x1="110.9" y1="624" x2="110.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="110.9" y="640" font-size="10" fill="#898781" text-anchor="middle">100 W</text>
+<line x1="141.7" y1="624" x2="141.7" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="172.4" y1="624" x2="172.4" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="172.4" y="640" font-size="10" fill="#898781" text-anchor="middle">120 W</text>
+<line x1="233.9" y1="624" x2="233.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="233.9" y="640" font-size="10" fill="#898781" text-anchor="middle">140 W</text>
+<line x1="295.5" y1="624" x2="295.5" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="295.5" y="640" font-size="10" fill="#898781" text-anchor="middle">160 W</text>
+<line x1="341.6" y1="624" x2="341.6" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="341.6" y="640" font-size="10" fill="#898781" text-anchor="middle">175 W</text>
+<line x1="357.0" y1="624" x2="357.0" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="387.7" y1="624" x2="387.7" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="387.7" y="640" font-size="10" fill="#898781" text-anchor="middle">190 W</text>
+<line x1="418.5" y1="624" x2="418.5" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="449.3" y1="624" x2="449.3" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="449.3" y="640" font-size="10" fill="#898781" text-anchor="middle">210 W</text>
+<line x1="480.0" y1="624" x2="480.0" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="541.5" y1="624" x2="541.5" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="541.5" y="640" font-size="10" fill="#898781" text-anchor="middle">240 W</text>
+<line x1="587.7" y1="624" x2="587.7" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="587.7" y="640" font-size="10" fill="#898781" text-anchor="middle">255 W</text>
+<line x1="679.9" y1="624" x2="679.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="679.9" y="640" font-size="10" fill="#898781" text-anchor="middle">285 W</text>
+<line x1="679.9" y1="624" x2="679.9" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="726.1" y1="624" x2="726.1" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="726.1" y="640" font-size="10" fill="#898781" text-anchor="middle">300 W</text>
+<line x1="772.2" y1="624" x2="772.2" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="772.2" y="640" font-size="10" fill="#898781" text-anchor="middle">315 W</text>
+<line x1="818.4" y1="624" x2="818.4" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="818.4" y="640" font-size="10" fill="#898781" text-anchor="middle">330 W</text>
+<line x1="929.1" y1="624" x2="929.1" y2="628" stroke="#c3c2b7" stroke-width="1"/>
+<text x="929.1" y="640" font-size="10" fill="#898781" text-anchor="middle">366 W</text>
 <text x="74" y="528" font-size="11" fill="#52514e">watts actually drawn</text>
-<line x1="74" y1="622.6" x2="794.9" y2="538" stroke="#e1e0d9" stroke-width="1"/>
-<text x="652.8" y="546.0" font-size="9" fill="#898781" text-anchor="end">drawing exactly the cap</text>
-<polyline points="113.6,618.2 179.7,610.4 245.8,602.4 295.3,596.8 311.9,594.9 344.9,591.0 377.9,587.1 411.0,583.3 444.0,579.4 510.1,573.1 559.6,573.1 658.8,573.1" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="113.6" cy="618.2" r="6" fill="#fcfcfb"/>
-<circle cx="113.6" cy="618.2" r="4" fill="#eb6834"><title>cap 120 W: drew 119.5 W</title></circle>
-<circle cx="179.7" cy="610.4" r="6" fill="#fcfcfb"/>
-<circle cx="179.7" cy="610.4" r="4" fill="#eb6834"><title>cap 140 W: drew 139.6 W</title></circle>
-<circle cx="245.8" cy="602.4" r="6" fill="#fcfcfb"/>
-<circle cx="245.8" cy="602.4" r="4" fill="#eb6834"><title>cap 160 W: drew 160.1 W</title></circle>
-<circle cx="295.3" cy="596.8" r="6" fill="#fcfcfb"/>
-<circle cx="295.3" cy="596.8" r="4" fill="#eb6834"><title>cap 175 W: drew 174.6 W</title></circle>
-<circle cx="311.9" cy="594.9" r="6" fill="#fcfcfb"/>
-<circle cx="311.9" cy="594.9" r="4" fill="#eb6834"><title>cap 180 W: drew 179.6 W</title></circle>
-<circle cx="344.9" cy="591.0" r="6" fill="#fcfcfb"/>
-<circle cx="344.9" cy="591.0" r="4" fill="#eb6834"><title>cap 190 W: drew 189.6 W</title></circle>
-<circle cx="377.9" cy="587.1" r="6" fill="#fcfcfb"/>
-<circle cx="377.9" cy="587.1" r="4" fill="#eb6834"><title>cap 200 W: drew 199.6 W</title></circle>
-<circle cx="411.0" cy="583.3" r="6" fill="#fcfcfb"/>
-<circle cx="411.0" cy="583.3" r="4" fill="#eb6834"><title>cap 210 W: drew 209.4 W</title></circle>
-<circle cx="444.0" cy="579.4" r="6" fill="#fcfcfb"/>
-<circle cx="444.0" cy="579.4" r="4" fill="#eb6834"><title>cap 220 W: drew 219.6 W</title></circle>
-<circle cx="510.1" cy="573.1" r="6" fill="#fcfcfb"/>
-<circle cx="510.1" cy="573.1" r="4" fill="#eb6834"><title>cap 240 W: drew 235.7 W</title></circle>
-<circle cx="559.6" cy="573.1" r="6" fill="#fcfcfb"/>
-<circle cx="559.6" cy="573.1" r="4" fill="#eb6834"><title>cap 255 W: drew 235.8 W</title></circle>
-<circle cx="658.8" cy="573.1" r="6" fill="#fcfcfb"/>
-<circle cx="658.8" cy="573.1" r="4" fill="#eb6834"><title>cap 285 W: drew 235.8 W</title></circle>
-<polyline points="113.6,618.1 179.7,610.3 245.8,602.4 295.3,596.6 311.9,594.7 344.9,590.9 377.9,587.0 411.0,583.2 444.0,579.4 510.1,571.7 559.6,565.9 658.8,554.3" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="113.6" cy="618.1" r="6" fill="#fcfcfb"/>
-<circle cx="113.6" cy="618.1" r="4" fill="#2a78d6"><title>cap 120 W: drew 119.8 W</title></circle>
-<circle cx="179.7" cy="610.3" r="6" fill="#fcfcfb"/>
-<circle cx="179.7" cy="610.3" r="4" fill="#2a78d6"><title>cap 140 W: drew 139.9 W</title></circle>
-<circle cx="245.8" cy="602.4" r="6" fill="#fcfcfb"/>
-<circle cx="245.8" cy="602.4" r="4" fill="#2a78d6"><title>cap 160 W: drew 160.1 W</title></circle>
-<circle cx="295.3" cy="596.6" r="6" fill="#fcfcfb"/>
-<circle cx="295.3" cy="596.6" r="4" fill="#2a78d6"><title>cap 175 W: drew 175.2 W</title></circle>
-<circle cx="311.9" cy="594.7" r="6" fill="#fcfcfb"/>
-<circle cx="311.9" cy="594.7" r="4" fill="#2a78d6"><title>cap 180 W: drew 180 W</title></circle>
-<circle cx="344.9" cy="590.9" r="6" fill="#fcfcfb"/>
-<circle cx="344.9" cy="590.9" r="4" fill="#2a78d6"><title>cap 190 W: drew 189.9 W</title></circle>
-<circle cx="377.9" cy="587.0" r="6" fill="#fcfcfb"/>
-<circle cx="377.9" cy="587.0" r="4" fill="#2a78d6"><title>cap 200 W: drew 199.8 W</title></circle>
-<circle cx="411.0" cy="583.2" r="6" fill="#fcfcfb"/>
-<circle cx="411.0" cy="583.2" r="4" fill="#2a78d6"><title>cap 210 W: drew 209.6 W</title></circle>
-<circle cx="444.0" cy="579.4" r="6" fill="#fcfcfb"/>
-<circle cx="444.0" cy="579.4" r="4" fill="#2a78d6"><title>cap 220 W: drew 219.5 W</title></circle>
-<circle cx="510.1" cy="571.7" r="6" fill="#fcfcfb"/>
-<circle cx="510.1" cy="571.7" r="4" fill="#2a78d6"><title>cap 240 W: drew 239.4 W</title></circle>
-<circle cx="559.6" cy="565.9" r="6" fill="#fcfcfb"/>
-<circle cx="559.6" cy="565.9" r="4" fill="#2a78d6"><title>cap 255 W: drew 254.2 W</title></circle>
-<circle cx="658.8" cy="554.3" r="6" fill="#fcfcfb"/>
-<circle cx="658.8" cy="554.3" r="4" fill="#2a78d6"><title>cap 285 W: drew 284.2 W</title></circle>
-<polyline points="658.8,554.4 708.3,548.5 757.9,544.5 807.4,543.8 926.4,543.8" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
-<circle cx="658.8" cy="554.4" r="5.5" fill="#fcfcfb"/>
-<circle cx="658.8" cy="554.4" r="3.5" fill="#2a78d6"><title>cap 285 W (MXBM only, later session): drew 284 W</title></circle>
-<circle cx="708.3" cy="548.5" r="5.5" fill="#fcfcfb"/>
-<circle cx="708.3" cy="548.5" r="3.5" fill="#2a78d6"><title>cap 300 W (MXBM only, later session): drew 299.1 W</title></circle>
-<circle cx="757.9" cy="544.5" r="5.5" fill="#fcfcfb"/>
-<circle cx="757.9" cy="544.5" r="3.5" fill="#2a78d6"><title>cap 315 W (MXBM only, later session): drew 309.4 W</title></circle>
-<circle cx="807.4" cy="543.8" r="5.5" fill="#fcfcfb"/>
-<circle cx="807.4" cy="543.8" r="3.5" fill="#2a78d6"><title>cap 330 W (MXBM only, later session): drew 311.2 W</title></circle>
-<circle cx="926.4" cy="543.8" r="5.5" fill="#fcfcfb"/>
-<circle cx="926.4" cy="543.8" r="3.5" fill="#2a78d6"><title>cap 366 W (MXBM only, later session): drew 311.2 W</title></circle>
-<text x="962" y="533.8" font-size="10" fill="#52514e" text-anchor="end">MXBM stops responding here: 330/366 W all draw ~311 W</text>
-<text x="962" y="593.1" font-size="10" fill="#52514e" text-anchor="end">lolMiner stops responding to the cap here: 240/255/285 W all draw ~236 W</text>
-<text x="245.8" y="349.5" font-size="10" fill="#52514e" text-anchor="middle">lolMiner's best 0.3036</text>
-<text x="377.9" y="424.9" font-size="10" fill="#52514e" text-anchor="middle">MXBM's best 0.2611</text>
+<line x1="74" y1="622.7" x2="806.7" y2="538" stroke="#e1e0d9" stroke-width="1"/>
+<text x="673.9" y="544.6" font-size="9" fill="#898781" text-anchor="end">drawing exactly the cap</text>
+<polyline points="110.9,618.7 141.7,615.1 172.4,611.5 233.9,604.3 295.5,597.1 341.6,591.9 357.0,590.1 387.7,586.5 418.5,583.0 449.3,579.5 480.0,576.0 541.5,569.9 587.7,569.5 679.9,569.6" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="110.9" cy="618.7" r="6" fill="#fcfcfb"/>
+<circle cx="110.9" cy="618.7" r="4" fill="#eb6834"><title>cap 100 W: drew 99.3 W</title></circle>
+<circle cx="141.7" cy="615.1" r="6" fill="#fcfcfb"/>
+<circle cx="141.7" cy="615.1" r="4" fill="#eb6834"><title>cap 110 W: drew 109.2 W</title></circle>
+<circle cx="172.4" cy="611.5" r="6" fill="#fcfcfb"/>
+<circle cx="172.4" cy="611.5" r="4" fill="#eb6834"><title>cap 120 W: drew 119.5 W</title></circle>
+<circle cx="233.9" cy="604.3" r="6" fill="#fcfcfb"/>
+<circle cx="233.9" cy="604.3" r="4" fill="#eb6834"><title>cap 140 W: drew 139.6 W</title></circle>
+<circle cx="295.5" cy="597.1" r="6" fill="#fcfcfb"/>
+<circle cx="295.5" cy="597.1" r="4" fill="#eb6834"><title>cap 160 W: drew 160.1 W</title></circle>
+<circle cx="341.6" cy="591.9" r="6" fill="#fcfcfb"/>
+<circle cx="341.6" cy="591.9" r="4" fill="#eb6834"><title>cap 175 W: drew 174.7 W</title></circle>
+<circle cx="357.0" cy="590.1" r="6" fill="#fcfcfb"/>
+<circle cx="357.0" cy="590.1" r="4" fill="#eb6834"><title>cap 180 W: drew 179.6 W</title></circle>
+<circle cx="387.7" cy="586.5" r="6" fill="#fcfcfb"/>
+<circle cx="387.7" cy="586.5" r="4" fill="#eb6834"><title>cap 190 W: drew 189.8 W</title></circle>
+<circle cx="418.5" cy="583.0" r="6" fill="#fcfcfb"/>
+<circle cx="418.5" cy="583.0" r="4" fill="#eb6834"><title>cap 200 W: drew 199.6 W</title></circle>
+<circle cx="449.3" cy="579.5" r="6" fill="#fcfcfb"/>
+<circle cx="449.3" cy="579.5" r="4" fill="#eb6834"><title>cap 210 W: drew 209.6 W</title></circle>
+<circle cx="480.0" cy="576.0" r="6" fill="#fcfcfb"/>
+<circle cx="480.0" cy="576.0" r="4" fill="#eb6834"><title>cap 220 W: drew 219.4 W</title></circle>
+<circle cx="541.5" cy="569.9" r="6" fill="#fcfcfb"/>
+<circle cx="541.5" cy="569.9" r="4" fill="#eb6834"><title>cap 240 W: drew 236.6 W</title></circle>
+<circle cx="587.7" cy="569.5" r="6" fill="#fcfcfb"/>
+<circle cx="587.7" cy="569.5" r="4" fill="#eb6834"><title>cap 255 W: drew 237.5 W</title></circle>
+<circle cx="679.9" cy="569.6" r="6" fill="#fcfcfb"/>
+<circle cx="679.9" cy="569.6" r="4" fill="#eb6834"><title>cap 285 W: drew 237.4 W</title></circle>
+<polyline points="110.9,618.6 141.7,615.0 172.4,611.4 233.9,604.2 295.5,597.1 341.6,591.7 357.0,589.9 387.7,586.5 418.5,582.9 449.3,579.5 480.0,575.9 541.5,568.8 587.7,563.6 679.9,553.0" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="110.9" cy="618.6" r="6" fill="#fcfcfb"/>
+<circle cx="110.9" cy="618.6" r="4" fill="#2a78d6"><title>cap 100 W: drew 99.5 W</title></circle>
+<circle cx="141.7" cy="615.0" r="6" fill="#fcfcfb"/>
+<circle cx="141.7" cy="615.0" r="4" fill="#2a78d6"><title>cap 110 W: drew 109.5 W</title></circle>
+<circle cx="172.4" cy="611.4" r="6" fill="#fcfcfb"/>
+<circle cx="172.4" cy="611.4" r="4" fill="#2a78d6"><title>cap 120 W: drew 119.8 W</title></circle>
+<circle cx="233.9" cy="604.2" r="6" fill="#fcfcfb"/>
+<circle cx="233.9" cy="604.2" r="4" fill="#2a78d6"><title>cap 140 W: drew 139.9 W</title></circle>
+<circle cx="295.5" cy="597.1" r="6" fill="#fcfcfb"/>
+<circle cx="295.5" cy="597.1" r="4" fill="#2a78d6"><title>cap 160 W: drew 160.1 W</title></circle>
+<circle cx="341.6" cy="591.7" r="6" fill="#fcfcfb"/>
+<circle cx="341.6" cy="591.7" r="4" fill="#2a78d6"><title>cap 175 W: drew 175.2 W</title></circle>
+<circle cx="357.0" cy="589.9" r="6" fill="#fcfcfb"/>
+<circle cx="357.0" cy="589.9" r="4" fill="#2a78d6"><title>cap 180 W: drew 180.1 W</title></circle>
+<circle cx="387.7" cy="586.5" r="6" fill="#fcfcfb"/>
+<circle cx="387.7" cy="586.5" r="4" fill="#2a78d6"><title>cap 190 W: drew 189.9 W</title></circle>
+<circle cx="418.5" cy="582.9" r="6" fill="#fcfcfb"/>
+<circle cx="418.5" cy="582.9" r="4" fill="#2a78d6"><title>cap 200 W: drew 199.8 W</title></circle>
+<circle cx="449.3" cy="579.5" r="6" fill="#fcfcfb"/>
+<circle cx="449.3" cy="579.5" r="4" fill="#2a78d6"><title>cap 210 W: drew 209.6 W</title></circle>
+<circle cx="480.0" cy="575.9" r="6" fill="#fcfcfb"/>
+<circle cx="480.0" cy="575.9" r="4" fill="#2a78d6"><title>cap 220 W: drew 219.5 W</title></circle>
+<circle cx="541.5" cy="568.8" r="6" fill="#fcfcfb"/>
+<circle cx="541.5" cy="568.8" r="4" fill="#2a78d6"><title>cap 240 W: drew 239.5 W</title></circle>
+<circle cx="587.7" cy="563.6" r="6" fill="#fcfcfb"/>
+<circle cx="587.7" cy="563.6" r="4" fill="#2a78d6"><title>cap 255 W: drew 254.3 W</title></circle>
+<circle cx="679.9" cy="553.0" r="6" fill="#fcfcfb"/>
+<circle cx="679.9" cy="553.0" r="4" fill="#2a78d6"><title>cap 285 W: drew 284 W</title></circle>
+<polyline points="679.9,553.0 726.1,547.6 772.2,544.0 818.4,543.3 929.1,543.3" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="679.9" cy="553.0" r="5.5" fill="#fcfcfb"/>
+<circle cx="679.9" cy="553.0" r="3.5" fill="#2a78d6"><title>cap 285 W (MXBM only, later session): drew 284 W</title></circle>
+<circle cx="726.1" cy="547.6" r="5.5" fill="#fcfcfb"/>
+<circle cx="726.1" cy="547.6" r="3.5" fill="#2a78d6"><title>cap 300 W (MXBM only, later session): drew 299.1 W</title></circle>
+<circle cx="772.2" cy="544.0" r="5.5" fill="#fcfcfb"/>
+<circle cx="772.2" cy="544.0" r="3.5" fill="#2a78d6"><title>cap 315 W (MXBM only, later session): drew 309.4 W</title></circle>
+<circle cx="818.4" cy="543.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="818.4" cy="543.3" r="3.5" fill="#2a78d6"><title>cap 330 W (MXBM only, later session): drew 311.2 W</title></circle>
+<circle cx="929.1" cy="543.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="929.1" cy="543.3" r="3.5" fill="#2a78d6"><title>cap 366 W (MXBM only, later session): drew 311.2 W</title></circle>
+<text x="962" y="533.3" font-size="10" fill="#52514e" text-anchor="end">MXBM stops responding here: 330/366 W all draw ~311 W</text>
+<text x="962" y="589.5" font-size="10" fill="#52514e" text-anchor="end">lolMiner stops responding to the cap here: 240/255/285 W all draw ~238 W</text>
+<text x="341.6" y="349.8" font-size="10" fill="#52514e" text-anchor="middle">lolMiner's best 0.2991</text>
+<text x="449.3" y="425.9" font-size="10" fill="#52514e" text-anchor="middle">MXBM's best 0.2575</text>
 <line x1="88" y1="117" x2="110" y2="117" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="99" cy="117" r="6" fill="#fcfcfb"/>
 <circle cx="99" cy="117" r="4" fill="#2a78d6"></circle>
