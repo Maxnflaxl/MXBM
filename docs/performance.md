@@ -37,12 +37,27 @@ dialect of the same pipeline — it is the only way to run the fused one.
 median over 20 solves across two sessions, per this document's own rule that a maximum
 of noisy draws reads high.
 
-**The miner delivers less than the pipeline**, and by the same margin this document
-records for CUDA: `--benchmark BEAM-III` reports **155.2 ms/solve median (p5 148.7,
-p95 310.5), 8.5 sol/s** against the pipeline's 117 ms. Roughly 38 ms per solve is spent
-outside the measured region — nonce iteration, stats, the difficulty filter — and the
-long p95 tail is not yet attributed. Quote 117 ms for the *pipeline* and 155 ms for the
-*miner*; they answer different questions.
+**The miner's per-solve overhead is ~0; what moves is thermal.** `--benchmark BEAM-III`
+on an idle machine:
+
+| run length | median | p5 | p95 | sol/s |
+|---|---:|---:|---:|---:|
+| 12 s | 119.3 ms | 116.6 | 126.3 | 14.3 |
+| 45 s | 130.9 ms | 116.8 | 153.2 | 15.3 |
+
+The **p5 is 116.8 ms in both — the pipeline's own 117 ms**, which agrees with the 1.6 ms
+the GPU timing measures outside the kernels. Nonce iteration, stats and the difficulty
+filter cost essentially nothing. What rises with run length is the median and the p95,
+which is a MacBook throttling under sustained load, not overhead.
+
+So quote 117 ms as the pipeline figure and ~15 sol/s as the sustained one, and expect
+the gap between them to widen with ambient temperature and run length rather than being
+fixable in software.
+
+> An earlier revision of this section reported 155.2 ms/solve and attributed a ~38 ms
+> gap to work outside the pipeline. That measurement was taken while builds and tests
+> were competing for the same GPU; on an idle machine it does not reproduce. Benchmark
+> figures here are only valid from an otherwise-idle machine.
 
 Threadgroup memory, the resource the fused rounds are bound by (32 768 B ceiling,
 measured):

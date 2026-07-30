@@ -185,6 +185,15 @@ int main(int argc, char** argv) {
     const std::vector<gpu::CudaSolver::DeviceInfo> cuda_devices = gpu::CudaSolver::enumerate();
     device_count = (unsigned)cuda_devices.size();
 #endif
+#ifdef MXBM_HAVE_METAL
+    // Only when CUDA reported nothing: on a machine with both, CUDA's PCI-ordered list
+    // is the one --devices and --pl are indexed against, and a second list underneath it
+    // would make an index mean two things.
+    const std::vector<gpu::MetalSolver::DeviceInfo> metal_devices =
+        device_count == 0 ? gpu::MetalSolver::enumerate()
+                          : std::vector<gpu::MetalSolver::DeviceInfo>{};
+    if (device_count == 0) device_count = (unsigned)metal_devices.size();
+#endif
 
     if (opts.list_devices) {
 #ifdef MXBM_HAVE_CUDA
@@ -204,9 +213,26 @@ int main(int argc, char** argv) {
                 ui::console::info(line);
             }
         }
-#else
-        ui::console::info("This build has no CUDA backend, so no devices can be listed.");
 #endif
+#ifdef MXBM_HAVE_METAL
+        // Listed whenever CUDA had nothing to say. Saying "no devices can be listed" on
+        // a machine that announced a Metal GPU two lines earlier is worse than silence.
+        if (!metal_devices.empty()) {
+            ui::console::info("Detected devices:");
+            for (size_t i = 0; i < metal_devices.size(); ++i) {
+                const auto& d = metal_devices[i];
+                char line[256];
+                std::snprintf(line, sizeof line, "  %zu: %-34s %5llu MB  %2u cores  Metal%s",
+                              i, d.name.c_str(),
+                              (unsigned long long)(d.global_mem / (1024ull * 1024ull)),
+                              d.compute_units,
+                              d.viable ? "" : "  [too small for BeamHash III]");
+                ui::console::info(line);
+            }
+        }
+#endif
+        if (device_count == 0)
+            ui::console::info("No GPU devices detected by any backend built into this binary.");
         return 0;
     }
 

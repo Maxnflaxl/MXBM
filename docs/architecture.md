@@ -3,7 +3,7 @@
 MXBM is built as a set of small, focused units with well-defined interfaces,
 each testable on its own. The design goal is a fully auditable miner: every
 proof-of-work primitive is validated against Beam's reference, and the GPU
-backends (when they land) slot in behind a single solver interface without
+backends slot in behind a single solver interface without
 touching the networking or UI code.
 
 ## Source layout
@@ -61,7 +61,7 @@ verifier over tens of thousands of fuzzed inputs.
 
 - **`Solver`** is a one-method interface: given a header and a nonce, return
   candidate solutions. This is the seam the GPU backends plug into. The current
-  reference solver wraps Beam's `OptimisedSolve`; future OpenCL/CUDA/HIP solvers
+  reference solver wraps Beam's `OptimisedSolve`; the OpenCL, CUDA and Metal solvers (and a future HIP one)
   implement the same interface.
 - **`Engine`** owns the pipeline: it takes the latest job from a mailbox on a
   worker thread, runs the solver, filters each candidate through the difficulty
