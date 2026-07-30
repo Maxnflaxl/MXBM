@@ -581,4 +581,18 @@ if(MXBM_HAVE_METAL)
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_solver COMMAND test_metal_solver)
   set_tests_properties(metal_solver PROPERTIES TIMEOUT 1800)
+
+  # The occupancy contract. Deliberately weaker than the CUDA one -- Metal exposes no
+  # register count and the alternatives were exhausted (see the file header) -- so it
+  # pins threadgroup memory exactly and leaves register regressions to be caught by
+  # their effect on median ms/solve.
+  add_executable(test_metal_resources tests/test_metal_resources.mm)
+  add_dependencies(test_metal_resources mxbm_metallib_gen)
+  target_include_directories(test_metal_resources
+      PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR}/generated)
+  target_link_libraries(test_metal_resources PRIVATE mxbm_beamhash
+      "-framework Metal" "-framework Foundation")
+  set_source_files_properties(tests/test_metal_resources.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+  add_test(NAME metal_resources COMMAND test_metal_resources)
 endif()

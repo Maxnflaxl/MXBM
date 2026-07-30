@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <cstdlib>
 #include <vector>
 
 using namespace mxbm;
@@ -87,6 +89,32 @@ int main() {
     const double ms2 = std::chrono::duration<double, std::milli>(t1 - t0).count();
     std::printf("  solve #2: %.1f ms\n", ms2);
     verify_goldens(sols2, "solve #2");
+
+    // ---- MXBM_BENCH=N: the exit-criterion measurement ----
+    // The OpenCL baseline is quoted as a median over >= 20 solves (docs/performance.md
+    // warns that maxima of noisy draws read high), so Metal is held to the same rule.
+    // Off by default: 20 full solves is minutes, not a unit test.
+    if (const char* e = std::getenv("MXBM_BENCH")) {
+        const int iters = std::atoi(e) > 0 ? std::atoi(e) : 20;
+        std::vector<double> ms;
+        ms.reserve(iters);
+        int clean = 0;
+        for (int i = 0; i < iters; ++i) {
+            const auto a = std::chrono::steady_clock::now();
+            auto r = s.solve(kat::input32, kat::nonce0);
+            const auto b = std::chrono::steady_clock::now();
+            ms.push_back(std::chrono::duration<double, std::milli>(b - a).count());
+            if (r.size() == 3) ++clean;
+        }
+        std::sort(ms.begin(), ms.end());
+        const double med = ms[ms.size() / 2];
+        std::printf("\n==== METAL BENCH (%d solves) ====\n", iters);
+        std::printf("median total   : %.1f ms  (%.2f solve/s, ~%.1f sol/s)\n",
+                    med, 1000.0 / med, 1900.0 / med);
+        std::printf("min / max      : %.1f / %.1f ms\n", ms.front(), ms.back());
+        std::printf("correctness    : %d/%d clean\n", clean, iters);
+        std::printf("================================\n");
+    }
 
     return summary("metal_solver");
 }
