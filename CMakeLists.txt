@@ -505,7 +505,8 @@ if(MXBM_HAVE_METAL)
       ${CMAKE_SOURCE_DIR}/kernels/metal/prim_probe.metal
       ${CMAKE_SOURCE_DIR}/kernels/metal/records_probe.metal
       ${CMAKE_SOURCE_DIR}/kernels/metal/entry.metal
-      ${CMAKE_SOURCE_DIR}/kernels/metal/fused_round.metal)
+      ${CMAKE_SOURCE_DIR}/kernels/metal/fused_round.metal
+      ${CMAKE_SOURCE_DIR}/kernels/metal/pipeline_kernels.metal)
   set(MXBM_METALLIB        ${CMAKE_BINARY_DIR}/generated/mxbm.metallib)
   set(MXBM_METALLIB_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_metallib.h)
   mxbm_build_metallib(${MXBM_METALLIB} ${MXBM_METAL_SOURCES})
