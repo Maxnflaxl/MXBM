@@ -144,6 +144,10 @@ struct CudaSolver {
             cudaEventCreateWithFlags(&r1Done[k],    cudaEventDisableTiming);
         }
         cudaStreamCreate(&sMain); cudaStreamCreate(&sEntry);
+        if (cob_s() && (cob_s() < 2u || ((nb << sm) % (cob_s() - 1u)) != 0u)) {
+            printf("FAIL: MXBM_COB_S-1 must divide nb<<sm (%u)\n", nb << sm);
+            return false;
+        }
         #define CARVE(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, \
                                               cudaSharedmemCarveoutMaxShared)
         CARVE((fused_round<MXBM_R1_ARGS>)); CARVE((fused_round<MXBM_R2_ARGS>));
@@ -191,6 +195,26 @@ struct CudaSolver {
     // rounds (9.5 ms at 21 % SM), so the most idle issue slots to fill. MXBM_CO_ROUND.
     static int co_round() { static const int v = []{ const char* e=getenv("MXBM_CO_ROUND");
                                 return e ? atoi(e) : 3; }(); return v; }
+    // MXBM_COB_S=S: run the co-tenant entry as SEPARATE INTERLEAVED BLOCKS (every S-th
+    // block of the host round's grid) instead of in the round's own warps. S-1 must
+    // divide nb << sm. 0 = off (classic COTENANT tail-hosting).
+    static uint32_t cob_s() { static const uint32_t v = []{ const char* e=getenv("MXBM_COB_S");
+                                  return e ? (uint32_t)atoi(e) : 0u; }(); return v; }
+    // MXBM_CO_ROUND=34: split the entry work across TWO hosts -- r3 seeds the first half
+    // of the index space and r4 the second -- so each host carries half the co-work and
+    // the entry side has both rounds' combined duration to finish in.
+    static bool co_hosts(int R) { const int cr = co_round();
+        return cr == 34 ? (R == 3 || R == 4) : (R == cr); }
+    // MXBM_COB_DUMMY=1: co-blocks are launched but given ZERO work, so they return
+    // immediately -- measures pure block displacement + grid overhead. The real entry is
+    // launched separately by the driver, exactly as the NOSCATTER diagnostic does.
+    static bool cob_dummy() { static const bool v = getenv("MXBM_COB_DUMMY") != nullptr;
+        return v; }
+    static void co_slice(int R, uint32_t total, uint32_t& begin, uint32_t& count) {
+        if (co_round() == 34) { const uint32_t h = total / 2u;
+            begin = (R == 3) ? 0u : h; count = (R == 3) ? h : total - h; }
+        else { begin = 0u; count = total; }
+    }
     static int rep_round() { static const int v = []{ const char* e=getenv("MXBM_ROUND_REPS");
                                  return e ? atoi(e) : 0; }(); return v; }
     static int rep_count() { static const int v = []{ const char* e=getenv("MXBM_ROUND_REPS");
@@ -237,6 +261,16 @@ struct CudaSolver {
                     <<<nb, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,   \
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
                         left, right, gictr, drops, dpp);                                 \
+                else if (coNonce && co_hosts(R) && cob_s()) {                            \
+                  uint32_t cb_ = 0, cc_ = 0; co_slice((R), elems, cb_, cc_);             \
+                  if (cob_dummy()) cc_ = 0;                                              \
+                  fused_round<__VA_ARGS__,false,false,true>\
+                    <<<(nb << sm) + (nb << sm)/(cob_s()-1u), kWG, 0, st>>>(               \
+                        bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,                    \
+                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        left, right, gictr, drops, dpp,                                  \
+                        dpp2[coSlot], cc_, cap, entryCounts[coSlot], entryOut[coSlot],   \
+                        cob_s(), cb_); }                                                 \
                 else if (coNonce && (R) == co_round())                                   \
                   fused_round<__VA_ARGS__,true>\
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
@@ -308,6 +342,119 @@ struct CudaSolver {
         launch_entry(input, nonce, 0, sMain);
         return finish_solve(input, nonce, 0, sMain, []{}, survOut, dropOut);
     }
+
+    // ---- pipe2: two solves in flight; r4(i) and r1(i+1) share ONE launch -------------
+    //
+    // r1's output lives in its own double-buffered bucket set (pair records, stride 2)
+    // and its back-refs in a second BR set, so nothing it writes collides with solve i
+    // still in flight. The main elem/counts ping-pong is HANDED OVER between solves:
+    // r2(i+1) writes elem[0] only after terminal(i) has read it, which the in-order
+    // stream guarantees. Extra footprint: 2 x 0.73 GiB pair buckets + 1.29 GiB BR set.
+    uint64_t *pairOut[2] = {nullptr,nullptr};
+    uint32_t *pairCounts[2] = {nullptr,nullptr};
+    uint32_t *br2L = nullptr, *br2R = nullptr;      // back-ref set for odd-parity solves
+    uint32_t *gictrB = nullptr;                     // r1(i+1)'s gi counter
+    uint32_t* brL(int p) { return p ? br2L : left; }
+    uint32_t* brR(int p) { return p ? br2R : right; }
+
+    bool init_pipe2() {
+        for (int k = 0; k < 2; ++k) {
+            pairOut[k]    = dalloc<uint64_t>(nslots * 2);
+            pairCounts[k] = dalloc<uint32_t>(nb);
+        }
+        br2L = dalloc<uint32_t>((size_t)5*capacity);
+        br2R = dalloc<uint32_t>((size_t)5*capacity);
+        gictrB = dalloc<uint32_t>(1);
+        return pairOut[0] && pairOut[1] && pairCounts[0] && pairCounts[1]
+            && br2L && br2R && gictrB;
+    }
+
+    // Standalone r1 for the solve in slot p: entryOut[p] -> pairOut[p], BR(p) level 0.
+    // Used by the prologue; in steady state r1 rides inside fused_pair instead.
+    void launch_r1(int p, cudaStream_t st) {
+        cudaMemsetAsync(pairCounts[p], 0, (size_t)nb*4, st);
+        cudaMemsetAsync(gictrB, 0, 4, st);
+        fused_round<MXBM_R1_ARGS><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, 0u,
+            entryCounts[p], entryOut[p], pairCounts[p], pairOut[p],
+            brL(p), brR(p), gictrB, drops, dpp2[p]);
+    }
+
+    // One steady-state iteration: r2(i) r3(i) entry(i+1) [r4(i) || r1(i+1)] term(i),
+    // then readback + recover + CPU verify for solve i. nextNonce == nullptr drains the
+    // pipeline with a plain r4.
+    std::vector<std::array<uint8_t,104>> pipe2_iter(const uint8_t input[32],
+            const uint8_t nonce[8], const uint8_t* nextNonce, int p, uint32_t* dropOut) {
+        cudaStream_t st = sMain;
+        std::vector<std::array<uint8_t,104>> out;
+        uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};
+        bh3::compute_prepow(input, 32, nonce, extra0, pp);
+        cudaMemcpyAsync(dpp, pp, 32, cudaMemcpyHostToDevice, st);
+        cudaMemsetAsync(drops, 0, 16, st);
+        cudaMemsetAsync(survCount, 0, 4, st);
+        // r2(i): pair records -> packed records
+        cudaMemsetAsync(counts[0], 0, (size_t)nb*4, st); cudaMemsetAsync(gictr, 0, 4, st);
+        fused_round<MXBM_R2_ARGS><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, 1u*capacity,
+            pairCounts[p], pairOut[p], counts[0], elem[0],
+            brL(p), brR(p), gictr, drops, dpp);
+        // r3(i)
+        cudaMemsetAsync(counts[1], 0, (size_t)nb*4, st); cudaMemsetAsync(gictr, 0, 4, st);
+        fused_round<MXBM_R3_ARGS><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, 2u*capacity,
+            counts[0], elem[0], counts[1], elem[1],
+            brL(p), brR(p), gictr, drops, dpp);
+        // entry(i+1), then the heterogeneous launch. MXBM_P2_VAR picks the pairing:
+        //   0  r4(i) || r1(i+1), 1:1 residency          (grid 2R, alternating)
+        //   1  r1(i+1)-major: r4 blocks doubled, so 2/3 of residency is r1's
+        static const int var = []{ const char* e=getenv("MXBM_P2_VAR");
+                                   return e ? atoi(e) : 0; }();
+        if (nextNonce) launch_entry(input, nextNonce, p ^ 1, st);
+        cudaMemsetAsync(counts[0], 0, (size_t)nb*4, st); cudaMemsetAsync(gictr, 0, 4, st);
+        if (nextNonce) {
+            cudaMemsetAsync(pairCounts[p^1], 0, (size_t)nb*4, st);
+            cudaMemsetAsync(gictrB, 0, 4, st);
+            RoundArgs A{bb, sm, cap, cap, 3u*capacity, counts[1], elem[1],
+                        counts[0], elem[0], brL(p), brR(p), gictr, drops, dpp};
+            RoundArgs B{bb, sm, cap, cap, 0u, entryCounts[p^1], entryOut[p^1],
+                        pairCounts[p^1], pairOut[p^1], brL(p^1), brR(p^1), gictrB, drops,
+                        dpp2[p^1]};
+            if (var == 1)
+                // A = r1(i+1) gets 2 of every 3 resident blocks; B = r4(i), each B block
+                // runs two consecutive buckets. Grid: R r1-blocks + R/2 r4-blocks.
+                fused_pair<MXBM_R1_ARGS, MXBM_R4_ARGS, 2u>
+                    <<<(nb << sm) + (nb << sm)/2u, kWG, 0, st>>>(B, A, 3u);
+            else
+                fused_pair<MXBM_R4_ARGS, MXBM_R1_ARGS>
+                    <<<2u*(nb << sm), kWG, 0, st>>>(A, B, 2u);
+        } else {
+            fused_round<MXBM_R4_ARGS><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap,
+                3u*capacity, counts[1], elem[1], counts[0], elem[0],
+                brL(p), brR(p), gictr, drops, dpp);
+        }
+        terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[0],
+            elem[0], brL(p), brR(p), survSlots, survCount, survCap, drops);
+
+        cudaError_t le = cudaGetLastError();
+        if (le != cudaSuccess) {
+            printf("CUDA launch error: %s\n", cudaGetErrorString(le));
+            return out;
+        }
+        uint32_t hs = 0, hd[4] = {0,0,0,0};
+        cudaMemcpyAsync(&hs, survCount, 4, cudaMemcpyDeviceToHost, st);
+        cudaMemcpyAsync(hd, drops, 16, cudaMemcpyDeviceToHost, st);
+        cudaStreamSynchronize(st);
+        if (hs > survCap) hs = survCap;
+        if (dropOut) *dropOut = hd[1] | hd[2] | hd[3];
+        if (hs == 0) return out;
+        recover<<<(hs+63)/64, 64, 0, st>>>(hs, survSlots, capacity, brL(p), brR(p), dleaves);
+        std::vector<uint32_t> hl((size_t)hs*32);
+        cudaMemcpyAsync(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost, st);
+        cudaStreamSynchronize(st);
+        for (uint32_t i = 0; i < hs; ++i) {
+            std::array<uint8_t,104> sol{};
+            bh3::pack_indices(&hl[(size_t)i*32], sol.data());
+            if (bh3::is_valid_solution(input, 32, nonce, sol.data())) out.push_back(sol);
+        }
+        return out;
+    }
 };
 
 int main(int argc, char** argv) {
@@ -372,10 +519,20 @@ int main(int argc, char** argv) {
     // double-count the shared time. The same figure is printed for both paths so the
     // comparison is like-for-like.
     const int n = (argc > 1) ? atoi(argv[1]) : 20;
-    bool overlap = false, fuse = false;
+    bool overlap = false, fuse = false, pipe2 = false;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--overlap")) overlap = true;
         if (!strcmp(argv[i], "--fuse"))    fuse = true;
+        if (!strcmp(argv[i], "--pipe2"))   pipe2 = true;
+    }
+    if (pipe2) {
+        if (!s.init_pipe2()) { printf("FAIL: pipe2 allocation\n"); return 1; }
+        cudaDeviceProp pr{}; cudaGetDeviceProperties(&pr, 0);
+        int bpsm = 0;
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bpsm,
+            (const void*)(fused_pair<MXBM_R4_ARGS, MXBM_R1_ARGS>), kWG, 0);
+        printf("  r4||r1 pair blocks/SM=%d (needs 4 to match the homogeneous launches)\n",
+               bpsm);
     }
 
     uint8_t nonce[8]; memcpy(nonce, kat::nonce0, 8);
@@ -389,7 +546,26 @@ int main(int argc, char** argv) {
     cudaDeviceSynchronize();
     auto T0 = std::chrono::steady_clock::now();
 
-    if (fuse) {
+    if (pipe2) {
+        // Prologue: entry(0) + standalone r1(0); each iteration then finishes solve i
+        // and runs r1(i+1) inside r4(i)'s launch.
+        uint8_t cur[8], nxt[8];
+        nonce_for(0, cur);
+        s.launch_entry(kat::input32, cur, 0, s.sMain);
+        s.launch_r1(0, s.sMain);
+        for (int i = 0; i < n; ++i) {
+            nonce_for(i, cur);
+            const bool more = (i + 1 < n);
+            if (more) nonce_for(i + 1, nxt);
+            auto t0 = std::chrono::steady_clock::now();
+            uint32_t d = 0;
+            auto v = s.pipe2_iter(kat::input32, cur, more ? nxt : nullptr, i & 1, &d);
+            cudaDeviceSynchronize();
+            ms.push_back(std::chrono::duration<double,std::milli>(
+                             std::chrono::steady_clock::now() - t0).count());
+            verified += v.size(); worstDrop |= d;
+        }
+    } else if (fuse) {
         // Solve i's round `co_round` hosts solve i+1's entry pass, so entry_scatter is
         // launched exactly ONCE (to prime solve 0) instead of once per solve. If the
         // co-residency does nothing, this costs the same as sequential; if it works, the
@@ -412,7 +588,8 @@ int main(int argc, char** argv) {
             // exactly what it costs to host entry's arithmetic inside a round, with its
             // scatter left out. (Without this the pipeline runs on an empty buffer and
             // "3.84 ms/solve" measures nothing at all.)
-            if (MXBM_CO_NOSCATTER && more) s.launch_entry(kat::input32, nxt, (i + 1) & 1, s.sMain);
+            if ((MXBM_CO_NOSCATTER || CudaSolver::cob_dummy()) && more)
+                s.launch_entry(kat::input32, nxt, (i + 1) & 1, s.sMain);
             cudaDeviceSynchronize();
             ms.push_back(std::chrono::duration<double,std::milli>(
                              std::chrono::steady_clock::now() - t0).count());
@@ -461,7 +638,8 @@ int main(int argc, char** argv) {
     const double med = ms[ms.size()/2];
     const double per = wall / n;
     const double spersolve = (double)verified / n;
-    printf("mode      : %s\n", fuse    ? "FUSED (entry co-tenant in a round's blocks)"
+    printf("mode      : %s\n", pipe2   ? "PIPE2 (r4(i) || r1(i+1) in one launch)"
+                            : fuse    ? "FUSED (entry co-tenant in a round's blocks)"
                             : overlap ? "OVERLAP (entry on 2nd stream)"
                                       : "sequential (baseline)");
     printf("end-to-end: %.2f ms/solve (wall/%d)   [per-solve median %.2f ms]\n", per, n, med);

@@ -185,7 +185,11 @@ struct Kernel {
     // The other three are found by the <length><name> token of the Itanium mangling,
     // which is stable under a change to their parameter list.
     bool        templated;
-    int         id[6];
+    // id[6] is the COBLOCKS template argument: the speculative-entry variant of a round
+    // is a distinct kernel with the same six round numbers, so the identity needs the
+    // bool. Rows written with six values zero-initialise it, which matches the plain
+    // kernels.
+    int         id[7];
     const char* token;
     int         blockSize;
     int         reg;
@@ -199,25 +203,30 @@ struct Kernel {
 //   INW OUTW LEAFW LMODE | LOUT PADN SIN SOUT SBUILD | INSTR OUTSTR | FCAP | COTENANT SUBPASS
 // LMode values (kernels/cuda/fused_round.cuh:212-220):
 //   LM_EMIT 1, LM_USE 2, LM_SEED 3, LM_RD2 4, LM_SEEDF 5, LM_RAW 6, LM_RD3 7
+//
+// Shared figures re-baselined 2026-07-31 for the RoundShared refactor (the arrays moved
+// into one struct so fused_pair can union two rounds' layouts): each round pays +12-20 B
+// for the struct's 1-sized placeholder members plus padding, blocks/SM unchanged on
+// every kernel and registers unchanged or lower (r4 47 -> 46).
 const Kernel kContract[] = {
     // name                    tmpl   INW OUT LEAF LM IN OUT   token                wg  reg   smem stk min
     { "entry_scatter",         false, {0,0,0,0,0,0}, "13entry_scatterE",  256,  40,     0,  0, 6,
       "ON A CLIFF: 40 registers is EXACTLY the limit for 6 blocks/SM. Measured at 6 "
       "blocks/SM standalone (docs/performance-research.md:951); the pass costs 2.77 ms" },
-    { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2}, nullptr,             256,  48, 18980,  0, 5,
-      "ON TWO CLIFFS: 48 registers of 48 AND 18980 B of 19456. r1's fifth block is "
+    { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2}, nullptr,             256,  48, 19000,  0, 5,
+      "ON TWO CLIFFS: 48 registers of 48 AND 19000 B of 19456. r1's fifth block is "
       "worth 0.15 ms (docs/performance-research.md:1719)" },
-    { "r2 (packed record)",     true, {7,7,2,4,2,8}, nullptr,             256,  64, 23588,  0, 4,
+    { "r2 (packed record)",     true, {7,7,2,4,2,8}, nullptr,             256,  64, 23608,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM. r1 and r2 "
       "crossing 3 -> 4 together was worth 1.13 ms (docs/performance-research.md:1609)" },
-    { "r2 (quad record)",       true, {7,7,2,4,2,3}, nullptr,             256,  64, 23588,  0, 4,
+    { "r2 (quad record)",       true, {7,7,2,4,2,3}, nullptr,             256,  64, 23608,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM" },
-    { "r3 (packed record)",     true, {7,6,4,1,8,8}, nullptr,             256,  56, 26148,  0, 3,
+    { "r3 (packed record)",     true, {7,6,4,1,8,8}, nullptr,             256,  56, 26168,  0, 3,
       "shared-bound at 3 blocks; r3 does not want a fourth "
       "(docs/performance-research.md:1731-1745)" },
-    { "r3 (quad record)",       true, {7,6,4,7,3,8}, nullptr,             256,  80, 26148,  0, 3,
+    { "r3 (quad record)",       true, {7,6,4,7,3,8}, nullptr,             256,  80, 26168,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
-    { "r4 (LM_USE)",            true, {6,1,2,2,8,2}, nullptr,             256,  47, 22308,  0, 4, "" },
+    { "r4 (LM_USE)",            true, {6,1,2,2,8,2}, nullptr,             256,  46, 22320,  0, 4, "" },
     { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundE", 256,  22,  9732,  0, 6,
       "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound" },
     // recover's 64 B of stack is a genuine local array, not a spill: ptxas -v reports
@@ -324,10 +333,11 @@ std::vector<Measured> parse_res_usage(const std::string& out, bool& sawArch) {
             const Kernel& c = kContract[i];
             bool hit;
             if (c.templated)
-                hit = k.targs.size() >= 12 &&
+                hit = k.targs.size() >= 15 &&
                       k.targs[0] == c.id[0] && k.targs[1] == c.id[1] &&
                       k.targs[2] == c.id[2] && k.targs[3] == c.id[3] &&
-                      k.targs[9] == c.id[4] && k.targs[10] == c.id[5];
+                      k.targs[9] == c.id[4] && k.targs[10] == c.id[5] &&
+                      k.targs[14] == c.id[6];      // COBLOCKS variant is its own row
             else
                 hit = k.targs.empty() && k.mangled.find(c.token) != std::string::npos;
             if (hit) { k.match = i; break; }

@@ -221,6 +221,14 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #define MXBM_R3_QUAD 0
 #endif
 
+// Register-budget probes; see MINBLOCKS below. 0 = compiler default.
+#ifndef MXBM_MB_SEED
+#define MXBM_MB_SEED 0
+#endif
+#ifndef MXBM_MB_RD2
+#define MXBM_MB_RD2 0
+#endif
+
 enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4,
              // A/B pair (MXBM_R2_FULL): round 1 emits a FULL packed record and round 2
              // reads it instead of rebuilding from two seed indices. Trades bytes for
@@ -290,17 +298,51 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
 // Cost is registers, and there is room: r3 uses 48 of the 85/thread that 3 blocks/SM
 // allows, and it is shared-memory-bound at 32772 B, not register-bound. If the fused
 // kernel pushes past 85 the occupancy drops to 2 and this will lose -- check ptxas -v.
+// Everything a fused_round launch takes at runtime, as one POD so a heterogeneous
+// kernel can carry TWO rounds' argument sets. Field order mirrors the kernel signature.
+struct RoundArgs {
+    uint32_t bucket_bits, submask_bits, in_bucket_cap, out_bucket_cap, out_off;
+    const uint32_t* in_counts; const uint64_t* in_belem;
+    uint32_t* out_counts; uint64_t* out_belem;
+    uint32_t* all_left; uint32_t* all_right;
+    uint32_t* gi_counter; uint32_t* drops;
+    const uint64_t* pp4;
+};
+
+// One round's shared-memory arrays as a STRUCT, so a heterogeneous kernel can put two
+// rounds' layouts in a union and pay max() of the two rather than their sum. The member
+// order and sizes are exactly the arrays fused_round declared individually before this
+// existed; test_cuda_resources pins the totals against cuobjdump.
+template<int INW, int LEAFW, int LMODE, uint32_t FCAP, bool SUBPASS>
+struct RoundShared {
+    static constexpr bool kNeedLead = (LMODE == LM_USE);
+    static constexpr bool kNarrow6 =
+        (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
+    static constexpr int  kLws = kNarrow6 ? INW - 1 : INW;
+    static constexpr bool kGiIsLead = (LMODE == LM_SEED || LMODE == LM_SEEDF);
+    uint64_t lwork[kLws * FCAP];
+    uint16_t lw6[kNarrow6 ? FCAP : 1];
+    uint32_t lgi[kGiIsLead ? 1 : FCAP];
+    uint32_t lleaf[LEAFW * FCAP];
+    uint32_t llead[kNeedLead ? FCAP : 1];
+    uint32_t lkey[MXBM_PERFECT_TAB ? 1 : FCAP];
+    uint32_t lchain[FCAP];
+    uint32_t tab[kTabSize];
+    uint32_t gcount;
+    uint32_t cnt8[MXBM_SPILL ? 8 : 1];
+    uint8_t  skey[SUBPASS ? kSKey : 1];
+};
+
+// The round body, extracted so a kernel can run DIFFERENT rounds in different blocks of
+// one launch (see fused_pair below / cuda/pipeline.cu). `bid` is the block's rank among
+// this round's blocks -- blockIdx.x for a homogeneous launch, a remapped rank otherwise.
+// Shared memory comes in as a RoundShared& so the caller controls where it lives.
 template<int INW, int OUTW, int LEAFW, int LMODE,
          uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
-         uint32_t INSTR, uint32_t OUTSTR,
-         // Per-round group cap. Every shared array scales with it, and B (shared bytes
-         // per staged element) differs by round -- r3 80, r2 72, r1 64 -- so one global
-         // value cannot put them all at their best occupancy. Lowering it for a round
-         // costs only that round's own spill rate. Ahead of the two bools because the
-         // co-tenant and sub-pass launches append to the argument list.
-         uint32_t FCAP = kFCap, bool COTENANT = false, bool SUBPASS = false>
-__global__ __launch_bounds__(kWG)
-void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
+         uint32_t INSTR, uint32_t OUTSTR, uint32_t FCAP, bool SUBPASS = false>
+__device__ __forceinline__
+void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32_t bid,
+                 uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
                  const uint32_t* __restrict__ in_counts,
                  const uint64_t* __restrict__ in_belem,
@@ -310,12 +352,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t* __restrict__ all_right,
                  uint32_t* __restrict__ gi_counter,
                  uint32_t* __restrict__ drops,
-                 const uint64_t* __restrict__ pp4,
-                 // co-tenant entry pass for the NEXT nonce; ignored unless COTENANT
-                 const uint64_t* __restrict__ co_pp4 = nullptr,
-                 uint32_t co_count = 0, uint32_t co_bucket_cap = 0,
-                 uint32_t* __restrict__ co_counts = nullptr,
-                 uint64_t* __restrict__ co_belem = nullptr) {
+                 const uint64_t* __restrict__ pp4) {
     // `lead` is leaf 0 of the element's own prefix, so for every mode that stages real
     // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
     // exception: its leaf payload is the packed leftContrib, not leaves.
@@ -324,23 +361,22 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     // launch sites need no new argument.
     constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
     constexpr int  LWS     = NARROW6 ? INW - 1 : INW;      // lwork stride, u64
-    __shared__ uint64_t lwork[LWS * FCAP];
-    __shared__ uint16_t lw6[NARROW6 ? FCAP : 1];
     // Round 1's gi IS its leaf: both are the seed index, written from the same
-    // rec0 >> 32. So LM_SEED keeps only one copy and reads gi through lleaf[0],
-    // which drops a whole 4 B/element array for the round that gains most from
-    // occupancy. Every other mode has a genuinely distinct gi.
+    // rec0 >> 32. So LM_SEED keeps only one copy and reads gi through lleaf[0].
     constexpr bool kGiIsLead = (LMODE == LM_SEED || LMODE == LM_SEEDF);
-    __shared__ uint32_t lgi[kGiIsLead ? 1 : FCAP], lleaf[LEAFW * FCAP];
-    __shared__ uint32_t llead[kNeedLead ? FCAP : 1];
-    __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : FCAP], lchain[FCAP], tab[kTabSize];
-    __shared__ uint32_t gcount;
-    __shared__ uint32_t cnt8[MXBM_SPILL ? 8 : 1];
-    // SUBPASS: one block owns a whole BUCKET and sweeps its sub-masks in sequence, so the
-    // sub-mask bits of every element's key are read from global ONCE into skey and reused
-    // for every sweep. Only the sub-mask bits are needed to filter, so a byte each is
-    // ample -- ~0.7 KB against the 21 KB lwork costs.
-    __shared__ uint8_t skey[SUBPASS ? kSKey : 1];
+    // Reference bindings: the body below is textually what it was when these were the
+    // kernel's own __shared__ declarations, and the bindings keep it that way.
+    auto& lwork  = shm.lwork;
+    auto& lw6    = shm.lw6;
+    auto& lgi    = shm.lgi;
+    auto& lleaf  = shm.lleaf;
+    auto& llead  = shm.llead;
+    auto& lkey   = shm.lkey;
+    auto& lchain = shm.lchain;
+    auto& tab    = shm.tab;
+    auto& gcount = shm.gcount;
+    auto& cnt8   = shm.cnt8;
+    auto& skey   = shm.skey;
     auto lead_of = [&](uint32_t p) -> uint32_t {
         return kNeedLead ? llead[p] : lleaf[p * LEAFW + 0];
     };
@@ -362,8 +398,8 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     const uint32_t submaskCount = 1u << submask_bits;
     // Without SUBPASS a block is one (bucket, sub-mask) and the grid is nb << sm. With it
     // a block is one BUCKET, the grid is nb, and the sub-masks become an inner loop.
-    const uint32_t bucket = SUBPASS ? blockIdx.x : blockIdx.x / submaskCount;
-    const uint32_t mask0  = SUBPASS ? 0u : blockIdx.x % submaskCount;
+    const uint32_t bucket = SUBPASS ? bid : bid / submaskCount;
+    const uint32_t mask0  = SUBPASS ? 0u : bid % submaskCount;
     const uint32_t nsweep = SUBPASS ? submaskCount : 1u;
 
     // Round 2's record is 9 u64, and a 9-u64 stride puts every odd slot on an 8 B
@@ -727,6 +763,91 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
     }
   }
 
+}
+
+template<int INW, int OUTW, int LEAFW, int LMODE,
+         uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
+         uint32_t INSTR, uint32_t OUTSTR,
+         // Per-round group cap. Every shared array scales with it, and B (shared bytes
+         // per staged element) differs by round -- r3 80, r2 72, r1 64 -- so one global
+         // value cannot put them all at their best occupancy. Lowering it for a round
+         // costs only that round's own spill rate. Ahead of the two bools because the
+         // co-tenant and sub-pass launches append to the argument list.
+         uint32_t FCAP = kFCap, bool COTENANT = false, bool SUBPASS = false,
+         // COBLOCKS: co-schedule the NEXT nonce's entry pass as SEPARATE BLOCKS
+         // interleaved through this round's grid -- every co_stride-th block is an entry
+         // block. Distinct from both measured overlap nulls: a second STREAM never runs
+         // (662 waves of backlog), and COTENANT runs entry in the round's own warps
+         // AFTER their round work, where a memory stall serialises rather than overlaps.
+         // Here entry's instructions issue from their own warps, resident BESIDE the
+         // round's stalled ones -- at the price of displacing ~1/co_stride of the
+         // round's blocks (each entry block still reserves the round's static shared).
+         bool COBLOCKS = false,
+         // Minimum resident blocks/SM the compiler must budget registers for. 0 keeps
+         // the default. Probed and NULL: r1/r2 are shared-memory-capped at 5/4 blocks
+         // before the freed registers can matter (5 x 23.6 KB > 100 KB for r2), so
+         // occupancy there is closed from BOTH resources. Kept as an instrument.
+         int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
+                        : LMODE == LM_RD2  ? MXBM_MB_RD2 : 0)>
+__global__ __launch_bounds__(kWG, MINBLOCKS)
+void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
+                 uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
+                 const uint32_t* __restrict__ in_counts,
+                 const uint64_t* __restrict__ in_belem,
+                 uint32_t* __restrict__ out_counts,
+                 uint64_t* __restrict__ out_belem,
+                 uint32_t* __restrict__ all_left,
+                 uint32_t* __restrict__ all_right,
+                 uint32_t* __restrict__ gi_counter,
+                 uint32_t* __restrict__ drops,
+                 const uint64_t* __restrict__ pp4,
+                 // co-tenant entry pass for the NEXT nonce; ignored unless COTENANT
+                 const uint64_t* __restrict__ co_pp4 = nullptr,
+                 uint32_t co_count = 0, uint32_t co_bucket_cap = 0,
+                 uint32_t* __restrict__ co_counts = nullptr,
+                 uint64_t* __restrict__ co_belem = nullptr,
+                 uint32_t co_stride = 0, uint32_t co_begin = 0) {
+    // COBLOCKS role dispatch. The grid is (nb << sm) round blocks plus one entry block
+    // per (co_stride - 1) of them, interleaved by index so every dispatch wave carries
+    // the mix -- appending them instead would schedule them all in the tail, which is
+    // the second-stream null all over again. Entry blocks return before the first
+    // barrier; a barrier is per-block, so the round blocks are unaffected.
+    uint32_t bid = blockIdx.x;
+    if constexpr (COBLOCKS) {
+        if (bid % co_stride == co_stride - 1u) {
+            const uint32_t eb = bid / co_stride;            // 0-based among entry blocks
+            const uint32_t nE = gridDim.x / co_stride;
+#if MXBM_CO_NOSCATTER
+            // Diagnostic (results wrong without a separate real entry launch): compute
+            // only, no scatter -- isolates issue interference from DRAM interference.
+            uint64_t acc = 0;
+            for (uint32_t g = eb * blockDim.x + threadIdx.x; g < co_count;
+                 g += nE * blockDim.x) {
+                uint64_t pp[4] = { co_pp4[0], co_pp4[1], co_pp4[2], co_pp4[3] };
+                bh3::Elem e; bh3::seed_element(pp, co_begin + g, e);
+                uint32_t t1[1] = { co_begin + g };
+                bh3::apply_mix(e, t1, 1u, 448u);
+                acc ^= e.w[0];
+            }
+            if (acc == 0xDEADBEEFDEADBEEFull) atomicAdd(&drops[3], 1u);
+#else
+            for (uint32_t g = eb * blockDim.x + threadIdx.x; g < co_count;
+                 g += nE * blockDim.x)
+                entry_body(co_begin + g, co_pp4, bucket_bits, co_bucket_cap, co_counts,
+                           co_belem, drops);
+#endif
+            return;
+        }
+        bid -= bid / co_stride;                             // rank among round blocks
+    }
+
+    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS> shm;
+    fused_round_body<INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD,
+                     INSTR, OUTSTR, FCAP, SUBPASS>(
+        shm, bid, bucket_bits, submask_bits, in_bucket_cap, out_bucket_cap, out_off,
+        in_counts, in_belem, out_counts, out_belem, all_left, all_right, gi_counter,
+        drops, pp4);
+
     // Co-tenant: the next nonce's entry pass, in THIS launch. Grid-strided rather than
     // one-element-per-thread, so it stays correct if the geometry or kWG ever makes
     // gridDim*blockDim differ from 2^25 (today they are equal).
@@ -756,6 +877,62 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
              g += gridDim.x*blockDim.x)
             entry_body(g, co_pp4, bucket_bits, co_bucket_cap, co_counts, co_belem, drops);
 #endif
+    }
+}
+
+// ---- fused_pair: TWO ROUNDS OF TWO SOLVES IN ONE LAUNCH ------------------------------
+//
+// The roofline said the SM is idle half the wall clock and DRAM the other half, at
+// different moments -- and both prior attempts to overlap phases were null: a second
+// stream never runs (662 waves of backlog) and same-warp hosting serialises behind the
+// stall. This is the third mechanism: solve A's round in the even blocks and solve B's
+// round in the odd blocks of ONE grid, so each SM holds a mix of A-blocks and B-blocks
+// and B's instructions issue from their own warps while A's warps sit in their memory
+// stalls. The COBLOCKS probe measured the mechanism real: co-scheduled compute hides at
+// ~2/3, and displacing blocks of a DRAM-bound round is free.
+//
+// The shared-memory union is the point of the RoundShared refactor: the block pays
+// max(A, B), not A + B, so residency stays at the shipping 4 blocks/SM when r4 hosts r1.
+// The register file is the hazard instead -- the merged kernel takes the max of both
+// paths, and at 256 threads anything past 64 registers drops a block. Check the
+// occupancy probe before believing any number from this kernel.
+//
+// bEvery: every bEvery-th block is a B block; (gridDim / bEvery) must equal B's block
+// count and the rest must equal A's. For two full rounds on the bb+sm=17 line both need
+// nb << sm blocks, so the grid is 2*(nb << sm) and bEvery is 2.
+template<int AINW, int AOUTW, int ALEAFW, int ALMODE,
+         uint32_t ALOUT, uint32_t APADN, uint32_t ASIN, uint32_t ASOUT, uint32_t ASBUILD,
+         uint32_t AINSTR, uint32_t AOUTSTR, uint32_t AFCAP,
+         int BINW, int BOUTW, int BLEAFW, int BLMODE,
+         uint32_t BLOUT, uint32_t BPADN, uint32_t BSIN, uint32_t BSOUT, uint32_t BSBUILD,
+         uint32_t BINSTR, uint32_t BOUTSTR, uint32_t BFCAP,
+         // Each B block runs BMULT consecutive B ranks back to back. This is how the
+         // RESIDENCY split is steered away from the 1:1 the equal block counts force:
+         // with BMULT=2 and bEvery=3, two thirds of the resident blocks are A's.
+         uint32_t BMULT = 1>
+__global__ __launch_bounds__(kWG)
+void fused_pair(RoundArgs a, RoundArgs b, uint32_t bEvery) {
+    __shared__ union PairShared {
+        RoundShared<AINW, ALEAFW, ALMODE, AFCAP, false> a;
+        RoundShared<BINW, BLEAFW, BLMODE, BFCAP, false> b;
+    } shm;
+    const uint32_t bid = blockIdx.x;
+    if (bid % bEvery == bEvery - 1u) {
+        const uint32_t eb = bid / bEvery;
+        #pragma unroll
+        for (uint32_t k = 0; k < BMULT; ++k)
+            fused_round_body<BINW, BOUTW, BLEAFW, BLMODE, BLOUT, BPADN, BSIN, BSOUT,
+                             BSBUILD, BINSTR, BOUTSTR, BFCAP, false>(
+                shm.b, eb * BMULT + k, b.bucket_bits, b.submask_bits, b.in_bucket_cap,
+                b.out_bucket_cap, b.out_off, b.in_counts, b.in_belem, b.out_counts,
+                b.out_belem, b.all_left, b.all_right, b.gi_counter, b.drops, b.pp4);
+    } else {
+        fused_round_body<AINW, AOUTW, ALEAFW, ALMODE, ALOUT, APADN, ASIN, ASOUT, ASBUILD,
+                         AINSTR, AOUTSTR, AFCAP, false>(
+            shm.a, bid - bid / bEvery,      // rank among A blocks: B blocks before bid
+            a.bucket_bits, a.submask_bits, a.in_bucket_cap,
+            a.out_bucket_cap, a.out_off, a.in_counts, a.in_belem, a.out_counts,
+            a.out_belem, a.all_left, a.all_right, a.gi_counter, a.drops, a.pp4);
     }
 }
 
