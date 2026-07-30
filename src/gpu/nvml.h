@@ -15,7 +15,12 @@ struct Telemetry {
     bool  have_mem   = false;  unsigned mem_clock_mhz = 0;
     bool  have_temp  = false;  unsigned temp_c        = 0;
     bool  have_fan   = false;  unsigned fan_pct       = 0;
-    bool any() const { return have_power || have_sm || have_mem || have_temp || have_fan; }
+    // Busy percentage. NVML reports it via nvmlDeviceGetUtilizationRates; on Apple
+    // Silicon it is the ONLY thing the public API exposes, which is why it earns a
+    // field rather than living in the Metal backend.
+    bool  have_util  = false;  unsigned util_pct      = 0;
+    bool any() const { return have_power || have_sm || have_mem || have_temp
+                           || have_fan || have_util; }
 };
 
 // Returns false if NVML is unavailable; safe to call once at startup and ignore.

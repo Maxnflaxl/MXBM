@@ -34,6 +34,7 @@
 #endif
 #ifdef MXBM_HAVE_METAL
 #include "gpu/metal_solver.h"
+#include "gpu/metal_telemetry.h"
 #endif
 #ifdef MXBM_HAVE_CUDA
 #include "gpu/cuda_solver.h"
@@ -353,6 +354,20 @@ int main(int argc, char** argv) {
             "Selected Algorithm: BeamHash III (" + dev_driver + ")");
     }
 
+#ifdef MXBM_HAVE_METAL
+    // Apple Silicon telemetry, when NVML is not the source. Much thinner than NVML by
+    // necessity: utilization is the only figure the public API exposes (see
+    // gpu/metal_telemetry.h), so the power/clock/temp/fan columns stay blank rather
+    // than being filled with a scraped guess.
+    const bool have_metal_telem = !have_nvml && dev_driver == "Metal"
+                               && gpu::metal_telemetry_init();
+    if (have_metal_telem) {
+        stats.set_telemetry_source([](unsigned row, miner::Stats::Device& d) {
+            const gpu::Telemetry t = gpu::metal_sample(row);
+            d.has_util = t.have_util;  d.util_pct = t.util_pct;
+        });
+    }
+#endif
     if (have_nvml) {
         // Each row samples its OWN card. The index is the position in the
         // PCI-sorted list --devices selected from, and NVML enumerates by bus
@@ -368,6 +383,7 @@ int main(int argc, char** argv) {
             d.has_mem_clock = t.have_mem;       d.mem_clock_mhz = t.mem_clock_mhz;
             d.has_temp = t.have_temp;           d.temp_c        = t.temp_c;
             d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
+            d.has_util = t.have_util;           d.util_pct      = t.util_pct;
         });
     }
     // Board power limit. After device enumeration so the console has already
@@ -406,12 +422,18 @@ int main(int argc, char** argv) {
         if (any) {
             gpu::oc_set_restore_enabled(!opts.no_oc_reset);
             if (!have_nvml) {
-                // Two different causes, and saying the wrong one sends the user
+                // Three different causes, and saying the wrong one sends the user
                 // hunting for a driver they already have. NVML is only opened
                 // when a solver was selected, because changing the power limit
                 // of a card this process is not going to use is a side effect
                 // nobody asked for.
-                ui::console::error(solver
+                const bool metal_dev = (dev_driver == "Metal");
+                ui::console::error(
+                    metal_dev
+                    ? std::string("Overclock settings are not supported on Apple Silicon: macOS "
+                                  "exposes no power-limit, clock or fan control. Continuing at "
+                                  "the system's own settings")
+                    : solver
                     ? std::string("Overclock settings need NVML (an NVIDIA driver), which is not "
                                   "available here; continuing at the card's current settings")
                     : std::string("Overclock settings were not applied: no GPU solver is in use, "

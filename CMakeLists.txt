@@ -535,14 +535,15 @@ if(MXBM_HAVE_METAL)
 
   # The solver proper. mxbm_geom for the row-bucket geometry both backends must
   # decide identically; mxbm_beamhash for the CPU verify gate solve() ends with.
-  add_library(mxbm_metal STATIC src/gpu/metal_solver.mm src/gpu/budget.cpp)
+  add_library(mxbm_metal STATIC src/gpu/metal_solver.mm src/gpu/metal_telemetry.mm
+                                src/gpu/budget.cpp)
   add_dependencies(mxbm_metal mxbm_metallib_gen)
   target_include_directories(mxbm_metal PUBLIC src
                              PRIVATE ${CMAKE_BINARY_DIR}/generated)
   target_link_libraries(mxbm_metal PUBLIC mxbm_beamhash mxbm_geom
       "-framework Metal" "-framework Foundation" "-framework IOKit")
-  set_source_files_properties(src/gpu/metal_solver.mm PROPERTIES
-                              COMPILE_FLAGS "-fobjc-arc")
+  set_source_files_properties(src/gpu/metal_solver.mm src/gpu/metal_telemetry.mm
+                              PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
   # Wire the Metal solver into the mxbm binary itself. The target already exists
   # (defined above), so this just adds mxbm_metal's PUBLIC requirements to it.
@@ -600,4 +601,11 @@ if(MXBM_HAVE_METAL)
   set_source_files_properties(tests/test_metal_resources.mm PROPERTIES
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_resources COMMAND test_metal_resources)
+
+  add_executable(test_metal_telemetry tests/test_metal_telemetry.mm)
+  target_include_directories(test_metal_telemetry PRIVATE tests src)
+  target_link_libraries(test_metal_telemetry PRIVATE mxbm_metal)
+  set_source_files_properties(tests/test_metal_telemetry.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+  add_test(NAME metal_telemetry COMMAND test_metal_telemetry)
 endif()

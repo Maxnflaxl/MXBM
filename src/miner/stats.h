@@ -126,6 +126,7 @@ public:
         bool has_mem_clock = false; unsigned mem_clock_mhz = 0;
         bool has_temp = false;      unsigned temp_c = 0;
         bool has_fan = false;       unsigned fan_pct = 0;
+        bool has_util = false;      unsigned util_pct = 0;
     };
 
     struct SeriesSet {
@@ -179,6 +180,7 @@ public:
         bool has_mem_clock = false; unsigned mem_clock_mhz = 0;
         bool has_temp = false;   unsigned temp_c = 0;
         bool has_fan = false;    unsigned fan_pct = 0;
+        bool has_util = false;   unsigned util_pct = 0;
     };
     Snapshot snapshot() const;
 
