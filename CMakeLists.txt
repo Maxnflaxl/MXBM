@@ -526,4 +526,22 @@ if(MXBM_HAVE_METAL)
   set_source_files_properties(tests/test_metal_primitives.mm PROPERTIES
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_primitives COMMAND test_metal_primitives)
+
+  # The solver proper. mxbm_geom for the row-bucket geometry both backends must
+  # decide identically; mxbm_beamhash for the CPU verify gate solve() ends with.
+  add_library(mxbm_metal STATIC src/gpu/metal_solver.mm src/gpu/budget.cpp)
+  add_dependencies(mxbm_metal mxbm_metallib_gen)
+  target_include_directories(mxbm_metal PUBLIC src
+                             PRIVATE ${CMAKE_BINARY_DIR}/generated)
+  target_link_libraries(mxbm_metal PUBLIC mxbm_beamhash mxbm_geom
+      "-framework Metal" "-framework Foundation" "-framework IOKit")
+  set_source_files_properties(src/gpu/metal_solver.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+
+  add_executable(test_metal_device tests/test_metal_device.mm)
+  target_include_directories(test_metal_device PRIVATE tests src)
+  target_link_libraries(test_metal_device PRIVATE mxbm_metal)
+  set_source_files_properties(tests/test_metal_device.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+  add_test(NAME metal_device COMMAND test_metal_device)
 endif()
