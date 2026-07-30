@@ -47,6 +47,7 @@
 set -uf
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/benchmarks/lib.sh"
 LOL=${LOL:-/home/maxnflaxl/Documents/lolMiner/1.98a/lolMiner}
 SECS=${SECS:-60}         # matched to lolMiner's fixed benchmark length
 WARMUP=${WARMUP:-25}     # both miners are flat by ~10 s; 25 is deliberately generous
@@ -83,8 +84,9 @@ NEEDS_ROOT=no
 [ "$CCLKS" != "*" ] && NEEDS_ROOT=yes
 [ "$MCLKS" != "*" ] && NEEDS_ROOT=yes
 if [ "$NEEDS_ROOT" = yes ]; then
-    if ! sudo -v; then
+    if ! bench_gpu_root; then
         echo "need root to set the power limit -- aborting before measuring anything"
+        echo "  run 'sudo -v' in your own shell first, or grant NOPASSWD for nvidia-smi"
         exit 1
     fi
     ( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 45; done ) &
@@ -204,7 +206,7 @@ for pl in $LIMITS; do
         # dooms every remaining point and must stop the sweep, the second is
         # local to one value. Reporting a run at a cap that was not applied would
         # be worse than either -- it would label stock numbers as capped ones.
-        if ! sudo -n true 2>/dev/null; then
+        if ! bench_gpu_root; then
             echo "!! lost root before ${pl} W -- the keepalive died. Aborting rather than"
             echo "   measuring at a limit that was never applied. Points done so far stand."
             break

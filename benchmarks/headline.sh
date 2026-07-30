@@ -52,6 +52,7 @@
 set -uf
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/benchmarks/lib.sh"
 SECS=${SECS:-120}          # per measured run
 RUNS=${RUNS:-6}
 WARMUP_S=${WARMUP_S:-240}  # discarded run, to reach thermal equilibrium
@@ -99,8 +100,9 @@ NEEDS_ROOT=no
 
 KEEPALIVE=""
 if [ "$NEEDS_ROOT" = yes ]; then
-    if ! sudo -v; then
+    if ! bench_gpu_root; then
         echo "need root to pin the power limit or lock clocks -- aborting before measuring"
+        echo "  run 'sudo -v' in your own shell first, or grant NOPASSWD for nvidia-smi"
         exit 1
     fi
     ( while kill -0 "$$" 2>/dev/null; do sudo -n true 2>/dev/null; sleep 45; done ) &
