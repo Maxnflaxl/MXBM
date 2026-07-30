@@ -72,7 +72,8 @@ Licensed under the [Apache License 2.0](LICENSE).
   [docs/performance.md](docs/performance.md) and
   [docs/performance-research.md](docs/performance-research.md).
 - **Apple Silicon native** — a Metal backend running the fused row-bucket
-  pipeline, ~4× the OpenCL path on an M3 Max (117 ms/solve vs ~505 ms).
+  pipeline at **101 ms/solve (18.8 sol/s)** on an M3 Max, ~5× the OpenCL path,
+  which cannot run these kernels at all.
 - **Self-contained** — no Boost, no Beam runtime. The only dependencies are a
   vendored single-header JSON library and your system OpenSSL.
 

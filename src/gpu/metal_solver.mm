@@ -145,6 +145,11 @@ struct MetalSolver::Impl {
     id<MTLCommandQueue> queue = nil;
     id<MTLComputePipelineState> psEntry = nil, psR1 = nil, psR2 = nil, psR3 = nil,
                                 psR4 = nil, psTerm = nil, psRecover = nil;
+    // The SEEDF pair: r1 stores the child element it already computed and r2 reads it
+    // rather than rebuilding from the seeds. Always built, selected at runtime, so the
+    // two divisions of labour can be compared without a rebuild.
+    id<MTLComputePipelineState> psR1F = nil, psR2F = nil;
+    bool seedf = false;
 
     uint32_t bb = 16, sm = 1, nb = 1u << 16;
     uint32_t cap = 0; size_t nslots = 0;
@@ -180,7 +185,13 @@ struct MetalSolver::Impl {
         // allocation cannot disagree with what rb_geometry_for sized the ladder against.
         elem[0] = [dev newBufferWithLength:nslots * fb_set_stride(0) * sizeof(uint64_t)
                                    options:MTLResourceStorageModeShared];
-        elem[1] = [dev newBufferWithLength:nslots * fb_set_stride(1) * sizeof(uint64_t)
+        // Set 1 carries round 1's output and round 3's. Round 3 wants 8 u64; round 1
+        // wants 2 normally but 9 under SEEDF, so the buffer is sized for the widest
+        // either configuration can ask for. The extra ~270 MB is nothing against a
+        // 107 GB working set, and sizing it conditionally would make the allocation
+        // depend on a runtime switch that can change between solves.
+        const uint32_t set1 = fb_set_stride(1) > 9u ? fb_set_stride(1) : 9u;
+        elem[1] = [dev newBufferWithLength:nslots * set1 * sizeof(uint64_t)
                                    options:MTLResourceStorageModeShared];
         counts[0] = [dev newBufferWithLength:nb * sizeof(uint32_t)
                                      options:MTLResourceStorageModeShared];
@@ -224,7 +235,14 @@ MetalSolver::MetalSolver(int index) : p_(new Impl) {
         p_->psR2      = make("fused_round_r2");
         p_->psR3      = make("fused_round_r3");
         p_->psR4      = make("fused_round_r4");
+        p_->psR1F     = make("fused_round_r1_seedf");
+        p_->psR2F     = make("fused_round_r2_seedf");
         p_->psTerm    = make("terminal_round");
+        // SEEDF is the DEFAULT on Apple: measured 101.5 ms against the rebuild path's
+        // 117.8 ms, cold and interleaved, with the ranges not overlapping. The rebuild
+        // stays reachable via MXBM_METAL_REBUILD=1 because it is the configuration CUDA
+        // ships, and an A/B that needs a rebuild to run is an A/B nobody runs.
+        p_->seedf     = std::getenv("MXBM_METAL_REBUILD") == nullptr;
         // The kernels stride their staging loops by their compile-time kWG. If this
         // binary and the metallib were built with different values the loops skip
         // elements and solutions vanish with no error -- so refuse to run rather than
@@ -356,7 +374,11 @@ std::vector<std::array<uint8_t, 104>> MetalSolver::solve(const uint8_t input[32]
 
         const NSUInteger groups = (NSUInteger)I.nb << I.sm;
         int inSet = 0;
-        id<MTLComputePipelineState> rounds[4] = { I.psR1, I.psR2, I.psR3, I.psR4 };
+        // r1 and r2 switch together: r1's OUTSTR is r2's INSTR, so a mixed pair would
+        // have the second read a record the first never wrote.
+        id<MTLComputePipelineState> rounds[4] = { I.seedf ? I.psR1F : I.psR1,
+                                                  I.seedf ? I.psR2F : I.psR2,
+                                                  I.psR3, I.psR4 };
         for (int r = 0; r < 4; ++r) {
             const int o = inSet ^ 1;
             std::memset(I.counts[o].contents, 0, (size_t)I.nb * 4);

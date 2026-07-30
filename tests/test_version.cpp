@@ -27,6 +27,6 @@ int main() {
     // Pins that the runtime string really comes from project(VERSION ...) in
     // CMakeLists.txt rather than a stale hardcoded stamp -- so this literal
     // must be bumped in step with it.
-    check(strncmp(version(), "0.5.", 4) == 0, "major.minor from project()");
+    check(strncmp(version(), "0.6.", 4) == 0, "major.minor from project()");
     return summary("version");
 }

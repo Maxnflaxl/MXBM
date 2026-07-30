@@ -25,7 +25,8 @@ section is the Mac, and the two are not comparable except in shape.
 | OpenCL, sort | ~505 (494.6 / 516.6) | ~3.8 | the only OpenCL path that runs here |
 | OpenCL, LDS | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
 | OpenCL, row-bucket | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
-| **Metal, fused row-bucket** | **117** (117.4 / 116.9) | **16.2** | 20/20 clean, spread 0.4 % |
+| Metal, fused row-bucket (rebuild) | 117 (117.4 / 116.9) | 16.2 | the CUDA-shipping configuration |
+| **Metal, fused row-bucket (SEEDF)** | **101.5** (102.3 / 100.7) | **18.8** | **default on Apple**, see below |
 
 **Apple's OpenCL cannot build the fused kernels at all.** Both the LDS and row-bucket
 collision finders fail at `newComputePipelineState`, which is why every macOS-relevant
@@ -79,20 +80,20 @@ Per-phase GPU time (`MXBM_METAL_TIMING=1`, from `MTLCommandBuffer`'s
 GPUStartTime/GPUEndTime, so this is GPU execution and not the wall clock around the
 submit):
 
-| phase | ms | |
-|---|---:|---|
-| entry | 12.0 | |
-| r1 | 23.4 | |
-| **r2** | **44.0** | **38 % of the solve** |
-| r3 | 17.1 | |
-| r4 | 14.0 | |
-| terminal | 4.4 | |
-| recover | 0.0 | |
-| **GPU** | **115.0** | wall 116.5 — only **1.6 ms outside** |
+| phase | rebuild | SEEDF (default) | |
+|---|---:|---:|---|
+| entry | 12.0 | 12.2 | |
+| r1 | 23.4 | 26.2 | pays for the wider record |
+| **r2** | **44.0** | **24.3** | **38 % of the solve, before** |
+| r3 | 17.1 | 17.1 | |
+| r4 | 14.0 | 14.2 | |
+| terminal | 4.4 | 4.4 | |
+| recover | 0.0 | 0.0 | |
+| **GPU** | **115.0** | **98.4** | wall +1.6 ms |
 
-Two things fall out immediately. The six per-round command buffers, each with a
-`waitUntilCompleted`, cost **1.6 ms total** — batching them is not a lead. And r2 is
-the whole story.
+Two things fell out immediately. The six per-round command buffers, each with a
+`waitUntilCompleted`, cost **1.6 ms total** — batching them is not a lead. And r2 was the
+whole story, which is what the rest of this section is about.
 
 ### r2's rebuild does not hide on Apple — 21 ms exposed, against 0.4 ms on Ada
 
@@ -111,7 +112,40 @@ ABL=2      entry 12.2  r1 23.4  r2 22.9  r3 17.1  r4 13.9  terminal 4.4  | GPU  
 absorbs it. This is the single largest architectural divergence found between the two
 backends, and it is where any further Apple work should start.
 
-### Four nulls, so they are not re-proposed
+### The fix: round 1 stores what round 2 was rebuilding (SEEDF) — 14 % faster
+
+Round 1 already computes the exact element round 2 reconstructs: r1 emits
+`apply_mix(combine(a, b, 424), {li, ri}, 2, 424)`, and `rebuild_r2(pp, li, ri)` recomputes
+precisely that from the two seed indices. So r1 stores it instead — its record goes from
+2 u64 to 9 — and r2 reads it. **This is the CUDA source's `LM_SEEDF` idea, which loses on
+Ada and wins here**, because the compute it removes is exposed on Apple and hidden on Ada.
+
+Cold, uncontested, medians over 6–8 solves with the baseline bracketed either side:
+
+| | r1 | r2 | GPU total | pipeline median |
+|---|---:|---:|---:|---:|
+| rebuild | 23.4 | **44.0** | 115.0 | 117.8 ms |
+| **SEEDF** | 26.2 | **24.3** | **98.4** | **101.5 ms** |
+
+**−16.3 ms, 13.8 %** — 16.2 → 18.8 sol/s. The ranges do not overlap (SEEDF 100.1–104.9,
+rebuild 116.8–119.3). r1 pays 2.8 ms for the wider write; r2 saves 19.7 ms, which is the
+ablation's 21 ms less the cost of reading the wider record. Every other phase is
+unchanged to within noise, which is the internal check that the change did what it says.
+
+The win is larger under thermal load, not smaller (r2 55.8 → 25.4 ms when hot), because
+the rebuild's compute is itself part of what generates the heat.
+
+SEEDF is the **default on Apple**. `MXBM_METAL_REBUILD=1` selects the CUDA-shipping
+configuration; both kernel pairs live in the same metallib and the host picks at runtime,
+so the A/B needs no rebuild.
+
+> An earlier revision of this section predicted this change would net only ~4 ms and
+> declined to attempt it. That arithmetic assumed ~251 GB/s effective bandwidth, inferred
+> by dividing round 3's traffic by its wall time — but round 3 is not purely
+> bandwidth-bound, so the real figure is far higher and the extra traffic much cheaper
+> than predicted. Measure the thing; do not divide two numbers and call it a bandwidth.
+
+### Three nulls, so they are not re-proposed
 
 - **Threadgroup size.** Bracketed medians over 10 solves: 128 → 144.6, 192 → 126.7,
   256 → 117.0/117.3, 288 → 116.6, 320 → 116.8/116.9, 352 → 118.3, 384 → 136.0,
@@ -127,12 +161,6 @@ backends, and it is where any further Apple work should start.
   Ported to `ulong2` on Metal it measures **neutral to slightly worse** (117.9 vs 117.1
   median), so the scalar form is kept and the complexity is not. Apple's compiler
   appears to coalesce these already.
-- **Trading r2's rebuild for bandwidth (`LM_SEEDF`).** Having r1 emit a full packed
-  record so r2 reads instead of rebuilding would recover the 21 ms, at the cost of
-  ~4.3 GB more traffic (r1 writes 16 B/element today, 80 B under SEEDF; r2 reads the
-  same). Round 3 moves 4.3 GB in 17.1 ms, i.e. ~251 GB/s effective, so that traffic
-  costs ~17 ms. Net ~4 ms for a substantial change to record formats, strides and
-  allocation. Not attempted; recorded so the arithmetic does not have to be redone.
 
 ### A measurement hazard worth knowing
 

@@ -4,10 +4,12 @@ Measured numbers for MXBM, and for lolMiner on the same card, so the comparison 
 like-for-like. Everything here is reproducible with the scripts in `benchmarks/` — the
 commands are given under each table.
 
-**MXBM has been measured on exactly one GPU.** That is the honest state of things, and it
-is the reason for [the second half of this page](#send-us-your-numbers): a solver tuned
-against one card is tuned against one card. If you run MXBM, a two-minute benchmark from
-you is worth more to the project than any amount of speculation from us.
+**MXBM has been measured on exactly two GPUs**, and they are not comparable to each
+other — an RTX 4070 Ti SUPER on Linux via CUDA, and an M3 Max via Metal. That is the
+honest state of things, and it is the reason for
+[the second half of this page](#send-us-your-numbers): a solver tuned against one card is
+tuned against one card. If you run MXBM, a two-minute benchmark from you is worth more to
+the project than any amount of speculation from us.
 
 For *why* comparing miners is harder than reading two numbers off two screens, see
 [benchmarking.md](benchmarking.md). This page is the results; that page is the method.
@@ -195,6 +197,80 @@ published 57.5 from a 90 s run and measured 56.4 from a 300 s one, same build (2
 windows on this card reach 61.5 sol/s, and that figure is noise: for the observed spread,
 the expected maximum of 304 samples is about 67. The median moves by less than 1 %
 between runs; peaks move by 10 %.
+
+---
+
+## Apple Silicon (Metal)
+
+The second card MXBM has been measured on. **No cross-vendor comparison is intended**:
+the numbers below sit next to Ada's in this document only because there is nowhere else
+to put them, and a 40-core laptop GPU at ~400 GB/s is not the same class of hardware as a
+285 W desktop board.
+
+| | |
+|---|---|
+| GPU | Apple M3 Max, 40 GPU cores (Apple9 family, Metal 3) |
+| Memory | 128 GB unified, 107.5 GB reported as the GPU working set |
+| OS | macOS 26.5, Metal toolchain 17F109 |
+| Power / thermal control | none available — see below |
+
+### Results
+
+| | ms/solve | sol/s | |
+|---|---:|---:|---|
+| **MXBM (Metal, SEEDF)** | **101.5** | **18.8** | default on Apple |
+| MXBM (Metal, rebuild path) | 117.8 | 16.2 | the configuration CUDA ships |
+| MXBM (OpenCL, sort path) | ~505 | ~3.8 | the only OpenCL path that runs here |
+| lolMiner | — | — | no Apple Silicon build exists |
+
+Pipeline medians over 6–8 solves, cold, with the baseline bracketed either side. The
+sustained miner figure over a 60 s run is **16.3 sol/s, 128.0 ms/solve median (p5 100.0,
+p95 135.7)** across 491 solves — the p5 matches the pipeline figure exactly, and the gap
+above it is thermal, not overhead.
+
+**Apple's OpenCL cannot run this pipeline at all.** Both the LDS and fused row-bucket
+collision finders fail at `clCreateKernel` with `CL_INVALID_KERNEL (-48)`, confining the
+OpenCL path to the slowest of the three finders. Metal is not a faster dialect here; it
+is the only way to run the fused algorithm on a Mac. The six OpenCL gates that cover
+those kernels are marked disabled on macOS rather than silently skipped.
+
+### Two things this platform will not tell you
+
+- **No power figure.** macOS exposes no public API for GPU power, clocks, temperature or
+  fan. `powermetrics` reads them through a private framework whose layout moves between
+  OS releases, so MXBM reports utilization and nothing else rather than a number nobody
+  can trust. Every efficiency claim elsewhere in this document is therefore
+  Ada-only — there is no sol/s/W row here because there is no honest W.
+- **No overclocking or power limiting.** `--pl`, `--cclk` and friends report
+  "not supported on this platform".
+
+### Reproducing
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+cmake --build build -j
+
+# pipeline median over 20 solves, gated on the KAT goldens
+MXBM_BENCH=20 ./build/test_metal_solver
+
+# per-phase GPU time (GPUStartTime/GPUEndTime, not wall clock)
+MXBM_METAL_TIMING=1 ./build/test_metal_solver
+
+# the A/B behind the SEEDF default -- no rebuild needed, both pairs are compiled in
+MXBM_METAL_REBUILD=1 MXBM_BENCH=20 ./build/test_metal_solver
+
+# sustained, through the miner
+./build/mxbm --benchmark BEAM-III --benchmark-seconds 60
+```
+
+Needs the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`); without it
+the Metal backend is simply not built and everything else still works.
+
+**Benchmark only on an otherwise-idle machine.** This is a laptop: a concurrent build
+inflated one early measurement by 30 % and produced a figure that had to be retracted
+from `performance.md`. Quote medians, bracket a sweep with the baseline repeated first
+and last, and discard the run if the two brackets disagree.
 
 ---
 

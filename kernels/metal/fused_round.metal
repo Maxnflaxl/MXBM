@@ -102,9 +102,19 @@ inline uint32_t gi_alloc(device atomic_uint* ctr) {
 // The round body. Instantiated per round below with [[host_name]], because MSL kernel
 // entry points cannot themselves be templates.
 // ---------------------------------------------------------------------------------
+// SEEDF: round 1 stores the child element it already computed, and round 2 reads it
+// instead of rebuilding it from the two seed indices. Trades bytes for compute --
+// r1's record goes from 2 u64 to 9, and r2's 14-siphash rebuild_r2 disappears.
+//
+// Sound because the two are the SAME value by construction: r1 emits
+// apply_mix(combine(a, b, 424), {li, ri}, 2, 424) and rebuild_r2(pp, li, ri) recomputes
+// exactly that from the seeds. The goldens are what prove it rather than this comment.
+//
+// Worth trying on Apple specifically: the rebuild costs 21 ms of EXPOSED compute here
+// against 0.4 ms on Ada, where it hides inside memory stalls (docs/performance.md).
 template<int INW, int OUTW, int LEAFW, int LMODE,
          uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
-         uint32_t INSTR, uint32_t OUTSTR, uint32_t FCAP>
+         uint32_t INSTR, uint32_t OUTSTR, uint32_t FCAP, bool SEEDF = false>
 void fused_round_body(
         uint32_t bucket_bits, uint32_t submask_bits,
         uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
@@ -179,6 +189,14 @@ void fused_round_body(
 
             if (LMODE == LM_SEED) {
                 lleaf[pos * LEAFW + 0] = (uint32_t)(rec0 >> 32);      // derive later
+            } else if (LMODE == LM_RD2 && SEEDF) {
+                // The 9 u64 record: 7 work words r1 already computed, then the same two
+                // meta words the narrow record carried. No rebuild follows.
+                for (int w = 0; w < INW; ++w) lwork[pos * INW + w] = in_belem[d + w];
+                const uint64_t m0 = in_belem[d + INW], m1 = in_belem[d + INW + 1];
+                lgi[pos] = pair_gi(m1);
+                lleaf[pos * LEAFW + 0] = pair_left(m0);               // leaf 0 IS the lead
+                lleaf[pos * LEAFW + 1] = pair_right(m1);
             } else if (LMODE == LM_RD2) {
                 const uint64_t rec1 = in_belem[d + 1];
                 lgi[pos] = pair_gi(rec1);
@@ -267,6 +285,8 @@ void fused_round_body(
                 uint32_t t1[1] = { idx };
                 bh3::apply_mix(e, t1, 1u, 448u);
                 for (int w = 0; w < INW; ++w) lwork[pos * INW + w] = e.w[w];
+            } else if (LMODE == LM_RD2 && SEEDF) {
+                // Nothing to do: staging already filled lwork. This is the 21 ms.
             } else if (LMODE == LM_RD2) {
                 bh3::Elem e;
                 if (MXBM_METAL_ABL_DERIVE & 2)
@@ -347,7 +367,14 @@ void fused_round_body(
                     const uint32_t cgi = gi_alloc(gi_counter);
                     const size_t oslot = (size_t)cb * out_bucket_cap + cpos;
                     const size_t od    = oslot * OUTSTR;
-                    if (LMODE == LM_SEED) {
+                    if (LMODE == LM_SEED && SEEDF) {
+                        // 7 work words, then the two meta words unchanged, so round 2's
+                        // sub-mask filter still finds the key in the low 24 bits of the
+                        // FIRST word -- c.w[0] & 0xFFFFFF IS ckey, by construction.
+                        for (int w = 0; w < 7; ++w) out_belem[od + w] = c.w[w];
+                        out_belem[od + 7] = pair_w0(ckey, ctree[0]);
+                        out_belem[od + 8] = pair_w1(ctree[1], cgi);
+                    } else if (LMODE == LM_SEED) {
                         out_belem[od + 0] = pair_w0(ckey, ctree[0]);
                         out_belem[od + 1] = pair_w1(ctree[1], cgi);
                     } else if (LMODE == LM_RD2 && OUTSTR == 3) {
@@ -542,3 +569,84 @@ kernel void fused_round_r4(
         gi_counter, drops, pp4,
         lwork, lgi, lleaf, llead, lchain, tab, gcount, cnt8, lId, groupId);
 }
+
+// ---------------------------------------------------------------------------------
+// SEEDF variants of rounds 1 and 2. Same algorithm, different division of labour:
+// r1 writes the child element it already has (9 u64 instead of 2), and r2 reads it
+// instead of spending 14 siphash rounds rebuilding it.
+//
+// They are a MATCHED PAIR -- r1's OUTSTR is r2's INSTR -- so they switch together or
+// the second reads a record the first never wrote. Both are always compiled; the host
+// picks the pair at runtime (MXBM_METAL_SEEDF), which is what makes them A/B-able
+// without a rebuild.
+// ---------------------------------------------------------------------------------
+
+kernel void fused_round_r1_seedf(
+        constant uint32_t*     cfg        [[buffer(0)]],
+        const device uint32_t* in_counts  [[buffer(1)]],
+        const device uint64_t* in_belem   [[buffer(2)]],
+        device atomic_uint*    out_counts [[buffer(3)]],
+        device uint64_t*       out_belem  [[buffer(4)]],
+        device uint32_t*       all_left   [[buffer(5)]],
+        device uint32_t*       all_right  [[buffer(6)]],
+        device atomic_uint*    gi_counter [[buffer(7)]],
+        device atomic_uint*    drops      [[buffer(8)]],
+        const device uint64_t* pp4        [[buffer(9)]],
+        uint lId     [[thread_position_in_threadgroup]],
+        uint groupId [[threadgroup_position_in_grid]])
+{
+    using namespace mxbm::metalk;
+    constexpr uint32_t F = kR1FCap;
+    threadgroup uint64_t    lwork[7 * F];
+    threadgroup uint32_t    lgi[1];
+    threadgroup uint32_t    lleaf[1 * F];
+    threadgroup uint32_t    llead[1];
+    threadgroup uint32_t    lchain[F];
+    threadgroup atomic_uint tab[kTabSize];
+    threadgroup atomic_uint gcount;
+    threadgroup atomic_uint cnt8[8];
+    static_assert(sizeof(lwork) + sizeof(lgi) + sizeof(lleaf) + sizeof(llead)
+                  + sizeof(lchain) + sizeof(tab) + 36u <= 32768u,
+                  "r1-seedf threadgroup allocation exceeds Apple's 32 KB ceiling");
+    fused_round_body<7, 7, 1, LM_SEED, 424u, 2u, 1u, 2u, 2u, 1u, 9u, F, true>(
+        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4],
+        in_counts, in_belem, out_counts, out_belem, all_left, all_right,
+        gi_counter, drops, pp4,
+        lwork, lgi, lleaf, llead, lchain, tab, gcount, cnt8, lId, groupId);
+}
+
+
+kernel void fused_round_r2_seedf(
+        constant uint32_t*     cfg        [[buffer(0)]],
+        const device uint32_t* in_counts  [[buffer(1)]],
+        const device uint64_t* in_belem   [[buffer(2)]],
+        device atomic_uint*    out_counts [[buffer(3)]],
+        device uint64_t*       out_belem  [[buffer(4)]],
+        device uint32_t*       all_left   [[buffer(5)]],
+        device uint32_t*       all_right  [[buffer(6)]],
+        device atomic_uint*    gi_counter [[buffer(7)]],
+        device atomic_uint*    drops      [[buffer(8)]],
+        const device uint64_t* pp4        [[buffer(9)]],
+        uint lId     [[thread_position_in_threadgroup]],
+        uint groupId [[threadgroup_position_in_grid]])
+{
+    using namespace mxbm::metalk;
+    constexpr uint32_t F = kFCap;
+    threadgroup uint64_t    lwork[7 * F];
+    threadgroup uint32_t    lgi[F];
+    threadgroup uint32_t    lleaf[2 * F];
+    threadgroup uint32_t    llead[1];
+    threadgroup uint32_t    lchain[F];
+    threadgroup atomic_uint tab[kTabSize];
+    threadgroup atomic_uint gcount;
+    threadgroup atomic_uint cnt8[8];
+    static_assert(sizeof(lwork) + sizeof(lgi) + sizeof(lleaf) + sizeof(llead)
+                  + sizeof(lchain) + sizeof(tab) + 36u <= 32768u,
+                  "r2-seedf threadgroup allocation exceeds Apple's 32 KB ceiling");
+    fused_round_body<7, 7, 2, LM_RD2, 400u, 4u, 2u, 4u, 4u, 9u, 8u, F, true>(
+        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4],
+        in_counts, in_belem, out_counts, out_belem, all_left, all_right,
+        gi_counter, drops, pp4,
+        lwork, lgi, lleaf, llead, lchain, tab, gcount, cnt8, lId, groupId);
+}
+
