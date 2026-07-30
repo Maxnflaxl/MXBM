@@ -570,4 +570,15 @@ if(MXBM_HAVE_METAL)
   set_source_files_properties(tests/test_metal_entry.mm PROPERTIES
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_entry COMMAND test_metal_entry)
+
+  # THE MILESTONE: the full fused pipeline through solve(), gated on the 3 KAT
+  # goldens. Same generous timeout as the OpenCL golden gates, for the same
+  # reason (slow-but-correct hardware must not be killed).
+  add_executable(test_metal_solver tests/test_metal_solver.mm)
+  target_include_directories(test_metal_solver PRIVATE tests src src/beamhash)
+  target_link_libraries(test_metal_solver PRIVATE mxbm_metal)
+  set_source_files_properties(tests/test_metal_solver.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+  add_test(NAME metal_solver COMMAND test_metal_solver)
+  set_tests_properties(metal_solver PROPERTIES TIMEOUT 1800)
 endif()
