@@ -473,3 +473,57 @@ if(OpenCL_FOUND)
 else()
   message(STATUS "OpenCL not found: GPU targets skipped (core suite unaffected)")
 endif()
+
+# ---- Apple Metal GPU solver (optional component) ----
+# Optional in exactly the same way CUDA and OpenCL are. The Metal toolchain ships
+# SEPARATELY from Xcode (xcodebuild -downloadComponent MetalToolchain), so a Mac
+# with only the Command Line Tools builds and tests everything else unaffected.
+#
+# Why Metal at all, when OpenCL already runs on macOS: Apple's OpenCL is a
+# deprecated 1.2-era shim that cannot build the fused row-bucket kernels at all
+# (clCreateKernel -> CL_INVALID_KERNEL), which confines macOS to the SLOWEST of
+# the three collision finders. Metal is the only route to the fused pipeline on
+# this hardware. See docs-internal/superpowers/specs for the measured baseline.
+if(APPLE)
+  execute_process(COMMAND xcrun --find metallib
+                  OUTPUT_VARIABLE MXBM_METALLIB_BIN
+                  ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
+                  RESULT_VARIABLE MXBM_METALLIB_MISSING)
+  if(MXBM_METALLIB_MISSING EQUAL 0)
+    message(STATUS "Metal toolchain found: Metal solver enabled")
+    set(MXBM_HAVE_METAL ON)
+  else()
+    message(STATUS "Metal toolchain not found: Metal solver disabled "
+                   "(xcodebuild -downloadComponent MetalToolchain to enable)")
+  endif()
+endif()
+
+if(MXBM_HAVE_METAL)
+  include(cmake/BuildMetallib.cmake)
+  set(MXBM_METAL_SOURCES ${CMAKE_SOURCE_DIR}/kernels/metal/prim_probe.metal)
+  set(MXBM_METALLIB        ${CMAKE_BINARY_DIR}/generated/mxbm.metallib)
+  set(MXBM_METALLIB_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_metallib.h)
+  mxbm_build_metallib(${MXBM_METALLIB} ${MXBM_METAL_SOURCES})
+  add_custom_command(OUTPUT ${MXBM_METALLIB_HEADER}
+    COMMAND ${CMAKE_COMMAND} -DIN_FILE=${MXBM_METALLIB}
+            -DOUT_FILE=${MXBM_METALLIB_HEADER}
+            -P ${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake
+    DEPENDS ${MXBM_METALLIB} ${CMAKE_SOURCE_DIR}/cmake/EmbedBinary.cmake
+    COMMENT "Embedding mxbm.metallib -> mxbm_metallib.h"
+    VERBATIM)
+  add_custom_target(mxbm_metallib_gen DEPENDS ${MXBM_METALLIB_HEADER})
+
+  # The primitives, compiled as MSL, must stay bit-identical to the host copy --
+  # they ARE the host copy (src/beamhash/bh3_primitives.h, one source, three
+  # compilers). A drift here would find the WRONG collisions and the CPU verify
+  # gate would silently reject every solution, so this gate comes first.
+  add_executable(test_metal_primitives tests/test_metal_primitives.mm)
+  add_dependencies(test_metal_primitives mxbm_metallib_gen)
+  target_include_directories(test_metal_primitives
+      PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR}/generated)
+  target_link_libraries(test_metal_primitives PRIVATE mxbm_beamhash
+      "-framework Metal" "-framework Foundation")
+  set_source_files_properties(tests/test_metal_primitives.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+  add_test(NAME metal_primitives COMMAND test_metal_primitives)
+endif()
