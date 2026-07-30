@@ -227,6 +227,10 @@ const Kernel kContract[] = {
     { "r3 (quad record)",       true, {7,6,4,7,3,8}, nullptr,             256,  80, 26168,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
     { "r4 (LM_USE)",            true, {6,1,2,2,8,2}, nullptr,             256,  46, 22320,  0, 4, "" },
+    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,2,1}, nullptr,           256,  64, 22320,  0, 4,
+      "ON A CLIFF: hosting the speculative entry pass costs 18 registers (46 -> 64), "
+      "landing EXACTLY on the 4-blocks/SM limit. One more and the whole launch -- the "
+      "round AND the co-scheduled entry -- drops to 3 blocks" },
     { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundE", 256,  22,  9732,  0, 6,
       "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound" },
     // recover's 64 B of stack is a genuine local array, not a spill: ptxas -v reports

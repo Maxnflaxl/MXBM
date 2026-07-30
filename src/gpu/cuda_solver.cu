@@ -83,6 +83,25 @@ struct CudaSolver::Impl {
     DeviceInfo info;
     int device_index = 0;
 
+    // Speculative entry co-scheduling. The NEXT nonce's entry pass rides inside round
+    // 4's launch as separate interleaved blocks (COBLOCKS in fused_round.cuh), where it
+    // measures ~0.4 ms cheaper than standing alone -- round 4 is 82 % of DRAM peak and
+    // 29 % SM, and displacing a third of its blocks is measured free. The engine
+    // iterates nonces at a fixed stride within a job, so the solver LEARNS the delta
+    // between consecutive calls and seeds (nonce + delta); a job change mis-speculates
+    // one solve, which then simply runs its own entry pass. Entry output moves to a
+    // dedicated dense buffer (+0.39 GiB) so it survives round 2 overwriting elem[0];
+    // if that buffer does not fit, spec* stay null and everything runs as before.
+    uint64_t *specElem = nullptr, *specPp = nullptr;
+    uint32_t *specCounts = nullptr;
+    bool specOn = false;                // buffers allocated and MXBM_NO_SPEC unset
+    bool specValid = false;             // specElem holds entry(specNonce) of specInput
+    bool haveLast = false;
+    bool haveDelta = false;             // persistent: the stride survives job changes,
+                                        // so a new job costs one miss, not two
+    uint64_t specNonceLE = 0, lastNonceLE = 0, learnedDelta = 0;
+    uint8_t specInput[32] = {0}, lastInput[32] = {0};
+
     // The geometry-dependent half of the allocation: the two record sets and their
     // bucket counters. Split out so a step-down retries only what changes size.
     bool alloc_geometry(uint32_t bb_, uint32_t sm_, bool quad_) {
@@ -106,9 +125,9 @@ struct CudaSolver::Impl {
     // the throw and retrying smaller therefore got LESS memory on each attempt. ~Impl
     // runs either way, p_ being a fully-constructed member.
     ~Impl() {
-        for (auto* q : {elem[0], elem[1], dpp}) cudaFree(q);
+        for (auto* q : {elem[0], elem[1], dpp, specElem, specPp}) cudaFree(q);
         for (auto* q : {counts[0], counts[1], gictr, drops,
-                        left, right, survSlots, survCount, dleaves}) cudaFree(q);
+                        left, right, survSlots, survCount, dleaves, specCounts}) cudaFree(q);
     }
 };
 
@@ -219,8 +238,24 @@ CudaSolver::CudaSolver(int index) : p_(new Impl) {
     // actually runs, and applying it to a kernel that never launches is what the
     // MXBM_Rn_ARGS naming exists to prevent (see the drift bug in cad8fde).
     CARVE((fused_round<MXBM_R2Q_ARGS>)); CARVE((fused_round<MXBM_R3Q_ARGS>));
+    // The round-4 variant that hosts the next nonce's entry as co-blocks.
+    CARVE((fused_round<MXBM_R4_ARGS, false, false, true>));
     CARVE(terminal_round);
     #undef CARVE
+
+    // Speculative-entry buffers are best-effort: a card without the extra 0.39 GiB (or
+    // a user setting MXBM_NO_SPEC=1) simply runs the entry pass standalone, as before.
+    if (!std::getenv("MXBM_NO_SPEC")) {
+        p_->specElem   = dalloc<uint64_t>(p_->nslots);
+        p_->specCounts = dalloc<uint32_t>(p_->nb);
+        p_->specPp     = dalloc<uint64_t>(4);
+        p_->specOn = p_->specElem && p_->specCounts && p_->specPp;
+        if (!p_->specOn) {
+            cudaFree(p_->specElem);   p_->specElem = nullptr;
+            cudaFree(p_->specCounts); p_->specCounts = nullptr;
+            cudaFree(p_->specPp);     p_->specPp = nullptr;
+        }
+    }
 }
 
 // Defined here rather than defaulted in the header: ~unique_ptr<Impl> needs Impl to be
@@ -238,18 +273,53 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     bh3::compute_prepow(input, 32, nonce, extra0, pp);
     cudaMemcpy(I.dpp, pp, 32, cudaMemcpyHostToDevice);
     cudaMemset(I.drops, 0, 16); cudaMemset(I.survCount, 0, 4);
-    cudaMemset(I.counts[0], 0, (size_t)I.nb*4);
 
-    entry_scatter<<<(kElems+255)/256,256>>>(I.dpp, 0, kElems, I.bb, I.cap, I.counts[0], I.elem[0], I.drops);
+    // Speculative entry co-scheduling. The engine walks nonces at a fixed stride
+    // within a job, so consecutive calls teach the solver the delta; each solve then
+    // seeds (nonce + delta) inside round 4's launch, and the next call skips its
+    // entry pass if the prediction was right. A job change simply misses once.
+    uint64_t nLE = 0; std::memcpy(&nLE, nonce, 8);
+    const bool sameJob = I.haveLast && std::memcmp(I.lastInput, input, 32) == 0;
+    if (sameJob) { I.learnedDelta = nLE - I.lastNonceLE; I.haveDelta = true; }
+    I.haveLast = true; I.lastNonceLE = nLE; std::memcpy(I.lastInput, input, 32);
+
+    const bool hit = I.specOn && I.specValid && I.specNonceLE == nLE
+                  && std::memcmp(I.specInput, input, 32) == 0;
+    I.specValid = false;
+    const bool spec = I.specOn && I.haveDelta;  // seed nonce + delta during round 4
+    // Entry output lives in the dedicated dense buffer when speculation is available,
+    // because elem[0] is overwritten by round 2 and could not carry data across solves.
+    uint32_t* r1Counts = I.specOn ? I.specCounts : I.counts[0];
+    uint64_t* r1Elem   = I.specOn ? I.specElem   : I.elem[0];
+    if (!hit) {
+        cudaMemset(r1Counts, 0, (size_t)I.nb*4);
+        entry_scatter<<<(kElems+255)/256,256>>>(I.dpp, 0, kElems, I.bb, I.cap,
+                                                r1Counts, r1Elem, I.drops);
+    }
+    if (spec) {
+        uint64_t nextLE = nLE + I.learnedDelta;
+        uint8_t nn[8]; std::memcpy(nn, &nextLE, 8);
+        uint64_t npp[4];
+        bh3::compute_prepow(input, 32, nn, extra0, npp);
+        cudaMemcpy(I.specPp, npp, 32, cudaMemcpyHostToDevice);
+        // Zeroing specCounts here is safe: round 1 reads it before round 4 runs, and
+        // the stream is in-order -- but only when r1's input was already consumed by a
+        // HIT above. On a miss the standalone entry just filled these buffers, so the
+        // zeroing must wait until round 1 has read them; it is issued before round 4
+        // below instead.
+    }
     int inSet = 0;
     // Variadic so a round can carry the optional trailing template arguments
     // (COTENANT, SUBPASS, FCAP) without every other round having to name them.
+    // Round 1 reads the entry buffer, wherever this solve put it.
     #define ROUND(R, ...)                                                            \
         { const int o = inSet ^ 1;                                                   \
+          const uint32_t* inC = ((R)==1) ? r1Counts : I.counts[inSet];               \
+          const uint64_t* inE = ((R)==1) ? r1Elem   : I.elem[inSet];                 \
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
           fused_round<__VA_ARGS__>                                                   \
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],               \
+                inC, inE, I.counts[o], I.elem[o],                                    \
                 I.left, I.right, I.gictr, I.drops, I.dpp);                            \
           inSet = o; }
     // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
@@ -259,9 +329,27 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // switch together or the second reads a record the first never wrote.
     if (I.quad) { ROUND_X(2, MXBM_R2Q_ARGS) ROUND_X(3, MXBM_R3Q_ARGS) }
     else        { ROUND_X(2, MXBM_R2_ARGS)  ROUND_X(3, MXBM_R3_ARGS)  }
-    ROUND_X(4, MXBM_R4_ARGS)
     #undef ROUND_X
     #undef ROUND
+    // Round 4, outside the macro so the co-blocks variant is instantiated for this
+    // round only. When speculating it hosts the next nonce's entry pass as interleaved
+    // co-blocks: grid *3/2, every third block seeds into the spec buffers.
+    { const int o = inSet ^ 1;
+      cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);
+      if (spec) {
+          cudaMemset(I.specCounts, 0, (size_t)I.nb*4);
+          fused_round<MXBM_R4_ARGS, false, false, true>
+            <<<(I.nb << I.sm) + (I.nb << I.sm)/2u, kWG>>>(I.bb, I.sm, I.cap, I.cap,
+                3u*kCapacity, I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.left, I.right, I.gictr, I.drops, I.dpp,
+                I.specPp, kElems, I.cap, I.specCounts, I.specElem, 3u);
+      } else {
+          fused_round<MXBM_R4_ARGS>
+            <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, 3u*kCapacity,
+                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.left, I.right, I.gictr, I.drops, I.dpp);
+      }
+      inSet = o; }
     terminal_round<<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, 4u*kCapacity, I.counts[inSet],
                                         I.elem[inSet], I.left, I.right, I.survSlots,
                                         I.survCount, kSurvCap, I.drops);
@@ -272,6 +360,11 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         // correctness bug rather than a configuration one.
         std::fprintf(stderr, "CUDA launch error: %s\n", cudaGetErrorString(le));
         return out;
+    }
+    if (spec) {   // round 4's co-blocks seeded (nonce + delta) for the next call
+        I.specValid = true;
+        I.specNonceLE = nLE + I.learnedDelta;
+        std::memcpy(I.specInput, input, 32);
     }
     uint32_t hs = 0;
     cudaMemcpy(&hs, I.survCount, 4, cudaMemcpyDeviceToHost);
