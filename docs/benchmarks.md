@@ -276,11 +276,13 @@ and last, and discard the run if the two brackets disagree.
 
 ## Send us your numbers
 
-**This is the part we actually need.** MXBM is developed against one RTX 4070 Ti SUPER.
-Everything above — the geometry choices, the power curve, the record layout, the claim
-that rounds 3 and 4 are bandwidth-bound — is measured on Ada, at one memory bandwidth,
-with one shared-memory budget. Some of it will not transfer. We would rather find that out
-from your data than assume.
+**This is the part we actually need.** MXBM is developed against one RTX 4070 Ti SUPER
+and one M3 Max. Everything in the Ada sections above — the geometry choices, the power
+curve, the record layout, the claim that rounds 3 and 4 are bandwidth-bound — is measured
+at one memory bandwidth with one shared-memory budget. Some of it does not transfer, and
+we know that because porting to Apple already found one case where the same code gives the
+opposite answer (round 2's rebuild: 0.4 ms exposed on Ada, 21 ms on Apple). We would rather
+find the rest out from your data than assume.
 
 Particularly wanted:
 
@@ -318,14 +320,26 @@ Paste whatever you have. The minimum that makes a report usable:
 
 ### What happens to it
 
-Results get added to the table below with attribution, and hardware that behaves
+Results get added to the benchmarked-devices table below with attribution, and hardware
+that behaves
 differently from the reference card becomes a work item. If MXBM turns out to be slow or
 broken on your GPU, that is a bug report we want, not a disappointment to manage.
 
-### Community results
+### Benchmarked devices
 
-*Empty so far — yours would be the first.*
+*Both rows below are ours. No community reports yet — yours would be the first.*
 
-| GPU | VRAM | Driver | Backend | sol/s | W | sol/s/W | Reported by |
-|---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB | 610.43.03 | CUDA | 58.9 | 284 | 0.207 | reference card |
+| GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Reported by |
+|---|---|---|---|---|---|---|---|---|
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 58.9 | 33.8 | 284 | 0.207 | reference card |
+| Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | reference card |
+
+Both sol/s figures are sustained `--benchmark` runs, not pipeline medians, so they are
+comparable to each other in method if not in hardware class. The M3 Max's pipeline alone
+runs **101.5 ms/solve (18.8 sol/s)**; the sustained figure is lower because a laptop
+throttles, and the p5 of that run is 100.0 ms — see
+[Apple Silicon (Metal)](#apple-silicon-metal).
+
+The Apple row has no power column because macOS exposes no public GPU power API. It is
+blank rather than estimated: an invented watt figure would make the efficiency column
+look complete and be wrong.
