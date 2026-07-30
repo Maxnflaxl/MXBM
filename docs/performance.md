@@ -281,17 +281,21 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 | 2026-07-25 | 128-bit access on the remaining records | 38.4 | 35.2 | **56.1 ± 2.3** | −3.2 | −8.3 % | [CUDA backend](#the-cuda-backend) | [cp.async, block size, pair record](performance-research.md#levers-tried-after-the-mio-fix--all-null) |
 | 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.16 | 35.0 | **56.4** | −0.2 | −0.6 % | [Alignment pad](performance-research.md#the-round-2-alignment-pad) *(the win is −0.36 GiB; the speed is noise-level)* | — |
 | 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0 ± 0.4** | −0.9 | −2.6 % | [Group cap](performance-research.md#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](performance-research.md#bytes-are-nearly-free-per-element-work-is-not) |
+| 2026-07-31 | **Speculative entry co-scheduling** — r4's launch hosts the next nonce's entry as interleaved co-blocks | 33.85 | 33.4 | **59.5** | −0.45 | −1.3 % | [Co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), [ships](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms) | [pipe2 1:1, split host, r2/r3 hosts](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms), [register-forced occupancy](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 48.2 | 41.0 | fallback / `--solver opencl` |
-| **CUDA** | **58.9 ± 0.4**[^drift] | **33.8**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **59.8**[^drift] | **33.3**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row is **8,866 solves over 300 s** (`benchmarks/headline.sh`, 2026-07-28), at
-1.990 verified solutions per solve and a p5–p95 of 33.6–34.7 ms, measured under stated
-conditions rather than opportunistically: stock 285 W, card at thermal equilibrium after a
-discarded 240 s warmup, 2685 MHz / 10251 MHz / 284.1 W / 67 °C throughout.
+The CUDA row is **4 × 120 s, 14,296 solves** (`benchmarks/headline.sh`, 2026-07-31, the
+first controlled run with [speculative entry
+co-scheduling](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms)
+shipped), 0.0 % spread across the four runs, measured under stated conditions rather
+than opportunistically: stock 285 W, card at thermal equilibrium after a discarded 240 s
+warmup, 2670 MHz / 10251 MHz / 284.1 W / 69 °C throughout. The previous controlled
+figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
 
 [^drift]: **Carries a ~5 % cross-session band.** Within one session the measurement is
     tight — six repeats spread 0.3 % — but four sessions of the same binaries have landed
@@ -508,9 +512,9 @@ the basis of numbers mid-sweep, which is the one thing a reproducibility section
 do — but it is the right instrument for the next one.
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — 33.8 ms / 58.9 sol/s at stock 285 W, 2685 MHz, 67 °C — and carry the ~5 %
-cross-session band. Do not re-derive a headline from a short run: see the note on
-solutions/solve under the progress table.
+attached — 33.3 ms / 59.8 sol/s at stock 285 W, 2670 MHz, 69 °C (2026-07-31, with
+speculative entry) — and carry the ~5 % cross-session band. Do not re-derive a headline
+from a short run: see the note on solutions/solve under the progress table.
 
 ---
 
@@ -850,7 +854,9 @@ the footprint while moving the same bytes, so it stays a reach lever.
 
 #### ⚠ Below 160 W the clock gap INVERTS, and the clock explanation stops applying
 
-*(New 2026-07-30, from extending the sweep to the card's 100 W floor. Unexplained.)*
+*(New 2026-07-30, from extending the sweep to the card's 100 W floor. **Resolved
+2026-07-31** — the duty-cycle reading below is refuted and the work-per-clock reading
+confirmed; see the addendum after the candidate readings.)*
 
 Everything above is a story about clock: lolMiner clocks higher under a cap, and that is
 why it wins. **Below 160 W that is simply not what happens.** At 140 W and under, **MXBM
@@ -884,6 +890,22 @@ samples rather than their median: a duty-cycling miner is bimodal.
 higher, where the clock story holds and is confirmed by this session. What it removes is
 the temptation to extrapolate that story downward — the low end has a different mechanism
 and nobody has identified it.
+
+**Addendum 2026-07-31 — the mechanism is identified, and it is the second reading.**
+The cheap test was run: clock samples at 10 Hz under both miners at 100 W and 140 W.
+lolMiner's distribution is broad and **unimodal** — no burst/idle bimodality, so it is
+not duty-cycling; it genuinely executes at a median 480 MHz at 100 W and still outsolves
+MXBM at 750 MHz by ~22 %. The deficit is **~2.3× useful work per core cycle**, real and
+measured. Below ~190 W everything is issue-bound (103.7 ms at 100 W is 2.94× stock at
+3.38× less clock — even the DRAM-bound rounds stop saturating DRAM, because the LSU rate
+scales with core clock), so the currency down there is instructions issued, and MXBM's
+organization — sub-mask rescans, chain walks, per-element bookkeeping — simply spends
+more of them. What our own knobs recover is measured and small: geometry (17,0), which
+deletes the rescan, crosses over at ~190 W and buys 1 % in the 140–180 W band and 2.6 %
+at the floor (`MXBM_BB=17`, needs 8.35 GiB); the byte-heavy `MXBM_R2_FULL` **loses at
+every cap** — re-derivation is the right trade at all power levels. Full tables:
+[the eco sweep](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does)
+and [the duty-cycle probe](performance-research.md#lolminer-is-not-duty-cycling--the-low-end-gap-is-real-work-per-clock).
 
 #### ⚠ Closed 2026-07-29: the low end is not reachable by traffic, and no other mechanism has been found
 
@@ -946,6 +968,12 @@ narrowing worth more than the 1.07 GB the audit allows; a machine where the comp
 does not drive the display, which makes undervolting measurable; or a mechanism nobody
 has proposed. The first two would move the arithmetic, not the conclusion — 48 % of all
 traffic is a long way from 1.07 GB.*
+
+*2026-07-31: the "mechanism nobody has proposed" arrived — instruction issue as the
+low-cap currency — was measured, and the closure holds. It is real (geometry (17,0)
+crosses over below ~190 W and buys up to 2.6 %) and it is small: every instruction-side
+trim this pipeline exposes totals a few per cent against a 20–30 % deficit that the
+duty-cycle probe pinned to ~2.3× work-per-clock in the solver's organization itself.*
 
 ### Above stock: the curve continues to ~311 W, and the memory rung is unreachable
 
@@ -1339,11 +1367,11 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | fewer bytes | every record is `ceil(bits/64)` ([audit](performance-research.md#the-record-redundancy-audit)) — except one that was *stored* wider than that, [since fixed](performance-research.md#the-round-2-alignment-pad). And bytes buy almost no **time**: shrinking r2's and r3's records to 16 B, well past what the audit allows, is worth ~4 ms of 34 ([measured](performance-research.md#bytes-are-nearly-free-per-element-work-is-not)) |
 | bytes as **watts** | where that lever moved to. Under a cap bytes are clock: 16 % less traffic is worth [60 MHz at 285 W and 210 MHz at 180 W](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz) — but that is the prize for a *free* narrowing, and the [one built](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) spends the freed watts on the arithmetic replacing the bytes. **CLOSED 2026-07-29.** The denominator is 1.47 GB measured, not 2.09 derived, and the numerator is a replay clock — so the whole-solve rate is ≤ 92 MHz/GB and closing 570 MHz needs 48 % of all traffic against the 1.07 GB the audit allows. [Details](#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found) |
 | redundant rescan | removing it entirely buys nothing over halving it ([geometry](performance-research.md#row-bucket-geometry)); re-confirmed on CUDA, where (17,0) is −9 % traffic and +9 % time |
-| occupancy | ⚠ **reopened on CUDA, and partly collected.** OpenCL's 48 KB LDS made it structurally unreachable ([details](performance-research.md#occupancy-again)); CUDA exposes 100 KB/SM, where [3 → 4 blocks/SM is worth ~1.6 ms](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate). r1/r2 crossed at `kFCap` 320 (**−1.25 ms**) and [r1 took a fifth block](performance-research.md#round-1-takes-a-fifth-block-015-ms-via-a-per-round-group-cap) (−0.15). r3 reaches 4 blocks and [does not care](performance-research.md#round-3-does-not-want-a-fourth-block--occupancy-pays-only-where-a-round-is-latency-bound) — occupancy pays where a round is latency-bound, not where it is bandwidth-bound. **Shared memory per staged element (`B`) is the only term left** |
+| occupancy | **closed 2026-07-31, from both resources.** OpenCL's 48 KB LDS made it structurally unreachable ([details](performance-research.md#occupancy-again)); CUDA exposes 100 KB/SM, where [3 → 4 blocks/SM is worth ~1.6 ms](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate). r1/r2 crossed at `kFCap` 320 (**−1.25 ms**) and [r1 took a fifth block](performance-research.md#round-1-takes-a-fifth-block-015-ms-via-a-per-round-group-cap) (−0.15). r3 reaches 4 blocks and [does not care](performance-research.md#round-3-does-not-want-a-fourth-block--occupancy-pays-only-where-a-round-is-latency-bound). This entry used to end "`B` is the only term left"; it is not — **r2's 4 × 256 × 64 registers are the ENTIRE register file**, so the next block needs fewer shared bytes AND fewer registers at once, and [forcing the register side is null](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
 | coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](performance-research.md#two-level-bucketing)) |
 | the two atomics | both load-bearing; removing either is slower |
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined on OpenCL and less on CUDA — nothing left to win |
-| phase overlap | closed by two mechanisms — grid depth and warp slots ([details](performance-research.md#phase-overlap-cannot-reach-the-roofline)) |
+| phase overlap | **closed by three mechanisms and HARVESTED 2026-07-31.** Grid depth (streams) and warp slots (same-warp hosting) were null; the third — [co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), separate interleaved blocks in one launch — works, and its whole yield is **~0.5 ms**: r4's exploitable idle, whatever co-work is offered (entry, or [a whole round of the next solve](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms)). Shipped as [speculative entry](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms); the 1.71× roofline stays out of reach |
 
 **Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.12× short.
 **Goal 1 — the low-power gap — is closed by measurement**, not by exhaustion of effort:
@@ -1485,11 +1513,13 @@ What remains is speed and efficiency at and above the band, where the pipeline s
 two-level bucketing, shared-memory magazines, warp-aggregated atomics, decoupling the
 scatter for occupancy, SoA layouts in either global or local memory, and shrinking the
 element below the `[7,7,6,5,1]` schedule. Added 2026-07-26: streaming stores, geometry
-(17,0), a tighter bucket capacity, **and phase overlap by every available mechanism** —
-two streams (grid depth) and one co-resident launch (warp slots). The binding resource
-behind the last two is **resident blocks per SM**, not bandwidth, not bytes and not
-scheduling policy — and that resource is worth ~1.6 ms per extra block, so it is the one
-thing on this page still open. Larger blocks are *not* a substitute
+(17,0) *at stock — see the eco results for what it does under a cap*, a tighter bucket
+capacity, and phase overlap by streams (grid depth) and same-warp hosting (warp slots).
+Amended 2026-07-31: the third overlap mechanism — separate co-scheduled blocks — **works
+and is now shipped**, and with it the family is finished rather than merely closed: its
+entire yield is r4's ~0.5 ms of exploitable idle. The resident-blocks lever behind
+occupancy is closed from both resources at once (shared memory AND the register file,
+which r2 fills exactly). Larger blocks are *not* a substitute
 ([measured](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate)).
 
 ---

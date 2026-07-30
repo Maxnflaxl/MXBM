@@ -22,6 +22,7 @@ every A/B here was interleaved, so the deltas do not.
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
+| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships |
 | [The CUDA backend in detail](#the-cuda-backend-in-detail) | the profiler findings |
 | [What a CUDA backend was predicted to buy](#what-a-cuda-backend-was-predicted-to-buy-retained-for-calibration) | a forecast, kept to score it |
 
@@ -79,6 +80,16 @@ stores), `-DMXBM_WARPAGG=1` (warp-aggregated `gi`), `-DMXBM_CPASYNC=1`, `-DMXBM_
 `./cuda/pipeline N --fuse` runs the co-tenant entry experiment (`MXBM_CO_ROUND` picks the
 host round, default 3); `--overlap` runs the two-stream one. Both are null — kept because
 a null with a mechanism is what stops the idea being re-proposed.
+
+Overlap instruments added 2026-07-31 (see [co-blocks](#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14)):
+`MXBM_COB_S=S` turns `--fuse` into the co-BLOCKS form (every S-th block of the host
+round's grid seeds; S−1 must divide nb≪sm); `MXBM_CO_ROUND=34` splits the co-work across
+r3 and r4; `MXBM_COB_DUMMY=1` gives the co-blocks zero work (prices displacement alone,
+real entry launched separately). `--pipe2` runs the two-solve software pipeline with
+`fused_pair` (r4(i) ‖ r1(i+1) in one launch); `MXBM_P2_VAR=1` gives r1 two thirds of the
+residency. On the shipped miner, `MXBM_NO_SPEC=1` disables speculative entry
+co-scheduling for A/Bs. `-DMXBM_MB_SEED=N` / `-DMXBM_MB_RD2=N` force a register budget
+(`__launch_bounds__` minBlocks) on r1 / r2 — measured null, shared memory caps first.
 
 **CUDA attribution builds** — `-DMXBM_ABL_EMIT=R` (narrow round *R*'s payload to 16 B),
 `-DMXBM_ABL_DERIVE=1|2|3` (round 1's seed / round 2's rebuild), `-DMXBM_ABL_MIX=R` (skip
@@ -1875,6 +1886,178 @@ reaches 4 blocks and does not care.**
 > build/libmxbm_cuda.a` gives r1 SHARED 18 980 at `FCAP` 288, and (18 980 − 548)/288 = 64.
 > The **84 B used today** four paragraphs above is r3's pre-`MXBM_PERFECT_TAB` figure and
 > is now 80, which is why that budget closes more easily than it reads.
+
+---
+
+## Measured results, 2026-07-31
+
+### Co-blocks: the third overlap mechanism works — and it is worth 0.4 ms, not 14
+
+*(Built and measured 2026-07-31. `MXBM_COB_S` / `MXBM_CO_ROUND` on `cuda/pipeline
+--fuse`; shipped as [speculative entry](#speculative-entry-co-scheduling-ships-in-the-miner--045-ms).)*
+
+Two overlap mechanisms were measured null and closed: a second **stream** (662 waves of
+backlog; the second kernel starts in the last wave's tail) and **same-warp hosting**
+(COTENANT: a memory-stalled warp still holds its slot, so entry's arithmetic inside r3's
+warps cost 7.25 ms against 2.77 standalone). This is the third: the next nonce's entry
+pass as **separate blocks interleaved through a round's own grid** — every S-th block of
+the launch seeds instead of matching. Interleaved by block index, not appended: appended
+blocks all dispatch in the tail, which is the stream null all over again. Entry's
+instructions then issue from their own warps, resident *beside* the round's stalled ones.
+
+Host and stride swept, 60 solves each, sequential bracket 33.9 ms:
+
+| host | S=2 | S=3 | S=5 | S=9 | S=17 |
+|---|---|---|---|---|---|
+| r2 | | 35.4 | 35.5 | 35.5 | 35.5 |
+| r3 | 33.9 | 33.9 | 34.1 | 34.1 | 34.2 |
+| **r4** | 33.5 | **33.4–33.5** | 33.5 | 33.7 | 34.0 |
+
+**r4 is the host, S=3 the plateau, −0.4 to −0.5 ms** (KAT green, drops 0 throughout).
+Splitting the entry across r3 *and* r4 (`MXBM_CO_ROUND=34`) is worse than r4 alone
+(34.6), and r2 — the round with the least idle of either resource — pays outright.
+
+**The attribution, which is the reusable part.** Three builds separate the hosting cost
+(sequential bracket 33.9; entry standalone is ~2.6 ms):
+
+| co-blocks do | end-to-end | what it prices |
+|---|---|---|
+| nothing (`MXBM_COB_DUMMY`, real entry separate) | 33.87 | **displacement: ~0** |
+| compute only (`MXBM_CO_NOSCATTER`, real entry separate) | 34.74 | **entry's compute hosted: +0.83** |
+| the full entry pass (no separate entry) | 33.41 | **hosting cost 2.1 of 2.6** |
+
+Three facts fall out. **Displacing a third of r4's blocks is free** — a DRAM-bound round
+at 82 % of peak genuinely does not need them, which the 3→4-blocks null for r3 already
+suggested. **Co-scheduled compute hides at ~2/3** — 2.5 ms of dense siphash costs 0.83
+hosted, which is the overlap the same-warp mechanism could never reach. And **the
+scatter side does not hide** (~1.3 ms of the 2.1): 33.5 M bucket atomics plus 8 B writes
+land on a memory system already at 82 % of peak.
+
+### fused_pair: two solves' rounds in one launch — the family's ceiling is ~0.5 ms
+
+The general form: `fused_round`'s body became a device function over a `RoundShared`
+struct, and `fused_pair` runs **round 4 of solve i and round 1 of solve i+1 as
+alternating blocks of one launch**, the two rounds' shared layouts in a union so a block
+pays max() rather than sum() (22.3 KB, still 4 blocks/SM; registers take the max of both
+paths and land on exactly 64). `cuda/pipeline --pipe2` orchestrates the two-solve
+pipeline: r1's output moves to its own double-buffered pair-record set, back-refs are
+double-buffered, and the main elem ping-pong hands over between solves. Correct on the
+first run (2.03 verified/solve over 60 distinct nonces, drops 0), and:
+
+| | ms/solve |
+|---|---|
+| sequential bracket | 33.87 |
+| `--pipe2`, 1:1 residency | 33.77–33.84 |
+| `--pipe2`, r1-major (r4 blocks doubled, 2/3 of residency to r1) | **33.48** |
+
+**The same −0.4 ms the entry co-blocks buy, by a much heavier route.** r1 at a 1:1
+residency split gets 16 warps against its standalone 40 and overlaps nothing; giving it
+2/3 of the blocks recovers exactly the gain the simpler mechanism already had. The
+conclusion to carry: **r4's exploitable idle is ~0.5 ms/solve, whatever co-work is
+offered** — entry's compute, or a whole round. The 1.71× roofline is now unreachable by
+three independent mechanisms, and the family is closed with its 0.5 ms harvested.
+
+### Occupancy is closed from BOTH resources — r2 sits on the whole register file
+
+*(The `MXBM_MB_SEED` / `MXBM_MB_RD2` probe, 2026-07-31.)* The occupancy budget in
+[shared memory](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) said
+`B` is the only term left. It is not the only gate: **r2 runs 4 blocks × 256 threads ×
+64 registers = 65,536 — the entire register file.** Forcing a 5-block register budget
+with `__launch_bounds__` (the MINBLOCKS template parameter) changes nothing, because the
+shared side caps first: 5 × 23.6 KB > 100 KB at `kFCap` 320, and an FCAP that fits five
+blocks (276) sits below mean + 1σ of the group tail, where the spill path stops being
+rare. r1 is the same story one block up (5 × 19.0 KB, 6 needs FCAP under the mean).
+**Every further occupancy route for r1/r2 now needs BOTH fewer shared bytes per element
+and fewer registers per thread simultaneously**; neither alone moves blocks/SM. Closed.
+
+### Speculative entry co-scheduling SHIPS in the miner (−0.45 ms)
+
+The co-blocks result needs the *next* nonce's prePow during the current solve, and the
+`Solver` interface only sees one nonce at a time. No interface change: the engine walks
+nonces at a fixed stride within a job, so `CudaSolver` **learns the delta between
+consecutive calls** and seeds (nonce + delta) inside round 4's launch; the next call
+skips its entry pass when the prediction was right, and a job change simply misses once
+(one solve at the plain cost, out of the hundreds a job lasts). Entry output moves to a
+dedicated dense buffer (+0.39 GiB) because round 2 overwrites `elem[0]` mid-solve;
+if that allocation fails, or under `MXBM_NO_SPEC=1`, everything runs exactly as before.
+
+Bracketed on the shipped miner (`--benchmark BEAM-III`, 60 s arms, same session):
+
+| | ms/solve | sol/s |
+|---|---|---|
+| `MXBM_NO_SPEC=1` | 33.8 | 58.7 |
+| **speculation on** | **33.4** | **59.5** |
+| `MXBM_NO_SPEC=1` | 33.9 | 58.7 |
+
+Verified solutions/solve identical (2.00), drops 0, all 45 tests green. The hosted r4
+lands on **exactly 64 registers** — the 4-blocks/SM cliff — and
+`tests/test_cuda_resources.cpp` pins it there with its own contract row.
+
+*Bookkeeping note:* moving the shared arrays into `RoundShared` costs each round
++12–20 B of shared for the struct's placeholder members and padding. blocks/SM held on
+every kernel and registers held or fell (r4 47 → 46); the resource contract was
+re-baselined per its own RESOURCE DRIFT rule.
+
+### The eco sweep: (17,0) crosses over below ~190 W; R2_FULL never does
+
+*(`benchmarks/eco_sweep.sh`, 2026-07-31. The below-160 W inversion said the low-power
+currency is core cycles, not bytes — this reprices the two instruction-vs-bytes trades
+at every cap. KAT green and drops 0 at all 28 points.)*
+
+The premise held in general and failed in the specific. At 100 W the solve is 103.7 ms
+against 33.8 at stock — 2.94× slower at 3.38× less clock — so essentially *everything*,
+DRAM-bound rounds included, is issue-limited at the bottom: the LSU feeds DRAM at a rate
+that scales with core clock. Two settled stock results were therefore re-run under caps:
+
+| cap | base (16,1) | (17,0) | Δ | `MXBM_R2_FULL` | Δ |
+|---|---|---|---|---|---|
+| 100 W | 103.7 ms | **100.9** | **−2.6 %** | 112.7 | +8.7 % |
+| 120 W | 76.8 | 76.9 | +0.2 % | 82.8 | +7.8 % |
+| 140 W | 62.3 | **61.8** | **−0.7 %** | 66.2 | +6.3 % |
+| 160 W | 51.5 | **50.9** | **−1.1 %** | 54.4 | +5.6 % |
+| 180 W | 44.1 | **43.5** | **−1.2 %** | 46.3 | +5.0 % |
+| 210 W | 36.9 | 39.2 | +6.3 % | 40.9 | +10.9 % |
+| 285 W | 34.1 | 37.8 | +10.9 % | 39.3 | +15.4 % |
+
+**Geometry (17,0) — sub-mask rescan removed — crosses over at ~190 W** and wins ~1 % in
+the 140–180 W band, 2.6 % at the card's floor. Its stock loss is scatter locality, a
+DRAM-side price that a capped card has spare bandwidth to pay; its win is the removed
+staging instructions, a core-side saving that a capped card values. `MXBM_BB=17` selects
+it at runtime; it needs the (17,0) footprint (8.35 GiB).
+
+**`MXBM_R2_FULL` loses at EVERY cap, monotonically.** This kills the clean form of the
+instruction-currency theory: round 2's 14-siphash rebuild is ~500 ALU ops per element
+against the ~10 extra memory instructions the full record costs, and the ALU side still
+wins at 765 MHz. The rebuild's arithmetic hides in stall shadows at low clock exactly as
+it does at stock — what a low cap makes expensive is *memory-instruction* work, not
+hidden ALU work. **Re-derivation is the right trade at every power level this card can
+run**, which closes the question the 2026-07-28 quad-record cap sweep opened from the
+other side.
+
+### lolMiner is NOT duty-cycling — the low-end gap is real work-per-clock
+
+*(2026-07-31, the test [the inversion
+section](performance.md#-below-160-w-the-clock-gap-inverts-and-the-clock-explanation-stops-applying)
+named and nobody had run: the clock-sample DISTRIBUTION, at 10 Hz, under both miners'
+benchmarks at the same caps.)*
+
+| | p5 | p25 | p50 | p75 | p95 |
+|---|---|---|---|---|---|
+| lolMiner, 100 W | 360 | 405 | 480 | 600 | 705 |
+| MXBM, 100 W | 525 | 660 | 750 | 825 | 855 |
+| lolMiner, 140 W | 810 | 885 | 975 | 1020 | 1065 |
+| MXBM, 140 W | 1020 | 1185 | 1230 | 1275 | 1320 |
+
+A duty-cycling miner would be bimodal — a burst mode and an idle mode with little in
+between. lolMiner's distribution is **broad and unimodal** (100 W histogram in 150 MHz
+bins: 300:199, 450:132, 600:125 — no idle peak, no burst peak). It genuinely executes at
+a median 480 MHz and still outsolves MXBM at 750 MHz by ~22 %. **The below-160 W deficit
+is confirmed as ~2.3× work per core cycle, measured, with the sampling artefact
+excluded.** Together with the eco sweep — our own instruction trims recover 1–2.6 % —
+the conclusion is that the low-end gap is a property of the solver's *organization*
+(rescans, chain walks, per-element bookkeeping), not of any toggle this pipeline
+exposes. The 2026-07-29 closure of the low-power goal stands, now with its mechanism
+named.
 
 ---
 
