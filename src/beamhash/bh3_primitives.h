@@ -24,15 +24,15 @@ MXBM_HD inline uint64_t siphash24(uint64_t k0, uint64_t k1, uint64_t k2, uint64_
     return v0 ^ v1 ^ v2 ^ v3;
 }
 
-MXBM_HD inline void seed_element(const uint64_t prePow[4], uint32_t index, Elem& out) {
+MXBM_HD inline void seed_element(const MXBM_THREAD uint64_t* prePow, uint32_t index, MXBM_THREAD Elem& out) {
     for (int k = 0; k < kWorkWords; ++k)
         out.w[k] = siphash24(prePow[0], prePow[1], prePow[2], prePow[3],
                              ((uint64_t)index << 3) + (uint64_t)k);
 }
 
-MXBM_HD inline uint32_t collision_bits(const Elem& e) { return (uint32_t)(e.w[0] & 0xFFFFFFu); }
+MXBM_HD inline uint32_t collision_bits(const MXBM_THREAD Elem& e) { return (uint32_t)(e.w[0] & 0xFFFFFFu); }
 
-MXBM_HD inline void apply_mix(Elem& e, const uint32_t* tree, uint32_t treeLen, uint32_t Lmix) {
+MXBM_HD inline void apply_mix(MXBM_THREAD Elem& e, const MXBM_THREAD uint32_t* tree, uint32_t treeLen, uint32_t Lmix) {
     uint64_t t[8];
     for (int i = 0; i < kWorkWords; ++i) t[i] = e.w[i];
     t[7] = 0;
@@ -54,7 +54,7 @@ MXBM_HD inline void apply_mix(Elem& e, const uint32_t* tree, uint32_t treeLen, u
     e.w[0] = result;
 }
 
-MXBM_HD inline void combine(const Elem& a, const Elem& b, uint32_t Lout, Elem& out) {
+MXBM_HD inline void combine(const MXBM_THREAD Elem& a, const MXBM_THREAD Elem& b, uint32_t Lout, MXBM_THREAD Elem& out) {
     uint64_t x[kWorkWords];
     for (int i = 0; i < kWorkWords; ++i) x[i] = a.w[i] ^ b.w[i];
     for (int i = 0; i < kWorkWords; ++i)
@@ -66,7 +66,7 @@ MXBM_HD inline void combine(const Elem& a, const Elem& b, uint32_t Lout, Elem& o
     }
 }
 
-MXBM_HD inline void pack_indices(const uint32_t idx[32], uint8_t out[100]) {
+MXBM_HD inline void pack_indices(const MXBM_THREAD uint32_t* idx, MXBM_THREAD uint8_t* out) {
     for (int i = 0; i < 100; ++i) out[i] = 0;
     for (int k = 0; k < kNumIndices; ++k)
         for (int b = 0; b < kIndexPackBits; ++b)
@@ -76,7 +76,7 @@ MXBM_HD inline void pack_indices(const uint32_t idx[32], uint8_t out[100]) {
             }
 }
 
-MXBM_HD inline void unpack_indices(const uint8_t soln[100], uint32_t idx[32]) {
+MXBM_HD inline void unpack_indices(const MXBM_THREAD uint8_t* soln, MXBM_THREAD uint32_t* idx) {
     for (int k = 0; k < kNumIndices; ++k) {
         uint32_t v = 0;
         for (int b = 0; b < kIndexPackBits; ++b) {
