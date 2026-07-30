@@ -463,6 +463,25 @@ if(OpenCL_FOUND)
   add_test(NAME gpu_recover_rowbucket COMMAND test_gpu_recover)
   set_tests_properties(gpu_recover_rowbucket PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_ROWBUCKET=1")
 
+  # Apple's OpenCL cannot build the LDS or fused row-bucket kernels at all --
+  # clCreateKernel returns CL_INVALID_KERNEL (-48) and clGetProgramBuildInfo reports
+  # "newComputePipelineState failed". It is a limitation of the deprecated 1.2-era
+  # shim, not a defect in these kernels, which run correctly on every other vendor.
+  #
+  # Marked DISABLED rather than skipped silently: ctest then lists them as disabled,
+  # so the fact that macOS covers less than Linux stays visible instead of a green
+  # run implying coverage that was never there. On a Mac the equivalent coverage is
+  # the Metal backend, which runs the same fused algorithm and the same goldens.
+  if(APPLE)
+    set_tests_properties(lds_collide gpu_rounds_lds gpu_solver_lds
+                         gpu_rounds_rowbucket gpu_solver_rowbucket
+                         gpu_recover_rowbucket
+                         PROPERTIES DISABLED TRUE)
+    message(STATUS "macOS: OpenCL LDS/row-bucket gates disabled "
+                   "(Apple's OpenCL cannot build those kernels); Metal covers the "
+                   "fused pipeline instead")
+  endif()
+
   # Phase-D benchmark harness (manual-run, NOT registered as a ctest gate):
   # repeats the full 2^25 solve N times, enforces the D0 correctness gate,
   # and reports median total + per-phase ms for comparing match-kernel variants.
