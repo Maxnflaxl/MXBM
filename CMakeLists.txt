@@ -500,7 +500,10 @@ endif()
 
 if(MXBM_HAVE_METAL)
   include(cmake/BuildMetallib.cmake)
-  set(MXBM_METAL_SOURCES ${CMAKE_SOURCE_DIR}/kernels/metal/prim_probe.metal)
+  # Only translation units here -- *.metalh are headers, included not compiled.
+  set(MXBM_METAL_SOURCES
+      ${CMAKE_SOURCE_DIR}/kernels/metal/prim_probe.metal
+      ${CMAKE_SOURCE_DIR}/kernels/metal/records_probe.metal)
   set(MXBM_METALLIB        ${CMAKE_BINARY_DIR}/generated/mxbm.metallib)
   set(MXBM_METALLIB_HEADER ${CMAKE_BINARY_DIR}/generated/mxbm_metallib.h)
   mxbm_build_metallib(${MXBM_METALLIB} ${MXBM_METAL_SOURCES})
@@ -544,4 +547,14 @@ if(MXBM_HAVE_METAL)
   set_source_files_properties(tests/test_metal_device.mm PROPERTIES
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_device COMMAND test_metal_device)
+
+  add_executable(test_metal_records tests/test_metal_records.mm)
+  add_dependencies(test_metal_records mxbm_metallib_gen)
+  target_include_directories(test_metal_records
+      PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR}/generated)
+  target_link_libraries(test_metal_records PRIVATE mxbm_beamhash
+      "-framework Metal" "-framework Foundation")
+  set_source_files_properties(tests/test_metal_records.mm PROPERTIES
+                              COMPILE_FLAGS "-fobjc-arc")
+  add_test(NAME metal_records COMMAND test_metal_records)
 endif()
