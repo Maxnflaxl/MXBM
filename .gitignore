@@ -60,4 +60,8 @@ mxbm-run.log
 # Python bytecode
 __pycache__/
 *.pyc
+
+# mclk_rung.sh raw captures: per-arm miner logs and telemetry, plus the run
+# transcript. The findings go in docs/performance.md; the traces stay local.
 .mclk/
+.mclk.out

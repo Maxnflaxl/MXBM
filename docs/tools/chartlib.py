@@ -226,11 +226,20 @@ class Canvas(object):
             a += ' fill-opacity="%g"' % opacity
         self.add('<rect %s/>' % a)
 
-    def polyline(self, pts, stroke, width=2):
-        """A 2px line with round joins -- the mark spec for every series line."""
+    def polyline(self, pts, stroke, width=2, dash=None):
+        """A 2px line with round joins -- the mark spec for every series line.
+
+        `dash` is for a segment of a series measured under different conditions,
+        NOT for a second entity. Colour follows the entity; a dashed run of the
+        entity's own colour reads as "same thing, different conditions", where a
+        new hue would read as "another miner". Pair it with a legend entry.
+        """
         s = " ".join("%s,%s" % (f(x), f(y)) for x, y in pts)
-        self.add('<polyline points="%s" fill="none" stroke="%s" stroke-width="%g" '
-                 'stroke-linejoin="round" stroke-linecap="round"/>' % (s, stroke, width))
+        a = ('points="%s" fill="none" stroke="%s" stroke-width="%g" '
+             'stroke-linejoin="round" stroke-linecap="round"' % (s, stroke, width))
+        if dash:
+            a += ' stroke-dasharray="%s"' % dash
+        self.add('<polyline %s/>' % a)
 
     def marker(self, x, y, fill, r=4, ring=SURFACE, title=None):
         """A data point: >=8px across, carrying a 2px ring in the surface color

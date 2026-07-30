@@ -37,6 +37,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 SRC = os.path.join(REPO, "docs", "performance.md")
 OUT = os.path.join(HERE, "power-curve.svg")
 SECTION = "### Both miners under the same cap"
+ABOVE = "### Above stock: the curve continues to ~311 W, and the memory rung is unreachable"
 
 W, H = 1000, 720
 L, R = 74, 34                      # left axis gutter, right margin
@@ -65,6 +66,40 @@ def parse():
         sys.exit("parsed %d rows from %r -- has the table changed?" % (len(rows), SECTION))
     rows.sort(key=lambda r: r["cap"])
     return rows
+
+
+def parse_above():
+    """MXBM's own curve ABOVE the stock cap, where there is no comparator.
+
+    Kept a separate series rather than extra rows in the head-to-head table for
+    two reasons, and both matter more than the convenience of one table. It is a
+    DIFFERENT SESSION -- the head-to-head was one interleaved sitting and this is
+    another, so it carries the ~5 % cross-session band the doc warns about. And
+    lolMiner was never measured here; empty cells in the head-to-head table would
+    read as "measured and equal" rather than "not measured", which is the failure
+    this file's docstring exists to prevent.
+
+    Returns [] when the section is absent, so removing it from the doc degrades
+    the chart to the head-to-head rather than breaking the build.
+    """
+    try:
+        lines = cl.section(cl.read_lines(SRC), ABOVE)
+    except LookupError:
+        return []
+
+    def watts(cell):
+        m = re.match(r"^\**\s*(\d+(?:\.\d+)?)\s*W", cell.replace("*", ""))
+        return float(m.group(1)) if m else None
+
+    out = []
+    # cap | ms | sol/s | SM clock | drawn W | sol/s per W | vs stock
+    for c in cl.table_rows(lines, lambda c: len(c) >= 6 and watts(c[0]) is not None
+                                            and cl.num(c[2]) is not None
+                                            and cl.num(c[4]) is not None):
+        out.append({"cap": watts(c[0]), "sol": cl.num(c[2]),
+                    "drew": cl.num(c[4]), "eff": cl.num(c[5])})
+    out.sort(key=lambda r: r["cap"])
+    return out
 
 
 def band(rows):
@@ -105,14 +140,18 @@ def band(rows):
     return inside[0], inside[-1]
 
 
-def render(rows):
+def render(rows, above=()):
     c = cl.Canvas(W, H)
     caps = [r["cap"] for r in rows]
-    lo, hi = caps[0] - 12, caps[-1] + 12
+    lo = caps[0] - 12
+    hi = (max(caps[-1], above[-1]["cap"]) if above else caps[-1]) + 12
 
-    sols = [r["mx"][1] for r in rows] + [r["lol"][1] for r in rows]
-    effs = [r["mx"][2] for r in rows] + [r["lol"][2] for r in rows]
-    watts = [r["mx"][0] for r in rows] + [r["lol"][0] for r in rows]
+    sols = [r["mx"][1] for r in rows] + [r["lol"][1] for r in rows] \
+        + [a["sol"] for a in above]
+    effs = [r["mx"][2] for r in rows] + [r["lol"][2] for r in rows] \
+        + [a["eff"] for a in above]
+    watts = [r["mx"][0] for r in rows] + [r["lol"][0] for r in rows] \
+        + [a["drew"] for a in above]
     srange = (min(sols) - 3, max(sols) + 2.5)
     erange = (min(effs) - 0.006, max(effs) + 0.010)
     wrange = (min(watts) - 15, max(watts) + 15)
@@ -153,12 +192,12 @@ def render(rows):
                "middle", weight="bold")
 
     # -- panels A and B: the two measures ----------------------------------
-    for p, idx, rng, fmt, nt, name in (
-            (pa, 1, srange, "%g", 6, "sol/s"),
-            (pb, 2, erange, "%.2f", 5, "sol/s per watt")):
+    for p, idx, rng, fmt, nt, name, akey in (
+            (pa, 1, srange, "%g", 6, "sol/s", "sol"),
+            (pb, 2, erange, "%.2f", 5, "sol/s per watt", "eff")):
         p.grid_y(cl.ticks(rng[0], rng[1], log=False, n=nt), fmt)
         p.frame_y()
-        p.axis_x(caps, "%g", label=False)
+        p.axis_x(caps + [a["cap"] for a in above], "%g", label=False)
         c.text(L, p.y0 - 10, name, 11, cl.INK_2)
         for who, colour in (("lol", LOL), ("mx", MX)):
             pts = [(r["cap"], r[who][idx]) for r in rows]
@@ -166,13 +205,24 @@ def render(rows):
             for i, (x, y) in enumerate(pts):
                 p.c.marker(xs(x), p.ys(y), colour, 4, cl.SURFACE,
                            "cap %g W: %g (drew %g W)" % (x, y, rows[i][who][0]))
+        # MXBM above stock: same entity, so same hue -- dashed, because it is a
+        # different session and has no comparator. It carries its OWN 285 W point
+        # rather than joining the head-to-head one, so the small step between the
+        # two IS the cross-session spread, shown instead of hidden.
+        if above:
+            apts = [(a["cap"], a[akey]) for a in above]
+            p.c.polyline([(xs(x), p.ys(y)) for x, y in apts], MX, dash="6 4")
+            for i, (x, y) in enumerate(apts):
+                p.c.marker(xs(x), p.ys(y), MX, 3.5, cl.SURFACE,
+                           "cap %g W (MXBM only, later session): %g (drew %g W)"
+                           % (x, y, above[i]["drew"]))
 
     # -- panel C: what each miner actually drew ----------------------------
     # The saturation finding deserves to be SEEN rather than asserted: MXBM
     # tracks the cap, lolMiner's trace goes flat once it stops responding.
     pc.grid_y(cl.ticks(wrange[0], wrange[1], log=False, n=4), "%g")
     pc.frame_y()
-    pc.axis_x(caps, "%g W")
+    pc.axis_x(caps + [a["cap"] for a in above], "%g W")
     c.text(L, C_TOP - 10, "watts actually drawn", 11, cl.INK_2)
     c.line(xs(max(lo, wrange[0])), ys_c(max(lo, wrange[0])),
            xs(min(hi, wrange[1])), ys_c(min(hi, wrange[1])), cl.GRID, 1)
@@ -184,6 +234,22 @@ def render(rows):
         pc.c.polyline([(xs(x), ys_c(y)) for x, y in pts], colour)
         for x, y in pts:
             pc.c.marker(xs(x), ys_c(y), colour, 4, cl.SURFACE, "cap %g W: drew %g W" % (x, y))
+
+    # MXBM above stock, in the panel where the finding lives: its trace goes flat
+    # too, just 75 W further right. Both miners saturate; the chart now shows both
+    # ceilings instead of asserting one and drawing the other.
+    if above:
+        apts = [(a["cap"], a["drew"]) for a in above]
+        pc.c.polyline([(xs(x), ys_c(y)) for x, y in apts], MX, dash="6 4")
+        for x, y in apts:
+            pc.c.marker(xs(x), ys_c(y), MX, 3.5, cl.SURFACE,
+                        "cap %g W (MXBM only, later session): drew %g W" % (x, y))
+        atop = max(a["drew"] for a in above)
+        asat = [a for a in above if abs(a["drew"] - atop) < SAT_TOL]
+        if len(asat) > 1:
+            c.text(W - R - 4, ys_c(atop) - 10,
+                   "MXBM stops responding here: %s W all draw ~%.0f W"
+                   % ("/".join("%g" % a["cap"] for a in asat), atop), 10, cl.INK_2, "end")
 
     sat = [r for r in rows if abs(r["lol"][0] - max(r2["lol"][0] for r2 in rows)) < SAT_TOL]
     if len(sat) > 1:
@@ -204,9 +270,12 @@ def render(rows):
 
     # -- legend and footer --------------------------------------------------
     lx, ly = L + 14, A_TOP + 17
-    for dy, colour, nm in ((0, MX, "MXBM"), (16, LOL, "lolMiner 1.98a")):
-        c.line(lx, ly - 4 + dy, lx + 22, ly - 4 + dy, colour, 2)
-        c.marker(lx + 11, ly - 4 + dy, colour, 4, cl.SURFACE)
+    legend = [(0, MX, None, "MXBM"), (16, LOL, None, "lolMiner 1.98a")]
+    if above:
+        legend.append((32, MX, "6 4", "MXBM above stock (later session, no comparator)"))
+    for dy, colour, dash, nm in legend:
+        c.line(lx, ly - 4 + dy, lx + 22, ly - 4 + dy, colour, 2, dash)
+        c.marker(lx + 11, ly - 4 + dy, colour, 3.5 if dash else 4, cl.SURFACE)
         c.text(lx + 30, ly + dy, nm, 11, cl.INK_2)
 
     c.text(L, C_BOT + 42, "x is the cap both miners were given -- the independent variable. "
@@ -220,10 +289,13 @@ def render(rows):
 
 def main():
     rows = parse()
+    above = parse_above()
     b_lo, b_hi = band(rows)
-    open(OUT, "w", encoding="utf-8").write(render(rows))
-    print("wrote %s (%d caps, %g-%g W; MXBM leads both over %s)"
-          % (OUT, len(rows), rows[0]["cap"], rows[-1]["cap"],
+    open(OUT, "w", encoding="utf-8").write(render(rows, above))
+    print("wrote %s (%d head-to-head caps %g-%g W, %d MXBM-only caps to %g W; "
+          "MXBM leads both over %s)"
+          % (OUT, len(rows), rows[0]["cap"], rows[-1]["cap"], len(above),
+             above[-1]["cap"] if above else rows[-1]["cap"],
              "%.1f-%.1f W" % (b_lo, b_hi) if b_lo else "no cap in range"))
 
 
