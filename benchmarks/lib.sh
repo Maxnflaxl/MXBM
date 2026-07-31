@@ -79,3 +79,20 @@ bench_build_pipeline() {
         -o "$out" 2> "$ROOT/cuda/build-pipeline.log" \
       || { echo "build failed, see cuda/build-pipeline.log"; tail -5 "$ROOT/cuda/build-pipeline.log"; exit 1; }
 }
+
+# bench_energy_mj
+#
+# Device 0's cumulative energy counter in millijoules, or "" when unsupported.
+# THE efficiency instrument: read before and after a run and diff -- exact
+# joules over the window, none of the 5 Hz power-sampling integration error
+# every J/solution figure before 2026-07-31 carried. Uses a tiny dlopen helper
+# (benchmarks/nvml_energy.c, built here on demand) because this driver's
+# nvidia-smi does not expose the counter. Reading needs no root, so this works
+# in the unprivileged half of a sweep too.
+bench_energy_mj() {
+    local bin="$ROOT/benchmarks/nvml_energy"
+    if [ ! -x "$bin" ] || [ "$ROOT/benchmarks/nvml_energy.c" -nt "$bin" ]; then
+        "${CC:-cc}" -O2 -o "$bin" "$ROOT/benchmarks/nvml_energy.c" -ldl 2>/dev/null || return 0
+    fi
+    "$bin" 2>/dev/null
+}

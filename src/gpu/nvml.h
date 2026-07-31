@@ -74,6 +74,15 @@ PowerLimit nvml_power_limit();
 // card's.
 PowerLimit nvml_power_limit_at(unsigned index);
 
+// The card's cumulative energy counter in MILLIJOULES, monotonic since driver
+// load (nvmlDeviceGetTotalEnergyConsumption, Volta+). THE efficiency
+// instrument: every J/solution figure recorded before 2026-07-31 was
+// integrated from sampled power draw, which reconstructs -- with sampling
+// error -- exactly what this counter holds exactly. Read it before and after
+// a window and diff; reading needs no root. Returns false (mj untouched) when
+// the driver, the card, or the index does not support it.
+bool nvml_total_energy_mj(unsigned long long& mj, unsigned index = 0);
+
 // NVML speaks milliwatts. Rounding rather than truncating matters: a card whose
 // limit reads 284999 mW must report 285 W, or a no-op write looks like a change
 // and the restore-on-exit bookkeeping puts back a value that was never set.

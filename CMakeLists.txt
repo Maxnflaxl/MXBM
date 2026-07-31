@@ -166,7 +166,9 @@ add_test(NAME console COMMAND test_console)
 
 add_library(mxbm_api STATIC src/api/http_summary.cpp)
 target_include_directories(mxbm_api PUBLIC src)
-target_link_libraries(mxbm_api PUBLIC mxbm_miner mxbm_json mxbm_version)
+# mxbm_nvml: /summary's Energy_J reads the card's energy counter directly -- the
+# snapshot has no energy field because the counter is the instrument, not telemetry.
+target_link_libraries(mxbm_api PUBLIC mxbm_miner mxbm_json mxbm_version mxbm_nvml)
 
 add_executable(test_api tests/test_api.cpp)
 target_include_directories(test_api PRIVATE tests src)

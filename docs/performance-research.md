@@ -168,6 +168,11 @@ Power-curve sweeps that used to be bash around `nvidia-smi` now also exist as
 `--tune` (docs/usage.md): miner-loop arms inside the shipping binary, coarse pass +
 knee-refining pass, end-of-sweep drift gauge, result stored per card for `--pl auto` —
 usable as a research instrument wherever a drift-gauged power curve is the question.
+Energy is measured, not integrated, since 2026-07-31: the card's millijoule counter
+(NVML `nvmlDeviceGetTotalEnergyConsumption`, no root to read) backs `--benchmark`'s
+J/solution line, `--tune`'s per-point draw, `/summary`'s `Energy_J`, and
+`bench_energy_mj` in `benchmarks/lib.sh` — bracket a window, diff the counter, divide;
+the 5 Hz `power.draw` sampler remains only as the fallback for cards without it.
 The row-bucket
 kernels' own knobs ride the same option string: `-DLDS_FCAP` / `-DLDS_FCAP_R1`
 (group caps, default 320/288), `-DLDS_FTAB` (chain-table entries, 128),

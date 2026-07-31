@@ -148,13 +148,20 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
         });
+        unsigned long long e0 = 0, e1 = 0;
+        const bool e_ok = gpu::nvml_total_energy_mj(e0);
         const BenchmarkResult r = run_benchmark(solver, stats, per, stop);
         done.store(true, std::memory_order_relaxed);
         sampler.join();
+        // Draw, best instrument first: the card's energy counter gives exact joules
+        // over the window (no sampling error, and it covers the settle-free window
+        // precisely); the 2 Hz sampler mean is the fallback for cards without it.
         double mean = 0.0;
         const size_t skip = draws.size() / 5;
         for (size_t i = skip; i < draws.size(); ++i) mean += draws[i];
         if (draws.size() > skip) mean /= (double)(draws.size() - skip);
+        if (e_ok && gpu::nvml_total_energy_mj(e1) && e1 > e0 && r.elapsed_s > 0.0)
+            mean = (double)(e1 - e0) / 1000.0 / r.elapsed_s;
         out = TunePoint{cap, mean, r.sol_per_s, r.median_ms};
         return !stop.load(std::memory_order_relaxed);
     };

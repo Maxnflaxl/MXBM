@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "nlohmann/json.hpp"
+#include "gpu/nvml.h"
 
 #include "api/dashboard_html.h"
 using nlohmann::json;
@@ -292,6 +293,15 @@ std::string HttpSummary::build_body() const {
         {"Job_Difficulty", s.last_job_units},
         {"Job_Id", s.last_job_id},
     };
+    // Device 0's cumulative energy counter in joules, monotonic since driver load
+    // (NVML; Volta+). Deliberately the RAW counter rather than a session delta:
+    // rig software polls /summary and diffs consecutive readings itself, which
+    // gives exact joules over any window with no sampling error. null when the
+    // card or driver has no counter -- same rule as the other telemetry fields.
+    {
+        unsigned long long mj = 0;
+        j["Energy_J"] = gpu::nvml_total_energy_mj(mj) ? json(mj / 1000.0) : json(nullptr);
+    }
 
     // One entry per mining device. A snapshot built by hand carries no device
     // vector, so fall back to the legacy single-device fields rather than

@@ -73,7 +73,11 @@ mxbm --benchmark BEAM-III --benchmark-seconds 120
 
 It drives the same solve path as live mining and reports through the same
 stats, so the figure is directly comparable to the mining one — median ms per
-solve with p5/p95, so a run can be judged stable without a second run.
+solve with p5/p95, so a run can be judged stable without a second run. On cards
+with an energy counter (NVIDIA Volta and newer) it also prints joules total, mean
+watts and J/solution read from the counter itself — exact, not integrated from
+power samples — which is the number to compare when the question is efficiency
+rather than speed.
 
 ### Tuning: measure your own card
 

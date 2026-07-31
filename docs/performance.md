@@ -362,7 +362,11 @@ since driver load. Every efficiency figure on this page is currently integrated 
 already holds exactly. Reading it before and after a run would give J/solution directly,
 with no sampling error and no dependence on sample rate. Not done here — it would change
 the basis of numbers mid-sweep, which is the one thing a reproducibility section must not
-do — but it is the right instrument for the next one.
+do — but it is the right instrument for the next one. *(Wired 2026-07-31: `--benchmark`
+now prints J total, mean W and J/solution from the counter, `--tune`'s per-point draw
+uses it over the sampler when present, `/summary` exposes the raw counter as `Energy_J`
+for rig software to diff, and `benchmarks/lib.sh` gained `bench_energy_mj` for sweeps.
+Existing tables keep their sampled basis until each is next re-measured whole.)*
 
 **How to quote a number from this page:** use the controlled figure with its conditions
 attached — 33.3 ms / 59.8 sol/s at stock 285 W, 2670 MHz, 69 °C (2026-07-31, with

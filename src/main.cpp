@@ -748,6 +748,11 @@ int main(int argc, char** argv) {
 
         ui::Ticker ticker;
         ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint, opts.apiport);
+        // The card's own energy counter, bracketing the run: exact joules, no
+        // sampling. e_ok stays false on non-NVIDIA/pre-Volta and the line below
+        // is simply not printed.
+        unsigned long long e0 = 0, e1 = 0;
+        const bool e_ok = have_nvml && gpu::nvml_total_energy_mj(e0);
         miner::BenchmarkResult r;
         try {
             r = miner::run_benchmark(*solver, stats, opts.benchmark_seconds, stop);
@@ -788,6 +793,17 @@ int main(int argc, char** argv) {
             "  %.1f ms/solve median   (p5 %.1f, p95 %.1f)",
             r.median_ms, r.p5_ms, r.p95_ms);
         ui::console::info(line);
+        // Efficiency from the energy counter, when the card has one: exact
+        // joules over the whole window, so J/solution carries no sampling error
+        // -- the number the power-sweep docs integrate 5 Hz samples to estimate.
+        if (e_ok && gpu::nvml_total_energy_mj(e1) && e1 > e0
+            && r.elapsed_s > 0.0 && r.solutions > 0) {
+            const double joules = (double)(e1 - e0) / 1000.0;
+            std::snprintf(line, sizeof line,
+                "  %.0f J total   (%.1f W mean, %.2f J/solution - from the card's energy counter)",
+                joules, joules / r.elapsed_s, joules / (double)r.solutions);
+            ui::console::info(line);
+        }
         if (r.solves < 100) {
             ui::console::info("  note: fewer than 100 solves - too few to quote a margin; "
                               "use --benchmark-seconds to run longer");

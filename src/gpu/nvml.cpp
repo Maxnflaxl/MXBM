@@ -37,6 +37,8 @@ nvmlReturn_t (*p_fan)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_driver)(char*, unsigned) = nullptr;
 // Takes an nvmlPciInfo_t*; see nvml_pci_address() for how it is passed.
 nvmlReturn_t (*p_pci)(nvmlDevice_t, void*) = nullptr;
+// Cumulative energy since driver load, in millijoules.
+nvmlReturn_t (*p_energy)(nvmlDevice_t, unsigned long long*) = nullptr;
 // Power limit: values are milliwatts throughout NVML's interface.
 nvmlReturn_t (*p_pl_get)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_pl_default)(nvmlDevice_t, unsigned*) = nullptr;
@@ -96,6 +98,7 @@ bool nvml_init() {
     bind(p_driver,   "nvmlSystemGetDriverVersion");
     bind(p_pci,      "nvmlDeviceGetPciInfo_v3");
     if (!p_pci) bind(p_pci, "nvmlDeviceGetPciInfo_v2");
+    bind(p_energy,         "nvmlDeviceGetTotalEnergyConsumption");
     bind(p_pl_get,         "nvmlDeviceGetPowerManagementLimit");
     bind(p_pl_default,     "nvmlDeviceGetPowerManagementDefaultLimit");
     bind(p_pl_constraints, "nvmlDeviceGetPowerManagementLimitConstraints");
@@ -221,6 +224,15 @@ PowerLimit read_power_limit(nvmlDevice_t dev) {
 
 PowerLimit nvml_power_limit()                  { return read_power_limit(g_dev); }
 PowerLimit nvml_power_limit_at(unsigned index) { return read_power_limit(dev_at(index)); }
+
+bool nvml_total_energy_mj(unsigned long long& mj, unsigned index) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_energy || !d) return false;
+    unsigned long long v = 0;
+    if (p_energy(d, &v) != NVML_SUCCESS) return false;
+    mj = v;
+    return true;
+}
 
 NvmlWrite nvml_set_power_limit(unsigned watts) {
     if (!g_ready || !p_pl_set) return NvmlWrite::Unsupported;
