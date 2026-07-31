@@ -52,6 +52,10 @@ GpuSolver::GpuSolver(unsigned index) : rt_(index) {
 bool GpuSolver::available(unsigned index) { return Runtime::any_device_available(index); }
 
 std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
+    {   // MXBM_VERIFY_STATS: candidates/solve needs the solve count as denominator.
+        static const bool kVerifyStatsSolve = std::getenv("MXBM_VERIFY_STATS") != nullptr;
+        if (kVerifyStatsSolve) bh3::verify_stats_note_solve();
+    }
     // Opt-in per-solve profiling: run with MXBM_PROFILE=1 to print a one-line
     // GPU-time breakdown (seed | per-round mix/scatter/match | survivor |
     // recover | verify) every solve, plus the derived solve/s next to
@@ -100,9 +104,19 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
 
         auto tVer = std::chrono::steady_clock::now();
         out.reserve(cand.size());
-        for (const auto& c : cand)
-            if (bh3::is_valid_solution(input, 32, nonce, c.data()))
-                out.push_back(c);
+        // MXBM_VERIFY_STATS=1: classify each candidate's verify outcome so the
+        // found-vs-verified gap is attributed by reject reason (printed at exit).
+        static const bool kVerifyStats = std::getenv("MXBM_VERIFY_STATS") != nullptr;
+        for (const auto& c : cand) {
+            if (!kVerifyStats) {
+                if (bh3::is_valid_solution(input, 32, nonce, c.data()))
+                    out.push_back(c);
+            } else {
+                const bh3::VerifyReason r = bh3::classify_solution(input, 32, nonce, c.data());
+                bh3::verify_stats_tally(r);
+                if (r.kind == bh3::VerifyReason::None) out.push_back(c);
+            }
+        }
         tVerifyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tVer).count();
     }
 

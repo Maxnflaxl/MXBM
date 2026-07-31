@@ -264,6 +264,10 @@ CudaSolver::~CudaSolver() = default;
 
 std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
     std::vector<std::array<uint8_t,104>> out;
+    {   // MXBM_VERIFY_STATS: candidates/solve needs the solve count as denominator.
+        static const bool kVerifyStats = std::getenv("MXBM_VERIFY_STATS") != nullptr;
+        if (kVerifyStats) bh3::verify_stats_note_solve();
+    }
     Impl& I = *p_;
     // Per-thread, and cheap when it is already current. See the constructor.
     cudaSetDevice(I.device_index);
@@ -374,10 +378,20 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     recover<<<(hs+63)/64, 64>>>(hs, I.survSlots, kCapacity, I.left, I.right, I.dleaves);
     std::vector<uint32_t> hl((size_t)hs*32);
     cudaMemcpy(hl.data(), I.dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost);
+    // MXBM_VERIFY_STATS=1: classify every candidate's verify outcome instead of
+    // only pass/fail, so the found-vs-verified gap is attributed by reject reason
+    // (tallies print at exit). The mining path is unchanged when unset.
+    static const bool kVerifyStats = std::getenv("MXBM_VERIFY_STATS") != nullptr;
     for (uint32_t i = 0; i < hs; ++i) {
         std::array<uint8_t,104> sol{};
         bh3::pack_indices(&hl[(size_t)i*32], sol.data());
-        if (bh3::is_valid_solution(input, 32, nonce, sol.data())) out.push_back(sol);
+        if (!kVerifyStats) {
+            if (bh3::is_valid_solution(input, 32, nonce, sol.data())) out.push_back(sol);
+        } else {
+            const bh3::VerifyReason r = bh3::classify_solution(input, 32, nonce, sol.data());
+            bh3::verify_stats_tally(r);
+            if (r.kind == bh3::VerifyReason::None) out.push_back(sol);
+        }
     }
     return out;
 }
