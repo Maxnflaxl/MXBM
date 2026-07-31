@@ -83,6 +83,15 @@ struct Options {
     // benchmark_seconds 0 means run until Ctrl+C.
     std::string benchmark;
     int benchmark_seconds = 0;
+
+    // --tune: sweep power caps in the miner loop and recommend a --pl value
+    // (miner/tune.h). Like --benchmark it is a mode, not a setting: no pool, no
+    // wallet, exits when done. Needs root, exactly as --pl does. --pl "auto"
+    // (stored in power_limit above) applies the stored recommendation.
+    bool tune = false;
+    int  tune_seconds = 60;      // --tune-seconds: measured seconds per power point
+    std::string tune_caps;       // --tune-caps: watts list ("100,140,220"); empty = auto
+    double tune_knee = 0.07;     // --tune-knee: sol/s per W below which watts stop paying
     std::string config_path, json_profile;  // --config PATH, --profile NAME (with --json)
     bool use_json_config = false;    // --json
     bool version_requested = false, help_requested = false;

@@ -53,6 +53,42 @@ reproducible win was the wrong trade. Whatever next claims the low band — a re
 crossover, or the Tier-2 eco pipeline — re-arms it by setting that one constant.
 `MXBM_BB=17` still forces the geometry by hand.
 
+## `--tune`: measure this card's power curve, then `--pl auto`
+
+The head-to-head sweeps that produced the tables below were bash scripts around
+`nvidia-smi`; `--tune` is that measurement as a first-class mode, built so its numbers
+cannot go wrong the three ways the 2026-07-31 session catalogued:
+
+- **The right loop.** Every point runs `run_benchmark()` — the exact `Engine` path
+  mining runs, CPU-verified sol/s — not a pipeline replay. A curve measured in any
+  other loop is a curve of a different program.
+- **The current build.** The sweep lives inside the shipping binary; there is no
+  separate bench binary to go stale.
+- **A drift gauge.** After a discarded warmup and the sweep (default: 6 points across
+  the band the *driver* reports, 60 s each, high to low), the first point is measured
+  again. The delta is printed and stored; past ±1.5 % the table is flagged as carrying
+  that uncertainty. This is not paranoia — un-gauged same-day sweeps on this card have
+  disagreed by 2 %/arm from heat-soak alone.
+
+The recommendation has two numbers: the **knee** — climbing from the lowest cap, the
+highest one where each extra watt still returns at least `--tune-knee` sol/s (default
+0.07/W, the one number that is a preference rather than a measurement) — and the
+**best-efficiency point** (max sol/s per *measured* watt of draw, not per cap-watt,
+because a core-limited card draws under its limit at stock). Both are printed;
+the knee is stored per card (`~/.config/mxbm/tune.json`, keyed by name@PCI) and
+`--pl auto` applies it on any later launch.
+
+Root is needed exactly as for `--pl` — every NVML write is — so the intended flow is:
+`sudo mxbm --tune` **once** (~8 min; the store deliberately lands in the *invoking*
+user's config dir, not root's, and is chowned back), then daily unprivileged runs with
+`--pl auto`... which still needs root to *apply* the limit, so on a no-root-mining rig
+the honest use is: read the recommendation once, then put `sudo nvidia-smi -pl <knee>`
+in the rig's boot sequence. `--tune` refuses a simultaneous `--pl` (it drives the limit
+itself) but allows the other OC knobs — tuning an undervolted card's curve is a
+legitimate ask. Ctrl+C aborts and restores the limit that was on the card, as does
+every completed sweep. Re-run after driver updates, cooling changes, or a season —
+`--pl auto` prints the measurement date so a stale tune is visible.
+
 **Apply order is fixed**: power limit, core offset, memory offset, locked core clock,
 locked memory clock, fan. The V/F curve is shaped before anything is pinned onto it, and
 the fan is set last, against the thermal load the rest implies. **Restore is the exact

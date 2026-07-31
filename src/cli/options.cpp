@@ -37,6 +37,14 @@ std::string usage_text() {
         "  --watchdogscript PATH  script to run when ACTION is script\n"
         "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
         "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
+        "  --tune                 measure this card's power/speed curve and recommend a\n"
+        "                         --pl value (needs root, ~8 min, no pool). The result is\n"
+        "                         stored per card; apply it later with --pl auto.\n"
+        "                         --tune-seconds N   seconds per power point (default: 60)\n"
+        "                         --tune-caps LIST   watt points (\"100,140,220\"; default:\n"
+        "                                            6 across the card's own band)\n"
+        "                         --tune-knee X      sol/s per extra watt below which more\n"
+        "                                            power stops paying (default: 0.07)\n"
         "  --solver cuda|metal|opencl|gpu|ref|auto\n"
         "                         solver backend. gpu = any GPU (CUDA, then Metal, then\n"
         "                         OpenCL), cuda/metal/opencl\n"
@@ -55,8 +63,9 @@ std::string usage_text() {
         "  --timeprint [0|1]      stamp the short-stats line with [HH:MM:SS] (default: off)\n"
         "  --digits N             decimals on the speed figures, 0..6 (default: 2)\n"
         "  --pl W                 board power limit in watts, per GPU (\"240\", \"240,*,260\";\n"
-        "                         * skips a GPU). Needs root. Restored on exit unless\n"
-        "                         --no-oc-reset. See docs/overclocking.md\n"
+        "                         * skips a GPU), or \"auto\" for the value a --tune run\n"
+        "                         stored for this card. Needs root. Restored on exit\n"
+        "                         unless --no-oc-reset. See docs/overclocking.md\n"
         "  --cclk MHz             lock the core clock       --coff MHz  shift its V/F curve\n"
         "  --mclk MHz             lock the memory clock     --moff MHz  shift its V/F curve\n"
         "  --fan PCT              fan target, in percent\n"
@@ -217,6 +226,15 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             // Syntax only here; the WATTS are validated against the band the
             // driver reports for the actual card, which the CLI cannot see.
             const std::string spec = argv[++i];
+            // "auto": the value --tune stored for this card. Resolved in main()
+            // once the card is known -- the CLI cannot look it up, only pass it on.
+            std::string low;
+            for (char c : spec) low += (char)std::tolower((unsigned char)c);
+            if (low == "auto") {
+                out.power_limit = "auto";
+                out.seen.power_limit = true;
+                continue;
+            }
             long v = 0; bool found = false; std::string perr;
             if (!gpu::oc_parse_list(spec, 0, v, found, perr)) {
                 err = "invalid --pl (" + perr + ")\n\n" + usage_text();
@@ -224,6 +242,56 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             }
             out.power_limit = spec;
             out.seen.power_limit = true;
+            continue;
+        }
+        if (arg == "--tune") {
+            out.tune = true;
+            // A mode like --benchmark: it names the work itself, so it satisfies
+            // --algo (there is only one algorithm to tune for).
+            algo = "BEAM-III";
+            continue;
+        }
+        if (arg == "--tune-seconds") {
+            if (i + 1 >= argc) { err = "missing value for --tune-seconds\n\n" + usage_text(); return false; }
+            char* end = nullptr;
+            long v = std::strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v < 15) {
+                err = "invalid --tune-seconds (must be an integer >= 15; shorter "
+                      "windows measure ramp, not rate)\n\n" + usage_text();
+                return false;
+            }
+            out.tune_seconds = (int)v;
+            continue;
+        }
+        if (arg == "--tune-caps") {
+            if (i + 1 >= argc) { err = "missing value for --tune-caps\n\n" + usage_text(); return false; }
+            // Syntax only, like --pl: a comma list of plain watt values. The band
+            // check belongs to the driver, which the CLI cannot see.
+            const std::string spec = argv[++i];
+            size_t pos = 0;
+            while (pos <= spec.size()) {
+                const size_t comma = spec.find(',', pos);
+                const std::string tok = spec.substr(pos, comma == std::string::npos
+                                                             ? std::string::npos : comma - pos);
+                if (tok.empty() || tok.find_first_not_of("0123456789") != std::string::npos) {
+                    err = "invalid --tune-caps ('" + tok + "' is not a wattage)\n\n" + usage_text();
+                    return false;
+                }
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            out.tune_caps = spec;
+            continue;
+        }
+        if (arg == "--tune-knee") {
+            if (i + 1 >= argc) { err = "missing value for --tune-knee\n\n" + usage_text(); return false; }
+            char* end = nullptr;
+            double v = std::strtod(argv[++i], &end);
+            if (!end || *end != '\0' || !(v > 0.0)) {
+                err = "invalid --tune-knee (sol/s per watt, must be > 0)\n\n" + usage_text();
+                return false;
+            }
+            out.tune_knee = v;
             continue;
         }
         // The clock and fan knobs. Same list grammar as --pl; the only

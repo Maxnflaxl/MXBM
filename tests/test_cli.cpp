@@ -403,5 +403,43 @@ int main() {
               "but ALL of nothing is simply nothing, which the caller reports its own way");
     }
 
+    {
+        // --tune and --pl auto. Both are pass-through at parse time: the watts and
+        // the store lookup belong to the driver and to main(), which the CLI cannot
+        // see -- exactly the --pl precedent.
+        const char* t1[] = {"mxbm","--tune"};
+        Options ot; std::string et;
+        check(parse_args(2,(char**)t1,ot,et), "--tune parses with nothing else");
+        check(ot.tune && ot.seen.algo, "--tune is a mode and satisfies --algo itself");
+        check(ot.tune_seconds == 60 && ot.tune_caps.empty() && ot.tune_knee == 0.07,
+              "tune defaults: 60 s per point, driver-band caps, 0.07 sol/s per W knee");
+
+        const char* t2[] = {"mxbm","--tune","--tune-seconds","30",
+                            "--tune-caps","100,160,220","--tune-knee","0.05"};
+        Options ot2; std::string et2;
+        check(parse_args(8,(char**)t2,ot2,et2), "tune knobs parse");
+        check(ot2.tune_seconds == 30 && ot2.tune_caps == "100,160,220"
+              && ot2.tune_knee == 0.05, "tune knobs land");
+
+        const char* t3[] = {"mxbm","--tune","--tune-seconds","5"};
+        Options ot3; std::string et3;
+        check(!parse_args(4,(char**)t3,ot3,et3),
+              "a 5 s point is refused: that window measures ramp, not rate");
+        const char* t4[] = {"mxbm","--tune","--tune-caps","100,abc"};
+        Options ot4; std::string et4;
+        check(!parse_args(4,(char**)t4,ot4,et4), "a non-wattage in --tune-caps is an error");
+
+        const char* t5[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--pl","AUTO"};
+        Options ot5; std::string et5;
+        check(parse_args(9,(char**)t5,ot5,et5), "--pl auto parses (any case)");
+        check(ot5.power_limit == "auto" && ot5.seen.power_limit,
+              "and is normalized to lowercase for main() to resolve");
+        const char* t6[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--pl","autoo"};
+        Options ot6; std::string et6;
+        check(!parse_args(9,(char**)t6,ot6,et6), "near-miss spellings stay errors");
+    }
+
     return summary("cli");
 }

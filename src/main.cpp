@@ -25,6 +25,7 @@
 #include "miner/engine.h"
 #include "miner/devfee.h"
 #include "miner/benchmark.h"
+#include "miner/tune.h"
 #include "miner/watchdog.h"
 #include "version.h"
 #include "gpu/nvml.h"
@@ -109,6 +110,18 @@ int main(int argc, char** argv) {
     cli::resolve_implied_options(opts);
 
     const bool benchmark_mode = !opts.benchmark.empty();
+    // --tune drives the power limit itself, point by point; a fixed --pl under it
+    // would be overwritten by the first sweep step and silently lied about. The
+    // other OC knobs (--cclk, --coff, ...) are ALLOWED: tuning the curve of an
+    // undervolted card is a legitimate ask, and they hold still across the sweep.
+    if (opts.tune && !opts.power_limit.empty()) {
+        std::fputs("--tune sets the power limit itself; drop --pl (other OC flags may stay)\n", stderr);
+        return 1;
+    }
+    if (opts.tune && benchmark_mode) {
+        std::fputs("--tune and --benchmark are both modes; pick one\n", stderr);
+        return 1;
+    }
     // Checked here rather than in parse_args: a config file may supply ALGO
     // and POOLS, so these fire only when no source supplied them. --list-devices
     // is exempt for the same reason --version is: it answers a question about
@@ -118,7 +131,7 @@ int main(int argc, char** argv) {
         std::fputs("unsupported algo (pass --algo BEAM-III, or set ALGO in your config)\n", stderr);
         return 1;
     }
-    if (opts.pools.empty() && !benchmark_mode && !opts.list_devices) {
+    if (opts.pools.empty() && !benchmark_mode && !opts.list_devices && !opts.tune) {
         std::fputs("missing --pool (or config with POOLS)\n", stderr);
         return 1;
     }
@@ -327,6 +340,34 @@ int main(int argc, char** argv) {
         ocreq.coff = opts.core_offset;
         ocreq.moff = opts.mem_offset;
         ocreq.fan  = opts.fan;
+
+        // --pl auto: the value a --tune run stored for THIS card. Resolved here --
+        // after the card is known, before the numeric validation below would choke
+        // on the word -- into a plain wattage, so everything downstream (apply,
+        // restore, geometry observation) is unchanged.
+        if (ocreq.pl == "auto") {
+            std::string key;
+#ifdef MXBM_HAVE_CUDA
+            if ((size_t)device_index < cuda_devices.size())
+                key = cuda_devices[(size_t)device_index].name + "@"
+                    + (have_nvml ? gpu::nvml_pci_address((unsigned)device_index)
+                                 : std::string());
+#endif
+            std::string date;
+            const unsigned w = key.empty() ? 0u : miner::tune_stored_knee(key, date);
+            if (w) {
+                ocreq.pl = std::to_string(w);
+                ui::console::info("--pl auto: " + std::to_string(w)
+                                  + " W, tuned for this card on " + date
+                                  + " (re-run --tune after driver or cooling changes)");
+            } else {
+                ocreq.pl.clear();
+                ui::console::error("--pl auto: no stored tune for this card in "
+                                   + miner::tune_store_path()
+                                   + " - run `sudo mxbm --tune` once; continuing at "
+                                     "the card's current limit");
+            }
+        }
         const bool any = !(ocreq.pl.empty() && ocreq.cclk.empty() && ocreq.mclk.empty()
                            && ocreq.coff.empty() && ocreq.moff.empty() && ocreq.fan.empty());
 
@@ -585,7 +626,7 @@ int main(int argc, char** argv) {
     // A failed connect is not fatal: client.run()'s reconnect loop keeps
     // retrying below. login() runs unconditionally so the api_key credential
     // is stored even then, giving that loop something to re-login with.
-    if (!benchmark_mode) {
+    if (!benchmark_mode && !opts.tune) {
         ui::console::connecting_to_pool();
         auto connect_t0 = std::chrono::steady_clock::now();
         // Failover list, in the order the pools were given. Each carries its own
@@ -617,6 +658,57 @@ int main(int argc, char** argv) {
             ui::console::error("Initial connection failed — will keep retrying");
         }
         client.login(opts.pools[0].user);   // stores api_key for reconnect re-login even if send fails
+    }
+
+    // --tune: sweep power caps through the SAME solver mining uses, recommend a
+    // --pl value, store it for --pl auto, exit. Placed exactly like --benchmark
+    // and for the same reason: a curve measured in any other loop is a curve of
+    // a different program (the 2026-07-31 lesson, docs/performance-research.md).
+    if (opts.tune) {
+        if (!solver) {
+            ui::console::error("--tune needs a working solver backend; none is available");
+            return 1;
+        }
+        if (!have_nvml) {
+            ui::console::error("--tune needs NVML (an NVIDIA driver) to drive the power "
+                               "limit; none is available here");
+            return 1;
+        }
+        miner::TuneConfig tcfg;
+        tcfg.seconds_per_point = opts.tune_seconds;
+        tcfg.knee_marginal = opts.tune_knee;
+        if (!opts.tune_caps.empty()) {
+            // Parse-time checked to be digits and commas; split it here.
+            size_t pos = 0;
+            while (pos <= opts.tune_caps.size()) {
+                const size_t comma = opts.tune_caps.find(',', pos);
+                tcfg.caps.push_back((unsigned)std::strtoul(
+                    opts.tune_caps.substr(pos, comma == std::string::npos
+                                                   ? std::string::npos : comma - pos).c_str(),
+                    nullptr, 10));
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+        }
+        // Same Ctrl+C contract as the benchmark: stop the sweep, cut the solve in
+        // flight -- and run_tune itself restores the power limit on that path.
+        static std::atomic<bool>* s_tstop = nullptr;
+        static miner::Solver* s_tsolver = nullptr;
+        std::atomic<bool> stop{false};
+        s_tstop = &stop;
+        s_tsolver = solver.get();
+        std::signal(SIGINT, [](int) {
+            if (s_tstop) s_tstop->store(true, std::memory_order_relaxed);
+            if (s_tsolver) s_tsolver->request_abort();
+        });
+        const std::string key = dev_name + "@"
+                              + gpu::nvml_pci_address((unsigned)device_index);
+        const int rc = miner::run_tune(*solver, stats, key, tcfg, stop);
+        // Same epilogue as the benchmark: if some OTHER OC knob (--cclk with --tune
+        // is legitimate) still has a restore pending, SIGINT must keep triggering it.
+        if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
+        else                               std::signal(SIGINT, SIG_DFL);
+        return rc;
     }
 
     // --benchmark: solve synthetic jobs, report, exit. After solver selection

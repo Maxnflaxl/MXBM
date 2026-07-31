@@ -126,6 +126,12 @@ target_include_directories(test_cli PRIVATE tests src)
 target_link_libraries(test_cli PRIVATE mxbm_nvml)
 add_test(NAME cli COMMAND test_cli)
 
+# The --tune recommendation arithmetic, header-only on purpose: a GPU-free test can
+# then pin the knee/efficiency logic that decides what --pl auto applies.
+add_executable(test_tune tests/test_tune.cpp)
+target_include_directories(test_tune PRIVATE tests src)
+add_test(NAME tune COMMAND test_tune)
+
 add_library(mxbm_config STATIC src/config/config.cpp)
 target_include_directories(mxbm_config PUBLIC src)
 target_link_libraries(mxbm_config PUBLIC mxbm_json)
@@ -179,8 +185,9 @@ target_include_directories(test_overclock PRIVATE tests src)
 target_link_libraries(test_overclock PRIVATE mxbm_nvml)
 add_test(NAME overclock COMMAND test_overclock)
 
-add_executable(mxbm src/main.cpp src/cli/options.cpp)
+add_executable(mxbm src/main.cpp src/cli/options.cpp src/miner/tune.cpp)
 target_link_libraries(mxbm PRIVATE mxbm_nvml)
+target_include_directories(mxbm PRIVATE third_party)   # tune.cpp: nlohmann/json
 # main.cpp asks the geometry question itself (the power-limit restart notice), so the
 # dependency is direct, not just transitive through whichever GPU backend is built in.
 target_link_libraries(mxbm PRIVATE mxbm_geom)
