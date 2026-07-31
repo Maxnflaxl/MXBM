@@ -33,6 +33,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 using namespace mxbm;
 using namespace mxbm::cuda;
 
@@ -457,6 +458,31 @@ struct CudaSolver {
     }
 };
 
+// Device 0's cumulative energy counter in millijoules (the same five-symbol dlopen
+// as benchmarks/nvml_energy.c). Bracketed around the timed loop so stage_power.sh
+// gets exact joules with the CUDA init and allocation excluded -- a bash-side
+// bracket would fold ~200 J of startup into runs whose stage figures are 0.3-3 J.
+static bool energy_mj(unsigned long long& out) {
+    typedef int (*fn_energy)(void*, unsigned long long*);
+    static void* dev = nullptr;
+    static fn_energy energy = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
+        if (!lib) lib = dlopen("libnvidia-ml.so", RTLD_LAZY);
+        if (lib) {
+            int (*init)(void) = (int (*)(void))dlsym(lib, "nvmlInit_v2");
+            int (*handle)(unsigned, void**) =
+                (int (*)(unsigned, void**))dlsym(lib, "nvmlDeviceGetHandleByIndex_v2");
+            energy = (fn_energy)dlsym(lib, "nvmlDeviceGetTotalEnergyConsumption");
+            if (!init || !handle || !energy || init() != 0 || handle(0, &dev) != 0)
+                energy = nullptr;
+        }
+    }
+    return energy && dev && energy(dev, &out) == 0;
+}
+
 int main(int argc, char** argv) {
     CudaSolver s;
     if (!s.init()) { printf("FAIL: allocation\n"); return 1; }
@@ -544,6 +570,8 @@ int main(int argc, char** argv) {
     size_t verified = 0; uint32_t worstDrop = 0;
     std::vector<double> ms;
     cudaDeviceSynchronize();
+    unsigned long long e0 = 0;
+    const bool haveE = energy_mj(e0);
     auto T0 = std::chrono::steady_clock::now();
 
     if (pipe2) {
@@ -634,6 +662,8 @@ int main(int argc, char** argv) {
 
     const double wall = std::chrono::duration<double,std::milli>(
                             std::chrono::steady_clock::now() - T0).count();
+    unsigned long long e1 = 0;
+    const bool haveE1 = haveE && energy_mj(e1) && e1 > e0;
     std::sort(ms.begin(), ms.end());
     const double med = ms[ms.size()/2];
     const double per = wall / n;
@@ -643,6 +673,10 @@ int main(int argc, char** argv) {
                             : overlap ? "OVERLAP (entry on 2nd stream)"
                                       : "sequential (baseline)");
     printf("end-to-end: %.2f ms/solve (wall/%d)   [per-solve median %.2f ms]\n", per, n, med);
+    if (haveE1)
+        printf("energy    : %.4f J/solve (%.0f J over the loop, %.1f W mean)\n",
+               (double)(e1 - e0) / 1000.0 / n, (double)(e1 - e0) / 1000.0,
+               (double)(e1 - e0) / wall);
     printf("solutions : %.2f verified/solve  =>  %.1f sol/s\n", spersolve, spersolve*1000.0/per);
     printf("drops     : %u  %s\n", worstDrop, worstDrop ? "*** NONZERO -- RESULT INVALID ***" : "(clean)");
 

@@ -13,6 +13,7 @@
 /cuda/pipeline
 /cuda/emit_shape_probe
 /cuda/test_primitives
+/benchmarks/nvml_energy
 
 # CUDA / HIP intermediates
 *.i

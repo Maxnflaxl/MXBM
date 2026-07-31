@@ -171,15 +171,32 @@ usable as a research instrument wherever a drift-gauged power curve is the quest
 The first full three-pass run (2026-07-31, reference card) reproduced the dedicated
 sweeps: knee 231 W (refined down from the coarse 248), rung crossover interpolated at
 ~171 W vs the sweeps' ~173, drift +0.5 % where un-gauged sessions had shown ~2 %/arm.
-One known grid miss: pass 3 reuses the coarse caps, whose 37 W spacing skips ~160 W —
-so the verdict named 211 W stock as best efficiency (0.256 sol/s/W) and could not see
-the true record between its rung points (160 W + rung, 0.264). The knee and rung-band
-verdicts, the ones `--pl auto` acts on, are unaffected.
+One grid miss surfaced and was closed the same day: pass 3 reuses the coarse caps,
+whose 37 W spacing skips ~160 W — so the verdict named 211 W stock as best efficiency
+(0.256 sol/s/W) and could not see the true record between its rung points (160 W +
+rung, 0.264). The knee and rung-band verdicts, the ones `--pl auto` acts on, were
+unaffected. Fix: a fourth pass that aims `tune_refine_caps` (budget 4, so ~15 W
+steps) at the best-efficiency point on its own memory clock; on this card's series
+that grid is 115/130/145/160 — the record cap lands on it exactly
+(test_tune pins the grid). Re-running `--tune` regenerates the store with it.
 Energy is measured, not integrated, since 2026-07-31: the card's millijoule counter
 (NVML `nvmlDeviceGetTotalEnergyConsumption`, no root to read) backs `--benchmark`'s
 J/solution line, `--tune`'s per-point draw, `/summary`'s `Energy_J`, and
 `bench_energy_mj` in `benchmarks/lib.sh` — bracket a window, diff the counter, divide;
 the 5 Hz `power.draw` sampler remains only as the fallback for cards without it.
+The composition of the two replay instruments with the counter is
+`benchmarks/stage_power.sh` since 2026-07-31: `cuda/pipeline` brackets the counter
+around its own timed loop (init excluded — a bash-side bracket would bias the small
+stages 5–50 %), so per-stage joules are exact, `E_s = (J_N − J_1)/(N−1)`. The stock
+re-measurement on the current kernels tightened both closures (stage times sum to
+100.1 % of the solve, stage energies to within 0.8 % of the counter's whole-solve
+figure) and re-confirmed the stock verdict with exact joules: no watt-hog — every
+stage draws 283–285 W except round 3 at 275.4 W, and r3 runs the highest clock of
+any stage (2745 MHz), the DRAM-bound signature. 9.63 J/solve ÷ 1.96 verified =
+4.91 J/solution at stock; the refreshed stage table is in performance.md. The open
+half of the lead is the same attribution at the capped/rung operating points
+(`BASE_MS` override sizes the runs), where the "every stage draws the cap" verdict
+has never been checked.
 The row-bucket
 kernels' own knobs ride the same option string: `-DLDS_FCAP` / `-DLDS_FCAP_R1`
 (group caps, default 320/288), `-DLDS_FTAB` (chain-table entries, 128),

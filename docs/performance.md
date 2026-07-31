@@ -413,30 +413,36 @@ not heat, and the 5 °C gap to lolMiner is the *consequence* of drawing
 That is not a property of one hot kernel. `benchmarks/stage_power.sh` replays a
 single stage N times inside the solve that produced its input — so its input
 bytes, bucket occupancies and output addresses are the real ones — and solves for
-that stage's own time and power from the shift it causes:
+that stage's own time and energy from the shift it causes (since 2026-07-31 the
+joules come from the card's energy counter, bracketed around the timed loop
+inside the binary; the sampled-watts identity remains the fallback):
 
-    t_s = (T_N - T_1) / (N-1)        P_s = (P_N*T_N - P_1*T_1) / (T_N - T_1)
+    t_s = (T_N - T_1) / (N-1)        E_s = (J_N - J_1) / (N-1)        P_s = E_s / t_s
+
+Re-measured 2026-07-31 on the current kernels, 8 reps, 45 s per stage:
 
 | stage | ms | % of solve | power | J/solve | % of energy |
 |---|---|---|---|---|---|
-| `entry_scatter` | 2.68 | 7.7 | 284.0 W | 0.76 | 7.7 |
-| round 1 | 5.79 | 16.5 | 284.5 W | 1.65 | 16.6 |
-| round 2 | 10.68 | 30.5 | 283.6 W | 3.03 | 30.5 |
-| round 3 | 9.54 | 27.2 | **270.9 W** | 2.58 | 26.1 |
-| round 4 | 5.65 | 16.1 | 282.9 W | 1.60 | 16.1 |
-| terminal | 1.05 | 3.0 | 284.1 W | 0.30 | 3.0 |
-| **sum** | **35.39** | **101 %** | 280.3 W | **9.92** | |
+| `entry_scatter` | 2.68 | 7.9 | 283.8 W | 0.76 | 8.0 |
+| round 1 | 5.14 | 15.2 | 284.6 W | 1.46 | 15.3 |
+| round 2 | 10.24 | 30.2 | 283.2 W | 2.90 | 30.4 |
+| round 3 | 9.48 | 28.0 | **275.4 W** | 2.61 | 27.4 |
+| round 4 | 5.46 | 16.1 | 283.7 W | 1.55 | 16.2 |
+| terminal | 0.94 | 2.8 | 280.2 W | 0.26 | 2.8 |
+| **sum** | **33.93** | **100.1 %** | 281.3 W | **9.55** | |
 
-Solve is 35.03 ms, so the stages account for 101 % of it — the 1 % overshoot is the
-measurement's own error, and it bounds anything unattributed (memsets, launch
-gaps, readback, CPU verify) at essentially zero. 9.92 J per solve ÷ 1.98 verified
-solutions = **4.96 J per solution**.
+Solve is 33.90 ms in the harness, so the stages account for 100.1 % of it, and
+their summed energy lands within 0.8 % of the counter's own whole-solve figure
+(9.63 J) — both closures bound anything unattributed (memsets, launch gaps,
+readback, CPU verify) at essentially zero. 9.63 J per solve ÷ 1.96 verified
+solutions = **4.91 J per solution** at stock.
 
 Every stage draws the cap. There is no power-hog kernel to fix: the workload
 saturates the board limit from `entry_scatter` through the terminal round, and
-the driver pulls the core clock down (2625–2760 MHz) to hold 285 W. Only round 3
-sits measurably below it, and round 3 is the DRAM-bound round — moving bytes
-costs this board less than working the SM does.
+the driver pulls the core clock down (2610–2745 MHz) to hold 285 W. Only round 3
+sits measurably below it — and it runs the highest clock of any stage — because
+round 3 is the DRAM-bound round: moving bytes costs this board less than working
+the SM does, so the freed power comes back as core clock.
 
 Two consequences, and they matter more than the table:
 

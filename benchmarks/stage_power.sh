@@ -7,10 +7,13 @@
 # solves for that stage's own time and power from the shift it causes:
 #
 #     t_s = (T_N - T_1) / (N-1)
-#     P_s = (P_N*T_N - P_1*T_1) / (T_N - T_1)
+#     E_s = (J_N - J_1) / (N-1)        P_s = E_s / t_s
 #
-# T is ms/solve and P the median sampled watts. Every rep is a complete, correct pass
-# over the real input, so per-rep memory traffic matches production exactly.
+# T is ms/solve and J the joules/solve from the card's energy counter, which the
+# pipeline binary brackets around its own timed loop (so init is excluded). On cards
+# without the counter, P falls back to the sampled median via the old identity
+# P_s = (P_N*T_N - P_1*T_1)/(T_N - T_1). Every rep is a complete, correct pass over
+# the real input, so per-rep memory traffic matches production exactly.
 #
 # Every run must be long enough that the sampled median is steady-state and not ramp:
 # the solve count is derived per stage from its known cost so each run lasts SECONDS.
@@ -25,8 +28,12 @@ OUT=${OUT_DIR:-/tmp/mxbm-stage}
 mkdir -p "$OUT"
 
 # ms/solve for the baseline, and each stage's own ms (measured; only used to size runs).
-BASE_MS=35.2
+# BASE_MS is overridable so a capped/rung wrapper can size its runs for the slower
+# solve; the per-stage estimates scale with it.
+BASE_MS=${BASE_MS:-35.2}
+SCALE=$(python3 -c "print($BASE_MS/35.2)")
 declare -A STAGE_MS=( [entry]=2.7 [r1]=5.8 [r2]=10.5 [r3]=10.0 [r4]=5.7 [term]=1.05 )
+for k in "${!STAGE_MS[@]}"; do STAGE_MS[$k]=$(python3 -c "print(${STAGE_MS[$k]}*$SCALE)"); done
 
 run() {   # run <label> <solves> <env-assignment...>
     local label=$1 solves=$2; shift 2
@@ -61,9 +68,10 @@ python3 - "$OUT" "$REPS" <<'PY'
 import sys, statistics as st, os
 out, reps = sys.argv[1], int(sys.argv[2])
 def read(label):
-    ms = None; drops = None
+    ms = None; drops = None; jps = None
     for line in open(f"{out}/{label}.log"):
         if line.startswith("end-to-end"): ms = float(line.split(":")[1].split("ms")[0])
+        if line.startswith("energy"): jps = float(line.split(":")[1].split("J/solve")[0])
         if line.startswith("drops"): drops = line.split(":")[1].strip()
     rows = []
     for line in open(f"{out}/{label}.csv"):
@@ -73,26 +81,34 @@ def read(label):
         except ValueError: pass
     body = rows[50:-3] if len(rows) > 120 else rows       # drop 10 s of ramp and the tail
     if len(body) < 60: print(f"WARNING: {label} has only {len(body)} steady samples")
-    return ms, st.median([r[0] for r in body]), st.median([r[1] for r in body]), drops
-T1, P1, C1, d1 = read("baseline")
-print(f"\nbaseline: {T1:.2f} ms/solve   {P1:.1f} W   {C1:.0f} MHz   drops {d1}")
+    return ms, st.median([r[0] for r in body]), st.median([r[1] for r in body]), drops, jps
+T1, P1, C1, d1, J1 = read("baseline")
+counter = J1 is not None
+print(f"\nbaseline: {T1:.2f} ms/solve   {P1:.1f} W   {C1:.0f} MHz   drops {d1}"
+      + (f"   {J1:.2f} J/solve (counter)" if counter else "   (no energy counter: sampled watts)"))
 print(f"\n{'stage':6} {'T_N ms':>8} {'P_N W':>7} {'clk':>6} | {'t_stage ms':>10} {'%time':>6} "
       f"{'P_stage W':>10} {'J/solve':>8} {'%energy':>8}")
 rows = []
 for s in ("entry","r1","r2","r3","r4","term"):
-    TN, PN, CN, dn = read(s)
+    TN, PN, CN, dn, JN = read(s)
     dt = TN - T1
     ts = dt/(reps-1)
-    Ps = (PN*TN - P1*T1)/dt
-    rows.append((s, TN, PN, CN, ts, Ps, dn))
+    if counter and JN is not None:
+        Es = (JN - J1)/(reps-1)          # exact joules per stage execution
+        Ps = 1000*Es/ts
+    else:
+        Ps = (PN*TN - P1*T1)/dt
+        Es = ts*Ps/1000
+    rows.append((s, TN, PN, CN, ts, Ps, Es, dn))
 tot_t = sum(r[4] for r in rows)
-tot_e = sum(r[4]*r[5] for r in rows)
-for s, TN, PN, CN, ts, Ps, dn in rows:
+tot_e = sum(r[6] for r in rows)
+for s, TN, PN, CN, ts, Ps, Es, dn in rows:
     print(f"{s:6} {TN:8.2f} {PN:7.1f} {CN:6.0f} | {ts:10.2f} {100*ts/T1:6.1f} "
-          f"{Ps:10.1f} {ts*Ps/1000:8.2f} {100*ts*Ps/tot_e:8.1f}"
+          f"{Ps:10.1f} {Es:8.2f} {100*Es/tot_e:8.1f}"
           + ("   DROPS!" if dn and dn != "0  (clean)" else ""))
 print(f"{'sum':6} {'':8} {'':7} {'':6} | {tot_t:10.2f} {100*tot_t/T1:6.1f} "
-      f"{tot_e/tot_t:10.1f} {tot_e/1000:8.2f}")
+      f"{1000*tot_e/tot_t:10.1f} {tot_e:8.2f}")
 print(f"\nunattributed: {T1-tot_t:.2f} ms/solve ({100*(T1-tot_t)/T1:.1f} %) -- memsets, "
-      f"launch gaps, readback, CPU verify")
+      f"launch gaps, readback, CPU verify"
+      + (f"; {J1-tot_e:+.2f} J/solve vs the counter's whole-solve figure" if counter else ""))
 PY
