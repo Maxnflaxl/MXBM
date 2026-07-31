@@ -106,14 +106,22 @@ sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh
 ```
 
 Reference values on the reference card (RTX 4070 Ti SUPER, driver 610.43.03,
-measured 2026-07-28, two runs 89 minutes apart under hostile desktop load):
+measured 2026-08-01 on the build at `5285c2b`, six 120 s runs):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **34.30** — both runs, to the digit | a build change is real past ±0.5 % (the within-session band is 0.3 %) |
+| ms/solve median | **33.50** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
 | SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
-| board draw | ~262 W | context, not a gate |
+| board draw | ~277 W (≈ 4.66 J/solution at 59.4 sol/s, sampled-power basis) | context, not a gate |
 | `clocks_event_reasons` | **none** | any throttle flag voids the run |
+
+Prior pin, for lineage: **34.30 ms / ~262 W**, measured 2026-07-28 (two runs
+89 minutes apart, to the digit). The 2026-08-01 repeat moved −2.3 % because two
+kernel changes shipped 2026-07-31 (`4605c62` entry co-scheduling, `dfdbb84`
+r2 LD.128 + terminal perfect table) — the shift matches their ship-time
+measurements, and the +15 W at identical clocks is the busier binary. The pin
+must be re-taken after any kernel-shipping day; the number belongs to a build,
+the *reproducibility* belongs to the rig.
 
 Three rules. **One:** builds are compared at this pin, never on the stock number —
 stock carries the ~2.5 % cross-session band and gates nothing. **Two:** the pin is
@@ -121,9 +129,12 @@ only a pin while the clock column reads 2610/10251; a run that drifted off it is
 discarded, not averaged. **Three:** since 2026-07-31 the energy counter is the
 efficiency basis — record J/solution alongside ms/solve from the next reference run
 onward, so the recipe gates efficiency regressions too, not just speed. A genuine
-**cross-day repeat of this reference is still owed** (both existing runs were
-2026-07-28); the first person to run it on another day should append the result to
-performance.md's reproducibility table.
+**cross-day repeat ran 2026-08-01** (performance.md's reproducibility section):
+under the pin the rig reproduced to the digit across days — six runs, 0.0 %
+spread — and the absolute number moved only with the build. The standing owe is
+now maintenance, not a question: re-pin after each kernel-shipping day, and any
+repeat that moves past ±0.5 % *without* a shipped kernel change reopens the
+V/f-state investigation.
 
 The full measured history, including every failed experiment, is in
 [performance-research.md](performance-research.md).

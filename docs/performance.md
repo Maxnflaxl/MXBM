@@ -673,6 +673,21 @@ lolMiner's saturation ceiling reproduced at 236.6–237.5 W against 235.7–235.
 band to attach to any single *absolute* number from this page is still the headline
 section's ~5 %; what this shows is that the *comparison* is stable well inside it.
 
+**The LGC-2600 cross-day repeat (2026-08-01), closing the pin's own question.**
+The locked-clock reference ran on a different day for the first time: six 120 s
+runs, ms/solve spread **0.0 %** (33.50 to the digit, all six), SM/mem pinned at
+exactly 2610/10251, temp 68 °C, power spread 0.6 %. The absolute number moved
+from the 07-28 reference's 34.30 to **33.50 (−2.3 %)** — and the lineage fully
+accounts for it: two kernel changes shipped 2026-07-31 (speculative entry
+co-scheduling, measured 33.8 → 33.4 ms at ship; r2's LD.128 pair record + the
+terminal round's perfect table) totalling 0.80 ms, inside their own measured
+sizes, and
+the draw rose 262 → 277 W at identical clocks, which is the signature of a
+busier binary, not a different rig-day. Verdict: **under the pin, the rig
+reproduces to the digit across days; the number moves only when the build
+does.** The reference is re-pinned at 33.50 for the current build
+(benchmarking.md); repeat it after any kernel-shipping day.
+
 ### Why we lose the low end: watts buy us less clock
 
 The mechanism is visible in the clocks — **down to 160 W, below which it inverts.**
