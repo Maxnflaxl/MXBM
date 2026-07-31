@@ -163,7 +163,12 @@ measured losses, kept as instruments),
 `LEADTIE_PROBE` (a `-D` build flag counting equal-lead pairs into the chain-drop
 counter; 17 per solve out of ~134 M),
 `MXBM_CL_OPTS` (extra OpenCL build options for the fused program, e.g.
-`-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)). The row-bucket
+`-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)).
+Power-curve sweeps that used to be bash around `nvidia-smi` now also exist as
+`--tune` (docs/usage.md): miner-loop arms inside the shipping binary, coarse pass +
+knee-refining pass, end-of-sweep drift gauge, result stored per card for `--pl auto` —
+usable as a research instrument wherever a drift-gauged power curve is the question.
+The row-bucket
 kernels' own knobs ride the same option string: `-DLDS_FCAP` / `-DLDS_FCAP_R1`
 (group caps, default 320/288), `-DLDS_FTAB` (chain-table entries, 128),
 `-DLDS_PERFECT_TAB=0` and `-DLDS_SPILL=0` — together those five restore the
@@ -2466,9 +2471,12 @@ hint is inert, the restart notice can
 never fire, and (17,0) is reachable only by `MXBM_BB=17`. Everything else stays live —
 the apply-then-observe startup order, the observed-limit hint through the CUDA ctor,
 the notice machinery — because Tier 2's eco pipeline (or a crossover that reproduces)
-re-arms the policy by setting that one constant. The same evening's runs also priced
-the guard the notice provides: (17,0) held at a 285 W stock limit costs **~23 % in the
-miner loop** (40.9 ms vs 33.1).
+re-arms the policy by setting that one constant. The restart notice itself was
+verified live before the disarm (start capped at 100 W, `nvidia-smi -pl 285` mid-run:
+fired once, immediately, correct direction, then silent for the rest of the run), and
+the same runs priced the guard it provides: (17,0) held at a 285 W stock limit costs
+**~23 % in the miner loop** (40.9 ms vs 33.1) — worth knowing for whenever the policy
+is re-armed.
 
 **`MXBM_R2_FULL` loses at EVERY cap, monotonically.** This kills the clean form of the
 instruction-currency theory: round 2's 14-siphash rebuild is ~500 ALU ops per element
@@ -2723,6 +2731,18 @@ Two nulls, so they are not re-proposed:
 A/B recipe, no rebuild needed (OpenCL compiles kernels at run time):
 `MXBM_CL_OPTS='-DLDS_PERFECT_TAB=0 -DLDS_SPILL=0 -DLDS_FCAP=384 -DLDS_FCAP_R1=384
 -DLDS_FTAB=512'` restores the legacy configuration exactly.
+
+**Metal, checked the same day: nothing to backport.** The Metal fused rounds postdate
+the 2026-07-26 CUDA wins and already carry all of them — no `lkey` anywhere, the walk
+compare omitted as a stated tautology, group spill, per-round FCAP (320 / r1 288), and
+the gi-is-lead fold. The one candidate left is `terminal_round`
+(`kernels/metal/pipeline_kernels.metal`), which keeps its `lkey` deliberately: its
+comment notes the table "is not guaranteed perfect at every geometry" because the
+Metal host has no bb+sm ≥ 17 guard. The remaining work is a Mac-session item — add the
+guard (mirroring `run_pipeline_rowbucket`/`CudaSolver`), drop terminal's `lkey` the
+way CUDA's `MXBM_PERFECT_TAB` did, and measure there. The CUDA analogue was worth
+≤ 0.1 ms of a 1.07 ms kernel; Metal's terminal is 4.4 ms of ~101, so expect small but
+nonzero. Not attempted from this rig: no Metal toolchain, no KAT gate.
 
 </details>
 
