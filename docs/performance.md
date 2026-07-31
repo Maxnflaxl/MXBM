@@ -102,7 +102,7 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 | 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.16 | 35.0 | **56.4** | −0.2 | −0.6 % | [Alignment pad](performance-research.md#the-round-2-alignment-pad) *(the win is −0.36 GiB; the speed is noise-level)* | — |
 | 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0 ± 0.4** | −0.9 | −2.6 % | [Group cap](performance-research.md#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](performance-research.md#bytes-are-nearly-free-per-element-work-is-not) |
 | 2026-07-31 | **Speculative entry co-scheduling** — r4's launch hosts the next nonce's entry as interleaved co-blocks | 33.85 | 33.4 | **59.5** | −0.45 | −1.3 % | [Co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), [ships](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms) | [pipe2 1:1, split host, r2/r3 hosts](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms), [register-forced occupancy](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
-| 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07)* | — |
+| 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7 ± 0.8** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07; the ± is the 60 s-window σ of the live session below)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
@@ -154,6 +154,21 @@ reports `N`, `Mean`, `Stddev`, `Min` and `Max` over the whole run for both windo
 for power, clocks and temperature — see
 [usage.md](usage.md#dashboard-and-monitoring-api). Only the median still needs the
 samples kept; the accumulators are constant-memory and hold none.
+
+**Re-confirmed on the current build, 2026-07-31.** A 20-minute live HeroMiners
+session on the shipping binary (stock 285 W, worker-logged, tallied from the pasted
+console):
+
+| window | samples | median | mean | σ | min | max |
+|---|---|---|---|---|---|---|
+| 60 s | 20 | **59.35** | 59.57 | **0.82** | 58.6 | 61.7 |
+| 15 s | 83 | **59.60** | 59.51 | 1.93 | 54.2 | 63.9 |
+
+Both window medians agree with the benchmark figure (59.7) to under 1 %, shares ran
+**47 accepted / 0 stale / 0 rejected**, and the card held 284 W / 2595–2685 MHz /
+66–68 °C throughout. Per this page's own model the *session-mean* uncertainty is the
+Poisson one (~71,000 solutions → ±0.2 sol/s); the ±0.8 carried on the progress row
+is the 60 s-window σ, the same convention as the 56.1 ± 2.3 session above.
 
 It also shows why **the peak must not be quoted**. Individual 15 s windows reached
 **61.5 sol/s**, which is tempting and wrong: it is the maximum of 304 draws from a noisy

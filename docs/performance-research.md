@@ -24,7 +24,7 @@ every A/B here was interleaved, so the deltas do not.
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
-| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline** |
+| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -156,6 +156,9 @@ positive control:
 
 Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
 `MXBM_LEGACY_MATCH`, `MXBM_LDS_MATCH`, `MXBM_NO_COMPACT`, `MXBM_SORT_PROFILE`,
+`MXBM_MATCH_K12` (sort path: 1 = the constant k1/k2 for r1/r2, 2 = the
+occupancy-pinned k1p/k2p; ballast size via `MXBM_CL_OPTS="-DKPIN_UINTS=N"` — both
+measured losses, kept as instruments),
 `MXBM_ABLATE` (bit 0 skips `apply_mix`, bit 1 skips the fat emit — for phase attribution),
 `LEADTIE_PROBE` (a `-D` build flag counting equal-lead pairs into the chain-drop
 counter; 17 per solve out of ~134 M),
@@ -2854,6 +2857,55 @@ durations under serialized replay, though their sum (37.4 ms) agrees with the
 uninstrumented ~35.8. lolMiner still reported 49–55 sol/s during the run, so the
 window barely distorted it. What its sol/s counter counts remains unmeasured — the
 accepted-share protocol stays the settle for that.*
+
+</details>
+
+### The sort path's constant-kernel regression: half of it is occupancy, the other half is still the constants — generic stays
+
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, the last open end of lead 4b. The ledger's named mechanism for k1/k2
+losing r1/r2 (+2.8/+2.3 ms) was that constant-folding dropped them from the generic
+kernel's 48 registers to 40, raising residency from 5 to 6 blocks/SM on a
+gather-bound kernel — supported by the converse probe (capping the GENERIC to 40
+cost r1 +4.9 / r2 +9.5) but never tested in the profitable direction: keep the
+constants, give the occupancy back.)*
+
+`ptxas` confirms the register facts exactly (generic 48, every K variant 40), and
+the test is `round_match_k1p`/`k2p`: the constant kernels plus a `__local` BALLAST
+array sized by `-DKPIN_UINTS` (kept live by a touch under a runtime condition that
+never holds, so it costs nothing at run time), selected by `MXBM_MATCH_K12=2`
+(`=1` re-measures the plain k1/k2 regression in the same binary). Whole-solve
+medians, `bench_rounds 10`, sort path, bracketed:
+
+| arm | ms |
+|---|---|
+| generic (shipping) | **193.5 / 190.6** |
+| k1/k2 (constants, 6 blocks/SM) | 202.5 |
+| k1p/k2p, 9.6 KB ballast | 197.7 |
+| k1p/k2p, 17.4 KB ballast | 197.9 |
+
+Per-round attribution (`MXBM_SORT_PROFILE`, emit means over 6 solves): generic
+r1 **21.0** / r2 **22.3** ms; pinned constants r1 **24.1** / r2 **25.1**.
+
+**Verdict: the pin recovers roughly half of the regression (202.5 → 197.7) — the
+occupancy mechanism is real — and the constant kernels still lose r1 +3.1 / r2
++2.8 ms to the generic even at pinned occupancy.** The residual travels with the
+constant-folding itself and stays unexplained, now with occupancy excluded as its
+cause. The generic kernel remains selected for r1/r2; both instruments stay in the
+tree so neither half has to be re-derived. That the two ballast sizes tie (197.7 vs
+197.9) also says the pin point saturated — the residual is not a partially-applied
+pin. Two caveats: the sweep ran while the card cooled from a mining session (the
+brackets moved 193.5 → 190.6, smaller than every gap read), and today's whole-solve
+regression (~+10 ms) reads larger than the ledger's original per-round +5.1 — same
+sign, different session.
+
+With this, **lead 4b's open ends are exhausted on the tuning side**: the K-variant
+question is answered, `leaves[2]`'s 138 MB stays declined for the audit's original
+reason (memory-only, on a path bound by other allocations), and what remains for
+the sort path is what always remained — it is the fallback for cards the row-bucket
+geometries cannot host, at ~190 ms.
 
 </details>
 
