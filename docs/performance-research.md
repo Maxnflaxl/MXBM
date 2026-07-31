@@ -2697,6 +2697,50 @@ is 33 % of the floor's time. Sign unknown; a KAT-gated ABBA at stock and
 
 </details>
 
+### The lwork SoA probe: conflict-free costs more than the conflicts — a measured loss
+
+<details>
+<summary>Details</summary>
+
+*(2026-08-01, closing the census's one named lever. `MXBM_LWORK_SOA=1` lays the
+staged work array out column-major — word w of element p at `w*FCAP + p` — so
+consecutive lanes read consecutive u64: bank-conflict-free by construction,
+same bytes, same shared budget. KAT green, r1 even dropped 46→43 registers.
+The measurement said no, twice.)*
+
+| operating point | base (pair means) | SoA | verdict |
+|---|---|---|---|
+| stock 285 W | 33.4 ms | 33.45 ms | wash |
+| 120 W + rung | 70.7 ms | 71.3 ms | **+0.85 %** |
+| 100 W + rung | 94.25 ms | 98.3 ms | **+4.3 %** (4.65 → 4.80 J/sol) |
+
+Worse exactly where it was supposed to win, growing toward the floor. The
+SASS explains it — the AoS record layout was quietly load-bearing for
+vectorization on BOTH shared paths:
+
+- **Stores**: 6 STS.128 in the base become 0 in the SoA build (50 STS.64 vs
+  38 — +12, exactly the un-fused pairs). Adjacent record words could fuse to
+  128-bit; column-major puts them `FCAP` apart, unfusable.
+- **Loads**: 27 LDS.128 become 19 (88 LDS.64 vs 72, +16) — part of the record
+  reads were 128-bit too, and the transpose broke those as well.
+
+Two flaws in the design premise, named so they stay named: (1) the
+consecutive-`p` assumption holds only in the linear rescan loops — the chain
+walk reads records at pointer-scattered positions where no stride is
+conflict-free; (2) conflict replays and memory instructions are different
+currencies, and on this kernel the replays are the cheap one — they hide
+under the ALU pipe (top at 69.9 %), while every added instruction bills the
+starved core directly at a cap. The same mechanism as the NARROW6-at-the-floor
+loss: instructions are the one thing a capped card cannot afford.
+
+The flag stays in the tree as the closure's instrument (off by default,
+flag-off codegen unchanged). With this, the census's non-structural list for
+r2 is empty: what remains in the round is hash arithmetic (86.5 %), designed
+divergence, and the structural scatter. Artifacts:
+`docs-internal/rootruns/soa-floor/`.
+
+</details>
+
 ### The compiler axis, re-swept on the July kernels — a clean null
 
 <details>
