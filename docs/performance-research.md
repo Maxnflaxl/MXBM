@@ -193,10 +193,10 @@ re-measurement on the current kernels tightened both closures (stage times sum t
 figure) and re-confirmed the stock verdict with exact joules: no watt-hog — every
 stage draws 283–285 W except round 3 at 275.4 W, and r3 runs the highest clock of
 any stage (2745 MHz), the DRAM-bound signature. 9.63 J/solve ÷ 1.96 verified =
-4.91 J/solution at stock; the refreshed stage table is in performance.md. The open
-half of the lead is the same attribution at the capped/rung operating points
-(`BASE_MS` override sizes the runs), where the "every stage draws the cap" verdict
-has never been checked.
+4.91 J/solution at stock; the refreshed stage table is in performance.md. The same
+attribution at the capped/rung operating points is
+[the eco attribution](#per-stage-attribution-at-the-eco-points-the-floors-time-is-round-2s),
+which named round 2 as the floor's diet target.
 The row-bucket
 kernels' own knobs ride the same option string: `-DLDS_FCAP` / `-DLDS_FCAP_R1`
 (group caps, default 320/288), `-DLDS_FTAB` (chain-table entries, 128),
@@ -2645,6 +2645,56 @@ reproduction failure. The disarm verdict now covers the rung regime too.
 The base arms doubled as a same-day reproduction of the rung sweep: 47.8–48.2 ms
 and 3.76–3.79 J/sol at 160 W + rung, against the sweep's 47.1 ms / 3.79 record.
 Artifacts: `docs-internal/rootruns/rung-compose/`.
+
+</details>
+
+### Per-stage attribution at the eco points: the floor's time is round 2's
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, `stage_power.sh` at the two operating points that matter to capped
+rigs — 160 W + 5001 (the efficiency record) and 100 W + 5001 (the Tier 2 floor) —
+rung held and verified over each whole point, energy from the counter, 8 reps,
+45 s-sized runs. The stock table is in performance.md; this is the first look at
+where the time goes when the cap actually bites.)*
+
+| stage | stock 285 W, %time | 160 W + rung | 100 W + rung |
+|---|---|---|---|
+| `entry_scatter` | 7.9 | 8.0 | 8.3 |
+| round 1 | 15.2 | 14.9 | 15.1 |
+| **round 2** | **30.2** | **31.4** | **33.1** |
+| round 3 | 28.0 | 32.5 | 23.7 |
+| round 4 | 16.1 | 19.4 | 14.8 |
+| terminal | 2.8 | 3.4 | 2.5 |
+
+Two regimes, opposite signatures:
+
+- **160 W + rung is bytes-bound.** r3 and r4 — the DRAM-heavy rounds — inflate to
+  52 % of the solve between them (r3 9.5 → 16.0 ms, +69 %; r4 5.5 → 9.6, +75 %):
+  the rung roofline biting, exactly where the rung stops paying above ~173 W. Not
+  actionable: the byte lever is closed in this regime too (quad's refund never
+  surfaces against its arithmetic price — see the composition nulls above).
+- **The floor is round 2's.** r2's share grows monotonically toward the floor —
+  30.2 → 31.4 → 33.1 % of time, 34.0 % of energy at 100 W, the largest single
+  item — while the DRAM rounds *shrink* (bandwidth stops binding when the core
+  runs at 885 MHz). r2 is the compute round; at the floor, per-element
+  instructions are the currency, and the floor is Tier 2's strongest band. An
+  instruction census on r2 priced at 885 MHz is the follow-on lead.
+
+Method caveat, visible in the closures: at 160 W + rung the stage sums overshoot
+(109.7 % of solve time, −12.6 % energy) where stock closed at 100.1 %/0.8 % and
+the floor at 97.4 %/+2.7 %. Under a cap, replaying one stage shifts the
+governor's sustained clock (the r2-heavy mix ran at 1695 MHz, the r3-heavy at
+2610, baseline 2310), so the non-replayed stages no longer cost what baseline
+charged them — single-stage amplification over-attributes by the shift. The
+%-shares are the readable quantity at that point; absolute per-stage ms there
+carry ~±10 %. At the floor the clocks barely move between mixes (885 baseline,
+750–960 across arms), which is why its closure is tight and the r2 verdict is
+solid. Efficiency cross-check: baselines read 7.71 J/solve at 160 W + rung vs
+8.88 at 100 W + rung — the same ~15 % efficiency drop toward the floor the miner
+sweeps measured (3.78 → 4.43 J/solution).
+
+Artifacts: `docs-internal/rootruns/stage-eco/`.
 
 </details>
 
