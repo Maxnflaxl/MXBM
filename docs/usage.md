@@ -88,32 +88,42 @@ produces the same table for **your** card, then recommends a wattage:
 sudo mxbm --tune
 ```
 
-About 15 minutes, in two passes: a discarded warmup, then six coarse points across the
-band your driver reports (60 s each, live mining path, CPU-verified sol/s) to locate
-the knee's neighbourhood, then a second pass at ~10 W steps bracketing it — the coarse
-grid can only place the knee to within its own spacing, and the fine pass is what
-distinguishes, say, 220 from 248. Both passes feed one curve and one verdict. Last, the
-first point is measured again as a drift gauge — if the card heated enough during the
-sweep to move the numbers by more than ±1.5 %, the table says so instead of pretending.
-It prints the curve plus two recommendations: the **knee** (the highest limit where
-each extra watt still returns at least 0.07 sol/s — above it you are buying watts, not
-speed) and the **best-efficiency point** (most sol/s per measured watt). The knee is
-stored per card in `~/.config/mxbm/tune.json` — in *your* config dir even under sudo —
-so later runs can just say:
+About 20 minutes, in three passes: a discarded warmup, then six coarse points across
+the band your driver reports (60 s each, live mining path, CPU-verified sol/s) to
+locate the knee's neighbourhood; a second pass at ~10 W steps bracketing it — the
+coarse grid can only place the knee to within its own spacing, and the fine pass is
+what distinguishes, say, 220 from 248; then a third pass at your card's **low memory
+rung** (picked from the driver's own supported-clock list, held-clock verified every
+arm) at the capped points, because under a low cap the memory interface burns watts
+for bandwidth the slowed core cannot use, and on the reference card giving them back
+was worth 8–14 %. All passes feed one verdict. Last, the first point is measured again
+as a drift gauge — if the card heated enough during the sweep to move the numbers by
+more than ±1.5 %, the table says so instead of pretending. It prints the curve plus
+three recommendations: the **knee** (the highest limit where each extra watt still
+returns at least 0.07 sol/s — above it you are buying watts, not speed), the
+**best-efficiency point** (most sol/s per measured watt, which may land *on the
+rung*), and — when the rung measured faster — the cap **below which to add
+`--mclk <rung>`**, a threshold measured on your card, not copied from ours. The
+result is stored per card in `~/.config/mxbm/tune.json` — in *your* config dir even
+under sudo — so later runs can just say:
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl auto
 ```
 
 `--pl auto` prints the stored value and its measurement date, so a stale tune is
-visible; re-run `--tune` after driver updates or cooling changes. On a rig that does
-not mine as root, read the recommendation once and put `sudo nvidia-smi -pl <knee>` in
-the boot sequence instead. Knobs: `--tune-seconds N` (per point, default 60),
-`--tune-caps "100,160,220"` (exactly these points, which also skips the second pass —
-a chosen grid means the grid you chose), `--tune-knee X` (the sol/s-per-watt bar,
-default 0.07 — the one number that is a preference, not a measurement). `--tune`
-refuses a simultaneous `--pl` but allows the other OC flags, so an undervolted card is
-tuned as it actually runs. Ctrl+C aborts and restores the previous limit.
+visible — and when the stored rung data says the resolved cap is inside the rung's
+paying band, it prints a one-line reminder to consider `--mclk` (recommended, never
+auto-applied: locking a memory clock you did not ask for is a hardware setting nobody
+requested). Re-run `--tune` after driver updates or cooling changes. On a rig that
+does not mine as root, read the recommendation once and put
+`sudo nvidia-smi -pl <knee> -lmc <rung>,<rung>` in the boot sequence instead. Knobs:
+`--tune-seconds N` (per point, default 60), `--tune-caps "100,160,220"` (exactly these
+points, which also skips the refinement and rung passes — a chosen grid means the grid
+you chose), `--tune-knee X` (the sol/s-per-watt bar, default 0.07 — the one number
+that is a preference, not a measurement). `--tune` refuses a simultaneous `--pl` but
+allows the other OC flags — and a given `--mclk` disables the rung pass: a chosen
+memory clock stands. Ctrl+C aborts and restores the previous limit and memory clock.
 
 ### Multiple pools (failover)
 

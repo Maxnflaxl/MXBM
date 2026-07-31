@@ -360,6 +360,17 @@ int main(int argc, char** argv) {
                 ui::console::info("--pl auto: " + std::to_string(w)
                                   + " W, tuned for this card on " + date
                                   + " (re-run --tune after driver or cooling changes)");
+                // The rung is recommended, never auto-applied: locking a memory
+                // clock the user did not ask for is a hardware setting nobody
+                // requested. --mclk given explicitly means they already decided.
+                unsigned rmhz = 0, rbelow = 0;
+                if (opts.mem_clock.empty() && miner::tune_stored_rung(key, rmhz, rbelow)
+                    && w < rbelow) {
+                    ui::console::info("--pl auto: at this cap the tune also measured "
+                                      "the " + std::to_string(rmhz)
+                                      + " MHz memory rung faster - consider adding "
+                                        "--mclk " + std::to_string(rmhz));
+                }
             } else {
                 ocreq.pl.clear();
                 ui::console::error("--pl auto: no stored tune for this card in "
@@ -680,6 +691,9 @@ int main(int argc, char** argv) {
         // An explicit cap list is a chosen grid: measure exactly those points, no
         // second pass. The default grid gets the knee-refining pass.
         tcfg.refine = opts.tune_caps.empty();
+        // The rung pass runs in default mode only, and never over a user's own
+        // --mclk: a chosen memory clock stands, exactly like a chosen grid.
+        tcfg.rung_pass = opts.tune_caps.empty() && opts.mem_clock.empty();
         if (!opts.tune_caps.empty()) {
             // Parse-time checked to be digits and commas; split it here.
             size_t pos = 0;

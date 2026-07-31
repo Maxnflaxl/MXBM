@@ -6,6 +6,7 @@
 // reports nothing on a machine with neither. Nothing in the build depends on it.
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace mxbm { namespace gpu {
 
@@ -73,6 +74,13 @@ PowerLimit nvml_power_limit();
 // launch. An out-of-range index reads as "no limit reported", never as another
 // card's.
 PowerLimit nvml_power_limit_at(unsigned index);
+
+// The memory clocks the DRIVER supports on this card, in MHz, unsorted as NVML
+// reports them (10501/10251/5001/810/405 on the reference card). What --tune's
+// rung pass picks its candidate from -- the rung must come from the card's own
+// list, never from a constant measured on someone else's. Empty when the query
+// is unsupported.
+std::vector<unsigned> nvml_supported_mem_clocks(unsigned index = 0);
 
 // The card's cumulative energy counter in MILLIJOULES, monotonic since driver
 // load (nvmlDeviceGetTotalEnergyConsumption, Volta+). THE efficiency

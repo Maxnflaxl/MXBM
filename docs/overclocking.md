@@ -69,13 +69,21 @@ cannot go wrong the three ways the 2026-07-31 session catalogued:
   uncertainty. This is not paranoia — un-gauged same-day sweeps on this card have
   disagreed by 2 %/arm from heat-soak alone.
 
-The sweep itself is **two passes** (default: ~15 min total): a coarse pass — 6 points
-across the band the *driver* reports, 60 s each, high to low, discarded warmup first —
-locates the knee's neighbourhood, then a fine pass at ~10 W steps fills the two coarse
-intervals touching it (the step widens only if the bracket would otherwise exceed 8
-points — refinement bounds the tail, it never restarts the sweep). Both passes feed
-one curve and one verdict. An explicit `--tune-caps` list runs single-pass: a chosen
-grid means exactly those points.
+The sweep itself is **three passes** (default: ~20 min total): a coarse pass — 6
+points across the band the *driver* reports, 60 s each, high to low, discarded warmup
+first — locates the knee's neighbourhood; a fine pass at ~10 W steps fills the two
+coarse intervals touching it (the step widens only if the bracket would otherwise
+exceed 8 points — refinement bounds the tail, it never restarts the sweep); and a
+**rung pass** re-measures the coarse caps at or below the knee at the card's low
+memory rung. The rung candidate comes from the driver's own supported-clock list (the
+largest clock below 70 % of the card's maximum, rejected under 20 % of it — nothing is
+inherited from the reference card's 5001), and every rung arm verifies from telemetry
+that the clock actually *held*: a refused rung prints REFUSED and is dropped, never
+counted as "does not pay" — the 10501 lesson, wired in. The verdict then adds "below
+~X W, add `--mclk <rung>`" with X interpolated from this card's own sign change, and
+`--pl auto` reminds about it when the resolved cap is inside the paying band
+(recommended, never auto-applied). An explicit `--tune-caps` list runs the coarse pass
+only, and a given `--mclk` disables the rung pass: chosen settings stand.
 
 **Capped below ~170 W: pair the cap with `--mclk 5001`** (measured 2026-07-31, the
 largest low-band lever on record: −8.5 % ms/solve at 160 W growing to −14.4 % at 120,

@@ -116,6 +116,47 @@ inline std::vector<unsigned> tune_default_caps(unsigned min_w, unsigned default_
     return caps;
 }
 
+// The rung pass's candidate: the memory clock worth testing under low caps, from
+// the DRIVER's own supported list. The heuristic wants the big half-rate step (the
+// reference card's 5001 out of 10501/10251/5001/810/405), not a neighbouring bin
+// and not the deep-idle rungs: the largest supported clock below 70 % of the
+// card's maximum, rejected if it is under 20 % of it (a card with nothing between
+// "full" and "idle" has no rung worth a pass). 0 = no candidate.
+inline unsigned tune_rung_pick(const std::vector<unsigned>& supported) {
+    unsigned top = 0, pick = 0;
+    for (unsigned c : supported) top = c > top ? c : top;
+    for (unsigned c : supported)
+        if (c < top * 7u / 10u && c > pick) pick = c;
+    return (top && pick >= top / 5u) ? pick : 0u;
+}
+
+// Where the rung stops paying, from paired stock/rung points at the same caps:
+// the sign change of (rung - stock) sol/s, linearly interpolated, so "add --mclk
+// below ~X W" is a fact about THIS card's curve. Walks ascending; the crossover is
+// taken between the highest winning cap and the next paired cap above it. Returns
+// 0 when the rung never wins, and the top paired cap when it always does (it pays
+// at least that far -- the sweep did not find its ceiling).
+inline unsigned tune_rung_below(std::vector<TunePoint> stock, std::vector<TunePoint> rung) {
+    auto bycap = [](const TunePoint& a, const TunePoint& b) { return a.cap_w < b.cap_w; };
+    std::sort(stock.begin(), stock.end(), bycap);
+    std::sort(rung.begin(), rung.end(), bycap);
+    std::vector<std::pair<unsigned, double>> d;              // cap -> rung - stock
+    for (const TunePoint& r : rung) {
+        if (r.sol_s <= 0.0) continue;
+        for (const TunePoint& s : stock)
+            if (s.cap_w == r.cap_w && s.sol_s > 0.0)
+                d.emplace_back(r.cap_w, r.sol_s - s.sol_s);
+    }
+    if (d.empty() || d.front().second <= 0.0) return 0;
+    for (size_t i = 1; i < d.size(); ++i) {
+        if (d[i].second > 0.0) continue;
+        const double t = d[i - 1].second / (d[i - 1].second - d[i].second);
+        return d[i - 1].first
+             + (unsigned)std::lround(t * (double)(d[i].first - d[i - 1].first));
+    }
+    return d.back().first;
+}
+
 struct TuneConfig {
     int    seconds_per_point = 60;
     double knee_marginal = 0.07;   // sol/s per W below which more watts stop paying
@@ -124,6 +165,11 @@ struct TuneConfig {
     // knee, one combined verdict. main() turns this off when the user passed an
     // explicit --tune-caps list -- a chosen grid means exactly those points.
     bool refine = true;
+    // Pass 3: rung arms (tune_rung_pick) at the coarse caps at or below the knee,
+    // locating where a reduced memory clock starts paying on THIS card. Off when
+    // the user chose a memory clock themselves (--mclk) -- theirs stands -- or
+    // chose an explicit grid.
+    bool rung_pass = true;
 };
 
 // Runs the sweep on `solver` (single-device: device 0's limit, like --pl). Needs NVML
@@ -138,6 +184,14 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
 // The stored knee for `device_key`, or 0 when the store or the entry is absent.
 // `date_out` receives the measurement date when found.
 unsigned tune_stored_knee(const std::string& device_key, std::string& date_out);
+
+// The stored rung verdict: true when a rung pass ran and measured a paying band.
+// `mhz_out` is the rung, `below_w_out` the cap under which it paid. What --pl auto
+// uses to say "at this cap, this card also measured faster with --mclk <mhz>" --
+// a printed recommendation, never an applied one: locking a memory clock the user
+// did not ask for is a hardware setting nobody requested.
+bool tune_stored_rung(const std::string& device_key, unsigned& mhz_out,
+                      unsigned& below_w_out);
 
 // Where results live: $XDG_CONFIG_HOME/mxbm/tune.json, with the sudo indirection
 // described above.

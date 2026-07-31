@@ -90,6 +90,40 @@ int main() {
               "a bracket narrower than one step is already refined");
     }
 
+    section("tune_rung_pick: the half-rate rung, from the driver's own list");
+    {
+        // The reference card's list: the big step is 5001, not the neighbouring
+        // 10251 bin and not the deep-idle rungs.
+        check(tune_rung_pick({10501, 10251, 5001, 810, 405}) == 5001,
+              "reference list picks 5001");
+        check(tune_rung_pick({10501, 10251, 810, 405}) == 0,
+              "no mid rung: 810 is under 20 % of max, nothing worth a pass");
+        check(tune_rung_pick({}) == 0, "empty list picks nothing");
+        check(tune_rung_pick({8000, 4000}) == 4000,
+              "exactly half-rate qualifies (below 70 %, above 20 %)");
+    }
+
+    section("tune_rung_below: where the rung stops paying, on this card's shape");
+    {
+        // The measured coarse shape: rung wins at 100-160, loses from ~174 up.
+        const std::vector<TunePoint> stock = {
+            {100, 0, 18.6, 0}, {137, 0, 27.0, 0}, {174, 0, 44.0, 0}, {211, 0, 54.0, 0}};
+        const std::vector<TunePoint> rung = {
+            {100, 0, 21.9, 0}, {137, 0, 31.0, 0}, {174, 0, 43.0, 0}, {211, 0, 44.0, 0}};
+        const unsigned below = tune_rung_below(stock, rung);
+        check(below > 137 && below < 174,
+              "crossover interpolates between the last winning and first losing cap");
+        check(tune_rung_below(stock, {{100, 0, 21.9, 0}, {137, 0, 31.0, 0}}) == 137,
+              "rung wins at every paired cap: pays at least to the top one measured");
+        check(tune_rung_below(stock, {{100, 0, 17.0, 0}, {137, 0, 25.0, 0}}) == 0,
+              "rung never wins: 0, and the recommendation stays silent");
+        check(tune_rung_below(stock, {{100, 0, 0.0, 0}}) == 0,
+              "refused arms (sol_s 0) pair with nothing");
+        // Unpaired caps (refine points, refused arms) simply do not vote.
+        check(tune_rung_below(stock, {{120, 0, 30.0, 0}}) == 0,
+              "a rung cap with no stock partner cannot place a crossover");
+    }
+
     section("tune_default_caps: the band is the driver's, not ours");
     {
         const std::vector<unsigned> c = tune_default_caps(100, 285);
