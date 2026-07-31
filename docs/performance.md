@@ -921,8 +921,9 @@ peak, with draw saturating at ~230 W under a 285 W cap).
 **The efficiency-optimal operating point moved onto the rung: 160 W + 5001 MHz gives
 3.79 J/solution** (0.264 sol/s/W; 41.9 sol/s at 159 W drawn), beating the previous
 ~3.83 peak at 200 W on stock memory. Guidance for capped rigs: below ~170 W, always
-pair the cap with the rung — `sudo nvidia-smi -pl <cap> -lmc 5001,5001`, or MXBM's
-`--pl <cap> --mclk 5001` under root. At or above ~180 W, never.
+pair the cap with the rung — `sudo mxbm ... --pl <cap> --mclk 5001` (both restored on
+exit), or `sudo nvidia-smi -pl <cap> -lmc 5001,5001` once at boot on rigs that mine
+unprivileged. At or above ~180 W, never.
 
 ### The memory traffic is compulsory
 

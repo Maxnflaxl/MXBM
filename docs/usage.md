@@ -468,11 +468,19 @@ recommendation derived from it — run `sudo mxbm --tune` once
 
 **Running capped below ~170 W? Drop the memory clock too.** Under a low cap the
 GDDR interface burns watts for bandwidth the slowed core cannot use; on the reference
-card `-lmc 5001` returns them as core clock — **8–14 % more sol/s at the same wall
-power** between 100 and 160 W, and the best efficiency the card has ever measured
-(3.79 J/solution at 160 W). Pair the two: `sudo nvidia-smi -pl 140 -lmc 5001,5001`
-(or `--pl 140 --mclk 5001` with MXBM under root). At 180 W and above the rung *loses*
-— badly at stock — so this is strictly a low-cap pairing. Details in
+card the 5001 MHz rung returns them as core clock — **8–14 % more sol/s at the same
+wall power** between 100 and 160 W, and the best efficiency the card has ever measured
+(3.79 J/solution at 160 W). Pair the two through the miner itself — one command, and
+both settings are restored when it exits:
+
+```sh
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
+```
+
+On a rig that doesn't run the miner as root, set the card once instead
+(`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. At
+180 W and above the rung *loses* — badly at stock — so this is strictly a low-cap
+pairing. Details in
 [performance.md](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
 
 ```
