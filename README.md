@@ -5,9 +5,7 @@
 MXBM is a from-scratch implementation of the BeamHash III proof-of-work —
 Beam's Equihash-style Wagner search on the ⟨144,5⟩ parameter shape (see
 [docs/beamhash-iii.md](docs/beamhash-iii.md)) — built to be a fully open,
-auditable alternative to the closed-source miners in the ecosystem. The
-proof-of-work core is validated bit-for-bit against Beam's own reference
-implementation.
+auditable alternative to the closed-source miners in the ecosystem.
 
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
 > Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
@@ -36,8 +34,6 @@ implementation.
 > If you run MXBM, **`--pl 220` is the setting to use** — its own efficiency peaks near
 > 200 W and its best speed-per-watt against the alternative is around 220. Needs root;
 > restored on exit. See [usage.md](docs/usage.md#power-limit).
-
-Licensed under the [Apache License 2.0](LICENSE).
 
 ---
 
@@ -116,10 +112,7 @@ files, and API.
 
 ## Roadmap
 
-What is left. Everything not listed here — the proof-of-work core, the stratum client,
-the console and API, both GPU solvers, multi-GPU, overclocking, failover and the
-watchdog — is built and shipping; the [Features](#features) section describes what
-those do.
+In rough priority order:
 
 | Next | What it delivers |
 |------|------------------|
@@ -128,8 +121,8 @@ those do.
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
 | **Per-GPU verification** | Multi-GPU is built and tested, but has never run on a machine with more than one card |
 
-GPU support targets both NVIDIA and AMD: an OpenCL baseline (runs on both), then
-vendor-tuned backends. The CUDA backend is done and shipping; HIP is not started.
+GPU support targets both NVIDIA and AMD: an OpenCL baseline that runs on both,
+then vendor-tuned backends per vendor.
 
 ## The algorithm
 
