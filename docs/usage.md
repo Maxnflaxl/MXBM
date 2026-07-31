@@ -44,7 +44,7 @@ immediately; only a *missing* one defers to the config.
 | `--timeprint [0\|1]` | Stamp the average-speed line with `[HH:MM:SS]`. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one), or `auto` for the value a `--tune` run stored for this card. Needs root. | card default |
-| `--tune` | Measure this card's own power/speed curve and recommend a `--pl` value (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~8 min, no pool. | |
+| `--tune` | Measure this card's own power/speed curve and recommend a `--pl` value (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~15 min, no pool. | |
 | `--cclk MHz` | Lock the core clock. Needs root. | driver-managed |
 | `--mclk MHz` | Lock the memory clock. Needs root. | driver-managed |
 | `--coff MHz` | Shift the core voltage/frequency curve. May be negative. Needs root. | 0 |
@@ -84,15 +84,18 @@ produces the same table for **your** card, then recommends a wattage:
 sudo mxbm --tune
 ```
 
-About 8 minutes: a discarded warmup, six power points across the band your driver
-reports (60 s each, live mining path, CPU-verified sol/s), then the first point again
-as a drift gauge — if the card heated enough during the sweep to move the numbers by
-more than ±1.5 %, the table says so instead of pretending. It prints the curve plus two
-recommendations: the **knee** (the highest limit where each extra watt still returns at
-least 0.07 sol/s — above it you are buying watts, not speed) and the **best-efficiency
-point** (most sol/s per measured watt). The knee is stored per card in
-`~/.config/mxbm/tune.json` — in *your* config dir even under sudo — so later runs can
-just say:
+About 15 minutes, in two passes: a discarded warmup, then six coarse points across the
+band your driver reports (60 s each, live mining path, CPU-verified sol/s) to locate
+the knee's neighbourhood, then a second pass at ~10 W steps bracketing it — the coarse
+grid can only place the knee to within its own spacing, and the fine pass is what
+distinguishes, say, 220 from 248. Both passes feed one curve and one verdict. Last, the
+first point is measured again as a drift gauge — if the card heated enough during the
+sweep to move the numbers by more than ±1.5 %, the table says so instead of pretending.
+It prints the curve plus two recommendations: the **knee** (the highest limit where
+each extra watt still returns at least 0.07 sol/s — above it you are buying watts, not
+speed) and the **best-efficiency point** (most sol/s per measured watt). The knee is
+stored per card in `~/.config/mxbm/tune.json` — in *your* config dir even under sudo —
+so later runs can just say:
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl auto
@@ -102,8 +105,9 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl auto
 visible; re-run `--tune` after driver updates or cooling changes. On a rig that does
 not mine as root, read the recommendation once and put `sudo nvidia-smi -pl <knee>` in
 the boot sequence instead. Knobs: `--tune-seconds N` (per point, default 60),
-`--tune-caps "100,160,220"` (explicit watt points), `--tune-knee X` (the sol/s-per-watt
-bar, default 0.07 — the one number that is a preference, not a measurement). `--tune`
+`--tune-caps "100,160,220"` (exactly these points, which also skips the second pass —
+a chosen grid means the grid you chose), `--tune-knee X` (the sol/s-per-watt bar,
+default 0.07 — the one number that is a preference, not a measurement). `--tune`
 refuses a simultaneous `--pl` but allows the other OC flags, so an undervolted card is
 tuned as it actually runs. Ctrl+C aborts and restores the previous limit.
 

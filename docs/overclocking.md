@@ -64,11 +64,18 @@ cannot go wrong the three ways the 2026-07-31 session catalogued:
   other loop is a curve of a different program.
 - **The current build.** The sweep lives inside the shipping binary; there is no
   separate bench binary to go stale.
-- **A drift gauge.** After a discarded warmup and the sweep (default: 6 points across
-  the band the *driver* reports, 60 s each, high to low), the first point is measured
-  again. The delta is printed and stored; past ±1.5 % the table is flagged as carrying
-  that uncertainty. This is not paranoia — un-gauged same-day sweeps on this card have
+- **A drift gauge.** After both passes, the first point is measured again. The delta
+  is printed and stored; past ±1.5 % the table is flagged as carrying that
+  uncertainty. This is not paranoia — un-gauged same-day sweeps on this card have
   disagreed by 2 %/arm from heat-soak alone.
+
+The sweep itself is **two passes** (default: ~15 min total): a coarse pass — 6 points
+across the band the *driver* reports, 60 s each, high to low, discarded warmup first —
+locates the knee's neighbourhood, then a fine pass at ~10 W steps fills the two coarse
+intervals touching it (the step widens only if the bracket would otherwise exceed 8
+points — refinement bounds the tail, it never restarts the sweep). Both passes feed
+one curve and one verdict. An explicit `--tune-caps` list runs single-pass: a chosen
+grid means exactly those points.
 
 The recommendation has two numbers: the **knee** — climbing from the lowest cap, the
 highest one where each extra watt still returns at least `--tune-knee` sol/s (default

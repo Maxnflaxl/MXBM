@@ -69,6 +69,38 @@ inline TuneVerdict tune_verdict(std::vector<TunePoint> pts, double knee_marginal
     return v;
 }
 
+// Pass 2's grid: the caps that refine a coarse knee. The coarse sweep can only place
+// the knee to within its own spacing (37 W on the reference band), so the second pass
+// fills the two coarse intervals TOUCHING the knee -- below it (the last step that
+// paid) and above it (the first that failed) -- with ~10 W steps, skipping caps
+// already measured. The step widens past 10 W only when the bracket would otherwise
+// exceed `max_points`: refinement bounds the sweep's tail, it does not restart it.
+// Returns an empty list when there is nothing to refine (a single point, or a bracket
+// narrower than one step) -- the caller then just keeps the coarse verdict.
+inline std::vector<unsigned> tune_refine_caps(std::vector<TunePoint> pts, unsigned knee_w,
+                                              unsigned max_points = 8) {
+    std::vector<unsigned> out;
+    std::sort(pts.begin(), pts.end(),
+              [](const TunePoint& a, const TunePoint& b) { return a.cap_w < b.cap_w; });
+    size_t i = 0;
+    while (i < pts.size() && pts[i].cap_w != knee_w) ++i;
+    if (i == pts.size()) return out;
+    const unsigned lo = i > 0 ? pts[i - 1].cap_w : knee_w;
+    const unsigned hi = i + 1 < pts.size() ? pts[i + 1].cap_w : knee_w;
+    if (hi <= lo) return out;
+    unsigned step = 10u;
+    auto interior = [&](unsigned s) {
+        unsigned n = 0;
+        for (unsigned c = lo + s; c < hi; c += s)
+            if (c != knee_w) ++n;
+        return n;
+    };
+    while (interior(step) > max_points) step += 5u;
+    for (unsigned c = lo + step; c < hi; c += step)
+        if (c != knee_w) out.push_back(c);
+    return out;
+}
+
 // Six candidate caps across the card's own band, min..default inclusive. The default
 // limit, not the max: above the default is overclocking territory, which --tune does
 // not walk into uninvited. Narrow bands can collapse points after rounding; the
@@ -88,6 +120,10 @@ struct TuneConfig {
     int    seconds_per_point = 60;
     double knee_marginal = 0.07;   // sol/s per W below which more watts stop paying
     std::vector<unsigned> caps;    // empty = tune_default_caps() from the driver band
+    // Two-pass by default: coarse locate, then tune_refine_caps() around the coarse
+    // knee, one combined verdict. main() turns this off when the user passed an
+    // explicit --tune-caps list -- a chosen grid means exactly those points.
+    bool refine = true;
 };
 
 // Runs the sweep on `solver` (single-device: device 0's limit, like --pl). Needs NVML

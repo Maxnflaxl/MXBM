@@ -117,10 +117,12 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     }
 
     const int per = cfg.seconds_per_point;
-    ui::console::info(fmt("Tuning %s: %zu power points x %d s, plus a warmup and a "
-                          "drift gauge (~%d min). Ctrl+C aborts and restores %u W.",
+    ui::console::info(fmt("Tuning %s: %zu power points x %d s%s, plus a warmup and a "
+                          "drift gauge (~%d min%s). Ctrl+C aborts and restores %u W.",
                           device_key.c_str(), caps.size(), per,
-                          (int)((caps.size() + 2) * (per + 6) / 60) + 1, pl0.current_w));
+                          cfg.refine ? ", then a knee-refining second pass" : "",
+                          (int)((caps.size() + 2) * (per + 6) / 60) + 1,
+                          cfg.refine ? " + the refinement" : "", pl0.current_w));
 
     // Restore on EVERY exit from here down. The original limit, not the default:
     // a user who had already capped the card outside MXBM gets their value back.
@@ -179,9 +181,37 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
         points.push_back(p);
     }
 
-    // The drift gauge: the first point again, at the end. Today's numbers carry at
-    // least this bar -- the 2026-07-31 session measured ~2 %/arm of thermal drift,
-    // which is what made un-gauged sweeps lie.
+    // Pass 2: the coarse grid can only place the knee to within its own spacing, so
+    // refine the two intervals touching it with ~10 W steps and fold the new points
+    // into the SAME verdict. Skipped for an explicit --tune-caps list (a chosen grid
+    // means exactly those points) and when the bracket is already tighter than a step.
+    if (cfg.refine) {
+        const TuneVerdict coarse = tune_verdict(points, cfg.knee_marginal);
+        std::vector<unsigned> fine = tune_refine_caps(points, coarse.knee_w);
+        std::sort(fine.begin(), fine.end(), std::greater<unsigned>());
+        if (!fine.empty()) {
+            ui::console::info(fmt("  pass 2: coarse knee at %u W - refining its "
+                                  "neighbourhood with %zu points x %d s (~%d min)...",
+                                  coarse.knee_w, fine.size(), per,
+                                  (int)(fine.size() * (per + 6) / 60) + 1));
+            for (unsigned cap : fine) {
+                ui::console::info(fmt("  measuring %u W (%d s)...", cap, per));
+                TunePoint p;
+                if (!measure(cap, p)) {
+                    ui::console::info("--tune aborted; power limit restored");
+                    return 1;
+                }
+                ui::console::info(fmt("    %u W: %.2f sol/s, %.1f ms/solve, draw %.1f W",
+                                      cap, p.sol_s, p.median_ms, p.draw_w));
+                points.push_back(p);
+            }
+        }
+    }
+
+    // The drift gauge: the first point again, at the end -- AFTER both passes, so it
+    // prices the whole session. Today's numbers carry at least this bar -- the
+    // 2026-07-31 session measured ~2 %/arm of thermal drift, which is what made
+    // un-gauged sweeps lie.
     ui::console::info(fmt("  drift gauge: %u W again (%d s)...", caps.front(), per));
     TunePoint again;
     double drift_pct = 0.0;
@@ -193,6 +223,10 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
         return 1;
     }
 
+    // Both passes in one table, in cap order -- the reader wants the curve, not the
+    // order the sweep happened to visit it in.
+    std::sort(points.begin(), points.end(),
+              [](const TunePoint& a, const TunePoint& b) { return a.cap_w > b.cap_w; });
     ui::console::info("Power curve (miner loop, CPU-verified sol/s):");
     ui::console::info("    cap W   draw W    sol/s   ms/solve   sol/s/W");
     for (const TunePoint& p : points) {
@@ -228,7 +262,8 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
         std::strftime(date, sizeof date, "%Y-%m-%d %H:%M", std::localtime(&now));
         j[device_key] = {{"knee_w", v.knee_w}, {"eff_w", v.eff_w},
                          {"knee_marginal", cfg.knee_marginal}, {"date", date},
-                         {"drift_pct", drift_pct}, {"points", pts}};
+                         {"drift_pct", drift_pct}, {"passes", cfg.refine ? 2 : 1},
+                         {"points", pts}};
         const std::filesystem::path dir = std::filesystem::path(path).parent_path();
         std::filesystem::create_directories(dir);
         chown_to_sudo_user(dir.string());

@@ -677,6 +677,9 @@ int main(int argc, char** argv) {
         miner::TuneConfig tcfg;
         tcfg.seconds_per_point = opts.tune_seconds;
         tcfg.knee_marginal = opts.tune_knee;
+        // An explicit cap list is a chosen grid: measure exactly those points, no
+        // second pass. The default grid gets the knee-refining pass.
+        tcfg.refine = opts.tune_caps.empty();
         if (!opts.tune_caps.empty()) {
             // Parse-time checked to be digits and commas; split it here.
             size_t pos = 0;

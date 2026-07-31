@@ -55,6 +55,41 @@ int main() {
         check(nodraw.eff_w == 220, "cap-priced fallback: 53.8/220 beats 16.3/100");
     }
 
+    section("tune_refine_caps: pass 2 brackets the coarse knee, bounded");
+    {
+        // The reference band's coarse grid with its knee mid-list: refine the two
+        // intervals touching 248 -- (211,248) and (248,285) -- at 10 W steps.
+        const std::vector<TunePoint> coarse = {
+            {100, 0, 18, 0}, {137, 0, 30, 0}, {174, 0, 43, 0},
+            {211, 0, 54, 0}, {248, 0, 57, 0}, {285, 0, 59, 0},
+        };
+        const std::vector<unsigned> f = tune_refine_caps(coarse, 248);
+        const std::vector<unsigned> want = {221, 231, 241, 251, 261, 271, 281};
+        check(f == want, "10 W steps across (211,285), the measured caps excluded");
+
+        // Knee at an end of the grid: only one interval exists to refine.
+        check(tune_refine_caps(coarse, 285) == std::vector<unsigned>({258, 268, 278}),
+              "knee at the top: refine below it only");
+        check(tune_refine_caps(coarse, 100) == std::vector<unsigned>({110, 120, 130}),
+              "knee at the floor: refine above it only");
+
+        // The step widens rather than the sweep growing: a 185 W bracket at 10 W
+        // steps would be 18 points, so it opens to 25 W and stays at 7.
+        const std::vector<TunePoint> wide = {{100, 0, 18, 0}, {285, 0, 59, 0}};
+        const std::vector<unsigned> w = tune_refine_caps(wide, 285);
+        check(w.size() == 7 && w.front() == 125 && w.back() == 275,
+              "an oversized bracket widens the step (25 W) instead of the sweep");
+
+        // Nothing to refine: a lone point, an unknown knee, a bracket under one step.
+        check(tune_refine_caps({{220, 0, 54, 0}}, 220).empty(),
+              "a single point has no bracket");
+        check(tune_refine_caps(coarse, 200).empty(),
+              "a knee that is not a measured cap refines nothing");
+        check(tune_refine_caps({{100, 0, 18, 0}, {105, 0, 19, 0}, {110, 0, 20, 0}},
+                               105).empty(),
+              "a bracket narrower than one step is already refined");
+    }
+
     section("tune_default_caps: the band is the driver's, not ours");
     {
         const std::vector<unsigned> c = tune_default_caps(100, 285);
