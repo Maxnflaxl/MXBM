@@ -108,6 +108,11 @@ constexpr uint32_t kFCap    = (uint32_t)MXBM_FCAP;
 // S is 32/gcd(2S,32), so ODD strides give 2-way and even ones 4-way or worse. Dropping
 // lwork from 7 to 6 u64 therefore doubles the conflicts on the walk's dominant shared
 // access. Whether the extra block pays for that is the measurement.
+//
+// Measured null at stock (16,1), and measured LOSS composed with (17,0) under power
+// caps -- +0.9 % at 180 W growing to +3 % at 100 W (2026-07-31): the split lw6 plane
+// costs instructions on the staging store and every walk ldw, and instructions are
+// the one thing a capped card cannot afford. Keep it off; do not re-propose.
 #ifndef MXBM_NARROW6
 #define MXBM_NARROW6 0
 #endif
@@ -227,6 +232,16 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #endif
 #ifndef MXBM_MB_RD2
 #define MXBM_MB_RD2 0
+#endif
+
+// MXBM_PAIR128: round 2 stages its 16 B pair record with one LD.128 instead of two
+// LD.64 (INSTR is 2, so d*8 is 16 B aligned -- same argument as the record loads in
+// LM_EMIT). The rescan lanes that fail the sub-mask filter fetch 16 B where they used
+// to fetch 8, but those bytes are ~98 % L2-absorbed; what every staged element saves
+// is a memory INSTRUCTION, the currency the MIO queue is priced in. Priced at the
+// project's 1 %-of-a-solve floor -- expected <= ~0.2 ms; ships only if it clears noise.
+#ifndef MXBM_PAIR128
+#define MXBM_PAIR128 1
 #endif
 
 enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4,
@@ -457,7 +472,16 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
         if constexpr (SUBPASS)
             if ((skey[p] & ((1u << sbits) - 1u)) != mask) continue;
         const size_t d = (base + p) * INSTR;
-        const uint64_t rec0 = in_belem[d];
+        uint64_t rec0;
+        [[maybe_unused]] uint64_t rec1 = 0;
+        if constexpr (LMODE == LM_RD2 && MXBM_PAIR128) {
+            // Both words of the pair record in one LD.128 -- see MXBM_PAIR128 above.
+            static_assert(INSTR % 2 == 0, "vectorised pair load needs an even stride");
+            const ulonglong2 q = *reinterpret_cast<const ulonglong2*>(in_belem + d);
+            rec0 = q.x; rec1 = q.y;
+        } else {
+            rec0 = in_belem[d];
+        }
         const uint32_t key = (uint32_t)(rec0 & 0xFFFFFFu);
         if constexpr (!SUBPASS)
             if ((key & ((1u << sbits) - 1u)) != mask) continue;
@@ -468,7 +492,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
             lleaf[pos*LEAFW + 0] = (uint32_t)(rec0 >> 32);           // derive later
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else if constexpr (LMODE == LM_RD2) {
-            const uint64_t rec1 = in_belem[d + 1];
+            if constexpr (!MXBM_PAIR128) rec1 = in_belem[d + 1];
             const uint32_t li = pair_left(rec0), ri = pair_right(rec1);
             lgi[pos] = pair_gi(rec1);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;

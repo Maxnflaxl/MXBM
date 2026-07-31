@@ -231,7 +231,9 @@ const Kernel kContract[] = {
       "ON A CLIFF: hosting the speculative entry pass costs 18 registers (46 -> 64), "
       "landing EXACTLY on the 4-blocks/SM limit. One more and the whole launch -- the "
       "round AND the co-scheduled entry -- drops to 3 blocks" },
-    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundE", 256,  22,  9732,  0, 6,
+    // Re-baselined 2026-07-31 for the perfect chain table (MXBM_PERFECT_TAB reaching
+    // terminal_round): lkey's 4 B x 384 of shared removed, REG 22 -> 24. blocks/SM held.
+    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundE", 256,  24,  8196,  0, 6,
       "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound" },
     // recover's 64 B of stack is a genuine local array, not a spill: ptxas -v reports
     // "64 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads". Its grid is at

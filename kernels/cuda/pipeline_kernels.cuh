@@ -32,7 +32,13 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
                     uint32_t* __restrict__ surv_slots, uint32_t* __restrict__ surv_count,
                     uint32_t surv_cap, uint32_t* __restrict__ drops) {
     __shared__ uint64_t lwork[kTCap];
-    __shared__ uint32_t lgi[kTCap], llead[kTCap], lkey[kTCap], lchain[kTCap], tab[kTabSize];
+    __shared__ uint32_t lgi[kTCap], llead[kTCap], lchain[kTCap], tab[kTabSize];
+    // Same perfect-hash argument as the fused rounds (MXBM_PERFECT_TAB in
+    // fused_round.cuh): on the bb + sm = 17 line only 7 key bits vary inside a
+    // group and the 128-entry table covers them, so same chain <=> same full key
+    // and lkey plus the walk's compare are dead. The launcher's geometry check in
+    // cuda_solver.cu guards this kernel too (same bb/sm).
+    __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : kTCap];
     __shared__ uint32_t gcount;
     const uint32_t lId = threadIdx.x;
     const uint32_t submaskCount = 1u << submask_bits;
@@ -52,21 +58,25 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
         if (pos >= kTCap) { atomicAdd(&drops[1], 1u); continue; }
         const uint64_t meta = in_belem[d + 1];
         lwork[pos] = w0; lgi[pos] = (uint32_t)(meta >> 32);
-        llead[pos] = (uint32_t)meta; lkey[pos] = key;
+        llead[pos] = (uint32_t)meta;
+        if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
     }
     __syncthreads();
     const uint32_t total = gcount < kTCap ? gcount : kTCap;
     for (uint32_t pos = lId; pos < total; pos += kWG) {
-        const uint32_t hk = (lkey[pos] >> submask_bits) & (kTabSize - 1u);
+        // lwork[pos] is word 0, whose low 24 bits ARE the key.
+        const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[pos] & 0xFFFFFFu)
+                                             : lkey[pos];
+        const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
         lchain[pos] = atomicExch(&tab[hk], pos);
     }
     __syncthreads();
     for (uint32_t pos = lId; pos < total; pos += kWG) {
-        const uint32_t key = lkey[pos];
+        const uint32_t key = MXBM_PERFECT_TAB ? 0u : lkey[pos];
         uint32_t oth = lchain[pos], walk = 0;
         while (oth != kEmpty) {
             if (++walk > 64u) { atomicAdd(&drops[3], 1u); break; }
-            if (lkey[oth] == key) {
+            if (MXBM_PERFECT_TAB || lkey[oth] == key) {
                 const uint32_t la = llead[pos], lb = llead[oth];
                 const uint32_t ga = lgi[pos],  gb = lgi[oth];
                 uint32_t L = pos, R = oth;
