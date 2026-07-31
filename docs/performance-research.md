@@ -2615,6 +2615,39 @@ shrinks to ~+11–16 % there — the deep floor (≤120 W) remains its strongest
 
 </details>
 
+### The rung regime does not reopen the closed geometry trades — quad and (17,0) both null
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, same evening as the rung sweeps. The rung created a new operating
+regime, and every closed geometry trade had been priced only in the old ones —
+the one honest doubt left on two of the ledger's closures. Both re-priced in one
+ABBA sitting: rung locked and sampled every arm, miner loop, 40 s arms, pair
+means so drift cancels.)*
+
+**Quad record × rung, 160/140 W** — the best-case prediction was here: at
+160 W + rung the solver sits 3.7 % off its 280 GB/s roofline, where bytes
+convert to time ~1:1, so if quad's byte saving could ever beat its
+re-derivation price, this was the spot. It does not: **+13.8 % at 160 W
+(48.0 → 54.6 ms pair means), +15.1 % at 140 W (56.7 → 65.2)** — the same
+~+14 % it costs at stock, unmoved by the regime. The reading: the arithmetic
+price is paid in core cycles, and a cap starves exactly those — the extra
+work inflates in ms terms with the same slowed clock everything else runs on,
+while the byte refund stays under the noise at every measured point. The quad
+record remains footprint-only in every regime measured.
+
+**(17,0) × rung, 120/100 W** — the deep floor, where the core is the only
+constraint and the disarm verdict had no coverage: **−0.4 % at 120 W
+(68.5 → 68.2 ms), +0.7 % at 100 W (88.9 → 89.5)** — opposite signs, both
+under the 1 %-of-a-solve floor. A wash, matching the stock-memory
+reproduction failure. The disarm verdict now covers the rung regime too.
+
+The base arms doubled as a same-day reproduction of the rung sweep: 47.8–48.2 ms
+and 3.76–3.79 J/sol at 160 W + rung, against the sweep's 47.1 ms / 3.79 record.
+Artifacts: `docs-internal/rootruns/rung-compose/`.
+
+</details>
+
 ### lolMiner is NOT duty-cycling — the low-end gap is real work-per-clock
 <details>
 <summary>Details</summary>
