@@ -61,21 +61,14 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 constexpr uint32_t kRbCapacity = (1u << 25) + (1u << 25) / 32;    // 34,603,008
 
 // The power band that would earn the (17,0) rung. ZERO: no band currently does.
-//
-// The eco sweep (2026-07-31) measured a ~190 W crossover (+1 % at 140-180 W, +2.6 %
-// at the 100 W floor) and the selection shipped wired to it the same day -- and the
-// prize then failed reproduction within hours: a wash in the miner loop at 160 W and
-// 100 W, and on a cooled card the sweep's own binary read (17,0) at 105.72 ms against
-// base's 103.90 (+1.8 % WORSE) while base reproduced the sweep to 0.2 ms. See the
-// eco-sweep addenda in docs/performance-research.md. With no reproducible band the
-// policy is disarmed; everything around it stays live -- the observed-limit hint
-// through the CUDA ctor, the mid-run restart notice, MXBM_BB -- so whatever next
-// claims the band (Tier 2's eco pipeline, or a re-measured crossover) re-arms by
-// setting this constant to that band's threshold.
-//
-// Selection, when armed, happens ONCE, from the limit observed after --pl landed:
-// a geometry switch is a multi-GiB realloc, so an externally changed cap mid-run does
-// not re-select -- main.cpp prints a restart notice instead.
+// The eco sweep measured a ~190 W crossover and the selection shipped wired to it
+// (2026-07-31) -- then the prize failed same-day reproduction in both the miner loop
+// and the sweep's own binary (eco-sweep addenda, docs/performance-research.md), so
+// the policy is disarmed. Everything around it stays live -- the observed-limit hint
+// through the CUDA ctor, the restart notice, MXBM_BB -- and re-arming is setting this
+// constant to a band that reproduces. Selection, when armed, happens ONCE, from the
+// limit observed after --pl landed: a geometry switch is a multi-GiB realloc, so a
+// cap changed mid-run gets a restart notice, never a re-select.
 constexpr unsigned kRbLowPowerW = 0;
 
 // The row-bucket geometry decision, with the device reduced to the two numbers it

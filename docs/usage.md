@@ -44,7 +44,7 @@ immediately; only a *missing* one defers to the config.
 | `--timeprint [0\|1]` | Stamp the average-speed line with `[HH:MM:SS]`. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one), or `auto` for the value a `--tune` run stored for this card. Needs root. | card default |
-| `--tune` | Measure this card's own power/speed curve and recommend a `--pl` value (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~15 min, no pool. | |
+| `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~20 min, no pool. | |
 | `--cclk MHz` | Lock the core clock. Needs root. | driver-managed |
 | `--mclk MHz` | Lock the memory clock. Needs root. | driver-managed |
 | `--coff MHz` | Shift the core voltage/frequency curve. May be negative. Needs root. | 0 |

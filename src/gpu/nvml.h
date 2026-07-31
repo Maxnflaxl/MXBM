@@ -83,12 +83,9 @@ PowerLimit nvml_power_limit_at(unsigned index);
 std::vector<unsigned> nvml_supported_mem_clocks(unsigned index = 0);
 
 // The card's cumulative energy counter in MILLIJOULES, monotonic since driver
-// load (nvmlDeviceGetTotalEnergyConsumption, Volta+). THE efficiency
-// instrument: every J/solution figure recorded before 2026-07-31 was
-// integrated from sampled power draw, which reconstructs -- with sampling
-// error -- exactly what this counter holds exactly. Read it before and after
-// a window and diff; reading needs no root. Returns false (mj untouched) when
-// the driver, the card, or the index does not support it.
+// load (nvmlDeviceGetTotalEnergyConsumption, Volta+). Bracket a window, diff,
+// divide: exact joules, no sampling error, no root to read. False (mj
+// untouched) when the driver, card, or index does not support it.
 bool nvml_total_energy_mj(unsigned long long& mj, unsigned index = 0);
 
 // NVML speaks milliwatts. Rounding rather than truncating matters: a card whose

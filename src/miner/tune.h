@@ -1,19 +1,16 @@
 #pragma once
-// --tune: measure THIS card's power/speed curve and recommend a --pl value.
+// --tune: measure THIS card's power/speed curve and recommend --pl (and --mclk).
 //
-// The whole point is that nothing here is a constant from the reference card. The
-// 2026-07-31 session established three ways a power-curve number goes wrong -- measured
-// in the wrong loop (pipeline replay vs the miner), on a stale build, or without a
-// drift gauge -- so the sweep runs the SAME Engine path mining runs (run_benchmark),
-// inside the shipping binary, and re-measures its first point at the end to price the
-// session's own drift. The candidate caps come from the band the driver reports, and
-// the knee criterion is a stated preference (sol/s per watt of cap), not a measurement:
-// it is the one number the user may reasonably want to move (--tune-knee).
+// Nothing here is a constant from the reference card: caps come from the driver's
+// band, the rung from its supported-clock list, thresholds from this card's own
+// curve. The sweep runs the SAME Engine path mining runs (run_benchmark), inside
+// the shipping binary, and re-measures its first point at the end as a drift gauge
+// -- the three ways a power-curve number goes wrong, each closed by construction.
+// The knee criterion (sol/s per cap-watt) is the one stated preference: --tune-knee.
 //
-// The result is stored (tune_store_path) so `--pl auto` can apply it on every later
-// launch without re-sweeping. --tune needs root, exactly like --pl: every NVML write
-// does. Run it once under sudo; the store lands in the INVOKING user's config dir, not
-// root's, so the unprivileged daily launch finds it.
+// Results are stored (tune_store_path) for `--pl auto`. --tune needs root like every
+// NVML write; under sudo the store lands in the INVOKING user's config dir so the
+// unprivileged daily launch finds it.
 #include <algorithm>
 #include <atomic>
 #include <cmath>

@@ -84,10 +84,9 @@ struct Options {
     std::string benchmark;
     int benchmark_seconds = 0;
 
-    // --tune: sweep power caps in the miner loop and recommend a --pl value
-    // (miner/tune.h). Like --benchmark it is a mode, not a setting: no pool, no
-    // wallet, exits when done. Needs root, exactly as --pl does. --pl "auto"
-    // (stored in power_limit above) applies the stored recommendation.
+    // --tune: sweep power caps in the miner loop, recommend --pl/--mclk values
+    // (miner/tune.h). A mode like --benchmark: no pool, exits when done, needs
+    // root. --pl "auto" (stored in power_limit above) applies the stored knee.
     bool tune = false;
     int  tune_seconds = 60;      // --tune-seconds: measured seconds per power point
     std::string tune_caps;       // --tune-caps: watts list ("100,140,220"); empty = auto

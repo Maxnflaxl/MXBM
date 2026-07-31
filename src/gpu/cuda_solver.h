@@ -35,11 +35,9 @@ public:
     static std::vector<DeviceInfo> enumerate();
 
     // `index` is a CUDA device index. Throws std::runtime_error on failure.
-    // `power_limit_w` is the board power limit observed at startup (0 = unknown or
-    // uncapped) -- the hint the geometry policy reads. The policy is currently
-    // DISARMED (kRbLowPowerW == 0 in rowbucket_geom.h; its comment tells the story),
-    // so every value is inert; the plumbing stays because selection, when armed,
-    // happens once, here -- a later cap change never re-selects (multi-GiB realloc).
+    // `power_limit_w`: the board limit observed at startup (0 = unknown), read by
+    // the geometry policy -- currently DISARMED (kRbLowPowerW in rowbucket_geom.h).
+    // When armed, selection happens once, here; a later cap change never re-selects.
     explicit CudaSolver(int index = 0, unsigned power_limit_w = 0);
     ~CudaSolver() override;
     CudaSolver(const CudaSolver&) = delete;

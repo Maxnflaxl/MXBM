@@ -28,8 +28,8 @@ they would be working against.
 Config-file keys `PL`, `CCLK`, `MCLK`, `COFF`, `MOFF`, `FAN` and `NO_OC_RESET` set the
 same things, and each also accepts a JSON array (`"PL": [220, "*", 260]`). Applied after
 device enumeration and **before the solver is constructed** (2026-07-31; previously after),
-so a benchmark measures the same operating point mining will use — and so the geometry
-selection below can read the limit `--pl` just set.
+so a benchmark measures the same operating point mining will use — and so anything that
+selects on the observed limit reads the value `--pl` just set.
 
 ## The power-limit geometry policy — built, verified, and currently disarmed
 

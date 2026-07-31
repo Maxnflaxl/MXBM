@@ -306,10 +306,8 @@ int main(int argc, char** argv) {
 #endif
 
     // Which backend WILL be attempted -- decided before construction, mirroring the
-    // guards below, because the power limit must be applied (--pl) and observed
-    // (geometry selection) before any buffer is sized. NVML is still opened only when
-    // a GPU backend will actually run: changing the power limit of a card this
-    // process is not going to use is a side effect nobody asked for.
+    // guards below: the power limit must be applied and observed before any buffer is
+    // sized. NVML still opens only when a GPU backend will actually run.
     bool cuda_will_run = false, metal_will_run = false, opencl_will_run = false;
 #ifdef MXBM_HAVE_CUDA
     cuda_will_run = (opts.solver == "cuda" || opts.solver == "gpu" || opts.solver == "auto")
@@ -341,10 +339,9 @@ int main(int argc, char** argv) {
         ocreq.moff = opts.mem_offset;
         ocreq.fan  = opts.fan;
 
-        // --pl auto: the value a --tune run stored for THIS card. Resolved here --
-        // after the card is known, before the numeric validation below would choke
-        // on the word -- into a plain wattage, so everything downstream (apply,
-        // restore, geometry observation) is unchanged.
+        // --pl auto: the value a --tune run stored for THIS card, resolved into a
+        // plain wattage here -- after the card is known, before the numeric
+        // validation below would choke on the word.
         if (ocreq.pl == "auto") {
             std::string key;
 #ifdef MXBM_HAVE_CUDA
@@ -360,9 +357,8 @@ int main(int argc, char** argv) {
                 ui::console::info("--pl auto: " + std::to_string(w)
                                   + " W, tuned for this card on " + date
                                   + " (re-run --tune after driver or cooling changes)");
-                // The rung is recommended, never auto-applied: locking a memory
-                // clock the user did not ask for is a hardware setting nobody
-                // requested. --mclk given explicitly means they already decided.
+                // Recommended, never auto-applied: locking a memory clock the user
+                // did not ask for is a hardware setting nobody requested.
                 unsigned rmhz = 0, rbelow = 0;
                 if (opts.mem_clock.empty() && miner::tune_stored_rung(key, rmhz, rbelow)
                     && w < rbelow) {
@@ -567,13 +563,10 @@ int main(int argc, char** argv) {
         std::vector<unsigned> nvml_index;
         for (unsigned d : selected_devices) nvml_index.push_back(d);
         if (nvml_index.empty()) nvml_index.push_back(0);
-        // The restart notice. Geometry is chosen ONCE, at startup, from the limit
-        // observed then (a switch is a multi-GiB realloc), so a cap that later moves
-        // across the selection threshold is answered with one line, not a re-select.
-        // The line only fires when the selection would actually DIFFER -- an 8 GB card
-        // that could never host (17,0) stays silent -- and never when the user forced
-        // the geometry by hand: a forced geometry is theirs. CUDA only: the OpenCL
-        // backend does not take the cap hint (the crossover was measured on CUDA).
+        // The restart notice: geometry is chosen once at startup (a switch is a
+        // multi-GiB realloc), so a cap that later crosses the threshold gets one line,
+        // not a re-select -- and only when the selection would actually DIFFER, never
+        // under a hand-forced geometry. CUDA only: OpenCL takes no cap hint.
         const bool watch_pl = dev_driver == "Cuda"
                            && !std::getenv("MXBM_BB") && !std::getenv("MXBM_SM");
         auto pl_noticed = std::make_shared<std::atomic<bool>>(false);
