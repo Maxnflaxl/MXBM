@@ -2648,6 +2648,37 @@ Artifacts: `docs-internal/rootruns/rung-compose/`.
 
 </details>
 
+### The compiler axis, re-swept on the July kernels — a clean null
+
+<details>
+<summary>Details</summary>
+
+*(2026-07-31. The per-kernel register budgets, ptxas settings and toolkit were
+last tuned before the perfect table, spill, LD.128, co-blocks and the quad
+record landed — the one stock-speed axis not re-visited since. Six variants,
+each rebuilt in an isolated probe dir with the resource guard off, KAT-gated,
+register-dumped to prove the flag applied, ABBA-bracketed against the shipping
+binary in the miner loop, 40 s arms. Null control read 0.0 %.)*
+
+| variant | what it does | result |
+|---|---|---|
+| null control | probe dir, no flag change | 33.1 → 33.1 ms (instrument clean) |
+| `-Xptxas=-O2` | one -O level down | 0.0 % — codegen-neutral |
+| `MB_SEED=6` | r1 squeezed 48 → 40 regs (6 blocks/SM) | +0.15 % (noise) |
+| `MB_SEED=4` | r1 relaxed to 64 regs (4 blocks) | **+0.6 %** — the fifth block still pays |
+| `MB_RD2=5` | r2 squeezed 64 → 48 regs (5 blocks) | **+0.5 %** |
+| `MB_RD2=3` | r2 relaxed to 80 regs (3 blocks) | **+1.2 %** |
+
+The current configuration is the local optimum on the current kernels: r2's
+64-register cliff binds from BOTH directions, r1's fifth resident block is
+still worth its register price, and ptxas has nothing left on the -O axis.
+The installed toolkit (13.3.73) has only a patch step available (13.3.1),
+priced as not worth a slot. Registers moved exactly as commanded in every
+variant (cuobjdump before/after in the artifacts), so these are real nulls,
+not unapplied flags. Artifacts: `docs-internal/rootruns/compiler-sweep/`.
+
+</details>
+
 ### Per-stage attribution at the eco points: the floor's time is round 2's
 <details>
 <summary>Details</summary>
