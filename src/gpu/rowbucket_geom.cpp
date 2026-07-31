@@ -41,7 +41,19 @@ const RbRung* rb_rungs(int& n) {
 }
 
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
-                           bool allow_quad) {
+                           bool allow_quad, unsigned power_limit_w) {
+    // The low-power exception to the ladder's order. (17,0) is NOT a rung: it loses
+    // 10.9 % at stock and only wins under a cap (the ~190 W crossover documented at
+    // kRbLowPowerW), so it is reached by policy here rather than by a rung every card
+    // would walk. Same fit rules as the ladder; if it does not fit, the ladder answers
+    // exactly as it would have without the hint.
+    if (power_limit_w && power_limit_w < kRbLowPowerW) {
+        size_t total = 0, single = 0;
+        rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false);
+        if ((!max_alloc || single <= (size_t)max_alloc)
+            && (!global_mem || total + (size_t)(1ull << 30) <= (size_t)global_mem))
+            return { 17u, 0u, false, true };
+    }
     int n = 0;
     const RbRung* rungs = rb_rungs(n);
     for (int i = 0; i < n; ++i) {

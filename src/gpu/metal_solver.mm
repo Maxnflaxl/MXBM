@@ -24,6 +24,8 @@
 namespace {
 constexpr uint32_t kElems    = 1u << 25;
 constexpr uint32_t kCapacity = kElems + kElems / 32;      // 34,603,008
+static_assert(kCapacity == mxbm::gpu::kRbCapacity,
+              "the shared geometry header's capacity must match the solver's");
 constexpr uint32_t kSurvCap  = 1024;
 // Threadgroup size. MUST equal the kWG the kernels were compiled with -- it is the
 // stride of their staging loops, and a mismatch silently skips elements rather than

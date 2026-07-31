@@ -2422,6 +2422,13 @@ DRAM-side price that a capped card has spare bandwidth to pay; its win is the re
 staging instructions, a core-side saving that a capped card values. `MXBM_BB=17` selects
 it at runtime; it needs the (17,0) footprint (8.35 GiB).
 
+**Shipped as behavior 2026-07-31.** The CUDA solver now selects (17,0) itself when the
+board power limit observed at startup is below 190 W and the 8.35 GiB fits — applied
+first (`--pl`), then observed (NVML), then sized, so a cap set outside MXBM
+(`nvidia-smi -pl` before launch) counts the same as one MXBM applied. Chosen once per
+run: a geometry switch is a multi-GiB realloc, so a cap changed mid-run gets a one-line
+restart notice instead of a re-selection. `MXBM_BB` still overrides both ways.
+
 **`MXBM_R2_FULL` loses at EVERY cap, monotonically.** This kills the clean form of the
 instruction-currency theory: round 2's 14-siphash rebuild is ~500 ALU ops per element
 against the ~10 extra memory instructions the full record costs, and the ALU side still

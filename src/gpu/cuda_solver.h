@@ -35,7 +35,11 @@ public:
     static std::vector<DeviceInfo> enumerate();
 
     // `index` is a CUDA device index. Throws std::runtime_error on failure.
-    explicit CudaSolver(int index = 0);
+    // `power_limit_w` is the board power limit observed at startup (0 = unknown or
+    // uncapped): below kRbLowPowerW the solver prefers the (17,0) geometry when its
+    // 8.35 GiB fits (rowbucket_geom.h). Chosen once, here -- a later cap change never
+    // re-selects, because a geometry switch is a multi-GiB realloc.
+    explicit CudaSolver(int index = 0, unsigned power_limit_w = 0);
     ~CudaSolver() override;
     CudaSolver(const CudaSolver&) = delete;
     CudaSolver& operator=(const CudaSolver&) = delete;
@@ -44,6 +48,11 @@ public:
     void request_abort() override;
 
     const DeviceInfo& device() const;
+
+    // The chosen bucket bits: bb of the (bb, 17-bb) geometry actually allocated,
+    // AFTER any allocator step-down. What the power-limit preference selects --
+    // exposed so tests can assert the hint reached the solver, not just the picker.
+    unsigned bucket_bits() const;
 
 private:
     struct Impl;

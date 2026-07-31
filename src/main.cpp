@@ -29,6 +29,7 @@
 #include "version.h"
 #include "gpu/nvml.h"
 #include "gpu/overclock.h"
+#include "gpu/rowbucket_geom.h"   // the restart notice asks the geometry question itself
 #ifdef MXBM_HAVE_OPENCL
 #include "gpu/gpu_solver.h"
 #endif
@@ -275,64 +276,13 @@ int main(int argc, char** argv) {
     unsigned long long dev_mem = 0;
 
 #ifdef MXBM_HAVE_CUDA
-    // CUDA first when both are built: it measures ~1.16x the OpenCL path's rate on the
-    // same card (docs/performance.md). --solver opencl forces the portable path.
     // enumerate() returned PCI order, so the user's index is a position in that
     // list; the CUDA index to construct on is the one recorded in the entry.
     const int cuda_index = (device_index >= 0 && (size_t)device_index < cuda_devices.size())
                          ? cuda_devices[(size_t)device_index].index : device_index;
-    if ((opts.solver == "cuda" || opts.solver == "gpu" || opts.solver == "auto")
-        && gpu::CudaSolver::available(cuda_index)) {
-        try {
-            auto cs = std::make_unique<gpu::CudaSolver>(cuda_index);
-            worker_label = cs->device().name;   // the real name, not a bare "GPU 0"
-            dev_name = cs->device().name;
-            dev_mem = cs->device().global_mem;
-            dev_driver = "Cuda";
-            solver = std::move(cs);
-        } catch (const std::exception& e) {
-            ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
-            gpu_attempt_failed = true;
-        }
-        // The remaining selected devices. A card that fails to initialise is
-        // reported and skipped rather than taking the rig down with it: on a
-        // multi-GPU box the whole point is that the others keep mining.
-        for (size_t k = 1; solver && k < selected_devices.size(); ++k) {
-            const size_t pos = selected_devices[k];
-            const int idx = pos < cuda_devices.size() ? cuda_devices[pos].index : (int)pos;
-            try {
-                auto cs = std::make_unique<gpu::CudaSolver>(idx);
-                extra_labels.push_back(cs->device().name);
-                extra_solvers.push_back(std::move(cs));
-            } catch (const std::exception& e) {
-                ui::console::error("Device " + std::to_string(pos) + " could not be initialised ("
-                                   + e.what() + ") - continuing without it");
-            }
-        }
-    }
 #endif
 #ifdef MXBM_HAVE_METAL
-    // Metal before OpenCL on Apple Silicon, and this is measured rather than assumed.
-    // Apple's OpenCL is a deprecated 1.2-era shim that cannot build the fused
-    // row-bucket kernels AT ALL (clCreateKernel -> CL_INVALID_KERNEL), so it is
-    // confined to the sort path -- the slowest of the three collision finders. On an
-    // M3 Max that is ~505 ms/solve against Metal's ~117 ms, a 4.3x difference.
-    // --solver opencl still forces the portable path.
     const int metal_index = device_index >= 0 ? device_index : 0;
-    if (!solver && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
-        && gpu::MetalSolver::available(metal_index)) {
-        try {
-            auto ms = std::make_unique<gpu::MetalSolver>(metal_index);
-            worker_label = ms->device().name;
-            dev_name = ms->device().name;
-            dev_mem = ms->device().global_mem;
-            dev_driver = "Metal";
-            solver = std::move(ms);
-        } catch (const std::exception& e) {
-            ui::console::error(std::string("Metal solver initialization failed: ") + e.what());
-            gpu_attempt_failed = true;
-        }
-    }
 #endif
 #ifdef MXBM_HAVE_OPENCL
     // The OpenCL index is the user's selection used directly: OpenCL enumerates
@@ -340,82 +290,34 @@ int main(int argc, char** argv) {
     // path there is no translation to make. On a single-vendor rig the two
     // orderings agree; --list-devices is what to check when they might not.
     const unsigned cl_index = device_index >= 0 ? (unsigned)device_index : 0u;
-    if (!solver && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
-        && gpu::GpuSolver::available(cl_index)) {
-        try {
-            auto gs = std::make_unique<gpu::GpuSolver>(cl_index);
-            worker_label = gs->device().name;
-            dev_name = gs->device().name;
-            dev_mem = gs->device().global_mem;
-            dev_driver = "OpenCL";
-            solver = std::move(gs);
-        } catch (const std::exception& e) {
-            ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
-            gpu_attempt_failed = true;
-        }
-    }
 #endif
-#ifdef MXBM_HAVE_BEAM_ORACLE
-    if (!solver && (opts.solver == "ref" || opts.solver == "auto")) {
-        solver = std::make_unique<miner::SolverRef>();
-        worker_label = "CPU 0 reference";
-    }
+
+    // Which backend WILL be attempted -- decided before construction, mirroring the
+    // guards below, because the power limit must be applied (--pl) and observed
+    // (geometry selection) before any buffer is sized. NVML is still opened only when
+    // a GPU backend will actually run: changing the power limit of a card this
+    // process is not going to use is a side effect nobody asked for.
+    bool cuda_will_run = false, metal_will_run = false, opencl_will_run = false;
+#ifdef MXBM_HAVE_CUDA
+    cuda_will_run = (opts.solver == "cuda" || opts.solver == "gpu" || opts.solver == "auto")
+                    && gpu::CudaSolver::available(cuda_index);
 #endif
-    stats.set_device_label(worker_label);
-
-    // NVML before the device block, not after: it supplies the PCI address and
-    // the driver version that block and the stats header report. Independent
-    // of the chosen backend, so an OpenCL run on an NVIDIA card gets it too.
-    const bool have_nvml = solver && gpu::nvml_init();
-    if (have_nvml) stats.set_driver_version(gpu::nvml_driver_version());
-
-    if (!dev_name.empty()) {
-        // Vendor is claimed only when NVML answered, itself proof of an NVIDIA
-        // card; other vendors get no Vendor line rather than a guessed one.
-        ui::console::device_block(
-            0, dev_name,
-            have_nvml ? gpu::nvml_pci_address() : std::string(),
-            have_nvml ? "NVIDIA Corporation" : std::string(),
-            dev_driver, dev_mem,
-            "Selected Algorithm: BeamHash III (" + dev_driver + ")");
-    }
-
 #ifdef MXBM_HAVE_METAL
-    // Apple Silicon telemetry, when NVML is not the source. Much thinner than NVML by
-    // necessity: utilization is the only figure the public API exposes (see
-    // gpu/metal_telemetry.h), so the power/clock/temp/fan columns stay blank rather
-    // than being filled with a scraped guess.
-    const bool have_metal_telem = !have_nvml && dev_driver == "Metal"
-                               && gpu::metal_telemetry_init();
-    if (have_metal_telem) {
-        stats.set_telemetry_source([](unsigned row, miner::Stats::Device& d) {
-            const gpu::Telemetry t = gpu::metal_sample(row);
-            d.has_util = t.have_util;  d.util_pct = t.util_pct;
-        });
-    }
+    metal_will_run = !cuda_will_run
+                  && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
+                  && gpu::MetalSolver::available(metal_index);
 #endif
-    if (have_nvml) {
-        // Each row samples its OWN card. The index is the position in the
-        // PCI-sorted list --devices selected from, and NVML enumerates by bus
-        // id too, so the two agree without a translation table.
-        std::vector<unsigned> nvml_index;
-        for (unsigned d : selected_devices) nvml_index.push_back(d);
-        if (nvml_index.empty()) nvml_index.push_back(0);
-        stats.set_telemetry_source([nvml_index](unsigned row, miner::Stats::Device& d) {
-            const unsigned idx = row < nvml_index.size() ? nvml_index[row] : row;
-            const gpu::Telemetry t = gpu::nvml_sample(idx);
-            d.has_power = t.have_power;         d.power_w       = t.power_w;
-            d.has_sm_clock = t.have_sm;         d.sm_clock_mhz  = t.sm_clock_mhz;
-            d.has_mem_clock = t.have_mem;       d.mem_clock_mhz = t.mem_clock_mhz;
-            d.has_temp = t.have_temp;           d.temp_c        = t.temp_c;
-            d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
-            d.has_util = t.have_util;           d.util_pct      = t.util_pct;
-        });
-    }
-    // Board power limit. After device enumeration so the console has already
-    // said which card this is, and before ANY solving -- benchmark and mining
-    // alike -- because the limit selects the operating point both of them
-    // measure. A card that cannot be set still mines, at stock: a miner that
+#ifdef MXBM_HAVE_OPENCL
+    opencl_will_run = !cuda_will_run && !metal_will_run
+                   && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
+                   && gpu::GpuSolver::available(cl_index);
+#endif
+    const bool gpu_will_run = cuda_will_run || metal_will_run || opencl_will_run;
+    const bool have_nvml = gpu_will_run && gpu::nvml_init();
+
+    // Overclock settings BEFORE the solver exists, not after: geometry selection reads
+    // the board power limit, so --pl has to land first -- apply, then observe, then
+    // size buffers. A card that cannot be set still mines, at stock: a miner that
     // failed to apply OC is degraded, not wrong (docs/overclocking.md).
     {
         gpu::OcRequest ocreq;
@@ -450,16 +352,15 @@ int main(int argc, char** argv) {
             if (!have_nvml) {
                 // Three different causes, and saying the wrong one sends the user
                 // hunting for a driver they already have. NVML is only opened
-                // when a solver was selected, because changing the power limit
+                // when a GPU backend will run, because changing the power limit
                 // of a card this process is not going to use is a side effect
                 // nobody asked for.
-                const bool metal_dev = (dev_driver == "Metal");
                 ui::console::error(
-                    metal_dev
+                    metal_will_run
                     ? std::string("Overclock settings are not supported on Apple Silicon: macOS "
                                   "exposes no power-limit, clock or fan control. Continuing at "
                                   "the system's own settings")
-                    : solver
+                    : gpu_will_run
                     ? std::string("Overclock settings need NVML (an NVIDIA driver), which is not "
                                   "available here; continuing at the card's current settings")
                     : std::string("Overclock settings were not applied: no GPU solver is in use, "
@@ -485,6 +386,177 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The limit geometry selection turns on: read back AFTER --pl landed, so a cap
+    // MXBM applied and one set outside it (nvidia-smi before launch) look the same.
+    // Zero means "no limit known" and selects nothing.
+    unsigned startup_pl_w = 0;
+    if (have_nvml) {
+        const gpu::PowerLimit board_pl = gpu::nvml_power_limit();
+        if (board_pl.valid) startup_pl_w = board_pl.current_w;
+    }
+
+#ifdef MXBM_HAVE_CUDA
+    // CUDA first when both are built: it measures ~1.16x the OpenCL path's rate on the
+    // same card (docs/performance.md). --solver opencl forces the portable path.
+    if (cuda_will_run) {
+        try {
+            auto cs = std::make_unique<gpu::CudaSolver>(cuda_index, startup_pl_w);
+            worker_label = cs->device().name;   // the real name, not a bare "GPU 0"
+            dev_name = cs->device().name;
+            dev_mem = cs->device().global_mem;
+            dev_driver = "Cuda";
+            solver = std::move(cs);
+        } catch (const std::exception& e) {
+            ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
+            gpu_attempt_failed = true;
+        }
+        // The remaining selected devices. A card that fails to initialise is
+        // reported and skipped rather than taking the rig down with it: on a
+        // multi-GPU box the whole point is that the others keep mining.
+        for (size_t k = 1; solver && k < selected_devices.size(); ++k) {
+            const size_t pos = selected_devices[k];
+            const int idx = pos < cuda_devices.size() ? cuda_devices[pos].index : (int)pos;
+            try {
+                // Each card gets ITS observed limit -- NVML orders by bus id, the same
+                // order `pos` indexes -- because a mixed rig can cap the cards apart.
+                const gpu::PowerLimit epl = have_nvml ? gpu::nvml_power_limit_at((unsigned)pos)
+                                                      : gpu::PowerLimit{};
+                auto cs = std::make_unique<gpu::CudaSolver>(idx, epl.valid ? epl.current_w : 0u);
+                extra_labels.push_back(cs->device().name);
+                extra_solvers.push_back(std::move(cs));
+            } catch (const std::exception& e) {
+                ui::console::error("Device " + std::to_string(pos) + " could not be initialised ("
+                                   + e.what() + ") - continuing without it");
+            }
+        }
+    }
+#endif
+#ifdef MXBM_HAVE_METAL
+    // Metal before OpenCL on Apple Silicon, and this is measured rather than assumed.
+    // Apple's OpenCL is a deprecated 1.2-era shim that cannot build the fused
+    // row-bucket kernels AT ALL (clCreateKernel -> CL_INVALID_KERNEL), so it is
+    // confined to the sort path -- the slowest of the three collision finders. On an
+    // M3 Max that is ~505 ms/solve against Metal's ~117 ms, a 4.3x difference.
+    // --solver opencl still forces the portable path.
+    if (!solver && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
+        && gpu::MetalSolver::available(metal_index)) {
+        try {
+            auto ms = std::make_unique<gpu::MetalSolver>(metal_index);
+            worker_label = ms->device().name;
+            dev_name = ms->device().name;
+            dev_mem = ms->device().global_mem;
+            dev_driver = "Metal";
+            solver = std::move(ms);
+        } catch (const std::exception& e) {
+            ui::console::error(std::string("Metal solver initialization failed: ") + e.what());
+            gpu_attempt_failed = true;
+        }
+    }
+#endif
+#ifdef MXBM_HAVE_OPENCL
+    if (!solver && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
+        && gpu::GpuSolver::available(cl_index)) {
+        try {
+            auto gs = std::make_unique<gpu::GpuSolver>(cl_index);
+            worker_label = gs->device().name;
+            dev_name = gs->device().name;
+            dev_mem = gs->device().global_mem;
+            dev_driver = "OpenCL";
+            solver = std::move(gs);
+        } catch (const std::exception& e) {
+            ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
+            gpu_attempt_failed = true;
+        }
+    }
+#endif
+#ifdef MXBM_HAVE_BEAM_ORACLE
+    if (!solver && (opts.solver == "ref" || opts.solver == "auto")) {
+        solver = std::make_unique<miner::SolverRef>();
+        worker_label = "CPU 0 reference";
+    }
+#endif
+    stats.set_device_label(worker_label);
+
+    // NVML came up BEFORE construction -- the power limit had to be applied and
+    // observed before geometry was chosen. It also supplies the PCI address and the
+    // driver version the device block and stats header report, independent of the
+    // chosen backend, so an OpenCL run on an NVIDIA card gets them too.
+    if (have_nvml) stats.set_driver_version(gpu::nvml_driver_version());
+
+    if (!dev_name.empty()) {
+        // Vendor is claimed only when NVML answered, itself proof of an NVIDIA
+        // card; other vendors get no Vendor line rather than a guessed one.
+        ui::console::device_block(
+            0, dev_name,
+            have_nvml ? gpu::nvml_pci_address() : std::string(),
+            have_nvml ? "NVIDIA Corporation" : std::string(),
+            dev_driver, dev_mem,
+            "Selected Algorithm: BeamHash III (" + dev_driver + ")");
+    }
+
+#ifdef MXBM_HAVE_METAL
+    // Apple Silicon telemetry, when NVML is not the source. Much thinner than NVML by
+    // necessity: utilization is the only figure the public API exposes (see
+    // gpu/metal_telemetry.h), so the power/clock/temp/fan columns stay blank rather
+    // than being filled with a scraped guess.
+    const bool have_metal_telem = !have_nvml && dev_driver == "Metal"
+                               && gpu::metal_telemetry_init();
+    if (have_metal_telem) {
+        stats.set_telemetry_source([](unsigned row, miner::Stats::Device& d) {
+            const gpu::Telemetry t = gpu::metal_sample(row);
+            d.has_util = t.have_util;  d.util_pct = t.util_pct;
+        });
+    }
+#endif
+    if (have_nvml && solver) {
+        // Each row samples its OWN card. The index is the position in the
+        // PCI-sorted list --devices selected from, and NVML enumerates by bus
+        // id too, so the two agree without a translation table.
+        std::vector<unsigned> nvml_index;
+        for (unsigned d : selected_devices) nvml_index.push_back(d);
+        if (nvml_index.empty()) nvml_index.push_back(0);
+        // The restart notice. Geometry is chosen ONCE, at startup, from the limit
+        // observed then (a switch is a multi-GiB realloc), so a cap that later moves
+        // across the selection threshold is answered with one line, not a re-select.
+        // The line only fires when the selection would actually DIFFER -- an 8 GB card
+        // that could never host (17,0) stays silent -- and never when the user forced
+        // the geometry by hand: a forced geometry is theirs. CUDA only: the OpenCL
+        // backend does not take the cap hint (the crossover was measured on CUDA).
+        const bool watch_pl = dev_driver == "Cuda"
+                           && !std::getenv("MXBM_BB") && !std::getenv("MXBM_SM");
+        auto pl_noticed = std::make_shared<std::atomic<bool>>(false);
+        const unsigned long long mem0 = dev_mem;
+        const unsigned pl0 = startup_pl_w;
+        stats.set_telemetry_source([nvml_index, watch_pl, pl_noticed, mem0, pl0]
+                                   (unsigned row, miner::Stats::Device& d) {
+            const unsigned idx = row < nvml_index.size() ? nvml_index[row] : row;
+            const gpu::Telemetry t = gpu::nvml_sample(idx);
+            d.has_power = t.have_power;         d.power_w       = t.power_w;
+            d.has_sm_clock = t.have_sm;         d.sm_clock_mhz  = t.sm_clock_mhz;
+            d.has_mem_clock = t.have_mem;       d.mem_clock_mhz = t.mem_clock_mhz;
+            d.has_temp = t.have_temp;           d.temp_c        = t.temp_c;
+            d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
+            d.has_util = t.have_util;           d.util_pct      = t.util_pct;
+            if (row == 0 && watch_pl && !pl_noticed->load(std::memory_order_relaxed)) {
+                const gpu::PowerLimit now = gpu::nvml_power_limit_at(nvml_index[0]);
+                if (now.valid && now.current_w != pl0) {
+                    const gpu::RbGeometry was = gpu::rb_geometry_for(
+                        gpu::kRbCapacity, 0, mem0, /*allow_quad=*/true, pl0);
+                    const gpu::RbGeometry would = gpu::rb_geometry_for(
+                        gpu::kRbCapacity, 0, mem0, /*allow_quad=*/true, now.current_w);
+                    if (was.bb != would.bb) {
+                        pl_noticed->store(true, std::memory_order_relaxed);
+                        ui::console::info(
+                            "Board power limit is now " + std::to_string(now.current_w)
+                            + " W (" + (pl0 ? std::to_string(pl0) + " W at startup"
+                                            : std::string("not known at startup"))
+                            + "). Solver geometry is chosen once, at startup, and stays "
+                              "for this run - restart MXBM to re-select for the new limit.");
+                    }
+                }
+            }
+        });
+    }
     if (!solver && gpu_attempt_failed) {
         ui::console::info("Falling back to monitoring jobs only (no solving)");
     } else if (!solver) {

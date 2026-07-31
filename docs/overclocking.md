@@ -27,8 +27,27 @@ they would be working against.
 
 Config-file keys `PL`, `CCLK`, `MCLK`, `COFF`, `MOFF`, `FAN` and `NO_OC_RESET` set the
 same things, and each also accepts a JSON array (`"PL": [220, "*", 260]`). Applied after
-device enumeration and before any solving, so a benchmark measures the same operating
-point mining will use.
+device enumeration and **before the solver is constructed** (2026-07-31; previously after),
+so a benchmark measures the same operating point mining will use — and so the geometry
+selection below can read the limit `--pl` just set.
+
+## `--pl` now selects the solver geometry — once, at startup
+
+The CUDA solver picks its bucket geometry from the board power limit in effect when it
+starts: below **190 W** it prefers the (17,0) low-power geometry (+1 % at 140–180 W,
++2.6 % at the card's floor — [the eco sweep](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does))
+when the card can host its 8.35 GiB; at or above 190 W it keeps (16,1), which is ~11 %
+faster at stock. The order is **apply, then observe, then size**: `--pl` lands first and
+the selection reads the limit off the card afterwards, so a cap applied outside MXBM
+(`nvidia-smi -pl` before launch — the only route on a rig that doesn't run MXBM as root)
+counts exactly the same as one `--pl` applied.
+
+The choice is made once per run. A geometry switch is a multi-GiB reallocation, and an
+externally changed cap can be transient, so MXBM never re-selects mid-run: if the limit
+later crosses to the other side of the threshold *and* the selection would actually
+differ on this card, it prints one line saying so and keeps mining — restart to
+re-select. `MXBM_BB=17`/`MXBM_BB=16` still force either geometry by hand, and a forced
+geometry suppresses the notice.
 
 **Apply order is fixed**: power limit, core offset, memory offset, locked core clock,
 locked memory clock, fan. The V/F curve is shaped before anything is pinned onto it, and

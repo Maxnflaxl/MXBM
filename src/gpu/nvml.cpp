@@ -198,24 +198,29 @@ std::string nvml_pci_address(unsigned index) {
     return strip(bus) + ":" + strip(dev);
 }
 
-PowerLimit nvml_power_limit() {
+namespace {
+PowerLimit read_power_limit(nvmlDevice_t dev) {
     PowerLimit p;
-    if (!g_ready || !p_pl_get) return p;
+    if (!g_ready || !p_pl_get || !dev) return p;
     unsigned v = 0;
-    if (p_pl_get(g_dev, &v) != NVML_SUCCESS) return p;
+    if (p_pl_get(dev, &v) != NVML_SUCCESS) return p;
     p.current_w = nvml_mw_to_w(v);
     p.valid = true;
     // The default and the constraints are separately optional: a card can
     // report its current limit and refuse the rest. Leaving them 0 lets the
     // caller tell "unknown" from "known and equal to the current value".
-    if (p_pl_default && p_pl_default(g_dev, &v) == NVML_SUCCESS) p.default_w = nvml_mw_to_w(v);
+    if (p_pl_default && p_pl_default(dev, &v) == NVML_SUCCESS) p.default_w = nvml_mw_to_w(v);
     unsigned lo = 0, hi = 0;
-    if (p_pl_constraints && p_pl_constraints(g_dev, &lo, &hi) == NVML_SUCCESS) {
+    if (p_pl_constraints && p_pl_constraints(dev, &lo, &hi) == NVML_SUCCESS) {
         p.min_w = nvml_mw_to_w(lo);
         p.max_w = nvml_mw_to_w(hi);
     }
     return p;
 }
+} // namespace
+
+PowerLimit nvml_power_limit()                  { return read_power_limit(g_dev); }
+PowerLimit nvml_power_limit_at(unsigned index) { return read_power_limit(dev_at(index)); }
 
 NvmlWrite nvml_set_power_limit(unsigned watts) {
     if (!g_ready || !p_pl_set) return NvmlWrite::Unsupported;

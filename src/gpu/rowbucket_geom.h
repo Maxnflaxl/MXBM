@@ -54,6 +54,21 @@ uint32_t fb_cap_for(uint32_t mean);
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
                      bool quad = false);
 
+// The shipping element capacity: the 2^25 seed layer plus the 1/32 growth slack every
+// round is budgeted against. Each backend keeps its own kCapacity for kernel arithmetic
+// and static_asserts it equals this one; exposed so main.cpp's restart notice can ask
+// the geometry question below with the same number the solvers used.
+constexpr uint32_t kRbCapacity = (1u << 25) + (1u << 25) / 32;    // 34,603,008
+
+// Below this board power limit the (17,0) rung is preferred when it fits. MEASURED
+// (the eco sweep, docs/performance-research.md): MXBM_BB=17 crosses over at ~190 W --
+// +1 % in the 140-180 W band, +2.6 % at the card's 100 W floor -- and LOSES 10.9 % at
+// stock (scatter locality), which is why (16,1) stays the uncapped default and (17,0)
+// is not a ladder rung. Selection happens ONCE, from the limit observed after --pl landed:
+// a geometry switch is a multi-GiB realloc, so an externally changed cap mid-run does
+// not re-select -- main.cpp prints a restart notice instead.
+constexpr unsigned kRbLowPowerW = 190;
+
 // The row-bucket geometry decision, with the device reduced to the two numbers it
 // actually turns on. Pure, so docs/HW_REQUIREMENTS.md's "which cards get the fast path"
 // table can be pinned by a test instead of worked out by hand.
@@ -94,9 +109,13 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 //   bb/sm     : bucket bits and sub-mask bits, always summing to 17
 //   quad      : use the 24 B quad record for round 2 -> round 3
 //   viable    : false when no rung will fit
+//   power_limit_w : the board power limit observed at startup, in watts; 0 means
+//               unknown or uncapped and changes nothing. Below kRbLowPowerW the
+//               (17,0) rung is preferred when its 8.35 GiB fits. Only the CUDA
+//               backend passes a real value -- the crossover was measured there.
 struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
-                           bool allow_quad = false);
+                           bool allow_quad = false, unsigned power_limit_w = 0);
 
 // The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
 // backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said

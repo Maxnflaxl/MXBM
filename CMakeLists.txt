@@ -181,6 +181,9 @@ add_test(NAME overclock COMMAND test_overclock)
 
 add_executable(mxbm src/main.cpp src/cli/options.cpp)
 target_link_libraries(mxbm PRIVATE mxbm_nvml)
+# main.cpp asks the geometry question itself (the power-limit restart notice), so the
+# dependency is direct, not just transitive through whichever GPU backend is built in.
+target_link_libraries(mxbm PRIVATE mxbm_geom)
 target_include_directories(mxbm PRIVATE src)
 target_link_libraries(mxbm PRIVATE mxbm_miner)
 target_link_libraries(mxbm PRIVATE mxbm_ui)

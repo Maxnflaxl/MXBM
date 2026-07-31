@@ -77,5 +77,25 @@ int main() {
     }
     unsetenv("MXBM_BB");
 
+    // The power-limit hint, end to end through the ctor -- exactly what main.cpp does
+    // after observing the board limit. No root or actual cap is needed: the ctor takes
+    // the observed value as an argument. 160 W on a card that can host 8.35 GiB must
+    // select (17,0) -- the cap-preferred geometry that is NOT a ladder rung -- and the
+    // goldens must come out of it, because this is the geometry capped rigs will mine on.
+    try {
+        gpu::CudaSolver g(0, /*power_limit_w=*/160);
+        check(g.bucket_bits() == 17u, "a 160 W hint selects (17,0), not the ladder's (16,1)");
+        solve_the_kat(g, "(17,0) via 160 W hint");
+    } catch (const std::exception& e) {
+        // A busy card can legitimately refuse the 8.35 GiB and step down; the unit
+        // test pins the selection logic, this arm exists to run the real kernels.
+        std::printf("  SKIP (17,0) via 160 W hint: %s\n", e.what());
+    }
+    // And the hint is inert at stock: 285 W is above the crossover, same rung as no hint.
+    {
+        gpu::CudaSolver g(0, /*power_limit_w=*/285);
+        check(g.bucket_bits() == 16u, "a 285 W hint changes nothing: (16,1) as always");
+    }
+
     return summary("cuda_solver");
 }

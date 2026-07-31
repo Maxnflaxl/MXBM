@@ -67,6 +67,13 @@ struct PowerLimit {
 // docs/overclocking.md ("Clamps") was waiting on.
 PowerLimit nvml_power_limit();
 
+// The same, for any device by index -- bus order, the order --devices selects
+// from. What geometry selection and the restart notice read: the limit that is
+// actually ON the card, whether --pl put it there or nvidia-smi did before
+// launch. An out-of-range index reads as "no limit reported", never as another
+// card's.
+PowerLimit nvml_power_limit_at(unsigned index);
+
 // NVML speaks milliwatts. Rounding rather than truncating matters: a card whose
 // limit reads 284999 mW must report 285 W, or a no-op write looks like a change
 // and the restore-on-exit bookkeeping puts back a value that was never set.

@@ -24,7 +24,7 @@ int main() {
         // memory, because the mean + 8 sd + 32 reservation is paid once per bucket and
         // sd/mean shrinks as the mean grows.
         struct { uint32_t bb; double total, single; } want[] = {
-            { 16, 7.46, 3.27 }, { 15, 6.88, 2.96 }, { 14, 6.50, 2.76 },
+            { 17, 8.35, 3.74 }, { 16, 7.46, 3.27 }, { 15, 6.88, 2.96 }, { 14, 6.50, 2.76 },
         };
         double prev = 1e9;
         for (const auto& w : want) {
@@ -163,6 +163,49 @@ int main() {
         check(n == 6, "six rungs: three geometries x two record formats");
         for (int i = 0; i < n; ++i)
             check(rungs[i].bb + rungs[i].sm == 17u, "every rung is on the bb + sm == 17 line");
+    }
+
+    section("the power cap reaches (17,0) -- once, at startup, only when it fits");
+    {
+        // MEASURED (the eco sweep, docs/performance-research.md): MXBM_BB=17 crosses
+        // over at ~190 W -- +1 % in the 140-180 W band, +2.6 % at the 100 W floor --
+        // and LOSES 10.9 % at stock. So (17,0) is a POLICY above the ladder, not a
+        // rung of it: without a cap hint nothing anywhere changes.
+        check(rb_geometry_for(cap, 0, gib(15.59), true, 0).bb == 16,
+              "no cap hint: (16,1), exactly as before");
+        check(rb_geometry_for(cap, 0, gib(15.59), true, 285).bb == 16,
+              "stock 285 W: (16,1) -- (17,0) loses above the crossover");
+        check(rb_geometry_for(cap, 0, gib(15.59), true, kRbLowPowerW).bb == 16,
+              "at the crossover itself the ladder stands: the preference is strictly below");
+        const RbGeometry lo = rb_geometry_for(cap, 0, gib(15.59), true, 160);
+        check(lo.viable && lo.bb == 17 && lo.sm == 0 && !lo.quad,
+              "160 W on a 16 GB card: (17,0), packed");
+        check(lo.bb + lo.sm == 17u && 24u - lo.bb - lo.sm == 7u,
+              "(17,0) stays on the line the kernels' compile-time constants assume");
+
+        // The rung must FIT under the same rules as the ladder: 8.35 GiB total plus
+        // the 1 GiB headroom. A capped card that cannot host it keeps the geometry it
+        // would have had -- the cap is a preference among viable geometries, never a
+        // way to lose one.
+        check(rb_geometry_for(cap, 0, gib(8.00), true, 160).bb == 15,
+              "capped 8 GB card: (17,0) does not fit, the ladder answers as before");
+        check(rb_geometry_for(cap, 0, gib(9.70), true, 160).bb == 17,
+              "capped 10 GB card: 8.35 GiB + 1 GiB headroom clears 9.70");
+        const RbGeometry ma_hint = rb_geometry_for(cap, gib(11.60)/4, gib(11.60), true, 160);
+        const RbGeometry ma_none = rb_geometry_for(cap, gib(11.60)/4, gib(11.60), true, 0);
+        check(ma_hint.bb == ma_none.bb && ma_hint.quad == ma_none.quad,
+              "single-allocation-bound cards: (17,0)'s 3.74 GiB set 0 is refused, nothing changes");
+
+        // main.cpp's restart notice asks this function whether the selection WOULD
+        // differ at the new limit; these two are the pair it compares on the rig the
+        // crossover was measured on.
+        check(rb_geometry_for(kRbCapacity, 0, gib(15.59), true, 285).bb
+           != rb_geometry_for(kRbCapacity, 0, gib(15.59), true, 160).bb,
+              "285 W and 160 W select different geometries on a 16 GB card -> notice fires");
+        check(rb_geometry_for(kRbCapacity, 0, gib(8.00), true, 285).bb
+           == rb_geometry_for(kRbCapacity, 0, gib(8.00), true, 160).bb,
+              "on an 8 GB card no limit changes the selection -> notice stays silent");
+        check(kRbCapacity == cap, "the exposed capacity is the shipping capacity");
     }
 
     section("invariants the kernels depend on");

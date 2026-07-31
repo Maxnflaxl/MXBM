@@ -22,6 +22,9 @@ template<class T> T* dalloc(size_t n) { void* p=nullptr; return cudaMalloc(&p, n
 
 constexpr uint32_t kElems    = 1u << 25;
 constexpr uint32_t kCapacity = kElems + kElems/32;      // 34,603,008
+static_assert(kCapacity == kRbCapacity,
+              "main.cpp's restart notice asks geometry questions with kRbCapacity; "
+              "the two must be the same number");
 constexpr uint32_t kSurvCap = 1024;
 // set 0 carries the round-2 and round-4 outputs, set 1 the round-1 and round-3 outputs.
 // Round 2's record is 9 u64: an 8-u64 record at a 16 B-aligned stride, plus a 9th-word
@@ -58,12 +61,15 @@ static_assert(kQuadStride == fb_round_stride(2, true) &&
 // grid is 2^17 blocks, the staged group is capacity / 2^17 = 264, and the 128-entry
 // chain table is a perfect hash for the 24 - bb - sm = 7 bits left varying.
 // max_alloc = 0: CUDA has no per-allocation limit (see rowbucket_geom.h).
-RbGeometry pick_geometry(uint64_t global_mem) {
+// power_limit_w = 0 (the availability/enumeration callers): viability must not depend
+// on the cap -- (17,0) is a preference among geometries that fit, never a requirement.
+RbGeometry pick_geometry(uint64_t global_mem, unsigned power_limit_w = 0) {
     // allow_quad: the 24 B record is implemented in the CUDA kernels only, so this is
     // the one caller that passes true. It costs +14 % time and buys no watts at any cap
     // (measured), so the ladder only reaches for it when a card cannot host a packed
     // rung -- which is exactly what takes the CUDA path below 6.5 GiB.
-    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem, /*allow_quad=*/true);
+    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem,
+                                   /*allow_quad=*/true, power_limit_w);
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
                                                  g.viable = true; }
     if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
@@ -173,9 +179,10 @@ std::vector<CudaSolver::DeviceInfo> CudaSolver::enumerate() {
 }
 
 const CudaSolver::DeviceInfo& CudaSolver::device() const { return p_->info; }
+unsigned CudaSolver::bucket_bits() const { return p_->bb; }
 void CudaSolver::request_abort() { p_->abort_.store(true, std::memory_order_relaxed); }
 
-CudaSolver::CudaSolver(int index) : p_(new Impl) {
+CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     // Bind THIS thread to the chosen device before any allocation. CUDA's current
     // device is per-thread, which is why solve() sets it again below: the engine
     // runs solve() on a worker thread that never saw this constructor, and would
@@ -198,7 +205,7 @@ CudaSolver::CudaSolver(int index) : p_(new Impl) {
     // desktop compositor can be sitting on a gigabyte of it, and whether a footprint
     // fits *today* is only knowable by asking the allocator. An explicit MXBM_BB /
     // MXBM_SM is the user's choice and is not stepped down under them.
-    const RbGeometry g = pick_geometry(p_->info.global_mem);
+    const RbGeometry g = pick_geometry(p_->info.global_mem, power_limit_w);
     if (!g.viable)
         throw std::runtime_error("CUDA: no row-bucket geometry fits this device");
     // MXBM_PERFECT_TAB drops the key comparison in the chain walk, which is only sound
@@ -211,6 +218,11 @@ CudaSolver::CudaSolver(int index) : p_(new Impl) {
                                  "table can separate (bb + sm must be >= 17)");
     const bool forced = std::getenv("MXBM_BB") || std::getenv("MXBM_SM")
                      || std::getenv("MXBM_QUAD");
+    // bb == 17 without a force can only mean the power-limit preference fired; say so,
+    // because a user comparing against a stock run will see different memory and speed.
+    if (!forced && g.bb == 17u)
+        std::fprintf(stderr, "CUDA: board power limit %u W is below %u W: selecting the "
+                     "low-power (17,0) geometry (8.35 GiB)\n", power_limit_w, kRbLowPowerW);
     bool ok = p_->alloc_geometry(g.bb, g.sm, g.quad);
     // Keep stepping down the SAME ladder rb_geometry_for walked, rather than
     // decrementing bb: the rungs interleave the two record formats, so a bb-only retry
@@ -221,6 +233,9 @@ CudaSolver::CudaSolver(int index) : p_(new Impl) {
         const RbRung* rungs = rb_rungs(n);
         int i = 0;
         while (i < n && !(rungs[i].bb == g.bb && rungs[i].quad == g.quad)) ++i;
+        // A cap-selected (17,0) is not ON the ladder, so the scan above runs off the
+        // end; when the allocator refuses it, retry from the top rung, not from i == n.
+        if (i == n) i = -1;
         for (++i; !ok && i < n; ++i) {
             std::fprintf(stderr, "CUDA: %u buckets%s did not fit, retrying at %u%s\n",
                          1u << g.bb, g.quad ? " (quad record)" : "",
