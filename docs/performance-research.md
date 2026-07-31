@@ -24,16 +24,22 @@ every A/B here was interleaved, so the deltas do not.
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
-| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the reorganization probes — r1's cycles are the algorithm, not bookkeeping |
+| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
 | [The CUDA backend in detail](#the-cuda-backend-in-detail) | the profiler findings |
 | [What a CUDA backend was predicted to buy](#what-a-cuda-backend-was-predicted-to-buy-retained-for-calibration) | a forecast, kept to score it |
 
+*Every section body below is collapsed behind a `Details` toggle so the document reads
+as an outline; the headings stay plain markdown, so every anchor link into this page
+keeps working.*
+
 ---
 
 ## Architecture
+<details>
+<summary>Details</summary>
 
 The solver runs Wagner's algorithm on the ⟨144,5⟩ parameter shape: 2^25 seed elements, five
 rounds, each finding pairs that collide on a 24-bit key and combining them. BeamHash III
@@ -43,7 +49,11 @@ word 0, re-deriving the collision key every round.
 Two collision-finding paths exist. The **fused row-bucket path** is the default wherever
 device memory allows; the **sort path** is the fallback for smaller cards.
 
+</details>
+
 ### Fused row-bucket pipeline
+<details>
+<summary>Details</summary>
 
 *One kernel per round* does round *r*'s match **and** round *r+1*'s mix **and** round
 *r+1*'s scatter. Per workgroup (one per bucket × sub-mask):
@@ -63,7 +73,11 @@ back to the sort path automatically. `MXBM_ROWBUCKET=1` / `MXBM_NO_ROWBUCKET=1` 
 (The *budget* still gates on a single sort-path-sized constant, which is stricter than
 this — see [open leads](#current-focus-and-open-leads).)
 
+</details>
+
 ### Round schedule
+<details>
+<summary>Details</summary>
 
 | Round | Lmix | Lout | padNum | Significant work words | Leaf payload carried |
 |---|---|---|---|---|---|
@@ -73,7 +87,11 @@ this — see [open leads](#current-focus-and-open-leads).)
 | 4 | 376 | 288 | 6 | 5 | `leftContrib` → none |
 | 5 | 288 | 24 | 9 | 1 | none (terminal) |
 
+</details>
+
 ### Stored record per round
+<details>
+<summary>Details</summary>
 
 Rounds 1–2 do not store work state at all: their elements are re-derivable from seed
 indices, and those indices are also exactly the leaves the round needs, so the compact
@@ -97,10 +115,13 @@ stride and the 9th lives in a plane behind the records, which is what keeps the 
 accesses legal without paying for a padding word — see
 [the round-2 alignment pad](#the-round-2-alignment-pad).
 
+</details>
 
 ---
 
 ## A note on method
+<details>
+<summary>Details</summary>
 
 Three results on this page were initially wrong because of the *measurement*, not the
 code, and the failure modes generalise. They are the reason several sections here carry a
@@ -125,9 +146,13 @@ positive control:
   silently losing golden solutions. Gate an A/B on output counts and goldens, never on
   timing alone.
 
+</details>
+
 ---
 
 ## Instruments: diagnostic and ablation flags
+<details>
+<summary>Details</summary>
 
 Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
 `MXBM_LEGACY_MATCH`, `MXBM_LDS_MATCH`, `MXBM_NO_COMPACT`, `MXBM_SORT_PROFILE`,
@@ -135,7 +160,12 @@ Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
 `LEADTIE_PROBE` (a `-D` build flag counting equal-lead pairs into the chain-drop
 counter; 17 per solve out of ~134 M),
 `MXBM_CL_OPTS` (extra OpenCL build options for the fused program, e.g.
-`-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)).
+`-cl-nv-maxrregcount=128`; see [register cap](#register-cap-tuning)). The row-bucket
+kernels' own knobs ride the same option string: `-DLDS_FCAP` / `-DLDS_FCAP_R1`
+(group caps, default 320/288), `-DLDS_FTAB` (chain-table entries, 128),
+`-DLDS_PERFECT_TAB=0` and `-DLDS_SPILL=0` — together those five restore the
+pre-2026-07-31 configuration for A/Bs, see
+[the backport](#the-cuda-match-wins-backported-to-opencl-perfect-table--spill--per-round-caps-06-ms).
 
 `-DMXBM_SUBPASS=1` builds the sub-pass kernel (block = whole bucket, sub-masks swept out
 of shared, keys read once); `-DMXBM_FCAP=N`, `-DMXBM_TAB=N`, `-DMXBM_SKEY=N` size it.
@@ -162,6 +192,11 @@ real entry launched separately). `--pipe2` runs the two-solve software pipeline 
 residency. On the shipped miner, `MXBM_NO_SPEC=1` disables speculative entry
 co-scheduling for A/Bs. `-DMXBM_MB_SEED=N` / `-DMXBM_MB_RD2=N` force a register budget
 (`__launch_bounds__` minBlocks) on r1 / r2 — measured null, shared memory caps first.
+`-DMXBM_PAIR128=0` restores r2's two scalar pair-record loads
+([shipped on 2026-07-31](#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms)).
+`MXBM_VERIFY_STATS=1` classifies every CPU-verify outcome by reject reason on either
+backend and prints tallies at exit
+([the found-vs-verified section](#the-found-vs-verified-gap-is-gone-0-of-3935-candidates-rejected)).
 
 **CUDA attribution builds** — `-DMXBM_ABL_EMIT=R` (narrow round *R*'s payload to 16 B),
 `-DMXBM_ABL_DERIVE=1|2|3` (round 1's seed / round 2's rebuild), `-DMXBM_ABL_MIX=R` (skip
@@ -190,28 +225,48 @@ bucket and measures pathological contention rather than the removed work.
 This replaces the `MXBM_ABLATE` that the row-bucket rewrite removed while this document
 still listed it.
 
+</details>
+
 ---
 
 ## What worked
 
 ### Sort-based collision finder
+<details>
+<summary>Details</summary>
+
 Replaced the atomic-bucket scatter + all-pairs match with a stable radix sort of
 (key, index) pairs and a coalesced run-scan emit. Also fused the sort-pair emission into
 the mix, deleting a whole strided pass over the work array. 245 → 225 ms across P1–P4.
 
+</details>
+
 ### Tiled radix sort
+<details>
+<summary>Details</summary>
+
 CUB-style 4-bit × 6-pass sort with per-thread private histograms and an in-place
 cross-thread prefix; 8 items/thread measured optimal (16 overflows 48 KB LDS).
 Sort cost per round 18 → 9.5 ms.
 
+</details>
+
 ### Fixed-width compaction
+<details>
+<summary>Details</summary>
+
 `bh3_combine` shifts out the 24 matched bits and masks to `Lout` each round, so the
 significant work words shrink on the schedule **[7, 7, 6, 5, 1]**. Storing only those
 words is bit-exact (upper words are provably zero). The win requires **compile-time**
 widths — see [runtime loop bounds](#runtime-loop-bounds). Measured 224.4 → 214.5 ms on
 the sort path, and the same schedule was later applied to the row-bucket path.
 
+</details>
+
 ### Fused row-bucket pipeline
+<details>
+<summary>Details</summary>
+
 The single largest win: **215 → 148 ms (−31 %)**. Built in three measured steps.
 
 **STEP A — bucket layout.** Carrying the leaf prefix *inside* the bucket element makes
@@ -231,25 +286,45 @@ unchanged.
 must be launched as `run1d(groups * WG, WG)` — launching `groups` work-items silently
 finds 0.4 % of collisions.
 
+</details>
+
 ### L5-thin emit
+<details>
+<summary>Details</summary>
+
 Round 4 was the most expensive round because it emitted round-5 children carrying a full
 9-leaf payload. Round 5 is terminal — it never mixes, and `recover` walks back-refs — so
 those leaves are dead weight. The kernel now decouples *build* from *store*: it builds
 `max(padNum_next, sOut)` leaves for the child's own mix but stores only `sOut`.
 Round 4: 37.2 → 29.3 ms; pipeline 151.9 → 139.1 ms.
 
+</details>
+
 ### Per-round compaction on the row-bucket path
+<details>
+<summary>Details</summary>
+
 The `[7,7,6,5,1]` schedule applied to the fused kernel as compile-time width variants
 (r3 = 7→6, r4 = 6→5), with round 5 reading at stride 5. Round 4: 29.3 → 26.8 ms;
 survivor scan 6.1 → 4.6 ms.
 
+</details>
+
 ### Async de-bubble
+<details>
+<summary>Details</summary>
+
 `run1d` blocks on `clFinish` after every kernel. In production (non-verbose) the
 row-bucket pipeline now enqueues the whole chain asynchronously on the in-order queue and
 drains once at the survivor readback. Only ~2 ms: the pipeline is genuinely GPU-bound, so
 those waits were mostly waiting on real work.
 
+</details>
+
 ### Compact leftContrib
+<details>
+<summary>Details</summary>
+
 Round 4's mix needs `padNum(5) = 9` leaves: **all 8** of the left parent's, but only the
 right parent's **first** — which is already carried as `lead`. `apply_mix` decomposes
 exactly:
@@ -272,7 +347,12 @@ Both sides use the pinned `bh3_apply_mix`, so no rotation constants are duplicat
 shrinks 9 → 4 uints/slot (~1.1 GB). **131.1 → 124.8 ms.** The algebra is pinned by
 `test_contrib_identity` (200 000 random trials) so a regression fails loudly.
 
+</details>
+
 ### Packed element record
+<details>
+<summary>Details</summary>
+
 Elements were stored across **four parallel arrays** (work, gi, lead, leaves) indexed by
 the same random slot. Global memory is serviced in **32 B sectors**, so a 4 B `gi` and a
 4 B `lead` each burned a whole sector — roughly **5 sectors of traffic for a 72 B child**,
@@ -298,7 +378,12 @@ to keep the widest packed array under the 3.9 GB single-allocation limit — sti
 headroom against a distribution whose max sits near mean + 4.5σ, and drop counters gate
 every run. **124.8 → 115.7 ms**, every round faster, and ~4 GB less memory.
 
+</details>
+
 ### Seed re-derivation
+<details>
+<summary>Details</summary>
+
 Round-1 elements are **seeds**: each is fully determined by its 25-bit index via
 7 × `siphash24` + `apply_mix`. We were storing the resulting 72 B record and reading it
 straight back. GPUs are compute-rich and memory-poor, and the isolated measurement is
@@ -323,7 +408,11 @@ This is the first confirmation of the compute-for-memory trade that BeamHash III
 design target implies (see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md)): the solver is
 bandwidth-bound, so paying arithmetic to avoid moving bytes wins.
 
+</details>
+
 ### The non-divergent expand
+<details>
+<summary>Details</summary>
 
 The single most useful structural finding so far, and the key that unlocked
 [the re-derivation chain](#the-re-derivation-chain).
@@ -356,7 +445,11 @@ This also explains, retrospectively, why
 [the first round-2 attempt](#round-2-re-derivation-first-attempt) failed so badly: it was
 never an arithmetic problem, only a placement one.
 
+</details>
+
 ### The re-derivation chain
+<details>
+<summary>Details</summary>
 
 With the divergence removed, "store indices, rebuild the element" extends up the pipeline.
 Each round's element is a combine of two of the previous round's, so an element at round
@@ -403,7 +496,11 @@ shrank 20 % and a full search now fits in **6.95 GiB** (222 B/element), down fro
 "index-only storage with re-derivation" as a route to the 3 GB target and argued memory
 efficiency and throughput were probably the same problem. Both moved together.
 
+</details>
+
 ### Compile-time round constants
+<details>
+<summary>Details</summary>
 
 The largest single win of the session, and a **third recurrence** of the failure mode
 already recorded twice under [runtime loop bounds](#runtime-loop-bounds).
@@ -452,7 +549,11 @@ Found with the `ABL` phase ablation (below), which attributed round 4 as: emit p
 5.0 ms, per-bucket atomic 1.9, `gi` atomic 0.8, back-refs 0.5 — and **17.3 ms in
 `apply_mix` alone**, against the "~10–15 % mix" this document had previously assumed.
 
+</details>
+
 ### Retiring the round-3 quad record
+<details>
+<summary>Details</summary>
 
 **A shipped optimization that a later change turned into a loss.** The
 [quad record](#the-re-derivation-chain) won −3.6 ms at 86.8 ms. After
@@ -479,7 +580,12 @@ round-1/round-3 outputs (8). Sizing them separately gives back most of what the 
 record costs: 6.95 → 8.36 → **7.65 GiB**. `fb_set_stride()` derives both widths from
 `kFbStride` so they cannot drift.
 
+</details>
+
 ### The redundant `lead` field
+<details>
+<summary>Details</summary>
+
 The generic packed record stores `meta = (gi << 32) | lead`. For the round-2 → round-3
 record `lead` **is** `ctree[0]`, which is already leaf 0 of the payload — it was being
 written and read twice. Removing it leaves 4 leaves (25 bits each) + `gi` (26) = 126 bits,
@@ -495,7 +601,11 @@ pipeline 54.0 → 52.7 ms and VRAM 7.65 → 7.30 GiB.
 *The same redundancy does not exist at the other boundaries: round 4's payload is the
 `leftContrib` rather than leaves, so its `lead` is not duplicated anywhere.*
 
+</details>
+
 ### The terminal round's dead work words
+<details>
+<summary>Details</summary>
 
 Round 4 was emitting all five significant work words of its children; round 5 reads four
 of them and uses none.
@@ -521,7 +631,11 @@ except the terminal one feeds its combine result through `apply_mix`, which sums
 of all seven words, so no earlier round can drop any. Round 5 is the only round with no
 mix.
 
+</details>
+
 ### The record-redundancy audit
+<details>
+<summary>Details</summary>
 
 Prompted by [the redundant `lead`](#the-redundant-lead-field) hiding in plain sight for the
 whole project. Every stored field, against what actually reads it. Besides the terminal
@@ -564,7 +678,11 @@ ping-pong for little gain on a path that measures 214.6 ms against row-bucket's 
 The audit was of *contents*, though, and one record was wider than its contents for a
 reason the audit could not see — see [the round-2 alignment pad](#the-round-2-alignment-pad).
 
+</details>
+
 ### The round-2 alignment pad
+<details>
+<summary>Details</summary>
 
 The audit above put round 3's input record at its 9-u64 information floor. The CUDA port
 then stored it in a **10**-u64 stride, so that `od*8` is always 16 B aligned and the
@@ -617,7 +735,11 @@ time in the rounds that are actually bandwidth-bound** — which, per the
 [stage table](performance.md#the-card-is-at-its-power-limit-in-every-kernel), is rounds 3 and 4 and not
 rounds 1 and 2.
 
+</details>
+
 ### Row-bucket geometry
+<details>
+<summary>Details</summary>
 
 `bucketBits = 14`, `submaskBits = 3` was chosen when the fused path was built and never
 revisited, though almost everything it was balanced against has since changed.
@@ -653,7 +775,11 @@ nothing over halving it, for 0.9 GiB more — so this lever is spent, and `subma
 is where it stops paying. Exposed as `MXBM_BB` / `MXBM_SM`, because the right balance
 depends on the record widths and those moved four times in one session.
 
+</details>
+
 ### Bucket capacity
+<details>
+<summary>Details</summary>
 
 `fb_cap_for` was dimensionally wrong. Occupancy is Poisson(mean) so σ = **√mean**, but the
 headroom term was `mean/4`, which scales with the mean — over-reserving, and worsening as
@@ -669,36 +795,64 @@ The concentration is expected: the max of *n* Poisson draws sits near
 at 8σ is ~1e-15 per bucket) at 14 % less memory. On its own it is memory-only
 (7.83 → 6.88 GiB, speed unchanged); its value is that it unlocked the geometry above.
 
+</details>
 
 ---
 
 ## What didn't work
+<details>
+<summary>Details</summary>
 
 Each of these was measured and reverted. They are recorded so they are not retried.
 
+</details>
+
 ### SoA word planes
+<details>
+<summary>Details</summary>
+
 One buffer per element word, skipping zero planes. Measured **only 1 % better** than
 fixed-width AoS (14.22 vs 14.42 ms) — not worth a full-pipeline rewrite. An AoS element
 write touches ~1 cache line; the same element in SoA fans across W buffers.
 
+</details>
+
 ### Runtime loop bounds
+<details>
+<summary>Details</summary>
+
 The first compaction attempt used runtime-variable word-loop bounds (`w < inW`). This
 defeats compiler unrolling and cost **+24 to +27 ms**. Compile-time widths are mandatory
 everywhere in the hot path; this failure mode recurred twice.
 
+</details>
+
 ### Un-fused LDS path
+<details>
+<summary>Details</summary>
+
 Bucket-scatter as a *separate* pass, then an LDS collide pass: **244 ms, slower than the
 215 ms sort path**. The separate fat scatter consumes exactly the coalesced-gather win it
 enables. This is why the row-bucket rewrite had to fuse.
 
+</details>
+
 ### Stride-1 lead array
+<details>
+<summary>Details</summary>
+
 Publishing leaf 0 into a dedicated dense array so the pair-ordering read would be
 sequential. Goldens stayed correct but match **regressed 158.9 → 176.3 ms**. Leaf 0 is
 cache-adjacent to the leaf-prefix data the same kernel already reads, so splitting it out
 added a second memory stream. The lead read and prefix build are cache-coupled; neither
 can be peeled off alone.
 
+</details>
+
 ### Occupancy tuning
+<details>
+<summary>Details</summary>
+
 The fused kernel uses ~41 KB of the 48 KB LDS → exactly **1 workgroup/SM (~17 %
 occupancy)**. Two attempts to buy occupancy both lost:
 - Halving the group cap and adding a sub-mask bit (LDS 41 → 22 KB, 2 wg/SM): **slower**,
@@ -709,12 +863,22 @@ occupancy)**. Two attempts to buy occupancy both lost:
 Decisively: [decoupled scatter](#decoupled-scatter) proved occupancy is irrelevant to the
 dominant cost anyway.
 
+</details>
+
 ### Dense key array
+<details>
+<summary>Details</summary>
+
 A dense per-slot key array so the sub-mask scan reads 4 B coalesced instead of striding
 into the 56 B work records. **Slower (133 → 146 ms)**: the redundant strided key scan is
 already L2-served and was never DRAM-bound, so the extra array was pure added traffic.
 
+</details>
+
 ### Decoupled scatter
+<details>
+<summary>Details</summary>
+
 Hypothesis: the emit is slow because the fused kernel's low occupancy can't hide its
 latency, so a standalone high-occupancy scatter kernel would be faster. **Refuted.**
 `test_scatter_occupancy` runs the identical scatter at three LDS footprints:
@@ -730,20 +894,35 @@ Identical (lo/hi = 0.98×). The scatter is **random-access-bound, not latency-bo
 1024 buckets vs 260 GB/s at 16384 (256 buckets is *slower*, 221 GB/s, from counter
 contention).
 
+</details>
+
 ### Global gi atomic
+<details>
+<summary>Details</summary>
+
 Suspected the per-child `atomic_inc` on a single global counter was serializing the emit.
 Stubbed it out: **no speedup** — NVIDIA's atomic aggregation already handles it. The
 per-bucket counters were tested too (`scatter_noatomic`): removing them made the scatter
 **slower** (235 vs 260 GB/s), because `atomic_inc` hands out sequential in-bucket slots,
 which is *better* locality than a computed slot.
 
+</details>
+
 ### Shared-memory magazine
+<details>
+<summary>Details</summary>
+
 Staging children in LDS per destination bucket and flushing coalesced. Infeasible at our
 fan-out: a workgroup produces ~256 children spread over 16384 buckets, so magazines hold
 ~1 element and never fill. Confirmed by the literature (local-reorder needs ≤256 bins) and
 by Wilke Trei's own FishHashMiner, which contains no magazine.
 
+</details>
+
 ### SoA LDS staging
+<details>
+<summary>Details</summary>
+
 The LDS staging array used AoS indexing `lwork[pos*7 + w]` — a stride of 7 ulongs = 14
 uints, and `gcd(14, 32 banks) = 2`, so every access was nominally a 2-way bank conflict.
 Switching to plane-major SoA (`lwork[w*CAP + pos]`) measured **125.7–125.9 vs 124.8 ms —
@@ -753,7 +932,11 @@ layout; only the staging loop has consecutive indices, and it is the minority of
 accesses. (Note this is LDS layout only — the *global* packing win above is a separate,
 real effect.)
 
+</details>
+
 ### Round-2 re-derivation (first attempt)
+<details>
+<summary>Details</summary>
 
 > **Superseded — this was diagnosed and is now shipping.** The conclusion below ("round 2
 > is past the threshold") was **wrong about the cause**. The arithmetic was never the
@@ -787,7 +970,12 @@ transferable into the fused kernel — measure **in situ**. The lesson that did 
 survive is the threshold claim; "in situ" turned out to mean *in the right loop*, and
 "measured in situ" is not the same as "measured in the best available placement".
 
+</details>
+
 ### Deferring the stage read
+<details>
+<summary>Details</summary>
+
 [The non-divergent expand](#the-non-divergent-expand) won by moving compute out of the
 sub-mask-filtered loop, so the obvious next step was to move the **64–72 B record load**
 out too — park the slot index, read the record in the all-lanes loop. **Slower** (r2
@@ -799,7 +987,12 @@ that memory-level parallelism and adds an LDS round-trip on top. Divergence cost
 *compute*, not *bandwidth* — the two halves of the staging loop want opposite treatment,
 and that is why only the recompute moved.
 
+</details>
+
 ### Register cap tuning
+<details>
+<summary>Details</summary>
+
 Round 3's rebuild costs ~9 ms of exposed compute where round 2's cost 0.4 ms — superlinear
 enough to suspect the compiler was spilling, since it budgets registers for an occupancy
 this LDS-bound kernel (1 workgroup/SM) can never reach. Swept
@@ -815,7 +1008,12 @@ A wash — r3/r4 gain what r2 loses. **Spilling is not the explanation**; the re
 genuinely more arithmetic than the kernel's memory stalls can hide. Retained as the
 `MXBM_CL_OPTS` diagnostic knob, defaulting to empty.
 
+</details>
+
 ### Two-level bucketing
+<details>
+<summary>Details</summary>
+
 The last structural idea: partition coarsely (256 bins, long runs, coalesced flush) then
 refine. Settled by measuring the **coalescing benefit curve** directly (`scatter_runs`)
 — run length is the only thing any reorder scheme changes:
@@ -838,7 +1036,12 @@ Two-level would need coalesced bandwidth **> 780 GB/s**, above the card's 510 GB
 **Impossible on this hardware**, at every width — including the late-round "thinner
 element" hybrid, which clears a naive 2× bar but still fails this one.
 
+</details>
+
 ### General compact mix-state
+<details>
+<summary>Details</summary>
+
 The `leftContrib` decomposition ([above](#compact-leftcontrib)) raises the question of
 carrying mix state instead of leaves everywhere. It does not generalize: `Lmix` changes
 every round, so a contribution precomputed at one round's base is useless at the next, and
@@ -846,8 +1049,12 @@ computing any round's contribution requires the raw leaves anyway. Serving all f
 rounds would cost more than the leaves it replaces. Round 4 is the sole exception because
 it needs *all* of one parent's leaves and only *one* of the other's.
 
+</details>
 
 ### Eliminating the dense `gi`
+<details>
+<summary>Details</summary>
+
 Long-standing lead: give each element its **bucket slot** (`cb*cap + cpos`) as identity
 instead of a 4 B counter value from `atomic_inc(gi_counter)`, removing a global atomic per
 emitted child. Ablating that atomic measured **-2.5 ms**, and the `(lead, gi)` ->
@@ -869,7 +1076,12 @@ either real alternative. It therefore measured "atomic removed **and** locality 
 An ablation that replaces a value must substitute something with the same access
 footprint, or it prices two changes as one.
 
+</details>
+
 ### Occupancy, again
+<details>
+<summary>Details</summary>
+
 [Occupancy tuning](#occupancy-tuning) was measured irrelevant early on, when the pipeline
 was purely scatter-bound. That is **no longer true** — the geometry work moved the solver
 off the pure-scatter rate, and occupancy now helps. It is just not reachable.
@@ -886,7 +1098,18 @@ everything else — `lgi`, `llead`, `lkey`, `lchain`, `lleaf` — would have to 
 Not staging `lwork` is the [un-fused path](#un-fused-lds-path), which doubles the work
 traffic and measured far worse. **Occupancy is structurally blocked by the element width.**
 
+*Addendum 2026-07-31: partially reopened, and harvested. The CUDA-era cuts — the
+perfect table, r1's gi/leaf fold, and a spill-backed near-mean cap — take r1 to
+64 B/element ≈ 19.0 KB/workgroup, and its second workgroup DOES fit and DOES pay:
+see [the backport](#the-cuda-match-wins-backported-to-opencl-perfect-table--spill--per-round-caps-06-ms)
+(−0.6 ms). r2 and r3 remain blocked exactly as argued here.*
+
+</details>
+
 ### Overlapping the entry pass
+<details>
+<summary>Details</summary>
+
 The last structural lead, and the reasoning behind it was sound: the entry is ~2.7 ms of
 which only ~1.0 is its own writes, the rest being 235 M siphashes. It is the one
 compute-bound phase in an otherwise bandwidth-bound pipeline, so it is the one phase that
@@ -912,16 +1135,23 @@ speculative next-nonce prefetch in `GpuSolver`, an addition to the `Solver` inte
 cross-queue event synchronisation — for zero. **Test the premise before building the
 mechanism**: the cost here was one throwaway `MXBM_CONC_TEST` block.
 
+</details>
 
 ---
 
 ## Measured results, 2026-07-26 to 2026-07-28
+<details>
+<summary>Details</summary>
 
 Everything below post-dates the CUDA backend shipping. These are longer write-ups than
 the entries above because most of them are nulls whose *mechanism* is the finding, and
 because several correct one another.
 
+</details>
+
 ### Phase overlap cannot reach the roofline
+<details>
+<summary>Details</summary>
 
 *(Two streams and one co-resident launch, both built and both null. Summarised as
 [lead 5](#current-focus-and-open-leads).)*
@@ -1048,7 +1278,11 @@ elements. Worth noting the *memory* objection to two resident pipelines has lift
 (13.8 GiB at geometry (15,2), against the 48 MiB shortfall at (16,1) that retired it),
 so if the shared-memory constraint is ever broken, that idea is affordable again.
 
+</details>
+
 ### Streaming stores: implemented, measured, null
+<details>
+<summary>Details</summary>
 
 `-DMXBM_STCS=1` routes every emit — records *and* back-refs — through `__stcs`, which is right on the face of it: a record is
 read exactly once by the next round, and back-refs are read only for the ≤1024 survivors
@@ -1062,7 +1296,11 @@ This retires the item ranked **first** in [what a CUDA backend was predicted to
 buy](#what-a-cuda-backend-was-predicted-to-buy-retained-for-calibration), the one called
 "the only item that could move the achieved bandwidth".
 
+</details>
+
 ### Bytes are nearly free; per-element work is not
+<details>
+<summary>Details</summary>
 
 *(Measured 2026-07-26. This is the most consequential result in this document and it
 retires a strategy, so the method matters as much as the number.)*
@@ -1141,7 +1379,11 @@ count* of the scatter — none of which is byte-count-driven, and none of which 
 single-kernel lever has moved. That is the same conclusion the overlap work reached from
 the other direction, and it points at the same place: co-residency.
 
+</details>
+
 ### …but bytes are not free in WATTS, and under a cap watts are clock (−60 MHz)
+<details>
+<summary>Details</summary>
 
 *(Measured 2026-07-28, `benchmarks/byte_power.sh`. This is the counterpart to the section
 above and it does not contradict it: the same bytes are cheap in time and expensive in
@@ -1257,7 +1499,11 @@ half has to come from narrower records. Since [measured traffic is within 1 % of
 compulsory](performance.md#the-memory-traffic-is-compulsory) for the current widths, narrower records
 means a structural change and not tuning.
 
+</details>
+
 #### Under a low cap the same bytes cost 5× as much clock
+<details>
+<summary>Details</summary>
 
 *(Measured 2026-07-28, `sudo PL=180 benchmarks/byte_power.sh`. This is the result that
 matters, because 180 W is where MXBM actually loses.)*
@@ -1327,7 +1573,11 @@ way to learn what the cost side is worth.
 > a real prediction and it is the point of running the sweep; it is not a reason to expect
 > much.
 
+</details>
+
 ### The occupancy optimum does move under a cap — by 0.08 % of a solve
+<details>
+<summary>Details</summary>
 
 *(`benchmarks/occupancy_cap.sh`, 2026-07-28. Direction predicted correctly, magnitude
 overestimated 2.5×, and the honest conclusion is to drop it.)*
@@ -1365,7 +1615,11 @@ named a *magnitude*: below ~1 % of a solve, drop it regardless of direction. Rec
 because it is the second time today a correctly-predicted direction came with a
 uselessly-small size.
 
+</details>
+
 ### The quad record on OpenCL takes 11 GB cards off the sort path (~190 → 45 ms)
+<details>
+<summary>Details</summary>
 
 *(2026-07-28. The reason to port it: on OpenCL the quad record is not a footprint
 nicety, it is what clears a hard ceiling.)*
@@ -1406,7 +1660,11 @@ default of 1, putting the geometry off the `bb + sm == 17` line every compile-ti
 constant assumes — and the OpenCL path, unlike CUDA's, did not check, so it **silently
 produced wrong results** (0/3 goldens) rather than refusing. `sm` is now derived from `bb`.
 
+</details>
+
 ### The round-4 mix anomaly was a runtime constant (27.0 → 8.2 ms)
+<details>
+<summary>Details</summary>
 
 *(Closed 2026-07-28. Open since before the CUDA backend existed, and the fix is a
 transformation this document already recommended twice.)*
@@ -1458,7 +1716,11 @@ private array lives in registers or in scratch. The row-bucket path learned this
 "−32.5 % from compile-time round constants"; the sort path had the same three constants
 and only one of them had been fixed.
 
+</details>
+
 ### The same trick on `round_match` mostly does not work (−3.7 ms, and two rounds lose)
+<details>
+<summary>Details</summary>
 
 *(2026-07-28. Ran because `Lout`, `lead_identity` and the leaf widths `s_in`/`s_out` were
 equally runtime in the match kernel — 158 ms of the then-193. The result corrects the
@@ -1491,7 +1753,11 @@ There was never a cliff here to find, and "compile-time round constants are wort
 generalised from a case that had one. Look for the dynamic index first; the constants are
 the fix, not the diagnosis.
 
+</details>
+
 #### Index-only round 1 does NOT transfer to the sort path (+27 ms)
+<details>
+<summary>Details</summary>
 
 *(Built, gated, measured, reverted to opt-in 2026-07-28. `MXBM_IDXONLY`.)*
 
@@ -1531,7 +1797,11 @@ kernel has idle issue slots to hide it in** — which is the same finding as
 [the match constants](#the-same-trick-on-round_match-mostly-does-not-work-37-ms-and-two-rounds-lose)
 (no cliff to find) from two more directions.
 
+</details>
+
 #### The OpenCL path finally has a register/spill instrument
+<details>
+<summary>Details</summary>
 
 `MXBM_CL_VERBOSE=1` appends `-cl-nv-verbose` and prints NVIDIA's `ptxas` report. This is
 the only register-level instrument available here — Nsight cannot profile OpenCL, which is
@@ -1564,7 +1834,11 @@ locality than they buy in latency hiding, which is the same shape as
 build's own spill numbers were not in the driver's (truncated) log, so "the cap did not
 simply induce a spill" is not directly verified.
 
+</details>
+
 ### The quad record: −29 % footprint, and the byte prize does NOT survive re-derivation
+<details>
+<summary>Details</summary>
 
 *(Built and measured 2026-07-28. `MXBM_R3_QUAD`, off by default. This is the experiment
 the two sections above called for, and it answers them in the negative.)*
@@ -1589,7 +1863,11 @@ and `pairDrops` zero:
 **−29 % of the footprint for +14 % of the time**, interleaved A/B, three repeats each,
 spread under 0.2 ms.
 
+</details>
+
 #### The result that matters: the clock does not move
+<details>
+<summary>Details</summary>
 
 Sampling NVML underneath both variants at stock, alternated:
 
@@ -1619,7 +1897,11 @@ document said before the experiment.
 *(At stock. Under a cap the freed watts do start to show as clock — +128 MHz at 180 W —
 without ever covering the arithmetic. The cap sweep is below.)*
 
+</details>
+
 #### Under a cap the effect appears — and the trade still never pays
+<details>
+<summary>Details</summary>
 
 *(`benchmarks/quad_cap.sh`, 2026-07-28. Packed / quad / packed at each cap, so the two
 packed runs bracket the quad one and their spread is the drift the delta must beat.)*
@@ -1653,7 +1935,11 @@ quad's 0.217.
 there is no cap at which it becomes a speed or efficiency win, and the trend runs away
 from one rather than toward it.
 
+</details>
+
 #### What it IS: a new bottom rung on the geometry ladder
+<details>
+<summary>Details</summary>
 
 The footprint half stands on its own, and the ladder is where it pays. Comparing on
 **memory budget** rather than on geometry:
@@ -1687,7 +1973,11 @@ free get a *faster* rung than before — quad (16,1) at 38.4 ms where the packed
 them (14,3) at 40.0. Full table in
 [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit).
 
+</details>
+
 ### Shipped: the group cap no longer has to cover the tail (−1.25 ms)
+<details>
+<summary>Details</summary>
 
 *(2026-07-26. **35.4 → 34.1 ms/solve, 55.9 → 58.1 sol/s**, goldens byte-exact, drops 0.)*
 
@@ -1766,7 +2056,11 @@ whole contribution is making that allocation *correct*.
 | + spill, `kFCap` 300 | 34.40 | r3 gains a block, and it is *slower* |
 | + spill, `kFCap` 288 | 34.54 | |
 
+</details>
+
 ### Occupancy is worth real time, and shared memory is the only gate
+<details>
+<summary>Details</summary>
 
 *(Measured 2026-07-26. This reverses "occupancy, measured properly, still does not help",
 which was measured at 2 → 3 blocks and is not what 3 → 5 does.)*
@@ -1856,7 +2150,11 @@ Coarser is better on fill and loses to integer block flooring; finer is worse on
 **sm=1 is a genuine optimum, and geometry is now closed from both directions.** `B` is the
 only term left.
 
+</details>
+
 ### Round 1 takes a fifth block (−0.15 ms), via a per-round group cap
+<details>
+<summary>Details</summary>
 
 *(2026-07-26.)* r1 had two redundancies the other rounds do not:
 
@@ -1888,7 +2186,11 @@ the kernels that do run never received the shared-memory preference — and the 
 blocks/SM column was reporting a different kernel than it timed, which is why r1 appeared
 stuck at 4. The arguments are now named once as `MXBM_Rn_ARGS` and used by all three.
 
+</details>
+
 ### Round 3 does not want a fourth block — occupancy pays only where a round is latency-bound
+<details>
+<summary>Details</summary>
 
 *(2026-07-26. This closes the "r3 still needs its own cut" lead rather than delivering it.)*
 
@@ -1959,11 +2261,15 @@ reaches 4 blocks and does not care.**
 > The **84 B used today** four paragraphs above is r3's pre-`MXBM_PERFECT_TAB` figure and
 > is now 80, which is why that budget closes more easily than it reads.
 
+</details>
+
 ---
 
 ## Measured results, 2026-07-31
 
 ### Co-blocks: the third overlap mechanism works — and it is worth 0.4 ms, not 14
+<details>
+<summary>Details</summary>
 
 *(Built and measured 2026-07-31. `MXBM_COB_S` / `MXBM_CO_ROUND` on `cuda/pipeline
 --fuse`; shipped as [speculative entry](#speculative-entry-co-scheduling-ships-in-the-miner-045-ms).)*
@@ -2005,7 +2311,11 @@ hosted, which is the overlap the same-warp mechanism could never reach. And **th
 scatter side does not hide** (~1.3 ms of the 2.1): 33.5 M bucket atomics plus 8 B writes
 land on a memory system already at 82 % of peak.
 
+</details>
+
 ### fused_pair: two solves' rounds in one launch — the family's ceiling is ~0.5 ms
+<details>
+<summary>Details</summary>
 
 The general form: `fused_round`'s body became a device function over a `RoundShared`
 struct, and `fused_pair` runs **round 4 of solve i and round 1 of solve i+1 as
@@ -2029,7 +2339,11 @@ conclusion to carry: **r4's exploitable idle is ~0.5 ms/solve, whatever co-work 
 offered** — entry's compute, or a whole round. The 1.71× roofline is now unreachable by
 three independent mechanisms, and the family is closed with its 0.5 ms harvested.
 
+</details>
+
 ### Occupancy is closed from BOTH resources — r2 sits on the whole register file
+<details>
+<summary>Details</summary>
 
 *(The `MXBM_MB_SEED` / `MXBM_MB_RD2` probe, 2026-07-31.)* The occupancy budget in
 [shared memory](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) said
@@ -2042,7 +2356,11 @@ rare. r1 is the same story one block up (5 × 19.0 KB, 6 needs FCAP under the me
 **Every further occupancy route for r1/r2 now needs BOTH fewer shared bytes per element
 and fewer registers per thread simultaneously**; neither alone moves blocks/SM. Closed.
 
+</details>
+
 ### Speculative entry co-scheduling SHIPS in the miner (−0.45 ms)
+<details>
+<summary>Details</summary>
 
 The co-blocks result needs the *next* nonce's prePow during the current solve, and the
 `Solver` interface only sees one nonce at a time. No interface change: the engine walks
@@ -2070,7 +2388,11 @@ lands on **exactly 64 registers** — the 4-blocks/SM cliff — and
 every kernel and registers held or fell (r4 47 → 46); the resource contract was
 re-baselined per its own RESOURCE DRIFT rule.
 
+</details>
+
 ### The eco sweep: (17,0) crosses over below ~190 W; R2_FULL never does
+<details>
+<summary>Details</summary>
 
 *(`benchmarks/eco_sweep.sh`, 2026-07-31. The below-160 W inversion said the low-power
 currency is core cycles, not bytes — this reprices the two instruction-vs-bytes trades
@@ -2106,7 +2428,11 @@ hidden ALU work. **Re-derivation is the right trade at every power level this ca
 run**, which closes the question the 2026-07-28 quad-record cap sweep opened from the
 other side.
 
+</details>
+
 ### lolMiner is NOT duty-cycling — the low-end gap is real work-per-clock
+<details>
+<summary>Details</summary>
 
 *(2026-07-31, the test [the inversion
 section](performance.md#-below-160-w-the-clock-gap-inverts-and-the-clock-explanation-stops-applying)
@@ -2136,7 +2462,90 @@ probes below](#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkee
 measured the bookkeeping at ~0.6 ms of r1's 5.2 ms of core cycles — the deficit is
 real but its mechanism is NOT rescans/chains/bookkeeping, and it remains unexplained.*
 
+*Resolved later the same day, by measurement rather than inference:
+[lolMiner's own kernels](#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline)
+show a state-storing streaming design with no derive or rebuild arithmetic at all —
+the work-per-clock gap is the absence of our arithmetic, not a leaner version of it.*
+
+</details>
+
+### The solver reorganization: the proposal behind the probes, condensed
+<details>
+<summary>Details</summary>
+
+*(2026-07-31. The full proposal — its design options, risk register and de-risking
+ladder — is `docs-internal/SOLVER_REORG.md`; this is the short form, kept here because
+the C/D measurement it stood on and the closure it ended in belong to this ledger. It
+was closed the same day it was proposed, by its own probes, before the prototype was
+paid for. The probe write-up is
+[the section below](#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping).)*
+
+**The measurement it stood on.** Per-round marginal cost at two locked core clocks
+(`nvidia-smi -lgc`, 2600 vs 800 MHz, clock ratio 3.25×), `MXBM_ROUND_REPS` replay,
+split into a core-cycle part `C` (scales with clock) and a clock-invariant part `D`
+(DRAM/fixed), `C = (m800 − m2600)/2.25`:
+
+| stage | @2600 | @800 | scaling | **C (core cycles)** | D (invariant) |
+|---|---|---|---|---|---|
+| entry | 2.58 | 8.34 | 3.23× | 2.56 | ~0 |
+| **r1** | 5.29 | 16.92 | **3.20×** | **5.17** | 0.12 |
+| **r2** | 10.55 | 33.57 | **3.18×** | **10.23** | 0.32 |
+| r3 | 9.62 | 23.58 | 2.45× | 6.20 | 3.42 |
+| r4 | 5.45 | 10.57 | 1.94× | 2.28 | 3.17 |
+| terminal | 0.95 | 2.67 | 2.81× | 0.76 | 0.19 |
+| **whole solve** | 34.95 | 97.24 | 2.78× | **~27** | ~7 |
+
+**r1 and r2 are ~98 % core-cycle-bound at stock** — they scale with the clock to
+within measurement error, so 15.4 of the 35 ms solve is pure core cycles in those two
+rounds alone, ~27 of 35 overall. That is the same currency as the low-power gap
+(lolMiner's measured ~2.3× work per core cycle), which is what made the proposal look
+like one lever moving stock speed and the whole power curve at once.
+
+**The premise.** Order-of-magnitude, ~130–160 B move through shared memory per element
+per round (~35–45 wavefronts) against ~10 global memory instructions and ~100–200 ALU
+ops — so the cycles were read as *organization*: staging stores, chain build and walk,
+the sub-mask rescan, barriers. Not hashing, not DRAM.
+
+**The design.** Option B, the real candidate: emit into 2^21 fine buckets (mean
+occupancy 16), one **warp** per bucket, `__match_any_sync` on the residual key bits,
+partner state fetched by `__shfl_sync` from registers — the chain table, the walk, the
+rescan and every barrier deleted, and at ~4.8 GiB it would have been the reach lever
+too. Option A (keys-only staging + a counting sort making equal-key runs contiguous +
+L2 gather, geometry unchanged) and Option C (match-on-load) were the fallbacks.
+Predicted, conservatively: r1 5.3 → ~3.0–3.5 ms, r2 10.6 → ~6.5–7.5, solve ~28–30 ms
+/ 63–68 sol/s — and a 2× r1+r2 cycle cut would have flipped the 140–180 W
+head-to-head, the band where the comparison is currently lost.
+
+**The probes killed it in one day, in order:**
+
+- **P2** (`cuda/emit_shape_probe.cu`): thin records cannot scatter into fine buckets.
+  8 B records at 2^21 buckets run at **0.22×** their 2^16 rate — once 2M bucket-tail
+  sectors exceed the 48 MB L2, sibling-write merging fails and every 8 B store pays a
+  read-modify-write sector. The cliff starts at bb = 18. Fine bucketing cannot live in
+  the global layout, so the design was re-scoped: fine buckets created at match time,
+  in shared memory, inside a coarse bucket — Option A's shape with Option B's core.
+- **P3** (`cuda/sorted_r1_probe.cu`): the re-scoped sorted-runs r1 is *correct* — it
+  emits the exact pair multiset of the shipping kernel — and **1.75× slower** (8.56
+  vs 4.89 ms). Its ablation carve decomposes the chain kernel itself: **derive ~2.5 +
+  emit arithmetic ~1.8 + all bookkeeping ~0.6 ms** of 4.9. The bookkeeping the
+  reorganization would have removed is 12 % of r1, not 55 %.
+
+**Closure.** There is no 2× in the match for any organization of it; any match
+rewrite's ceiling is ~0.6 ms/round. The prototype and the r2 conversion were
+cancelled, and Options A and C died with the wavefront model they were priced
+against. What survives: the C/D decomposition method, the compile-time carve + sink
+ablation, the 0.44 ms counting sort (if a future record format ever makes staging the
+wall), three CUDA codegen traps documented in the probe header — and the honest
+position that lolMiner's work-per-clock advantage is back to unexplained: the one
+hypothesis left standing is a state-storing layout that skips the derives, and even a
+free derive is ~5–6 ms of ~27 ms of C, short of 2.3×. *(That hypothesis was
+[confirmed by measurement the same day](#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline).)*
+
+</details>
+
 ### The solver-reorganization probes: the cycle deficit is NOT bookkeeping
+<details>
+<summary>Details</summary>
 
 *(2026-07-31. The clock-scaling C/D split above says r1/r2 are ~98 % core-cycle-bound
 at stock — 15.4 of 35 ms. The standing model said those cycles were staging, chain
@@ -2200,9 +2609,259 @@ derive/rebuild arithmetic entirely — our R2_FULL evidence against that trade p
 a variant that stored records *on top of* the pair machinery, not instead of it —
 but even a free derive is ~5–6 ms of ~27 ms of C, short of 2.3×.
 
+*Confirmed 2026-07-31, by profiling lolMiner itself: the state-storing hypothesis
+is the measured truth — 64 B/element layers, 17.7 GB/solve, no re-derivation
+anywhere, footprint = 2 × 33.5 M × 64 B exactly. See
+[lolMiner measured under ncu](#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline).*
+
+</details>
+
+### The CUDA match wins, backported to OpenCL: perfect table + spill + per-round caps (−0.6 ms)
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, the first lead executed from `docs-internal/PERF_LEADS.md`. OpenCL is
+the only fast path non-CUDA devices get, and `lds.cl` predated everything the match
+learned on 2026-07-26 — it still carried `lkey`, a tail-sized group cap and no
+spill.)*
+
+Three transplants, all as `FUSED_LDS` **macro parameters** (`FCAP, TAB, PERFECT,
+SPILL`) so the generic `round_fused_lds` — whose tests run it at geometries like
+(11,0) where the perfect-hash argument does not hold — keeps the legacy behavior:
+
+- **Perfect chain table** ([CUDA original](#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms)):
+  on the `bb + sm = 17` line only 7 key bits vary inside a group, so a 128-entry
+  table is a perfect hash, and `lkey` (4 B/element of LDS) plus the walk's
+  innermost-loop compare are deleted. `run_pipeline_rowbucket` refuses an off-line
+  geometry unless `-DLDS_PERFECT_TAB=0` is passed, mirroring `CudaSolver`'s check.
+- **Group spill**: an overflowing group splits on one more key bit, the level chosen
+  from an 8-bin word-0 count *before* any part is walked. `LDS_FCAP` then drops from
+  the tail (384) to near the mean: **320, and 288 for r1** (per-round caps, the
+  CUDA values).
+- **r1's folds**: gi == lead == leaf 0 == the seed index, so one `lleaf` slot
+  carries all three and `LEAFW` goes 2 → 1.
+
+That puts r1 at 64 B/element ≈ **19.0 KB per workgroup — two workgroups fit** the
+48 KB NVIDIA's OpenCL exposes per SM; r2 (23.6 KB) and r3 (26.2 KB) stay at one.
+
+| | pipeline median (`bench_rounds 20`) | miner end-to-end (60 s, ~1 470 solves) |
+|---|---|---|
+| legacy config | 40.3–40.5 ms | 40.6 ms / 48.7 sol/s |
+| **backport** | **39.6–39.8 ms** | **40.0 ms / 49.7 sol/s** |
+
+**−0.6 ms (−1.5 %), 48.2 → 49.7 sol/s on the miner's own 60 s benchmark.** Every
+backport run beat every legacy run across two interleaved brackets, and the
+same-session miner A/B agrees with the pipeline delta. Gates: goldens [1,1,1] on the
+packed *and* the quad rungs, drops 0, 45/45 tests. The verbose marginals put the win
+in **r1** (6.3 → ~5.5 ms), the latency-bound round that gained the workgroup — the
+same shape as CUDA's r1-takes-a-fifth-block result, at OpenCL's coarser granularity.
+
+Two nulls, so they are not re-proposed:
+
+- **`LDS_FCAP` 304 and 288 buy nothing** (39.6 / 39.9 ms against 39.6–39.7 at 320).
+  The arithmetic put r2 under the two-workgroup line at 304 (22.4 KB against the
+  `(24 576 − 2 052)` per-workgroup budget); either the OpenCL runtime does not grant
+  the second workgroup or r2 does not pay for it, and no instrument resolves which —
+  the driver's verbose log truncates before the fused kernels. 320 stays: it matches
+  CUDA and has the lowest spill rate.
+- The r4 child count wobbles ±1 across runs (…633/…634) — the pre-existing
+  gi-tie-break nondeterminism (~17 equal-lead pairs per solve whose left/right
+  choice follows emission order), confirmed present on identical binaries. The KAT
+  is the gate and holds.
+
+A/B recipe, no rebuild needed (OpenCL compiles kernels at run time):
+`MXBM_CL_OPTS='-DLDS_PERFECT_TAB=0 -DLDS_SPILL=0 -DLDS_FCAP=384 -DLDS_FCAP_R1=384
+-DLDS_FTAB=512'` restores the legacy configuration exactly.
+
+</details>
+
+### Two below-the-floor levers clear noise on CUDA: r2's pair record in one LD.128, and the terminal round joins the perfect table (−0.22 ms)
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, the "below-the-floor basket" from `docs-internal/PERF_LEADS.md`: items
+individually priced at or under the 1 %-of-a-solve floor, batched so one day's
+measurement decides all of them. Two of three ran — the third,
+`MXBM_NARROW6` × (17,0) under caps, needs root for the power limits and is queued.)*
+
+- **`MXBM_PAIR128`** (default on): round 2 stages its 16 B pair record with one
+  `LD.128` instead of two `LD.64` — the stride is 2 u64, so the address is always
+  16 B aligned, the same argument the wide records already use. The rescan lanes
+  that fail the sub-mask filter now fetch 16 B where they fetched 8, but those
+  bytes are ~98 % L2-absorbed; what every staged element saves is a memory
+  *instruction*.
+- **Perfect table in `terminal_round`**: the tautology holds there identically
+  (same `bb + sm = 17` line, 7 varying bits, 128-entry table), but the kernel still
+  carried `lkey` and its walk compare. Both gone; `cuda_solver.cu`'s existing
+  geometry guard covers this kernel too.
+
+Measured by replay amplification (`MXBM_ROUND_REPS`, ×9, `cuda/pipeline`, 30 nonces
+per arm, two interleaved pairs each), then confirmed end-to-end:
+
+| | base | new | per-solve Δ |
+|---|---|---|---|
+| r2 ×9 (`2:9`) | 115.53 / 116.13 ms | 114.38 / 114.66 | **−0.145 ms** |
+| terminal ×9 (`5:9`) | 42.02 / 41.95 | 41.31 / 41.36 | **−0.072 ms** |
+| end-to-end, 60 nonces × 3 pairs | 33.72 / 33.63 / 33.61 | **33.41 / 33.45 / 33.44** | **−0.22 ms** |
+| miner `--benchmark`, 60 s arms | 33.4 / 33.4 / 33.4 | 33.2 / 33.2 *(one 34.4 outlier)* | ≈ −0.2 ms |
+
+The end-to-end delta equals the sum of the two attributions, every standalone pair
+ordered the same way, KAT green and drops 0 throughout. **Both ship, on by
+default.** The known risk did not fire: r2 sits on the 64-of-64 register cliff and
+the vector load held it at 64 (`test_cuda_resources` passes unchanged). The terminal
+round re-baselined under the contract's RESOURCE DRIFT rule — REG 22 → 24, SHARED
+9 732 → 8 196 B (the 4 B × 384 `lkey`), blocks/SM held at its warp-capped 6.
+
+</details>
+
+### The found-vs-verified gap is GONE: 0 of 3,935 candidates rejected
+
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, `MXBM_VERIFY_STATS`. This closes the MXBM half of the counting
+question and retires a caveat this document had carried since the CUDA port.)*
+
+The CUDA-backend caveats recorded *"this solver produces 2.29 survivors per solve
+but only 1.95 that verify, a 17 % gap"* (2026-07-25), and nobody had ever looked at
+*why* candidates fail. `bh3::classify_solution` now mirrors `is_valid_solution`
+check for check but returns which one failed and at which round — duplicate index,
+tree-order violation, collision-bits mismatch, or non-zero final XOR — and
+`MXBM_VERIFY_STATS=1` tallies every candidate on either backend, printing at exit.
+
+| backend | solves | candidates | verified | rejected |
+|---|---|---|---|---|
+| CUDA (45 s) | 1 351 | 2 690 (1.991/solve) | 2 690 | **0** |
+| OpenCL (25 s) | 622 | 1 245 (2.002/solve) | 1 245 | **0** |
+
+**Every survivor the pipeline produces today is a valid solution.** Not
+mostly-duplicates-plus-a-few-bugs: zero rejections of any class, on both backends.
+The 2026-07-25 figure does not reproduce on the current build; whether it was real
+then (and closed by one of the intervening changes) or an artefact of that era's
+measurement cannot be reconstructed and does not matter — the current truth is that
+"found" and "verified" are the same number.
+
+Two consequences. The conservative counting MXBM ships (verified only) costs
+nothing — there is nothing looser to report. And the counting question in the
+lolMiner comparison is now one-sided: if its counter reports raw survivors, any
+definitional gap is bounded by *its* false-survivor rate, not ours. The
+accepted-share protocol (`docs-internal/MINER_COMP.md`) remains the only
+counter-independent settle, but the MXBM side of the ambiguity is measured away.
+
+The instrument stays: it is free when the env var is unset, and a future regression
+that starts shedding candidates will be attributable the day it appears.
+
+</details>
+
+### MXBM_NARROW6 × (17,0) under caps: loses at every cap — the basket's third item is a null
+
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, `docs-internal/rootruns/run_n6_caps.sh`. The premise: at low caps the
+currency is instructions, `MXBM_NARROW6` trims staged bytes, and the two knobs had
+never been composed. Standalone `cuda/pipeline` vs a `-DMXBM_NARROW6=1` build, both
+at `MXBM_BB=17`, 60 nonces per arm, two interleaved pairs per cap, KAT and drops
+green on every arm.)*
+
+| cap | base (17,0) | + NARROW6 | Δ |
+|---|---|---|---|
+| 100 W | 100.69 / 100.56 ms | 102.82 / 104.36 | **+3.0 %** |
+| 140 W | 60.02 / 60.05 | 61.91 / 61.77 | **+3.0 %** |
+| 180 W | 42.57 / 42.97 | 43.17 / 43.22 | **+0.9 %** |
+
+NARROW6 loses every pair at every cap, and by *more* as the cap tightens — the
+opposite of the premise. The staged-byte saving buys nothing (shared traffic
+overlaps issue, per the reorganization probes), while the split `lw6` plane costs
+real instructions on both the staging store and every `ldw` in the walk — and
+instructions are exactly what a capped card cannot afford. The knob stays
+default-off, now with a measured reason at both ends: null at stock (16,1), a loss
+under caps at (17,0). Do not re-propose.
+
+</details>
+
+### lolMiner measured under ncu: the state-storing design, confirmed — and its ~54 sol/s ceiling is a DRAM roofline
+
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, `docs-internal/rootruns/run_lol_ncu.sh` → `lol_ncu.ncu-rep`. The
+measurement three sections of this ledger called for: lolMiner 1.98a's own kernels,
+profiled over a 120-launch window of its fixed 61 s BEAM-III benchmark —
+`ncu` profiles closed binaries, no source needed. 15 complete solve cycles, byte
+counts stable to ±1 % across all 15. The kernel names are unobfuscated.)*
+
+**Its pipeline is our pipeline's shape** — a seed pass and five rounds, one kernel
+each, in a strict chain: `cleanUp → seed → R1 → R2 → R3 → R4 → R5A → R5B`. What
+differs is everything the bytes say:
+
+| kernel | grid × block | ms | rd MB | wr MB | GB/s |
+|---|---|---|---|---|---|
+| `cleanUp` | 640 × 256 | 0.005 | 0 | 0 | — |
+| `beamHashIII_seed` | 524288 × 64 | 5.43 | 2.5 | **2131** | 393 |
+| `beamHashIII_R1` | 131072 × 512 | 9.10 | 2155 | 2133 | 471 |
+| `beamHashIII_R2` | 131072 × 512 | 9.11 | 2156 | 2131 | 471 |
+| `beamHashIII_R3` | 131072 × 512 | 8.37 | 2154 | 2128 | 512 |
+| `beamHashIII_R4` | 65536 × 1024 | 4.34 | 2151 | **263** | 556 |
+| `beamHashIII_R5A` | 16384 × 1024 | 1.08 | 269 | 0.6 | 250 |
+| `beamHashIII_R5B` | 20 × 64 | 0.005 | 0.1 | 0 | — |
+| **per solve** | | **37.4** | **8.89 GB** | **8.79 GB** | |
+
+**17.67 GB per solve, against MXBM's 13.00.** The layers are ~64 B/element
+(2 131 MB ÷ 33.5 M — 8 u64), written by the seed pass and both read and written in
+full by R1–R3. That settles the hypothesis in one line: **the seed kernel writes the
+complete derived element to DRAM, and no round ever re-derives anything.** Its
+famous ~4 GB footprint is exactly two ping-pong sets × 33.5 M × 64 B = 4.3 GiB —
+the arithmetic `SOLVER_REORG.md` §6b guessed and could not check. (Our records are
+*narrower* where we re-derive — r1 8 B, r2 16 B — and *wider* where we store, 72 B
+with leaf payloads; theirs is a flat 64 B everywhere with, presumably, parent refs
+inline. R4→R5 it out-thins us: ~8 B/element against our 16.)
+
+Three standing questions close at once:
+
+- **The ~2.3× work-per-clock at low caps is not a mystery technique — it is the
+  absence of our arithmetic.** No 235 M-siphash seed re-derivation in R1, no
+  14-siphash rebuild in R2; every round is a streaming pass at 393–556 GB/s. Under
+  a core-power cap the memory clock does not scale down, so DRAM — their currency —
+  survives the cap while instruction issue — ours — collapses with it. The
+  [duty-cycle probe](#lolminer-is-not-duty-cycling--the-low-end-gap-is-real-work-per-clock)'s
+  "real work per clock" is real *absence* of work per element.
+- **Its ~54.0 sol/s ceiling is its DRAM roofline.** 17.67 GB/solve at its real
+  ~35.8 ms/solve is **~494 GB/s sustained** — within a few per cent of the card's
+  ~510 GB/s achievable — which is also why its draw saturates at ~237 W and caps
+  above that buy it nothing: it cannot spend core watts it has no instructions for.
+- **The whole band structure of the head-to-head is one design choice, held from
+  opposite ends.** MXBM pays arithmetic to move 4.7 GB/solve less; lolMiner pays
+  bytes to issue far fewer instructions. Above ~210 W the arithmetic hides in
+  memory stalls and the byte bill is the binding one — we win, and our ceiling
+  (59.8) sits above their roofline (54). Below ~190 W the arithmetic is priced at
+  full clock-starved cost — they win. Nobody is doing anything the other could not
+  in principle do; the two designs are the two ends of the same trade.
+
+**What it does and does not re-open.** It does not un-close the low-power goal by
+itself: our own full-record variants (`MXBM_R2_FULL`, the quad record) lose at
+every cap *inside this organization*, because they bolt stored bytes onto machinery
+that still stages, chains and walks per element — the measured difference is their
+ground-up streaming design (flat 64 B records, no leaf payloads, inline ancestry,
+512–1024-thread blocks, no sub-mask rescan). A from-scratch "eco pipeline" in that
+style is now a *specified* project rather than a mystery — with its prize honestly
+bounded by the band: ~20–30 % below 160 W, zero above ~210 W, on a card class
+where the band is already ceded. Parked as a design note, not a lead.
+
+*Caveats: byte counts are per-kernel under ncu replay (cache-flushed between
+launches, so cross-kernel L2 reuse — small for streams this size — reads as DRAM);
+durations under serialized replay, though their sum (37.4 ms) agrees with the
+uninstrumented ~35.8. lolMiner still reported 49–55 sol/s during the run, so the
+window barely distorted it. What its sol/s counter counts remains unmeasured — the
+accepted-share protocol stays the settle for that.*
+
+</details>
+
 ---
 
 ## Established limits
+<details>
+<summary>Details</summary>
 
 Measured properties of the problem on this hardware. These bound what any further
 optimization can achieve.
@@ -2240,10 +2899,13 @@ it was a compiler-visibility bug in code that had been read many times. Worth we
 before assuming lolMiner holds an unknown technique: the last 26.6 ms came from making
 existing arithmetic compile down properly, not from moving fewer bytes.
 
+</details>
 
 ---
 
 ## Current focus and open leads
+<details>
+<summary>Details</summary>
 
 **Where the time goes.** *(CUDA, the shipping path. Re-measured 2026-07-26, after the
 `kFCap` 320 change.)*
@@ -2372,7 +3034,8 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | phase overlap | **closed by three mechanisms and HARVESTED 2026-07-31.** Grid depth (streams) and warp slots (same-warp hosting) were null; the third — [co-blocks](#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), separate interleaved blocks in one launch — works, and its whole yield is **~0.5 ms**: r4's exploitable idle, whatever co-work is offered (entry, or [a whole round of the next solve](#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms)). Shipped as [speculative entry](#speculative-entry-co-scheduling-ships-in-the-miner-045-ms); the 1.71× roofline stays out of reach |
 | match organization | **closed 2026-07-31, by two probes, prototype unbuilt.** The plan was fine-grained buckets matched in registers (chains, rescans, staging and barriers deleted). P2: [thin records lose 4.5× scattering into 2^21 buckets](#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping) (the L2 bucket-tail cliff starts at bb = 18), so fine buckets cannot live in the global layout. P3: a counting-sort/register-pair r1 built in shared instead emits the exact pair multiset and is **1.75× slower** — its carve prices r1's cycles as derive ~2.5 + emit arithmetic ~1.8 + **all bookkeeping ~0.6** of 4.9 ms. There is no 2× in the match, for any organization of it; any rewrite's ceiling is ~0.6 ms/round |
 
-**Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.12× short.
+**Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.07× short
+(1.12× before [the 2026-07-31 backport](#the-cuda-match-wins-backported-to-opencl-perfect-table--spill--per-round-caps-06-ms)).
 **Goal 1 — the low-power gap — is closed by measurement**, not by exhaustion of effort:
 traffic supplies at most 17 % of the 570 MHz deficit, the instruction-issue route is
 impossible on this ISA, and undervolting is untestable on a card that drives its own
@@ -2521,9 +3184,13 @@ occupancy is closed from both resources at once (shared memory AND the register 
 which r2 fills exactly). Larger blocks are *not* a substitute
 ([measured](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate)).
 
+</details>
+
 ---
 
 ## The CUDA backend
+<details>
+<summary>Details</summary>
 
 Built, gated, measured, and **wired into the miner** (2026-07-25). `--solver auto`, the
 default, now prefers CUDA and falls back to OpenCL and then to the CPU reference; the
@@ -2539,6 +3206,11 @@ Compute cannot profile OpenCL, which is what motivated the port in the first pla
 | OpenCL (fallback) | 41.0 ms | 1.98 | 48.2 |
 | **CUDA backend (default)** | **34.1 ms** | **2.00** | **58.1** |
 | lolMiner (user-measured, stock) | — | — | 53.0 |
+
+*(The OpenCL row was re-measured 2026-07-31 after
+[the match-win backport](#the-cuda-match-wins-backported-to-opencl-perfect-table--spill--per-round-caps-06-ms):
+**40.0 ms / 49.7 sol/s**, 60 s miner benchmark, 1 494 solves. The table above is kept
+as the port-era comparison its surrounding text describes.)*
 
 Same methodology on both sides: median over **300 distinct nonces**, persistent buffers,
 including survivor readback, back-reference recovery and CPU verification, counting only
@@ -2578,7 +3250,10 @@ them legal. `cuobjdump -sass | grep LDG.E.128` is the check.
   [counting question](#the-cuda-backend) is still open — this solver produces 2.29
   survivors per solve but only 1.95 that verify, a 17 % gap between "solutions found" and
   "solutions that are solutions". If lolMiner reports the former, our margin is larger; if
-  the latter, it is the ~4 % measured here.
+  the latter, it is the ~4 % measured here. *(Superseded 2026-07-31: that gap
+  [no longer exists](#the-found-vs-verified-gap-is-gone-0-of-3935-candidates-rejected)
+  — 0 rejected candidates in 3,935 across both backends, so found == verified here
+  and only lolMiner's own counting basis remains open.)*
 - MXBM counts **verified** solutions, the conservative definition of the two.
 - Accepted pool shares over a fixed interval remain the only comparison that does not
   depend on either miner's counters. See `docs-internal/MINER_COMP.md`.
@@ -2589,15 +3264,23 @@ them legal. `cuobjdump -sass | grep LDG.E.128` is the check.
 rejected on top of it are in
 [the CUDA backend in detail](#the-cuda-backend-in-detail).*
 
+</details>
+
 ---
 
 ## The CUDA backend in detail
+<details>
+<summary>Details</summary>
 
 *(What the backend is and where it stands today is in
 [the section above](#the-cuda-backend). This is what the profiler found and
 what was tried on top of it.)*
 
+</details>
+
 ### Where the CUDA backend stands after the fix
+<details>
+<summary>Details</summary>
 
 Second profiler run, comparing against the first:
 
@@ -2630,7 +3313,11 @@ plausible — and this trade has reversed on every previous regime change. Measu
 with 128-bit access in place: **35.0 ms with the pair record against 39.2 ms without**.
 Keep it.
 
+</details>
+
 ### Levers tried after the MIO fix — all null
+<details>
+<summary>Details</summary>
 
 Each was indicated by the profile, implemented, measured, and kept out. Recorded with the
 mechanism, because "we tried it" without a reason is not reusable.
@@ -2676,7 +3363,11 @@ and this trade has reversed on every previous regime change. It did not reverse 
 > survivors*, which reads exactly like a correctness bug in the kernels. `solve()` now
 > checks `cudaGetLastError()` and says so.
 
+</details>
+
 ### What CUDA offered that OpenCL could not
+<details>
+<summary>Details</summary>
 
 Ranked by what actually paid, now that it has been measured rather than guessed:
 
@@ -2691,10 +3382,13 @@ Ranked by what actually paid, now that it has been measured rather than guessed:
 4. `cp.async`, `__match_any_sync` — untried; the profile suggests neither addresses the
    current limiters.
 
+</details>
 
 ---
 
 ## What a CUDA backend was predicted to buy (retained for calibration)
+<details>
+<summary>Details</summary>
 
 Scoped because it is the largest remaining roadmap item, and the temptation is to assume it
 closes the gap. It probably does not.
@@ -2747,3 +3441,5 @@ a target that may be 11 % away or may be zero. The share-rate comparison costs a
 > remaining time is". So the ranking was wrong at both ends: the item called "the only
 > one that could move the achieved bandwidth" moves none of it, and the item that
 > actually paid (instruction issue) is not in the list at all.
+
+</details>

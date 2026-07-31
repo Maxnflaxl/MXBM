@@ -102,10 +102,11 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 | 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.16 | 35.0 | **56.4** | −0.2 | −0.6 % | [Alignment pad](performance-research.md#the-round-2-alignment-pad) *(the win is −0.36 GiB; the speed is noise-level)* | — |
 | 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0 ± 0.4** | −0.9 | −2.6 % | [Group cap](performance-research.md#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](performance-research.md#bytes-are-nearly-free-per-element-work-is-not) |
 | 2026-07-31 | **Speculative entry co-scheduling** — r4's launch hosts the next nonce's entry as interleaved co-blocks | 33.85 | 33.4 | **59.5** | −0.45 | −1.3 % | [Co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), [ships](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms) | [pipe2 1:1, split host, r2/r3 hosts](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms), [register-forced occupancy](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
+| 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 48.2 | 41.0 | fallback / `--solver opencl` |
+| **OpenCL** | 49.7 | 40.0 | fallback / `--solver opencl` — 2026-07-31, after [the match-win backport](performance-research.md#the-cuda-match-wins-backported-to-opencl-perfect-table--spill--per-round-caps-06-ms) |
 | **CUDA** | **59.8**[^drift] | **33.3**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
@@ -122,8 +123,8 @@ figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
     between 33.7 and 35.6 ms and the cause is not yet known. See [how far these figures
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
     Every A/B on this page was interleaved, so the deltas are unaffected; only the scale
-    moves. OpenCL is the older 300-nonce measurement, ±4.1 % (1σ), and has not been
-    re-measured under these conditions.
+    moves. OpenCL is a single 60 s miner benchmark (1,494 solves, 2026-07-31), measured
+    opportunistically rather than under the controlled-conditions protocol.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
@@ -162,7 +163,7 @@ the peak (61.5 at 15 s vs 58.9 at 60 s) while leaving the median untouched, whic
 signature of noise rather than throughput. The three samples below 45 sol/s are likewise
 artefacts: they are consecutive, and coincide with a lolMiner benchmark and an MXBM
 benchmark being run against the same GPU. The CUDA
-backend is **~6 % past the target** and the OpenCL path 1.12× short — read
+backend is **~6 % past the target** and the OpenCL path 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as beaten.
 
 Started at **1.8 sol/s** when the solver first worked → **31× faster**.
@@ -723,7 +724,11 @@ organization — sub-mask rescans, chain walks, per-element bookkeeping — simp
 more of them. *(That last clause was tested the same day and is wrong: [the
 reorganization probes](performance-research.md#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping)
 measured the bookkeeping at ~0.6 ms of round 1's 4.9 — the deficit is real, its
-mechanism is not bookkeeping, and it is unexplained.)* What our own knobs recover is
+mechanism is not bookkeeping, and it is unexplained.)* *(Explained later that day by
+profiling lolMiner itself: it is a state-storing streaming design — 64 B/element,
+17.7 GB/solve, no derive or rebuild arithmetic anywhere — so at low caps it simply
+has almost no instructions to issue. See [lolMiner measured under
+ncu](performance-research.md#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline).)* What our own knobs recover is
 measured and small: geometry (17,0), which
 deletes the rescan, crosses over at ~190 W and buys 1 % in the 140–180 W band and 2.6 %
 at the floor (`MXBM_BB=17`, needs 8.35 GiB); the byte-heavy `MXBM_R2_FULL` **loses at
@@ -809,6 +814,15 @@ standalone kernel. The bookkeeping the reorganization would have removed is 12 %
 the round, not 55 % — so the 2.3× work-per-clock deficit does not come from
 bookkeeping, and its mechanism is again unidentified. Details:
 [the reorganization probes](performance-research.md#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping).*
+
+*And later still that day, identified for good — from lolMiner's own kernels rather
+than from ours. `ncu` on its closed binary: a state-storing streaming pipeline,
+64 B/element layers, 17.7 GB/solve against our 13.0, no re-derivation anywhere, and
+a sustained ~494 GB/s that makes its ~54 sol/s ceiling a DRAM roofline. The 2.3× is
+the absence of our arithmetic, the closure stands with its mechanism finally named,
+and the band structure of this whole comparison is one design trade held from
+opposite ends. See [lolMiner measured under
+ncu](performance-research.md#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline).*
 
 ### Above stock: the curve continues to ~311 W, and the memory rung is unreachable
 
