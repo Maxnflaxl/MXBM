@@ -237,7 +237,7 @@ structurally different, such as:
 > It does **not** extend to rounds 4–5. Rebuild cost doubles per round while the record
 > it replaces shrinks, and round 3 already sits at the point where the recompute stops
 > hiding inside the kernel's memory stalls (see "the compute-hiding budget" in
-> [performance.md](performance.md#established-limits)). Reaching 3 GB needs the *first* route —
+> [performance-research.md](performance-research.md#established-limits)). Reaching 3 GB needs the *first* route —
 > streaming / in-place reuse — not more re-derivation.
 
 This is correctness-neutral, but it is **also an energy cost**, and that half is now
