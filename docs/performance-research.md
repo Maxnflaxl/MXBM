@@ -2429,6 +2429,17 @@ first (`--pl`), then observed (NVML), then sized, so a cap set outside MXBM
 run: a geometry switch is a multi-GiB realloc, so a cap changed mid-run gets a one-line
 restart notice instead of a re-selection. `MXBM_BB` still overrides both ways.
 
+**Live at 160 W in the MINER loop, same day: a wash, not the sweep's −1.1 %.** First
+capped measurement in the loop users run (`--benchmark`, verify and speculative
+co-tenant entry included) rather than the pipeline replay the sweep used: interleaved
+brackets gave (17,0) 51.7/51.7/52.0 ms vs (16,1) 51.8/51.8 — 0 ± 0.3 %. Not a
+contradiction, a loop difference: the spec entry rides round 4, exactly where (17,0)
+changes the block population, and plausibly absorbs the mid-band saving. The selection
+stays (harmless at worst mid-band, and the floor's +2.6 % was measured at 3× the
+mid-band margin) — but **the floor claim is still pipeline-loop only**: a 100 W
+miner-loop bracket is the cheap test that would settle whether the auto-selection pays
+where it claims to, and it is owed.
+
 **`MXBM_R2_FULL` loses at EVERY cap, monotonically.** This kills the clean form of the
 instruction-currency theory: round 2's 14-siphash rebuild is ~500 ALU ops per element
 against the ~10 extra memory instructions the full record costs, and the ALU side still
