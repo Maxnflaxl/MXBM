@@ -168,6 +168,13 @@ Power-curve sweeps that used to be bash around `nvidia-smi` now also exist as
 `--tune` (docs/usage.md): miner-loop arms inside the shipping binary, coarse pass +
 knee-refining pass, end-of-sweep drift gauge, result stored per card for `--pl auto` —
 usable as a research instrument wherever a drift-gauged power curve is the question.
+The first full three-pass run (2026-07-31, reference card) reproduced the dedicated
+sweeps: knee 231 W (refined down from the coarse 248), rung crossover interpolated at
+~171 W vs the sweeps' ~173, drift +0.5 % where un-gauged sessions had shown ~2 %/arm.
+One known grid miss: pass 3 reuses the coarse caps, whose 37 W spacing skips ~160 W —
+so the verdict named 211 W stock as best efficiency (0.256 sol/s/W) and could not see
+the true record between its rung points (160 W + rung, 0.264). The knee and rung-band
+verdicts, the ones `--pl auto` acts on, are unaffected.
 Energy is measured, not integrated, since 2026-07-31: the card's millijoule counter
 (NVML `nvmlDeviceGetTotalEnergyConsumption`, no root to read) backs `--benchmark`'s
 J/solution line, `--tune`'s per-point draw, `/summary`'s `Energy_J`, and
