@@ -13,8 +13,8 @@ limits, and the open leads.
 **Reference hardware** for every measurement: RTX 4070 Ti SUPER (Ada, sm_89, 66 CUs,
 16 GB, 48 KB LDS/workgroup under OpenCL and 100 KB/SM under CUDA, ~510 GB/s achievable
 copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
-[~5 % cross-session band](performance.md#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions);
-every A/B here was interleaved, so the deltas do not.
+[~2.5 % cross-session band](performance.md#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions)
+(narrowed 2026-07-31 from ~5 %); every A/B here was interleaved, so the deltas do not.
 
 | | |
 |---|---|

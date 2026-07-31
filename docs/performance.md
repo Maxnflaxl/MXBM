@@ -118,9 +118,11 @@ than opportunistically: stock 285 W, card at thermal equilibrium after a discard
 warmup, 2670 MHz / 10251 MHz / 284.1 W / 69 °C throughout. The previous controlled
 figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
 
-[^drift]: **Carries a ~5 % cross-session band.** Within one session the measurement is
-    tight — six repeats spread 0.3 % — but four sessions of the same binaries have landed
-    between 33.7 and 35.6 ms and the cause is not yet known. See [how far these figures
+[^drift]: **Carries a ~2.5 % cross-session band** (narrowed 2026-07-31 from the ~5 %
+    it opened at). Within one session the measurement is tight — six repeats spread
+    0.3 % — and every session since 2026-07-26 has landed within ~2.5 % of its peers;
+    the single 35.6 ms outlier that set the original band never recurred and stays on
+    record. See [how far these figures
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
     Every A/B on this page was interleaved, so the deltas are unaffected; only the scale
     moves. OpenCL is a single 60 s miner benchmark (1,494 solves, 2026-07-31), measured
@@ -259,6 +261,21 @@ not capture. The controlled run adds one fact to that: the card is at
 it is whatever 285 W happens to buy. The surviving hypothesis is that the same 285 W buys
 a different point on the V/f curve on different days.
 
+**Narrowed to ~2.5 %, 2026-07-31.** Written when it was one slow session out of four,
+the 5 % band has not been earned again since: across 2026-07-26 → 07-31 the ledger now
+holds nine-plus same-binary stock sessions, and apart from the single 35.6 ms event
+every session median lands within ~2.5 % of its peers — the strongest cross-day pair
+being [the full power sweep repeated two days apart](#the-sweep-reproduces-across-sessions-to-1),
+twelve caps all within 2.5 % (mean −1 %). The mechanism side also firmed up: the
+locked-clock reference removes the suspected V/f variable by construction and
+reproduced to 0.00 % across the interval the anomaly originally appeared on. **The band
+this page carries is therefore ~2.5 %** — the worst same-binary cross-session delta
+actually observed since — with the 2026-07-26 event kept on record as a one-time,
+unexplained, on-GPU slowdown. *Reopening conditions: any same-binary session median
+landing more than ~2.5 % from its peers restores the 5 % band; and the cross-day
+locked-clock repeat this section owes is still owed — the two locked runs share one
+calendar day.*
+
 ### The locked-clock reference is stable to the digit — run it 2026-07-30
 
 The test proposed for this has now been run: lock the SM and memory clocks
@@ -349,7 +366,8 @@ do — but it is the right instrument for the next one.
 
 **How to quote a number from this page:** use the controlled figure with its conditions
 attached — 33.3 ms / 59.8 sol/s at stock 285 W, 2670 MHz, 69 °C (2026-07-31, with
-speculative entry) — and carry the ~5 % cross-session band. Do not re-derive a headline
+speculative entry) — and carry the ~2.5 % cross-session band (narrowed 2026-07-31; see
+above). Do not re-derive a headline
 from a short run: see the note on solutions/solve under the progress table.
 
 ---
@@ -626,7 +644,9 @@ sweep was therefore re-run on 2026-07-30, two days after the first, on the same 
 | 255 W | 58.00 → 57.85 | −0.3 % | 53.45 → 53.90 | +0.8 % |
 | 285 W | 59.15 → 59.05 | −0.2 % | 53.60 → 53.65 | +0.1 % |
 
-**This is much better than the ~5 % band the headline section warns about.** Every point
+**This is much better than the ~5 % band the headline section warned about at the
+time** (this sweep pair is, in fact, the evidence that later narrowed it to ~2.5 %).
+Every point
 of both miners reproduces within 2.5 %, and all but three within ~1 %. The board power
 drawn at each cap is identical to a tenth of a watt.
 
