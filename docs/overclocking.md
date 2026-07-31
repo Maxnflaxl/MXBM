@@ -31,23 +31,27 @@ device enumeration and **before the solver is constructed** (2026-07-31; previou
 so a benchmark measures the same operating point mining will use — and so the geometry
 selection below can read the limit `--pl` just set.
 
-## `--pl` now selects the solver geometry — once, at startup
+## The power-limit geometry policy — built, verified, and currently disarmed
 
-The CUDA solver picks its bucket geometry from the board power limit in effect when it
-starts: below **190 W** it prefers the (17,0) low-power geometry (+1 % at 140–180 W,
-+2.6 % at the card's floor — [the eco sweep](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does))
-when the card can host its 8.35 GiB; at or above 190 W it keeps (16,1), which is ~11 %
-faster at stock. The order is **apply, then observe, then size**: `--pl` lands first and
-the selection reads the limit off the card afterwards, so a cap applied outside MXBM
-(`nvidia-smi -pl` before launch — the only route on a rig that doesn't run MXBM as root)
-counts exactly the same as one `--pl` applied.
+The machinery for selecting the solver's bucket geometry from the board power limit
+exists and is verified end to end: the order is **apply, then observe, then size** —
+`--pl` lands before the solver is constructed and the selection reads the limit off the
+card afterwards, so a cap applied outside MXBM (`nvidia-smi -pl` before launch — the
+only route on a rig that doesn't run MXBM as root) counts exactly the same as one
+`--pl` applied, and a `--pl` that fails without root cannot mis-select. Selection,
+when armed, happens once per run (a geometry switch is a multi-GiB reallocation); a
+cap that later crosses the threshold gets a one-line restart notice, never a mid-run
+re-select. All of this was verified live on 2026-07-31, including the notice.
 
-The choice is made once per run. A geometry switch is a multi-GiB reallocation, and an
-externally changed cap can be transient, so MXBM never re-selects mid-run: if the limit
-later crosses to the other side of the threshold *and* the selection would actually
-differ on this card, it prints one line saying so and keeps mining — restart to
-re-select. `MXBM_BB=17`/`MXBM_BB=16` still force either geometry by hand, and a forced
-geometry suppresses the notice.
+**The policy is disarmed** (`kRbLowPowerW == 0` in `rowbucket_geom.h`): the eco sweep's
+measured prize for (17,0) below ~190 W failed same-day reproduction — a wash in the
+miner loop at 160 W and 100 W, and on a cooled card the sweep's own binary read (17,0)
+**+1.8 % worse** at the floor while its base arm reproduced to 0.2 ms (the
+[eco-sweep addenda](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does)).
+Holding (17,0) at stock costs ~23 % in the miner loop, so arming a selection with no
+reproducible win was the wrong trade. Whatever next claims the low band — a re-measured
+crossover, or the Tier-2 eco pipeline — re-arms it by setting that one constant.
+`MXBM_BB=17` still forces the geometry by hand.
 
 **Apply order is fixed**: power limit, core offset, memory offset, locked core clock,
 locked memory clock, fan. The V/F curve is shaped before anything is pinned onto it, and

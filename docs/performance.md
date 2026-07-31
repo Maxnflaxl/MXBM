@@ -766,10 +766,11 @@ has almost no instructions to issue. See [lolMiner measured under
 ncu](performance-research.md#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline).)* What our own knobs recover is
 measured and small: geometry (17,0), which
 deletes the rescan, crosses over at ~190 W and buys 1 % in the 140–180 W band and 2.6 %
-at the floor (`MXBM_BB=17`, needs 8.35 GiB — since 2026-07-31 the CUDA solver selects it
-by itself when the board limit observed at startup is below 190 W; see
-[docs/overclocking.md](overclocking.md#--pl-now-selects-the-solver-geometry--once-at-startup));
-the byte-heavy `MXBM_R2_FULL` **loses at
+at the floor (`MXBM_BB=17`, needs 8.35 GiB) — *a result that failed same-day
+reproduction in both the miner loop and the sweep's own binary; auto-selection was
+built, verified and then disarmed the same day (see
+[docs/overclocking.md](overclocking.md#the-power-limit-geometry-policy--built-verified-and-currently-disarmed)
+and the eco-sweep addenda)*; the byte-heavy `MXBM_R2_FULL` **loses at
 every cap** — re-derivation is the right trade at all power levels. Full tables:
 [the eco sweep](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does)
 and [the duty-cycle probe](performance-research.md#lolminer-is-not-duty-cycling--the-low-end-gap-is-real-work-per-clock).

@@ -58,8 +58,9 @@ int main() {
     // Every rung of the ladder, through the SHIPPING solver. A card too small for (16,1)
     // runs one of the others, so a coarser geometry has to produce the same goldens, not
     // merely allocate. On a 16 GB card auto is always (16,1) -- which is exactly why the
-    // other two would otherwise ship untested.
-    for (uint32_t bb = 16; bb >= 14; --bb) {
+    // other two would otherwise ship untested. bb = 17 is off-ladder (users reach it by
+    // MXBM_BB=17 while the power-cap policy stays disarmed) and keeps its kernels covered.
+    for (uint32_t bb = 17; bb >= 14; --bb) {
         char v[8], geom[32];
         std::snprintf(v, sizeof v, "%u", bb);
         std::snprintf(geom, sizeof geom, "(%u,%u)", bb, 17u - bb);
@@ -77,24 +78,13 @@ int main() {
     }
     unsetenv("MXBM_BB");
 
-    // The power-limit hint, end to end through the ctor -- exactly what main.cpp does
-    // after observing the board limit. No root or actual cap is needed: the ctor takes
-    // the observed value as an argument. 160 W on a card that can host 8.35 GiB must
-    // select (17,0) -- the cap-preferred geometry that is NOT a ladder rung -- and the
-    // goldens must come out of it, because this is the geometry capped rigs will mine on.
-    try {
-        gpu::CudaSolver g(0, /*power_limit_w=*/160);
-        check(g.bucket_bits() == 17u, "a 160 W hint selects (17,0), not the ladder's (16,1)");
-        solve_the_kat(g, "(17,0) via 160 W hint");
-    } catch (const std::exception& e) {
-        // A busy card can legitimately refuse the 8.35 GiB and step down; the unit
-        // test pins the selection logic, this arm exists to run the real kernels.
-        std::printf("  SKIP (17,0) via 160 W hint: %s\n", e.what());
-    }
-    // And the hint is inert at stock: 285 W is above the crossover, same rung as no hint.
+    // The power-limit hint through the ctor -- exactly what main.cpp passes after
+    // observing the board limit. The policy is DISARMED (kRbLowPowerW == 0; the
+    // low-band prize failed reproduction -- rowbucket_geom.h tells the story), so the
+    // plumbing must be live and the value must change NOTHING.
     {
-        gpu::CudaSolver g(0, /*power_limit_w=*/285);
-        check(g.bucket_bits() == 16u, "a 285 W hint changes nothing: (16,1) as always");
+        gpu::CudaSolver g(0, /*power_limit_w=*/160);
+        check(g.bucket_bits() == 16u, "disarmed: a 160 W hint is inert, (16,1) as always");
     }
 
     return summary("cuda_solver");

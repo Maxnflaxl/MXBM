@@ -43,11 +43,11 @@ const RbRung* rb_rungs(int& n) {
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad, unsigned power_limit_w) {
     // The low-power exception to the ladder's order. (17,0) is NOT a rung: it loses
-    // 10.9 % at stock and only wins under a cap (the ~190 W crossover documented at
-    // kRbLowPowerW), so it is reached by policy here rather than by a rung every card
-    // would walk. Same fit rules as the ladder; if it does not fit, the ladder answers
-    // exactly as it would have without the hint.
-    if (power_limit_w && power_limit_w < kRbLowPowerW) {
+    // 10.9 % at stock, so it can only be reached by policy under a cap -- and the
+    // policy is currently DISARMED (kRbLowPowerW == 0: the measured crossover failed
+    // reproduction; the constant's comment tells the story). Same fit rules as the
+    // ladder; if it does not fit, the ladder answers exactly as without the hint.
+    if (kRbLowPowerW != 0 && power_limit_w != 0 && power_limit_w < kRbLowPowerW) {
         size_t total = 0, single = 0;
         rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false);
         if ((!max_alloc || single <= (size_t)max_alloc)

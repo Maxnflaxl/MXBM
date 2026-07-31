@@ -2454,6 +2454,22 @@ nothing is released and the deciding measurement is cheap — re-run the pipelin
 at 100 W from a clean cold boot; if the −2.6 % does not come back, the selection
 defaults off until something reproducible claims the band.
 
+**The control ran post-reboot on a cool card the same evening, and the prize did not
+come back: the selection is disarmed.** Base 103.90 ms — reproducing the sweep's 103.7
+to 0.2 ms, which validates the conditions — and (17,0) **105.72, +1.8 % worse**,
+against the sweep's 100.9. Same binary, same cap, same arm order as the sweep
+(`cuda/pipeline`'s mtime is 2026-07-26: both measurements ran it unmodified), so the
+sweep's bb17 row is irreproducible *on its own instrument* — and that instrument is
+additionally five days stale against the shipping kernels, so even at face value it
+described a build the miner no longer runs. `kRbLowPowerW` is now 0: every wattage
+hint is inert, the restart notice can
+never fire, and (17,0) is reachable only by `MXBM_BB=17`. Everything else stays live —
+the apply-then-observe startup order, the observed-limit hint through the CUDA ctor,
+the notice machinery — because Tier 2's eco pipeline (or a crossover that reproduces)
+re-arms the policy by setting that one constant. The same evening's runs also priced
+the guard the notice provides: (17,0) held at a 285 W stock limit costs **~23 % in the
+miner loop** (40.9 ms vs 33.1).
+
 **`MXBM_R2_FULL` loses at EVERY cap, monotonically.** This kills the clean form of the
 instruction-currency theory: round 2's 14-siphash rebuild is ~500 ALU ops per element
 against the ~10 extra memory instructions the full record costs, and the ALU side still
