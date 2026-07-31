@@ -2440,6 +2440,20 @@ mid-band margin) — but **the floor claim is still pipeline-loop only**: a 100 
 miner-loop bracket is the cheap test that would settle whether the auto-selection pays
 where it claims to, and it is owed.
 
+**The floor bracket ran the same afternoon, and its positive control FAILED.** At
+100 W the miner loop read a wash across 10 arms (detrended (17,0) −0 to +0.4 % *worse*),
+so the sweep's own binary was re-run as the control: base's first-run absolute
+reproduced (104.3 vs the sweep's 103.7) but **bb17 did not** — 106.5/111.4 against the
+sweep's 100.9, i.e. the −2.6 % floor prize failed same-day reproduction in the loop
+that produced it. Both loops also showed a ~2 %-per-arm monotonic drift (up when
+arms heat-soak back-to-back, down after a warmup — core at 41–45 °C throughout, no
+throttle flags, no locked clocks; GDDR temperature is the unexposed suspect) that sets
+today's measurement ceiling well above the effect size. Standing: **the auto-selection
+currently has no reproducible prize in either loop**; it keeps its default only because
+nothing is released and the deciding measurement is cheap — re-run the pipeline control
+at 100 W from a clean cold boot; if the −2.6 % does not come back, the selection
+defaults off until something reproducible claims the band.
+
 **`MXBM_R2_FULL` loses at EVERY cap, monotonically.** This kills the clean form of the
 instruction-currency theory: round 2's 14-siphash rebuild is ~500 ALU ops per element
 against the ~10 extra memory instructions the full record costs, and the ALU side still
