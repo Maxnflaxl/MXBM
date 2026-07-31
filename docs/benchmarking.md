@@ -97,6 +97,34 @@ The locked-clock form is the one to track *builds* against: it removes the card'
 day-to-day discretion over the V/f point, which is the leading suspect for the
 cross-session spread.
 
+### The named reference: `LGC-2600`
+
+"Benchmark it" means this, exactly, so two people saying it run the same thing:
+
+```sh
+sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh
+```
+
+Reference values on the reference card (RTX 4070 Ti SUPER, driver 610.43.03,
+measured 2026-07-28, two runs 89 minutes apart under hostile desktop load):
+
+| quantity | reference | gate |
+|---|---|---|
+| ms/solve median | **34.30** — both runs, to the digit | a build change is real past ±0.5 % (the within-session band is 0.3 %) |
+| SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
+| board draw | ~262 W | context, not a gate |
+| `clocks_event_reasons` | **none** | any throttle flag voids the run |
+
+Three rules. **One:** builds are compared at this pin, never on the stock number —
+stock carries the ~2.5 % cross-session band and gates nothing. **Two:** the pin is
+only a pin while the clock column reads 2610/10251; a run that drifted off it is
+discarded, not averaged. **Three:** since 2026-07-31 the energy counter is the
+efficiency basis — record J/solution alongside ms/solve from the next reference run
+onward, so the recipe gates efficiency regressions too, not just speed. A genuine
+**cross-day repeat of this reference is still owed** (both existing runs were
+2026-07-28); the first person to run it on another day should append the result to
+performance.md's reproducibility table.
+
 The full measured history, including every failed experiment, is in
 [performance-research.md](performance-research.md).
 
