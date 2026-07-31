@@ -4,7 +4,7 @@
 
 MXBM is a from-scratch implementation of the BeamHash III proof-of-work —
 Beam's Equihash-style Wagner search on the ⟨144,5⟩ parameter shape (see
-[docs/beamhash-iii.md](docs/beamhash-iii.md)) — built to be a fully open,
+[docs/beamhash/beamhash-iii.md](docs/beamhash/beamhash-iii.md)) — built to be a fully open,
 auditable alternative to the closed-source miners in the ecosystem.
 
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
@@ -131,9 +131,9 @@ specifications rather than from folklore:
 
 | Doc | Covers |
 |-----|--------|
-| **[BeamHash III](docs/beamhash-iii.md)** | The current algorithm, the one MXBM implements — seeding, the per-round mixing step, the combination schedule, and the solution format, cross-referenced to the source |
-| [BeamHash II](docs/beamhash-ii.md) | The EquihashR family and the `r` parameter (block 321321 → 777777) |
-| [BeamHash I](docs/beamhash-i.md) | Beam's launch PoW, plus the Equihash and Wagner background the other two build on |
+| **[BeamHash III](docs/beamhash/beamhash-iii.md)** | The current algorithm, the one MXBM implements — seeding, the per-round mixing step, the combination schedule, and the solution format, cross-referenced to the source |
+| [BeamHash II](docs/beamhash/beamhash-ii.md) | The EquihashR family and the `r` parameter (block 321321 → 777777) |
+| [BeamHash I](docs/beamhash/beamhash-i.md) | Beam's launch PoW, plus the Equihash and Wagner background the other two build on |
 
 ## Architecture
 

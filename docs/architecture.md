@@ -34,9 +34,9 @@ header so the same logic can later become a GPU kernel body. A host-side verifie
 reproduces Beam's `IsValidSolution`.
 
 The algorithm itself is documented separately, from Beam's published
-specifications: **[beamhash-iii.md](beamhash-iii.md)** for the algorithm MXBM
-implements, with [beamhash-i.md](beamhash-i.md) and
-[beamhash-ii.md](beamhash-ii.md) covering the two predecessors and the Equihash
+specifications: **[beamhash-iii.md](beamhash/beamhash-iii.md)** for the algorithm MXBM
+implements, with [beamhash-i.md](beamhash/beamhash-i.md) and
+[beamhash-ii.md](beamhash/beamhash-ii.md) covering the two predecessors and the Equihash
 background they build on.
 
 Correctness is established two ways: against golden known-answer vectors

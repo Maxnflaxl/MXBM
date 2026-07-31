@@ -1,7 +1,7 @@
 # Hardware Requirements
 
 MXBM mines BeamHash III — an Equihash-style Wagner search on the ⟨144,5⟩ parameter shape;
-see [beamhash-iii.md](beamhash-iii.md). This document states what hardware is needed, why,
+see [beamhash-iii.md](beamhash/beamhash-iii.md). This document states what hardware is needed, why,
 and where the current implementation falls short.
 
 All figures are computed from the allocator in `src/gpu/round_pipeline.cpp` and

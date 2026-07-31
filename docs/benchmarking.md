@@ -226,7 +226,7 @@ either direction, including our own favour.
 - [overclocking.md](overclocking.md) — why OC must be excluded from a like-for-like run.
 - [\[bh2\]][bh2] Wilke Trei, *BeamHash II Specification*, 17 June 2019 — §2.4 tabulates
   solutions per iteration across the EquihashR family.
-- [beamhash-iii.md](beamhash-iii.md) — why a run yields ~2 solutions rather than exactly
+- [beamhash-iii.md](beamhash/beamhash-iii.md) — why a run yields ~2 solutions rather than exactly
   one, and what a "survivor" is.
 
 [bh2]: https://docs.beam.mw/BeamHashII.pdf
