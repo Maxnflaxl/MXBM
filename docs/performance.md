@@ -15,186 +15,6 @@ proposing a new lever, because most of them have already been tried.
 special configuration** (user-measured). BeamHash III yields ~1.9 solutions per solve,
 so 53 sol/s ÷ 1.9 ≈ **28 solve/s ≈ 36 ms/solve**. That is the bar.
 
-## Apple Silicon (Metal) — M3 Max, 2026-07-30
-
-A second reference platform. Everything else in this document is the 4070 Ti; this
-section is the Mac, and the two are not comparable except in shape.
-
-| path | median ms/solve | sol/s | notes |
-|---|---|---|---|
-| OpenCL, sort | ~505 (494.6 / 516.6) | ~3.8 | the only OpenCL path that runs here |
-| OpenCL, LDS | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
-| OpenCL, row-bucket | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
-| Metal, fused row-bucket (rebuild) | 117 (117.4 / 116.9) | 16.2 | the CUDA-shipping configuration |
-| **Metal, fused row-bucket (SEEDF)** | **101.5** (102.3 / 100.7) | **18.8** | **default on Apple**, see below |
-
-**Apple's OpenCL cannot build the fused kernels at all.** Both the LDS and row-bucket
-collision finders fail at `newComputePipelineState`, which is why every macOS-relevant
-GPU test in `CMakeLists.txt` is pinned to `MXBM_NO_ROWBUCKET=1`. So on this hardware
-OpenCL is confined to the slowest of the three finders, and Metal is not a faster
-dialect of the same pipeline — it is the only way to run the fused one.
-
-`bench_rounds`-equivalent figures above come from `MXBM_BENCH=20 test_metal_solver`,
-median over 20 solves across two sessions, per this document's own rule that a maximum
-of noisy draws reads high.
-
-**The miner's per-solve overhead is ~0; what moves is thermal.** `--benchmark BEAM-III`
-on an idle machine:
-
-| run length | median | p5 | p95 | sol/s |
-|---|---:|---:|---:|---:|
-| 12 s | 119.3 ms | 116.6 | 126.3 | 14.3 |
-| 45 s | 130.9 ms | 116.8 | 153.2 | 15.3 |
-
-The **p5 is 116.8 ms in both — the pipeline's own 117 ms**, which agrees with the 1.6 ms
-the GPU timing measures outside the kernels. Nonce iteration, stats and the difficulty
-filter cost essentially nothing. What rises with run length is the median and the p95,
-which is a MacBook throttling under sustained load, not overhead.
-
-So quote 117 ms as the pipeline figure and ~15 sol/s as the sustained one, and expect
-the gap between them to widen with ambient temperature and run length rather than being
-fixable in software.
-
-> An earlier revision of this section reported 155.2 ms/solve and attributed a ~38 ms
-> gap to work outside the pipeline. That measurement was taken while builds and tests
-> were competing for the same GPU; on an idle machine it does not reproduce. Benchmark
-> figures here are only valid from an otherwise-idle machine.
-
-Threadgroup memory, the resource the fused rounds are bound by (32 768 B ceiling,
-measured):
-
-| kernel | Metal | CUDA | of ceiling |
-|---|---|---|---|
-| `fused_round_r1` | 18 992 B | 18 980 B | 58.0 % |
-| `fused_round_r2` | 23 600 B | — | 72.0 % |
-| `fused_round_r3` | 26 160 B | 26 148 B | 79.8 % |
-| `fused_round_r4` | 22 320 B | — | 68.1 % |
-| `terminal_round` | 9 744 B | — | 29.7 % |
-
-The r1/r3 agreement to within 12 B (the `gcount`/`cnt8` atomics rounding) is the
-strongest available evidence that the two ports allocate the same shape.
-
-### Where the 117 ms goes
-
-Per-phase GPU time (`MXBM_METAL_TIMING=1`, from `MTLCommandBuffer`'s
-GPUStartTime/GPUEndTime, so this is GPU execution and not the wall clock around the
-submit):
-
-| phase | rebuild | SEEDF (default) | |
-|---|---:|---:|---|
-| entry | 12.0 | 12.2 | |
-| r1 | 23.4 | 26.2 | pays for the wider record |
-| **r2** | **44.0** | **24.3** | **38 % of the solve, before** |
-| r3 | 17.1 | 17.1 | |
-| r4 | 14.0 | 14.2 | |
-| terminal | 4.4 | 4.4 | |
-| recover | 0.0 | 0.0 | |
-| **GPU** | **115.0** | **98.4** | wall +1.6 ms |
-
-Two things fell out immediately. The six per-round command buffers, each with a
-`waitUntilCompleted`, cost **1.6 ms total** — batching them is not a lead. And r2 was the
-whole story, which is what the rest of this section is about.
-
-### r2's rebuild does not hide on Apple — 21 ms exposed, against 0.4 ms on Ada
-
-`-DMXBM_METAL_ABL_DERIVE=2` replaces `rebuild_r2`'s 14 `siphash24` calls with a cheap
-spread. Results are intentionally wrong; the ablation is safe because the rebuild reads
-only threadgroup memory and registers, so the global access footprint is untouched and
-the number measures compute alone.
-
-```
-baseline   entry 12.1  r1 23.4  r2 43.9  r3 17.1  r4 13.9  terminal 4.4  | GPU 115.0
-ABL=2      entry 12.2  r1 23.4  r2 22.9  r3 17.1  r4 13.9  terminal 4.4  | GPU  93.9
-```
-
-**21.0 ms of exposed compute.** The same rebuild costs **0.4 ms** on Ada
-(performance-research.md, "Register cap tuning") because Ada's memory-level parallelism
-absorbs it. This is the single largest architectural divergence found between the two
-backends, and it is where any further Apple work should start.
-
-### The fix: round 1 stores what round 2 was rebuilding (SEEDF) — 14 % faster
-
-Round 1 already computes the exact element round 2 reconstructs: r1 emits
-`apply_mix(combine(a, b, 424), {li, ri}, 2, 424)`, and `rebuild_r2(pp, li, ri)` recomputes
-precisely that from the two seed indices. So r1 stores it instead — its record goes from
-2 u64 to 9 — and r2 reads it. **This is the CUDA source's `LM_SEEDF` idea, which loses on
-Ada and wins here**, because the compute it removes is exposed on Apple and hidden on Ada.
-
-Cold, uncontested, medians over 6–8 solves with the baseline bracketed either side:
-
-| | r1 | r2 | GPU total | pipeline median |
-|---|---:|---:|---:|---:|
-| rebuild | 23.4 | **44.0** | 115.0 | 117.8 ms |
-| **SEEDF** | 26.2 | **24.3** | **98.4** | **101.5 ms** |
-
-**−16.3 ms, 13.8 %** — 16.2 → 18.8 sol/s. The ranges do not overlap (SEEDF 100.1–104.9,
-rebuild 116.8–119.3). r1 pays 2.8 ms for the wider write; r2 saves 19.7 ms, which is the
-ablation's 21 ms less the cost of reading the wider record. Every other phase is
-unchanged to within noise, which is the internal check that the change did what it says.
-
-The win is larger under thermal load, not smaller (r2 55.8 → 25.4 ms when hot), because
-the rebuild's compute is itself part of what generates the heat.
-
-SEEDF is the **default on Apple**. `MXBM_METAL_REBUILD=1` selects the CUDA-shipping
-configuration; both kernel pairs live in the same metallib and the host picks at runtime,
-so the A/B needs no rebuild.
-
-> An earlier revision of this section predicted this change would net only ~4 ms and
-> declined to attempt it. That arithmetic assumed ~251 GB/s effective bandwidth, inferred
-> by dividing round 3's traffic by its wall time — but round 3 is not purely
-> bandwidth-bound, so the real figure is far higher and the extra traffic much cheaper
-> than predicted. Measure the thing; do not divide two numbers and call it a bandwidth.
-
-### Three nulls, so they are not re-proposed
-
-- **Threadgroup size.** Bracketed medians over 10 solves: 128 → 144.6, 192 → 126.7,
-  256 → 117.0/117.3, 288 → 116.6, 320 → 116.8/116.9, 352 → 118.3, 384 → 136.0,
-  512 → 144.8. Flat across 256–320; the 0.3 ms between them is inside the spread. An
-  earlier single-solve sweep read 320 as a 1.2 % win — it did not replicate.
-- **Occupancy via smaller groups.** Cutting `kFCap` to fit two threadgroups per core's
-  32 KB, with `sm` raised to keep groups full, makes r2 monotonically *worse*:
-  (FCAP, sm) = (320,1) → 118.5, (192,2) → 125.3, (160,2) → 129.1, (128,3) → 178.0.
-  The extra groups pay table-init, barriers and sub-mask passes that outweigh anything
-  the occupancy buys. Apple is not occupancy-limited here in the way Ada is.
-- **128-bit vector loads and stores.** CUDA documents `4 x ST.128 + 1 x ST.64` beating
-  `9 x ST.64`, because round 3's top stall there is MIO-queue *instruction* issue.
-  Ported to `ulong2` on Metal it measures **neutral to slightly worse** (117.9 vs 117.1
-  median), so the scalar form is kept and the complexity is not. Apple's compiler
-  appears to coalesce these already.
-
-### A measurement hazard worth knowing
-
-Single-solve timings on this machine are thermally confounded. An identical
-configuration read 115 ms early in a sweep and 133 ms late, and one FCAP sweep drifted
-16.7 ms end to end — enough to invent a 14 % "win" out of nothing. Every figure above
-is a median over >= 10 solves with the baseline configuration repeated first *and last*;
-if the two brackets disagree by more than a millisecond or two, the run is discarded.
-
-Not tuned beyond the above: the `bb + sm = 17` line is carried over from Ada. Register
-counts are not observable on Metal (see `tests/test_metal_resources.mm`), so the
-occupancy work that produced Ada's numbers has no direct equivalent here.
-
----
-
-**Reference hardware** for every measurement below: RTX 4070 Ti SUPER (Ada, sm_89,
-66 CUs, 16 GB, 48 KB LDS/workgroup, ~510 GB/s achievable copy bandwidth).
-
-**How to reproduce.** Two figures are quoted throughout, and they measure different things:
-
-- `./build/bench_rounds 20` — median over 20 runs of the **solver pipeline** (entry through
-  terminal). This is the controlled number used to make optimization decisions.
-- `./build/test_gpu_solver` — **end-to-end `GpuSolver::solve()`**, including survivor
-  readback, back-reference recovery and CPU verification. Take `solve #2` (steady state,
-  persistent buffers); `solve #1` pays one-off allocation. This is what a miner reports,
-  so it is the headline.
-
-Both are noisy at the ~1 ms level, so single samples are not meaningful — quote a median
-of at least 5. `MXBM_NO_ROWBUCKET=1` forces the fallback sort path.
-
-sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
-
----
-
 ## Progress log
 
 Times are median ms per solve, lower is better. The "Worked" and "Didn't work" columns
@@ -1081,6 +901,186 @@ Full data, method and caveats for the head-to-head: `docs-internal/MINER_COMP_RE
 The two runs were not simultaneous, so lolMiner's power figure still
 wants a back-to-back rerun before it is quoted outside that document.
 
+
+---
+
+## Apple Silicon (Metal) — M3 Max, 2026-07-30
+
+A second reference platform. Everything else in this document is the 4070 Ti; this
+section is the Mac, and the two are not comparable except in shape.
+
+| path | median ms/solve | sol/s | notes |
+|---|---|---|---|
+| OpenCL, sort | ~505 (494.6 / 516.6) | ~3.8 | the only OpenCL path that runs here |
+| OpenCL, LDS | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
+| OpenCL, row-bucket | — | — | `clCreateKernel` → `CL_INVALID_KERNEL` |
+| Metal, fused row-bucket (rebuild) | 117 (117.4 / 116.9) | 16.2 | the CUDA-shipping configuration |
+| **Metal, fused row-bucket (SEEDF)** | **101.5** (102.3 / 100.7) | **18.8** | **default on Apple**, see below |
+
+**Apple's OpenCL cannot build the fused kernels at all.** Both the LDS and row-bucket
+collision finders fail at `newComputePipelineState`, which is why every macOS-relevant
+GPU test in `CMakeLists.txt` is pinned to `MXBM_NO_ROWBUCKET=1`. So on this hardware
+OpenCL is confined to the slowest of the three finders, and Metal is not a faster
+dialect of the same pipeline — it is the only way to run the fused one.
+
+`bench_rounds`-equivalent figures above come from `MXBM_BENCH=20 test_metal_solver`,
+median over 20 solves across two sessions, per this document's own rule that a maximum
+of noisy draws reads high.
+
+**The miner's per-solve overhead is ~0; what moves is thermal.** `--benchmark BEAM-III`
+on an idle machine:
+
+| run length | median | p5 | p95 | sol/s |
+|---|---:|---:|---:|---:|
+| 12 s | 119.3 ms | 116.6 | 126.3 | 14.3 |
+| 45 s | 130.9 ms | 116.8 | 153.2 | 15.3 |
+
+The **p5 is 116.8 ms in both — the pipeline's own 117 ms**, which agrees with the 1.6 ms
+the GPU timing measures outside the kernels. Nonce iteration, stats and the difficulty
+filter cost essentially nothing. What rises with run length is the median and the p95,
+which is a MacBook throttling under sustained load, not overhead.
+
+So quote 117 ms as the pipeline figure and ~15 sol/s as the sustained one, and expect
+the gap between them to widen with ambient temperature and run length rather than being
+fixable in software.
+
+> An earlier revision of this section reported 155.2 ms/solve and attributed a ~38 ms
+> gap to work outside the pipeline. That measurement was taken while builds and tests
+> were competing for the same GPU; on an idle machine it does not reproduce. Benchmark
+> figures here are only valid from an otherwise-idle machine.
+
+Threadgroup memory, the resource the fused rounds are bound by (32 768 B ceiling,
+measured):
+
+| kernel | Metal | CUDA | of ceiling |
+|---|---|---|---|
+| `fused_round_r1` | 18 992 B | 18 980 B | 58.0 % |
+| `fused_round_r2` | 23 600 B | — | 72.0 % |
+| `fused_round_r3` | 26 160 B | 26 148 B | 79.8 % |
+| `fused_round_r4` | 22 320 B | — | 68.1 % |
+| `terminal_round` | 9 744 B | — | 29.7 % |
+
+The r1/r3 agreement to within 12 B (the `gcount`/`cnt8` atomics rounding) is the
+strongest available evidence that the two ports allocate the same shape.
+
+### Where the 117 ms goes
+
+Per-phase GPU time (`MXBM_METAL_TIMING=1`, from `MTLCommandBuffer`'s
+GPUStartTime/GPUEndTime, so this is GPU execution and not the wall clock around the
+submit):
+
+| phase | rebuild | SEEDF (default) | |
+|---|---:|---:|---|
+| entry | 12.0 | 12.2 | |
+| r1 | 23.4 | 26.2 | pays for the wider record |
+| **r2** | **44.0** | **24.3** | **38 % of the solve, before** |
+| r3 | 17.1 | 17.1 | |
+| r4 | 14.0 | 14.2 | |
+| terminal | 4.4 | 4.4 | |
+| recover | 0.0 | 0.0 | |
+| **GPU** | **115.0** | **98.4** | wall +1.6 ms |
+
+Two things fell out immediately. The six per-round command buffers, each with a
+`waitUntilCompleted`, cost **1.6 ms total** — batching them is not a lead. And r2 was the
+whole story, which is what the rest of this section is about.
+
+### r2's rebuild does not hide on Apple — 21 ms exposed, against 0.4 ms on Ada
+
+`-DMXBM_METAL_ABL_DERIVE=2` replaces `rebuild_r2`'s 14 `siphash24` calls with a cheap
+spread. Results are intentionally wrong; the ablation is safe because the rebuild reads
+only threadgroup memory and registers, so the global access footprint is untouched and
+the number measures compute alone.
+
+```
+baseline   entry 12.1  r1 23.4  r2 43.9  r3 17.1  r4 13.9  terminal 4.4  | GPU 115.0
+ABL=2      entry 12.2  r1 23.4  r2 22.9  r3 17.1  r4 13.9  terminal 4.4  | GPU  93.9
+```
+
+**21.0 ms of exposed compute.** The same rebuild costs **0.4 ms** on Ada
+(performance-research.md, "Register cap tuning") because Ada's memory-level parallelism
+absorbs it. This is the single largest architectural divergence found between the two
+backends, and it is where any further Apple work should start.
+
+### The fix: round 1 stores what round 2 was rebuilding (SEEDF) — 14 % faster
+
+Round 1 already computes the exact element round 2 reconstructs: r1 emits
+`apply_mix(combine(a, b, 424), {li, ri}, 2, 424)`, and `rebuild_r2(pp, li, ri)` recomputes
+precisely that from the two seed indices. So r1 stores it instead — its record goes from
+2 u64 to 9 — and r2 reads it. **This is the CUDA source's `LM_SEEDF` idea, which loses on
+Ada and wins here**, because the compute it removes is exposed on Apple and hidden on Ada.
+
+Cold, uncontested, medians over 6–8 solves with the baseline bracketed either side:
+
+| | r1 | r2 | GPU total | pipeline median |
+|---|---:|---:|---:|---:|
+| rebuild | 23.4 | **44.0** | 115.0 | 117.8 ms |
+| **SEEDF** | 26.2 | **24.3** | **98.4** | **101.5 ms** |
+
+**−16.3 ms, 13.8 %** — 16.2 → 18.8 sol/s. The ranges do not overlap (SEEDF 100.1–104.9,
+rebuild 116.8–119.3). r1 pays 2.8 ms for the wider write; r2 saves 19.7 ms, which is the
+ablation's 21 ms less the cost of reading the wider record. Every other phase is
+unchanged to within noise, which is the internal check that the change did what it says.
+
+The win is larger under thermal load, not smaller (r2 55.8 → 25.4 ms when hot), because
+the rebuild's compute is itself part of what generates the heat.
+
+SEEDF is the **default on Apple**. `MXBM_METAL_REBUILD=1` selects the CUDA-shipping
+configuration; both kernel pairs live in the same metallib and the host picks at runtime,
+so the A/B needs no rebuild.
+
+> An earlier revision of this section predicted this change would net only ~4 ms and
+> declined to attempt it. That arithmetic assumed ~251 GB/s effective bandwidth, inferred
+> by dividing round 3's traffic by its wall time — but round 3 is not purely
+> bandwidth-bound, so the real figure is far higher and the extra traffic much cheaper
+> than predicted. Measure the thing; do not divide two numbers and call it a bandwidth.
+
+### Three nulls, so they are not re-proposed
+
+- **Threadgroup size.** Bracketed medians over 10 solves: 128 → 144.6, 192 → 126.7,
+  256 → 117.0/117.3, 288 → 116.6, 320 → 116.8/116.9, 352 → 118.3, 384 → 136.0,
+  512 → 144.8. Flat across 256–320; the 0.3 ms between them is inside the spread. An
+  earlier single-solve sweep read 320 as a 1.2 % win — it did not replicate.
+- **Occupancy via smaller groups.** Cutting `kFCap` to fit two threadgroups per core's
+  32 KB, with `sm` raised to keep groups full, makes r2 monotonically *worse*:
+  (FCAP, sm) = (320,1) → 118.5, (192,2) → 125.3, (160,2) → 129.1, (128,3) → 178.0.
+  The extra groups pay table-init, barriers and sub-mask passes that outweigh anything
+  the occupancy buys. Apple is not occupancy-limited here in the way Ada is.
+- **128-bit vector loads and stores.** CUDA documents `4 x ST.128 + 1 x ST.64` beating
+  `9 x ST.64`, because round 3's top stall there is MIO-queue *instruction* issue.
+  Ported to `ulong2` on Metal it measures **neutral to slightly worse** (117.9 vs 117.1
+  median), so the scalar form is kept and the complexity is not. Apple's compiler
+  appears to coalesce these already.
+
+### A measurement hazard worth knowing
+
+Single-solve timings on this machine are thermally confounded. An identical
+configuration read 115 ms early in a sweep and 133 ms late, and one FCAP sweep drifted
+16.7 ms end to end — enough to invent a 14 % "win" out of nothing. Every figure above
+is a median over >= 10 solves with the baseline configuration repeated first *and last*;
+if the two brackets disagree by more than a millisecond or two, the run is discarded.
+
+Not tuned beyond the above: the `bb + sm = 17` line is carried over from Ada. Register
+counts are not observable on Metal (see `tests/test_metal_resources.mm`), so the
+occupancy work that produced Ada's numbers has no direct equivalent here.
+
+---
+
+**Reference hardware** for every measurement below: RTX 4070 Ti SUPER (Ada, sm_89,
+66 CUs, 16 GB, 48 KB LDS/workgroup, ~510 GB/s achievable copy bandwidth).
+
+**How to reproduce.** Two figures are quoted throughout, and they measure different things:
+
+- `./build/bench_rounds 20` — median over 20 runs of the **solver pipeline** (entry through
+  terminal). This is the controlled number used to make optimization decisions.
+- `./build/test_gpu_solver` — **end-to-end `GpuSolver::solve()`**, including survivor
+  readback, back-reference recovery and CPU verification. Take `solve #2` (steady state,
+  persistent buffers); `solve #1` pays one-off allocation. This is what a miner reports,
+  so it is the headline.
+
+Both are noisy at the ~1 ms level, so single samples are not meaningful — quote a median
+of at least 5. `MXBM_NO_ROWBUCKET=1` forces the fallback sort path.
+
+sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
 
 ---
 
