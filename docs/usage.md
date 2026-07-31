@@ -44,7 +44,7 @@ immediately; only a *missing* one defers to the config.
 | `--timeprint [0\|1]` | Stamp the average-speed line with `[HH:MM:SS]`. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one), or `auto` for the value a `--tune` run stored for this card. Needs root. | card default |
-| `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~20 min, no pool. | |
+| `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~25 min, no pool. | |
 | `--cclk MHz` | Lock the core clock. Needs root. | driver-managed |
 | `--mclk MHz` | Lock the memory clock. Needs root. | driver-managed |
 | `--coff MHz` | Shift the core voltage/frequency curve. May be negative. Needs root. | 0 |
@@ -88,15 +88,17 @@ produces the same table for **your** card, then recommends a wattage:
 sudo mxbm --tune
 ```
 
-About 20 minutes, in three passes: a discarded warmup, then six coarse points across
+About 25 minutes, in four passes: a discarded warmup, then six coarse points across
 the band your driver reports (60 s each, live mining path, CPU-verified sol/s) to
 locate the knee's neighbourhood; a second pass at ~10 W steps bracketing it — the
 coarse grid can only place the knee to within its own spacing, and the fine pass is
-what distinguishes, say, 220 from 248; then a third pass at your card's **low memory
+what distinguishes, say, 220 from 248; a third pass at your card's **low memory
 rung** (picked from the driver's own supported-clock list, held-clock verified every
 arm) at the capped points, because under a low cap the memory interface burns watts
 for bandwidth the slowed core cannot use, and on the reference card giving them back
-was worth 8–14 %. All passes feed one verdict. Last, the first point is measured again
+was worth 8–14 %; and a fourth pass that refines around the best-efficiency point
+found so far, on whichever memory clock it sits — the coarse spacing blurs the
+efficiency optimum exactly as it blurs the knee. All passes feed one verdict. Last, the first point is measured again
 as a drift gauge — if the card heated enough during the sweep to move the numbers by
 more than ±1.5 %, the table says so instead of pretending. It prints the curve plus
 three recommendations: the **knee** (the highest limit where each extra watt still

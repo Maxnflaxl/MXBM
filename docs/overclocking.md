@@ -69,13 +69,17 @@ cannot go wrong the three ways the 2026-07-31 session catalogued:
   uncertainty. This is not paranoia — un-gauged same-day sweeps on this card have
   disagreed by 2 %/arm from heat-soak alone.
 
-The sweep itself is **three passes** (default: ~20 min total): a coarse pass — 6
+The sweep itself is **four passes** (default: ~25 min total): a coarse pass — 6
 points across the band the *driver* reports, 60 s each, high to low, discarded warmup
 first — locates the knee's neighbourhood; a fine pass at ~10 W steps fills the two
 coarse intervals touching it (the step widens only if the bracket would otherwise
-exceed 8 points — refinement bounds the tail, it never restarts the sweep); and a
+exceed 8 points — refinement bounds the tail, it never restarts the sweep); a
 **rung pass** re-measures the coarse caps at or below the knee at the card's low
-memory rung. The rung candidate comes from the driver's own supported-clock list (the
+memory rung; and an **efficiency-refining pass** that brackets the best sol/s-per-watt
+point found so far the same way the fine pass brackets the knee, on whichever memory
+clock that point sits — without it the coarse spacing can hide the true optimum
+between two arms, which is exactly how the reference card's first full run missed
+its 160 W + rung record. The rung candidate comes from the driver's own supported-clock list (the
 largest clock below 70 % of the card's maximum, rejected under 20 % of it — nothing is
 inherited from the reference card's 5001), and every rung arm verifies from telemetry
 that the clock actually *held*: a refused rung prints REFUSED and is dropped, never

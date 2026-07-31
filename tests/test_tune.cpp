@@ -88,6 +88,16 @@ int main() {
         check(tune_refine_caps({{100, 0, 18, 0}, {105, 0, 19, 0}, {110, 0, 20, 0}},
                                105).empty(),
               "a bracket narrower than one step is already refined");
+
+        // Pass 4 reuses this function aimed at the best-EFFICIENCY cap, budget 4.
+        // The 2026-07-31 first full run's rung series: best efficiency measured at
+        // 137 W, but the true record sat at 160, between the 137 and 174 arms. With
+        // max_points=4 the step widens to 15 and 160 itself lands on the grid.
+        const std::vector<TunePoint> rung = {
+            {211, 206.4, 42.35, 0}, {174, 171.9, 41.84, 0},
+            {137, 137.2, 34.05, 0}, {100, 99.9, 22.08, 0}};
+        check(tune_refine_caps(rung, 137, 4) == std::vector<unsigned>({115, 130, 145, 160}),
+              "efficiency refinement lands arms inside the 137-174 gap that hid the record");
     }
 
     section("tune_rung_pick: the half-rate rung, from the driver's own list");

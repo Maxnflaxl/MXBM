@@ -134,9 +134,9 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     ui::console::info(fmt("Tuning %s: %zu power points x %d s%s, plus a warmup and a "
                           "drift gauge (~%d min%s). Ctrl+C aborts and restores %u W.",
                           device_key.c_str(), caps.size(), per,
-                          cfg.refine ? ", then a knee-refining second pass" : "",
+                          cfg.refine ? ", then knee- and efficiency-refining passes" : "",
                           (int)((caps.size() + 2) * (per + 6) / 60) + 1,
-                          cfg.refine ? " + the refinement" : "", pl0.current_w));
+                          cfg.refine ? " + the refinements" : "", pl0.current_w));
 
     // Restore on EVERY exit from here down. The original limit, not the default:
     // a user who had already capped the card outside MXBM gets their value back.
@@ -299,6 +299,63 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
                     gpu::nvml_reset_locked_mem_clock();
                     restore.mem = false;
                 }
+            }
+        }
+    }
+
+    // Pass 4: efficiency refinement. The coarse spacing that blurs the knee blurs
+    // the efficiency optimum the same way -- on the reference card the 37 W grid
+    // skipped ~160 W and the verdict missed the true record sitting between two
+    // rung arms. Refine the two intervals touching the best-efficiency point ON
+    // ITS OWN memory clock (stock or rung) and fold the points into that series,
+    // so the final verdict reads a locally dense curve.
+    if (cfg.refine) {
+        auto eff = [](const TunePoint& p) {
+            const double w = p.draw_w > 0.0 ? p.draw_w : (double)p.cap_w;
+            return w > 0.0 ? p.sol_s / w : 0.0;
+        };
+        double best = 0.0; unsigned best_cap = 0; bool on_rung = false;
+        for (const TunePoint& p : points)
+            if (eff(p) > best) { best = eff(p); best_cap = p.cap_w; }
+        for (const TunePoint& p : rung_pts)
+            if (eff(p) > best) { best = eff(p); best_cap = p.cap_w; on_rung = true; }
+        std::vector<TunePoint>& series = on_rung ? rung_pts : points;
+        std::vector<unsigned> ecaps = tune_refine_caps(series, best_cap, 4);
+        ecaps.erase(std::remove_if(ecaps.begin(), ecaps.end(), [&](unsigned c) {
+                        for (const TunePoint& p : series) if (p.cap_w == c) return true;
+                        return false;
+                    }), ecaps.end());
+        if (!ecaps.empty()) {
+            ui::console::info(fmt("  pass 4: best efficiency so far at %u W%s - "
+                                  "refining with %zu points x %d s (~%d min)...",
+                                  best_cap,
+                                  on_rung ? fmt(" on the %u MHz rung", rung_mhz).c_str() : "",
+                                  ecaps.size(), per,
+                                  (int)(ecaps.size() * (per + 6) / 60) + 1));
+            const unsigned mclk = on_rung ? rung_mhz : 0u;
+            for (unsigned cap : ecaps) {
+                ui::console::info(mclk
+                    ? fmt("  measuring %u W at %u MHz (%d s)...", cap, mclk, per)
+                    : fmt("  measuring %u W (%d s)...", cap, per));
+                TunePoint p;
+                if (!measure(cap, mclk, p)) {
+                    ui::console::info("--tune aborted; card restored");
+                    return 1;
+                }
+                if (p.cap_w == 0) {
+                    if (!restore.mem) break;   // lock refused outright: no more arms
+                    continue;                  // this arm's clock did not hold
+                }
+                ui::console::info(mclk
+                    ? fmt("    %u W @ %u MHz: %.2f sol/s, %.1f ms/solve, draw %.1f W",
+                          cap, mclk, p.sol_s, p.median_ms, p.draw_w)
+                    : fmt("    %u W: %.2f sol/s, %.1f ms/solve, draw %.1f W",
+                          cap, p.sol_s, p.median_ms, p.draw_w));
+                series.push_back(p);
+            }
+            if (restore.mem) {
+                gpu::nvml_reset_locked_mem_clock();
+                restore.mem = false;
             }
         }
     }
