@@ -885,6 +885,23 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     uint32_t bbv = 0; for (uint32_t t = pb.fb_num_buckets; t > 1u; t >>= 1) ++bbv;
     const uint32_t bucketBits = bbv;                  // as chosen by alloc_rowbucket
     const uint32_t submaskBits = pb.fb_submask_bits;
+    // LDS_PERFECT_TAB (default on) drops the walk's key compare on the strength of
+    // the 128-entry chain table being a PERFECT hash over the 24 - bb - sm bits that
+    // vary inside a group. Off the bb + sm >= 17 line that assumption breaks
+    // SILENTLY -- distinct keys would be combined as equal -- so refuse rather than
+    // mine wrong, the same check CudaSolver makes. An off-line experiment can pass
+    // MXBM_CL_OPTS="-DLDS_PERFECT_TAB=0" to restore the keyed walk (and this check
+    // steps aside when it sees that).
+    {
+        const std::string opts = rowbucket_cl_opts();
+        const bool perfectOff = opts.find("LDS_PERFECT_TAB=0") != std::string::npos;
+        if (!perfectOff && (int)(24 - bucketBits - submaskBits) > 7)
+            throw ClError(CL_INVALID_VALUE,
+                "geometry (" + std::to_string(bucketBits) + "," + std::to_string(submaskBits) +
+                ") leaves more than 7 varying key bits per group; the perfect chain table "
+                "needs bucket_bits + submask_bits >= 17. Use a geometry on that line, or pass "
+                "MXBM_CL_OPTS=-DLDS_PERFECT_TAB=0 to keep the keyed walk.");
+    }
     const uint32_t survCap = 1024;
     const uint32_t total = (b.elems_per_round != 0) ? b.elems_per_round : capacity;
     const uint32_t batch = (b.seed_batch != 0) ? b.seed_batch : total;

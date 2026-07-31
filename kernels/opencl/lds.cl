@@ -275,10 +275,49 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 // AND the (lead,gi) tiebreak. Validated vs ref::cpu_round in test_lds_collide.
 // Full-width (7 u64) first for correctness; per-round compaction layers on later.
 // ===========================================================================
+// Group cap for the shipped fused kernels. It used to be 384 because it had to cover
+// the group's TAIL; LDS_SPILL removes that obligation by splitting an overflowing
+// group on one more key bit, so it can sit near the MEAN (264 on the bb + sm = 17
+// line). Smaller cap -> smaller __local footprint -> a second workgroup per SM
+// becomes reachable inside the 48 KB OpenCL exposes. Values mirror the CUDA side
+// (kFCap 320, MXBM_R1_FCAP 288); sweep via MXBM_CL_OPTS="-DLDS_FCAP=...".
+// The generic round_fused_lds keeps its own pinned 384 (see the instantiations).
 #ifndef LDS_FCAP
-#ifndef LDS_FCAP
-#define LDS_FCAP 384u        // fat-element group cap (work+leaves in LDS -> smaller than LDS_ECAP)
+#define LDS_FCAP 320u        // fat-element group cap, r2..r4 (near the group mean; spill covers the tail)
 #endif
+#ifndef LDS_FCAP_R1
+#define LDS_FCAP_R1 288u     // round 1 stages only 64 B/element, so it affords a tighter cap
+#endif
+// Chain table for the shipped kernels: 24 - bb - sm = 7 varying key bits on the
+// bb + sm = 17 line, so 128 entries is a PERFECT hash (see LDS_PERFECT_TAB below).
+// 512 never addressed more than 128 of them. round_fused_lds keeps LDS_TABSIZE.
+#ifndef LDS_FTAB
+#define LDS_FTAB 128u
+#endif
+// LDS_PERFECT_TAB: drop lkey entirely, and with it the key comparison in the walk.
+// Within a group the bucket fixes the key's top bb bits and the sub-mask its bottom
+// sm; when the table covers the 24 - bb - sm bits left varying, two elements share a
+// chain if and only if they share the full key, so `lkey[oth] == key` is a tautology
+// and the array re-derives a value word 0 of lwork already carries. Worth 4 B/element
+// of __local AND a shared load + branch out of the walk's innermost loop.
+// UNSAFE off the bb + sm = 17 line -- run_pipeline_rowbucket checks and refuses.
+#ifndef LDS_PERFECT_TAB
+#define LDS_PERFECT_TAB 1
+#endif
+// LDS_SPILL: when a group overflows FCAP, SPLIT it on one more key bit and redo,
+// instead of dropping the overflow. Splitting is exactly safe -- two elements whose
+// keys differ in the added bit can never collide, so no pair is lost or doubled --
+// and it is self-limiting: the split halves the group and overflow is rare, so the
+// redone work lands on a few per cent of groups. gcount counts UNCLAMPED (staging
+// stops writing past FCAP but keeps counting), so the true group size is known and
+// the split decision is uniform across the workgroup.
+#ifndef LDS_SPILL
+#define LDS_SPILL 1
+#endif
+// Terminal round (round5_fused_lds) stages only 24 B/element -- its cap never
+// constrained occupancy and must not be dragged down when LDS_FCAP is tuned.
+#ifndef LDS_TCAP
+#define LDS_TCAP 384u
 #endif
 #define LDS_FLEAF 8u         // max parent leaf prefix staged (sleaves_for(<=4) = 8)
 
@@ -548,7 +587,12 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
 //   [W+1 ..]    leaf payload, two u32 packed per u64 (or the u64 leftContrib)
 // Strides are runtime args; every LOOP BOUND stays compile-time so the word loops
 // still fully unroll (a runtime loop bound cost +24 ms here before).
-#define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR) \
+// FCAP / TAB / PERFECT / SPILL are per-instantiation parameters (the 2026-07-26 CUDA
+// match wins, backported): the shipped per-round kernels run the perfect table and
+// spill at a near-mean cap, while the generic round_fused_lds -- validated by tests
+// at arbitrary geometries where the perfect-hash argument does not hold -- keeps the
+// legacy behavior (tail-covering 384, keyed walk, drop-on-overflow).
+#define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR, FCAP, TAB, PERFECT, SPILL) \
 __kernel __attribute__((reqd_work_group_size(LDS_WG, 1, 1)))                          \
 void NAME(                                                                            \
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
@@ -562,28 +606,44 @@ void NAME(                                                                      
     __global uint* restrict all_left, __global uint* restrict all_right,              \
     __global uint* restrict gi_counter, __global uint* restrict drops,                \
     __global const ulong* restrict pp4) {                                            \
-    __local ulong lwork[(INW) * LDS_FCAP];                                            \
-    __local uint  lgi[LDS_FCAP]; __local uint llead[LDS_FCAP];                        \
-    __local uint  lleaf[(LEAFW) * LDS_FCAP];                                          \
-    __local uint  lkey[LDS_FCAP]; __local uint lchain[LDS_FCAP];                      \
-    __local uint  tab[LDS_TABSIZE]; __local uint gcount;                              \
+    /* Mode-dependent sizes. Round 1's gi IS its leaf (both are the seed index), so  \
+       LMODE_SEED keeps ONE copy in lleaf and lgi collapses. `lead` is leaf 0 of the \
+       element's own prefix in every mode whose payload is leaves, so only LMODE_USE \
+       (contrib payload) and the generic RAW keep a separate llead. lkey exists only \
+       when the table is not a perfect hash. */                                       \
+    __local ulong lwork[(INW) * (FCAP)];                                              \
+    __local uint  lgi[((LMODE) == LMODE_SEED) ? 1 : (FCAP)];                          \
+    __local uint  llead[((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW) ? (FCAP) : 1]; \
+    __local uint  lleaf[(LEAFW) * (FCAP)];                                            \
+    __local uint  lkey[(PERFECT) ? 1 : (FCAP)];                                       \
+    __local uint  lchain[(FCAP)];                                                     \
+    __local uint  tab[(TAB)]; __local uint gcount;                                    \
+    __local uint  cnt8[(SPILL) ? 8 : 1];                                              \
     uint lId = get_local_id(0);                                                       \
     uint submaskCount = 1u << submask_bits;                                           \
     uint bucket = get_group_id(0) / submaskCount;                                     \
     uint mask   = get_group_id(0) % submaskCount;                                     \
-    if (lId == 0) gcount = 0;                                                         \
-    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;              \
-    barrier(CLK_LOCAL_MEM_FENCE);                                                     \
     uint cnt = in_counts[bucket];                                                     \
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;                                     \
     size_t base = (size_t)bucket * in_bucket_cap;                                     \
+    /* SPILL state: xb = extra split bits (level chosen ONCE, never escalated -- an  \
+       escalation after a walk would re-emit the coarser parts' children), xp = the  \
+       part being processed this pass, nparts = 1 << xb. Without SPILL the loop runs \
+       exactly once and this is the old kernel. */                                    \
+    uint xb = 0u, xp = 0u, nparts = 1u, counted = 0u;                                 \
+    while (xp < nparts) {                                                             \
+    uint sbits = submask_bits + xb;                                                   \
+    uint pmask = mask | (xp << submask_bits);                                         \
+    if (lId == 0) gcount = 0;                                                         \
+    for (uint i = lId; i < (TAB); i += LDS_WG) tab[i] = LDS_EMPTY;                    \
+    barrier(CLK_LOCAL_MEM_FENCE);                                                     \
     for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
         size_t d = (base + p) * (INSTR);                                              \
         ulong rec0 = in_belem[d];                                                     \
         uint key = (uint)(rec0 & 0xFFFFFFu);                                          \
-        if ((key & (submaskCount - 1u)) != mask) continue;                            \
+        if ((key & ((1u << sbits) - 1u)) != pmask) continue;                          \
         uint pos = atomic_inc(&gcount);                                               \
-        if (pos < LDS_FCAP) {                                                         \
+        if (pos < (FCAP)) {                                                           \
             if ((LMODE) == LMODE_SEED) {                                              \
                 /* Round-1 elements are SEEDS: the record is just (index,key) and the \
                    56 B work state is RE-DERIVED. Recompute measured 2.5 ms vs 18.2 ms \
@@ -591,23 +651,27 @@ void NAME(                                                                      
                    Only the INDEX is captured here -- the expensive derivation happens \
                    in the DEFERRED EXPAND below, where every lane is active. This      \
                    staging loop runs 8 sub-mask passes at ~4/32 lanes; the expand loop \
-                   runs once at 32/32. See "non-divergent expand" in docs/performance.md. */ \
-                lgi[pos] = (uint)(rec0 >> 32); lkey[pos] = key;                       \
+                   runs once at 32/32. See "non-divergent expand" in docs/performance.md. \
+                   gi == lead == leaf 0 for a seed, so ONE lleaf slot carries all      \
+                   three (LEAFW is 1 for this mode). */                                \
+                lleaf[pos*(LEAFW)] = (uint)(rec0 >> 32);                              \
+                if (!(PERFECT)) lkey[pos] = key;                                      \
             } else if ((LMODE) == LMODE_RD2) {                                        \
                 /* Unpack the 16 B pair record. Cheap field extraction only -- the     \
                    two seed derivations are deferred to the expand loop below. */      \
                 ulong rec1 = in_belem[d + 1u];                                        \
                 uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
-                lgi[pos] = rd2_gi(rec1); llead[pos] = li; lkey[pos] = key;            \
+                lgi[pos] = rd2_gi(rec1);                                              \
+                if (!(PERFECT)) lkey[pos] = key;                                      \
                 lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
             } else if ((LMODE) == LMODE_RD3) {                                        \
                 /* 24 B QUAD record: key, four leaves, gi -- no work words. Three     \
                    scalar loads where LMODE_EMIT below reads nine. Field extraction    \
                    only; the two round-2 rebuilds are deferred to the expand loop. */  \
                 ulong w1 = in_belem[d + 1u], w2 = in_belem[d + 2u];                   \
-                uint l0 = rd2_left(rec0);                                             \
-                lgi[pos] = rd3_gi(w2); llead[pos] = l0; lkey[pos] = key;               \
-                lleaf[pos*(LEAFW) + 0] = l0;                                           \
+                lgi[pos] = rd3_gi(w2);                                                 \
+                if (!(PERFECT)) lkey[pos] = key;                                       \
+                lleaf[pos*(LEAFW) + 0] = rd2_left(rec0);                               \
                 lleaf[pos*(LEAFW) + 1] = rd3_i1(w1);                                   \
                 lleaf[pos*(LEAFW) + 2] = rd3_i2(w1);                                   \
                 lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                   \
@@ -615,9 +679,9 @@ void NAME(                                                                      
                 /* 72 B round-3 record: 7 work words then the packed leaves+gi. */     \
                 for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
                 ulong p0 = in_belem[d + (INW)], p1 = in_belem[d + (INW) + 1u];        \
-                uint l0 = r3_l0(p0);                                                  \
-                lgi[pos] = r3_gi(p1); llead[pos] = l0; lkey[pos] = key;               \
-                lleaf[pos*(LEAFW) + 0] = l0;                                          \
+                lgi[pos] = r3_gi(p1);                                                 \
+                if (!(PERFECT)) lkey[pos] = key;                                      \
+                lleaf[pos*(LEAFW) + 0] = r3_l0(p0);                                   \
                 lleaf[pos*(LEAFW) + 1] = r3_l1(p0);                                   \
                 lleaf[pos*(LEAFW) + 2] = r3_l2(p0, p1);                               \
                 lleaf[pos*(LEAFW) + 3] = r3_l3(p1);                                   \
@@ -630,28 +694,62 @@ void NAME(                                                                      
                    an LDS round-trip. Divergence costs compute, not bandwidth. */      \
                 for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
                 ulong meta = in_belem[d + (INW)];                                     \
-                lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key; \
+                lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta;               \
+                if (!(PERFECT)) lkey[pos] = key;                                      \
                 for (uint i = 0; i < (SIN); ++i)                                      \
                     lleaf[pos*(LEAFW) + i] =                                          \
                         (uint)(in_belem[d + (INW) + 1u + (i >> 1)] >> ((i & 1u) * 32u)); \
             }                                                                         \
-        } else atomic_inc(&drops[1]);                                                \
+        } else if (!(SPILL)) atomic_inc(&drops[1]);                                   \
     }                                                                                \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
-    uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;                               \
+    if ((SPILL) && gcount > (FCAP)) {                                                 \
+        if (!counted) {                                                               \
+            /* One word-0 pass counts all 8 possible sub-parts at once, so the split  \
+               level is picked from real sizes rather than discovered by trial. Paid  \
+               only by the few per cent of groups that overflow. The reads are the    \
+               same rescan word-0 reads the staging loop makes -- L2-resident. */     \
+            if (lId < 8u) cnt8[lId] = 0u;                                             \
+            barrier(CLK_LOCAL_MEM_FENCE);                                             \
+            for (uint p = lId; p < cnt; p += LDS_WG) {                                \
+                uint k2 = (uint)(in_belem[(base + p) * (INSTR)] & 0xFFu);             \
+                if ((k2 & (submaskCount - 1u)) != mask) continue;                     \
+                atomic_inc(&cnt8[(k2 >> submask_bits) & 7u]);                         \
+            }                                                                         \
+            barrier(CLK_LOCAL_MEM_FENCE);                                             \
+            uint lv = 1u;                                                             \
+            for (; lv <= 3u; ++lv) {                                                  \
+                uint mx = 0u;                                                         \
+                for (uint q = 0u; q < (1u << lv); ++q) {                              \
+                    uint sz = 0u;                                                     \
+                    for (uint i = 0u; i < 8u; ++i)                                    \
+                        if ((i & ((1u << lv) - 1u)) == q) sz += cnt8[i];              \
+                    if (sz > mx) mx = sz;                                             \
+                }                                                                     \
+                if (mx <= (FCAP)) break;                                              \
+            }                                                                         \
+            xb = lv > 3u ? 3u : lv;                                                   \
+            nparts = 1u << xb; xp = 0u; counted = 1u;                                 \
+            barrier(CLK_LOCAL_MEM_FENCE);                                             \
+            continue;                                                                 \
+        }                                                                             \
+        /* Only reachable if the chosen split still overflows, which the count rules  \
+           out at any cap the shipped geometries use. */                              \
+        if (lId == 0) atomic_add(&drops[1], gcount - (FCAP));                         \
+    }                                                                                 \
+    uint total = gcount < (FCAP) ? gcount : (FCAP);                                   \
     for (uint pos = lId; pos < total; pos += LDS_WG) {                               \
         if (!ABL_HIT(2, LMODE) && (LMODE) == LMODE_SEED) {                                    \
             /* DEFERRED EXPAND -- the whole point of splitting the stage. Every lane  \
                here is active (total ~= 256 == LDS_WG, one iteration), whereas the    \
                staging loop above is sub-mask filtered to ~1/8 of its lanes. Same     \
                number of seeds derived, 8x the SIMD utilization. */                   \
-            uint idx = lgi[pos];                                                      \
+            uint idx = lleaf[pos*(LEAFW)];                                            \
             ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
             ulong se[7]; bh3_seed_element(pp, idx, se);                               \
             uint t1[1] = { idx };                                                     \
             se[0] = bh3_apply_mix(se, t1, 1u, 448u);                                  \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = se[w];            \
-            llead[pos] = idx; lleaf[pos*(LEAFW) + 0] = idx;                           \
         }                                                                             \
         if (!ABL_HIT(2, LMODE) && (LMODE) == LMODE_RD2) {                                     \
             /* DEFERRED EXPAND, round 2: rebuild the 56 B work state from the two      \
@@ -679,17 +777,26 @@ void NAME(                                                                      
             cc[0] = bh3_apply_mix(cc, t4, 4u, 400u);                                   \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
         }                                                                             \
-        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);                   \
+        /* lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode --   \
+           and it is filled by this point (the derive modes fill it just above). */   \
+        uint hkk = (PERFECT) ? (uint)(lwork[pos*(INW)] & 0xFFFFFFu) : lkey[pos];      \
+        uint hk = (hkk >> submask_bits) & ((TAB) - 1u);                               \
         lchain[pos] = atomic_xchg(&tab[hk], pos);                                     \
     }                                                                                \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
     for (uint pos = lId; pos < total; pos += LDS_WG) {                               \
-        uint key = lkey[pos];                                                         \
+        uint key = (PERFECT) ? 0u : lkey[pos];                                        \
         uint oth = lchain[pos], walk = 0;                                             \
         while (oth != LDS_EMPTY) {                                                    \
             if (++walk > 64u) { atomic_inc(&drops[3]); break; }                      \
-            if (!ABL_HIT(4, LMODE) && lkey[oth] == key) {                                     \
-                uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];  \
+            /* Perfect table => same chain means same full key; the compare folds. */ \
+            if (!ABL_HIT(4, LMODE) && ((PERFECT) || lkey[oth] == key)) {              \
+                uint la = ((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW)              \
+                              ? llead[pos] : lleaf[pos*(LEAFW)];                      \
+                uint lb = ((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW)              \
+                              ? llead[oth] : lleaf[oth*(LEAFW)];                      \
+                uint ga = ((LMODE) == LMODE_SEED) ? lleaf[pos*(LEAFW)] : lgi[pos];    \
+                uint gb = ((LMODE) == LMODE_SEED) ? lleaf[oth*(LEAFW)] : lgi[oth];    \
                 uint leftPos = pos, rightPos = oth;                                   \
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; } \
                 if (LEADTIE_PROBE && lb == la) atomic_inc(&drops[3]);                 \
@@ -770,34 +877,53 @@ void NAME(                                                                      
                         }                                                             \
                     }                                                                 \
                     if (!ABL_HIT(8, LMODE)) {                                         \
-                      all_left[out_off + cgi] = lgi[leftPos]; all_right[out_off + cgi] = lgi[rightPos]; \
+                      all_left[out_off + cgi]  = ((LMODE) == LMODE_SEED)              \
+                          ? lleaf[leftPos*(LEAFW)]  : lgi[leftPos];                   \
+                      all_right[out_off + cgi] = ((LMODE) == LMODE_SEED)              \
+                          ? lleaf[rightPos*(LEAFW)] : lgi[rightPos];                  \
                     }                                                                 \
                 } else atomic_inc(&drops[2]);                                         \
             }                                                                        \
             oth = lchain[oth];                                                        \
         }                                                                            \
     }                                                                                \
+    barrier(CLK_LOCAL_MEM_FENCE);       /* next spill pass reuses every array above */ \
+    ++xp;                                                                             \
+    }                                                                                 \
 }
-// (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE). LEAFW is per-round rather
-// than a fixed 8, which also trims LDS: r1/r2 stage <=2 leaves, r3 stages 4, r4 the
-// 2-uint contrib.
-FUSED_LDS(round_fused_seed, 7, 7, 2, LMODE_SEED, 424u, 2u, 1u, 2u, 2u, 1u, 2u)  // r1: seeds in, 16 B pair record out
-FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 9u)    // r2: re-derives from the pair record
+// (INW, OUTW, LEAFW = LDS leaf-payload uints/elem, LMODE, ..., FCAP, TAB, PERFECT,
+// SPILL). LEAFW is per-round rather than a fixed 8, which also trims LDS: r1 stages
+// ONE uint (gi == lead == leaf 0 == the seed index), r2 two leaves, r3 four, r4 the
+// 2-uint contrib. The shipped kernels run the perfect 128-entry table and spill at a
+// near-mean cap (r1 288, rest 320); MXBM_CL_OPTS -D overrides restore the old
+// configuration at runtime for A/Bs.
+FUSED_LDS(round_fused_seed, 7, 7, 1, LMODE_SEED, 424u, 2u, 1u, 2u, 2u, 1u, 2u,
+          LDS_FCAP_R1, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)  // r1: seeds in, 16 B pair record out
+FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 9u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r2: re-derives from the pair record
 // RUNTIME-PARAMETERISED variant: the constants are the kernel's own runtime args, so
 // this one kernel still validates the fused mechanism generically across r=1..4
 // (tests/test_lds_collide.cpp, test_fused_round). Not on the pipeline path -- the four
 // shipped kernels above bake their per-round constants in, which is worth ~26 ms.
-// Lout(r) == Lmix(r+1) for every round, so `Lout` serves both roles.
-FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild, in_stride, out_stride)
-FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 9u, 8u)   // r3 fallback (full packed record)
+// Lout(r) == Lmix(r+1) for every round, so `Lout` serves both roles. It keeps the
+// LEGACY configuration -- tail cap 384, 512-entry keyed table, no spill -- because its
+// tests run it at geometries (e.g. bits=11, submask=0) where the perfect-hash argument
+// does not hold.
+FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild, in_stride, out_stride,
+          384u, LDS_TABSIZE, 0, 0)
+FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 9u, 8u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r3 fallback (full packed record)
 // QUAD-RECORD PAIR (rowbucket_geom.h `quad`). Only the strides and round 3's mode
 // change: the record carries the same INFORMATION either way, just not the same bytes.
 // r2 emits 3 u64 instead of 9, and set 0's stride collapses 9 -> 3 with it, which is
 // what takes the largest single allocation from 2.76 to 2.45 GiB -- under the
 // CL_DEVICE_MAX_MEM_ALLOC_SIZE of an 11 GB card, which is why this exists on OpenCL.
-FUSED_LDS(round_fused_rd2q, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 3u)    // r2: emits the 24 B quad record
-FUSED_LDS(round_fused_rd3,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 3u, 8u)    // r3: rebuilds from it
-FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u)    // r4: stages contrib, no leaf emit
+FUSED_LDS(round_fused_rd2q, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 3u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r2: emits the 24 B quad record
+FUSED_LDS(round_fused_rd3,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 3u, 8u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r3: rebuilds from it
+FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r4: stages contrib, no leaf emit
 
 // ENTRY (round 1) for the fused row-bucket path: seed_element + apply_mix(Lmix=448,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
@@ -855,11 +981,14 @@ void round5_fused_lds(
     #define LDS_R5W 1u
     #define LDS_R5STR 2u     // kFbStride[5]: 1 work word + meta
     #define LDS_R5LOUT 24u   // Lout(5); see the note at the combine below
-    __local ulong lwork[LDS_R5W * LDS_FCAP];
-    __local uint  lgi[LDS_FCAP];
-    __local uint  llead[LDS_FCAP];
-    __local uint  lkey[LDS_FCAP];
-    __local uint  lchain[LDS_FCAP];
+    // LDS_TCAP, not LDS_FCAP: this kernel stages 24 B/element, an eighth of a round
+    // block, so its cap never constrained occupancy -- it keeps covering the group
+    // TAIL rather than inheriting the spill-backed near-mean cap of the rounds.
+    __local ulong lwork[LDS_R5W * LDS_TCAP];
+    __local uint  lgi[LDS_TCAP];
+    __local uint  llead[LDS_TCAP];
+    __local uint  lkey[LDS_TCAP];
+    __local uint  lchain[LDS_TCAP];
     __local uint  tab[LDS_TABSIZE];
     __local uint  gcount;
 
@@ -880,14 +1009,14 @@ void round5_fused_lds(
         uint key = (uint)(in_belem[d] & 0xFFFFFFu);
         if ((key & (submaskCount - 1u)) != mask) continue;
         uint pos = atomic_inc(&gcount);
-        if (pos < LDS_FCAP) {
+        if (pos < LDS_TCAP) {
             for (uint w = 0; w < LDS_R5W; ++w) lwork[pos*LDS_R5W + w] = in_belem[d + w];
             ulong meta = in_belem[d + LDS_R5W];
             lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key;
         } else atomic_inc(&drops[1]);
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    uint total = gcount < LDS_FCAP ? gcount : LDS_FCAP;
+    uint total = gcount < LDS_TCAP ? gcount : LDS_TCAP;
 
     for (uint pos = lId; pos < total; pos += LDS_WG) {
         uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);
