@@ -329,7 +329,24 @@ MATCH_SORTED_W(round_match_sorted_5_1, 5, 1)   // r5: in 5 words, child 1
 //
 // Nothing else changes: this is the same contract, the same emission order, and the
 // goldens are byte-identical.
-#define MATCH_SORTED_K(NAME, INW, OUTW, LOUT, LEADID, SIN, SOUT)                  \
+//
+// PINU (2026-07-31): __local BALLAST, in uints, to pin OCCUPANCY -- 0 for the shipped
+// kernels. The k1/k2 regression's named mechanism is that constant-folding dropped
+// this kernel from the generic's 48 registers to 40, raising residency from 5 to 6
+// workgroups/SM, and the extra warps cost a gather-bound kernel more in cache
+// locality than they buy in latency hiding (the same shape as the capped-generic
+// probe: forcing the GENERIC to 40 regs cost r1 +4.9 / r2 +9.5 ms). The untried
+// corollary: keep the constants, give the occupancy back. The ballast array is
+// touched only under a runtime condition that never holds (out_capacity is never 0
+// on a real launch), so it is live to the compiler and free at run time. Sweep the
+// size with MXBM_CL_OPTS="-DKPIN_UINTS=N": the per-SM local-memory budget this
+// driver schedules against is not documented, so the pin point is found by sweep --
+// 2400 uints (9.6 KB) caps at 5 workgroups under a 48 KB/SM budget, 4352 (17.4 KB)
+// under a 100 KB one.
+#ifndef KPIN_UINTS
+#define KPIN_UINTS 2400u
+#endif
+#define MATCH_SORTED_K(NAME, INW, OUTW, LOUT, LEADID, SIN, SOUT, PINU)            \
 __kernel void NAME(uint N, uint Lout, uint lead_identity,                         \
                    uint out_off, uint out_capacity,                              \
                    __global const ulong* sorted_pairs,                           \
@@ -341,7 +358,12 @@ __kernel void NAME(uint N, uint Lout, uint lead_identity,                       
                    __global const uint* leaves_in,                              \
                    __global uint* leaves_out,                                    \
                    uint s_in, uint s_out) {                                       \
+    __local uint pin_[(PINU) != 0 ? (PINU) : 1];                                  \
     uint g = get_global_id(0);                                                   \
+    if ((PINU) != 0 && out_capacity == 0u) {   /* never at run time; keeps pin_ live */ \
+        pin_[g % ((PINU) != 0 ? (PINU) : 1)] = N;                                \
+        counters[3] = pin_[0];                                                   \
+    }                                                                            \
     if (g >= N) return;                                                          \
     uint ka = sort_key(sorted_pairs[g]);                                         \
     if (g > 0 && sort_key(sorted_pairs[g - 1]) == ka) return;                    \
@@ -458,9 +480,14 @@ __kernel void round_match_seed(uint N, uint Lout, uint lead_identity,
 // and is roughly free-to-negative where it only removes comparisons. Match has no
 // dynamically-indexed private array -- ea/eb/ec are indexed by unrolled loop counters --
 // so there was never a cliff here to find.
-//                     name                  INW OUTW  Lout  leadId sIn sOut
-MATCH_SORTED_K(round_match_k1, 7, 7, 424u, 1, 1, 2)   // r1: LOSES, not selected
-MATCH_SORTED_K(round_match_k2, 7, 7, 400u, 0, 2, 4)   // r2: LOSES, not selected
-MATCH_SORTED_K(round_match_k3, 7, 6, 376u, 0, 4, 8)
-MATCH_SORTED_K(round_match_k4, 6, 5, 288u, 0, 8, 9)
-MATCH_SORTED_K(round_match_k5, 5, 1,  24u, 0, 9, 0)   // r5: no child leaves at all
+//                     name                  INW OUTW  Lout  leadId sIn sOut PINU
+MATCH_SORTED_K(round_match_k1, 7, 7, 424u, 1, 1, 2, 0u)   // r1: LOSES, not selected
+MATCH_SORTED_K(round_match_k2, 7, 7, 400u, 0, 2, 4, 0u)   // r2: LOSES, not selected
+MATCH_SORTED_K(round_match_k3, 7, 6, 376u, 0, 4, 8, 0u)
+MATCH_SORTED_K(round_match_k4, 6, 5, 288u, 0, 8, 9, 0u)
+MATCH_SORTED_K(round_match_k5, 5, 1,  24u, 0, 9, 0, 0u)   // r5: no child leaves at all
+// The occupancy-pinned pair (the ballast experiment above). Selected only under
+// MXBM_MATCH_K12=2; MXBM_MATCH_K12=1 selects the unpinned k1/k2 so the original
+// regression stays re-measurable in the same binary.
+MATCH_SORTED_K(round_match_k1p, 7, 7, 424u, 1, 1, 2, KPIN_UINTS)
+MATCH_SORTED_K(round_match_k2p, 7, 7, 400u, 0, 2, 4, KPIN_UINTS)

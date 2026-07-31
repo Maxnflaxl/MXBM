@@ -651,6 +651,16 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
                                              "round_match_k4", "round_match_k5" };
                 matchName = kK[r];
             }
+            // MXBM_MATCH_K12: opt r1/r2 into the constant kernels the measured
+            // regression keeps un-selected. 1 = plain k1/k2 (re-measures the
+            // regression); 2 = the occupancy-pinned k1p/k2p (the ballast
+            // experiment -- same constants, the generic kernel's residency).
+            else if (!runtimeMatch && r <= 2) {
+                static const int k12 = std::getenv("MXBM_MATCH_K12")
+                                     ? atoi(std::getenv("MXBM_MATCH_K12")) : 0;
+                if (k12 == 1) matchName = (r == 1) ? "round_match_k1"  : "round_match_k2";
+                if (k12 == 2) matchName = (r == 1) ? "round_match_k1p" : "round_match_k2p";
+            }
             else if (r == 3) matchName = "round_match_sorted_7_6";
             else if (r == 4) matchName = "round_match_sorted_6_5";
             else if (r == 5) matchName = "round_match_sorted_5_1";
