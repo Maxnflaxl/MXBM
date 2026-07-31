@@ -2648,6 +2648,55 @@ Artifacts: `docs-internal/rootruns/rung-compose/`.
 
 </details>
 
+### The round-2 instruction census: 86.5 % hash arithmetic, and one named lever
+
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, ncu `--set full` on the shipping r2 instantiation — the fused
+round at (16,1), 64 regs, 23.6 KB shared, 131072×256 — profiled at stock,
+priced for the floor. The eco attribution had named r2 as the floor's largest
+and growing item; this is the census it asked for. Retired-instruction counts
+are clock-invariant, so a stock profile transfers: r2's 26.19 M elapsed cycles
+÷ the floor's 0.885 GHz = 29.6 ms, against the attribution's measured 29.4 —
+the floor's r2 time is fully explained by cycles × clock, and every cycle cut
+at stock converts 1:1 to floor milliseconds.)*
+
+**The mix.** 3.30 G executed instructions per kernel; the ALU quartet is
+86.5 % of them — LOP3 28.8 %, SHF 27.8 %, IMAD 16.9 %, IADD3 13.0 %. The
+stream IS the hash arithmetic (rotates and xors), which is why ALU is the top
+pipe (69.9 %) and why the compiler axis had nothing: there is no fat here,
+only work. LDS is 2.8 %, stores 0.8 %. IPC 1.91; 16.5 warp-cycles per issued
+instruction; 25.07/32 average active threads (the rescan filter's designed
+divergence). Zero spills; occupancy exactly the contract's 4 blocks, registers
+AND shared both binding.
+
+**Known-structural, re-confirmed with numbers**: the scatter's uncoalesced
+stores (45 % excessive L2 sectors; the claim atomic runs at 81 % excess) are
+the all-to-all bucket layout the ledger closed; nothing new there.
+
+**The one named lever: shared-memory bank conflicts at the staged-record
+read.** 39 % of shared-load wavefronts are conflict replays (74 M of 189 M,
+2.1-way average), and the source page localizes nearly all of it to two
+clusters of seven consecutive `LDS.64` — the 7-u64 (56 B, 14-word) staged
+record. Stride 14 words over 32 banks → gcd(14, 32) = 2 → exactly the 2-way
+measured. The design KNEW this: fused_round.cuh's staging comment prices
+conflict degree by stride and chose an odd u64 stride as the stride-family
+floor (odd = 2-way, even = 4+). What was never priced is an XOR swizzle to
+1-way — and the census shows it is cheap to try: the seven loads share one
+base register computed once per element, so a swizzle is ~one ALU op per
+element (~0.5 % of the ALU budget), not per access. Constraints for the probe
+(now lead 2.9): shared memory is a binding occupancy resource (24.6 of
+25.6 KB at 4 blocks), so any layout that grows the arrays loses the fourth
+resident block and with it more than conflicts pay — swizzle in place, never
+pad. Honest pricing: ncu's 16.9 % estimate is an upper bound; the kernel is
+"well-balanced" at stock so replay removal may convert weakly there, but the
+floor is core-bound, where LSU replay cycles are the scarce currency, and r2
+is 33 % of the floor's time. Sign unknown; a KAT-gated ABBA at stock and
+100 W closes it either way. Report: `docs-internal/rootruns/r2-census.ncu-rep`.
+
+</details>
+
 ### The compiler axis, re-swept on the July kernels — a clean null
 
 <details>
