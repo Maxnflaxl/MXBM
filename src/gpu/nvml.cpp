@@ -12,6 +12,7 @@ using nvmlReturn_t = int;
 constexpr nvmlReturn_t NVML_SUCCESS        = 0;
 constexpr nvmlReturn_t NVML_ERROR_NOT_SUPPORTED = 3;
 constexpr nvmlReturn_t NVML_ERROR_NO_PERMISSION = 4;
+constexpr nvmlReturn_t NVML_ERROR_INSUFFICIENT_SIZE = 7;
 using nvmlDevice_t = void*;
 
 void*        g_lib = nullptr;
@@ -35,6 +36,7 @@ nvmlReturn_t (*p_clock)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_temp)(nvmlDevice_t, int, unsigned*) = nullptr;
 nvmlReturn_t (*p_fan)(nvmlDevice_t, unsigned*) = nullptr;
 nvmlReturn_t (*p_driver)(char*, unsigned) = nullptr;
+nvmlReturn_t (*p_name)(nvmlDevice_t, char*, unsigned) = nullptr;
 // Takes an nvmlPciInfo_t*; see nvml_pci_address() for how it is passed.
 nvmlReturn_t (*p_pci)(nvmlDevice_t, void*) = nullptr;
 // Cumulative energy since driver load, in millijoules.
@@ -98,6 +100,7 @@ bool nvml_init() {
     bind(p_temp,     "nvmlDeviceGetTemperature");
     bind(p_fan,      "nvmlDeviceGetFanSpeed");
     bind(p_driver,   "nvmlSystemGetDriverVersion");
+    bind(p_name,     "nvmlDeviceGetName");
     bind(p_pci,      "nvmlDeviceGetPciInfo_v3");
     if (!p_pci) bind(p_pci, "nvmlDeviceGetPciInfo_v2");
     bind(p_energy,         "nvmlDeviceGetTotalEnergyConsumption");
@@ -228,14 +231,30 @@ PowerLimit read_power_limit(nvmlDevice_t dev) {
 PowerLimit nvml_power_limit()                  { return read_power_limit(g_dev); }
 PowerLimit nvml_power_limit_at(unsigned index) { return read_power_limit(dev_at(index)); }
 
+std::string nvml_device_name(unsigned index) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_name || !d) return "";
+    char buf[96] = {0};                       // NVML_DEVICE_NAME_V2_BUFFER_SIZE
+    if (p_name(d, buf, sizeof buf) != NVML_SUCCESS) return "";
+    return buf;
+}
+
 std::vector<unsigned> nvml_supported_mem_clocks(unsigned index) {
     std::vector<unsigned> out;
     nvmlDevice_t d = dev_at(index);
     if (!g_ready || !p_memclocks || !d) return out;
+    // The count is in/out: on INSUFFICIENT_SIZE it holds the required capacity,
+    // so retry once at that size instead of silently returning nothing (which
+    // would make --tune skip its rung pass on a card with a long clock list).
     unsigned n = 32;
-    unsigned clocks[32] = {0};
-    if (p_memclocks(d, &n, clocks) != NVML_SUCCESS || n > 32) return out;
-    out.assign(clocks, clocks + n);
+    std::vector<unsigned> clocks(n, 0);
+    nvmlReturn_t rc = p_memclocks(d, &n, clocks.data());
+    if (rc == NVML_ERROR_INSUFFICIENT_SIZE && n > 32) {
+        clocks.assign(n, 0);
+        rc = p_memclocks(d, &n, clocks.data());
+    }
+    if (rc != NVML_SUCCESS || n > clocks.size()) return out;
+    out.assign(clocks.begin(), clocks.begin() + n);
     return out;
 }
 

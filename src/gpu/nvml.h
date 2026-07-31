@@ -48,6 +48,11 @@ std::string nvml_driver_version();
 // multi-GPU rig this is what tells two identical cards apart.
 std::string nvml_pci_address(unsigned index = 0);
 
+// The device's marketing name ("NVIDIA GeForce RTX 4070 Ti SUPER"), or "" when
+// unavailable. What --tune and --pl auto build the store key from, so the key
+// is the same string whichever solver backend is active.
+std::string nvml_device_name(unsigned index = 0);
+
 // --- board power limit ---------------------------------------------------
 //
 // The most valuable knob on this card: MXBM runs pinned at the limit in every

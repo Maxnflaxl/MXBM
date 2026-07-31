@@ -343,9 +343,17 @@ int main(int argc, char** argv) {
         // plain wattage here -- after the card is known, before the numeric
         // validation below would choke on the word.
         if (ocreq.pl == "auto") {
+            // The key prefers NVML's own device name so it resolves on any
+            // backend build; the CUDA enumeration is the fallback. Both produce
+            // the same string on NVIDIA cards, so stores stay compatible.
             std::string key;
+            if (have_nvml) {
+                const std::string n = gpu::nvml_device_name((unsigned)device_index);
+                if (!n.empty())
+                    key = n + "@" + gpu::nvml_pci_address((unsigned)device_index);
+            }
 #ifdef MXBM_HAVE_CUDA
-            if ((size_t)device_index < cuda_devices.size())
+            if (key.empty() && (size_t)device_index < cuda_devices.size())
                 key = cuda_devices[(size_t)device_index].name + "@"
                     + (have_nvml ? gpu::nvml_pci_address((unsigned)device_index)
                                  : std::string());
@@ -711,7 +719,10 @@ int main(int argc, char** argv) {
             if (s_tstop) s_tstop->store(true, std::memory_order_relaxed);
             if (s_tsolver) s_tsolver->request_abort();
         });
-        const std::string key = dev_name + "@"
+        // Same key derivation as --pl auto: NVML's name first, the active
+        // solver's as fallback, so store and lookup agree on any backend.
+        const std::string nname = gpu::nvml_device_name((unsigned)device_index);
+        const std::string key = (nname.empty() ? dev_name : nname) + "@"
                               + gpu::nvml_pci_address((unsigned)device_index);
         const int rc = miner::run_tune(*solver, stats, key, tcfg, stop);
         // Same epilogue as the benchmark: if some OTHER OC knob (--cclk with --tune
