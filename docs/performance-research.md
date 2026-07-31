@@ -22,7 +22,7 @@ every A/B here was interleaved, so the deltas do not.
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
-| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships |
+| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the reorganization probes — r1's cycles are the algorithm, not bookkeeping |
 | [The CUDA backend in detail](#the-cuda-backend-in-detail) | the profiler findings |
 | [What a CUDA backend was predicted to buy](#what-a-cuda-backend-was-predicted-to-buy-retained-for-calibration) | a forecast, kept to score it |
 
@@ -2058,6 +2058,75 @@ the conclusion is that the low-end gap is a property of the solver's *organizati
 (rescans, chain walks, per-element bookkeeping), not of any toggle this pipeline
 exposes. The 2026-07-29 closure of the low-power goal stands, now with its mechanism
 named.
+
+*Amended same day: the parenthesis was tested and is wrong. [The reorganization
+probes below](#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping)
+measured the bookkeeping at ~0.6 ms of r1's 5.2 ms of core cycles — the deficit is
+real but its mechanism is NOT rescans/chains/bookkeeping, and it remains unexplained.*
+
+### The solver-reorganization probes: the cycle deficit is NOT bookkeeping
+
+*(2026-07-31. The clock-scaling C/D split above says r1/r2 are ~98 % core-cycle-bound
+at stock — 15.4 of 35 ms. The standing model said those cycles were staging, chain
+walks, rescans and barriers, and a reorganization was drafted to remove them:
+fine-grained buckets matched in registers. Two probes were designed to kill it cheaply
+before a prototype was paid for. Both fired.)*
+
+**P2 — thin records cannot scatter into fine buckets.** `emit_shape_probe sweep`
+(committed, results in its header): scatter rate vs bucket count at the three real
+record widths. 8 B records at 2^21 buckets run at **0.22×** their 2^16 rate
+(131 → 28.6 GB/s), 16 B at 0.42×, 72 B flat at 1.02×; the cliff starts at bb = 18 and
+only bb = 17 is free. Mechanism: in-bucket sibling writes only merge while the bucket-
+tail sectors stay L2-resident; 2M tails × 32 B = 64 MB > 48 MB L2, and once merging
+fails every 8 B write pays a read-modify-write sector. At `-lgc 800` the penalty
+mostly hides (0.61× / 0.95×) because the probe is issue-bound there — the memory
+system's slack absorbs the amplification — but 140–180 W runs at 1300–1700 MHz, where
+it does not. Bonus: the sweep's unclamped counters measured bucket overflow at mean 16
+/ cap 32 as 0.0016 %, matching Poisson. **Consequence: fine bucketing cannot live in
+the global layout.**
+
+**P3 — a sorted-runs match core is correct and 1.75× slower.** `sorted_r1_probe`
+(committed): one block per bucket, 8 B keys-only staging, a 256-bin counting sort
+making equal-key runs contiguous, each lane deriving its element into registers and
+pairing via statically-unrolled constant-distance `__shfl_up_sync` — the chain table,
+the walk, the rescan, the spill machinery and 5 of 8 barriers all gone. It emits the
+**exact pair multiset** of the shipping kernel (per-bucket counts, gi-masked record
+folds, back-ref folds all equal, drops 0, five nonces) at 8.56 ms against the chain
+kernel's 4.89. The compile-time ablation carve attributes every millisecond:
+
+| piece | ms |
+|---|---|
+| counting sort: count + scan + place + staged read | 0.44 |
+| seed derivation into registers | +2.5 |
+| match: bare shuffles + the leftover walk | +3.6 (walk ~3.3) |
+| emit: combine + mix + scatter | +2.0 |
+
+Even the design's floor — sort + derive + shuffles + perfectly converged emit — is
+~3.9 ms, 0.80× the chain kernel, against a ≥ 2× target. **The decomposition is the
+finding: the chain kernel's 4.89 ms is derive ~2.5 + emit arithmetic ~1.8 +
+bookkeeping ~0.6.** The wavefront model — 130–160 B through shared per element as the
+wall — is refuted at stock: that traffic overlaps ALU issue almost completely. What
+fills r1's cycles is the algorithm (hashing, combine, mix), not the organization, and
+r2's rebuild share is larger still. No match-side rewrite can reach 2×; the
+reorganization is closed, prototype unbuilt.
+
+Three CUDA codegen traps found on the way, documented in the probe header: a
+runtime-selected pointer (`cond ? &a : &b`) demotes both operands to local memory
+(168 B stack, 3× the kernel — order the mix tree instead, combine is a symmetric
+XOR); warp collectives inside a data-dependent loop each compile to a WARPSYNC
+trampoline call (constant-distance shuffles in straight-line code compile bare); and
+a divergent re-derive costs ~32× its converged price (the leftover walk served 6.3 %
+of pairs for 3.3 ms).
+
+What survives: the compile-time-carve + sink ablation method, the 0.44 ms counting
+sort (if a future record format ever makes staging the wall), a hard ceiling of
+~0.6 ms/round on any future match rewrite — and an honest problem statement: with
+bookkeeping at 12 % of r1, lolMiner's 2.3× work-per-clock cannot come from leaner
+bookkeeping, and its actual mechanism is back to unexplained. The one hypothesis
+left standing is that its ~4 GB footprint stores derived state and skips the
+derive/rebuild arithmetic entirely — our R2_FULL evidence against that trade priced
+a variant that stored records *on top of* the pair machinery, not instead of it —
+but even a free derive is ~5–6 ms of ~27 ms of C, short of 2.3×.
 
 ---
 

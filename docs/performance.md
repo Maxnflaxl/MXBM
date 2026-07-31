@@ -900,7 +900,11 @@ measured. Below ~190 W everything is issue-bound (103.7 ms at 100 W is 2.94× st
 3.38× less clock — even the DRAM-bound rounds stop saturating DRAM, because the LSU rate
 scales with core clock), so the currency down there is instructions issued, and MXBM's
 organization — sub-mask rescans, chain walks, per-element bookkeeping — simply spends
-more of them. What our own knobs recover is measured and small: geometry (17,0), which
+more of them. *(That last clause was tested the same day and is wrong: [the
+reorganization probes](performance-research.md#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping)
+measured the bookkeeping at ~0.6 ms of round 1's 4.9 — the deficit is real, its
+mechanism is not bookkeeping, and it is unexplained.)* What our own knobs recover is
+measured and small: geometry (17,0), which
 deletes the rescan, crosses over at ~190 W and buys 1 % in the 140–180 W band and 2.6 %
 at the floor (`MXBM_BB=17`, needs 8.35 GiB); the byte-heavy `MXBM_R2_FULL` **loses at
 every cap** — re-derivation is the right trade at all power levels. Full tables:
@@ -974,6 +978,17 @@ low-cap currency — was measured, and the closure holds. It is real (geometry (
 crosses over below ~190 W and buys up to 2.6 %) and it is small: every instruction-side
 trim this pipeline exposes totals a few per cent against a 20–30 % deficit that the
 duty-cycle probe pinned to ~2.3× work-per-clock in the solver's organization itself.*
+
+*Later the same day, "the solver's organization" was itself put to the test and the
+closure got stronger. A reorganization of the match — counting-sort runs, keys-only
+8 B staging, register pairing; chains, rescans, spill and most barriers deleted — was
+built as a standalone probe, produced the exact pair multiset of the shipping round-1
+kernel, and was **1.75× slower**. Its ablation carve decomposed round 1's cycles:
+derive ~2.5 ms + emit arithmetic ~1.8 + all bookkeeping **~0.6** of the 4.9 ms
+standalone kernel. The bookkeeping the reorganization would have removed is 12 % of
+the round, not 55 % — so the 2.3× work-per-clock deficit does not come from
+bookkeeping, and its mechanism is again unidentified. Details:
+[the reorganization probes](performance-research.md#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping).*
 
 ### Above stock: the curve continues to ~311 W, and the memory rung is unreachable
 
@@ -1372,6 +1387,7 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | the two atomics | both load-bearing; removing either is slower |
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined on OpenCL and less on CUDA — nothing left to win |
 | phase overlap | **closed by three mechanisms and HARVESTED 2026-07-31.** Grid depth (streams) and warp slots (same-warp hosting) were null; the third — [co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), separate interleaved blocks in one launch — works, and its whole yield is **~0.5 ms**: r4's exploitable idle, whatever co-work is offered (entry, or [a whole round of the next solve](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms)). Shipped as [speculative entry](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms); the 1.71× roofline stays out of reach |
+| match organization | **closed 2026-07-31, by two probes, prototype unbuilt.** The plan was fine-grained buckets matched in registers (chains, rescans, staging and barriers deleted). P2: [thin records lose 4.5× scattering into 2^21 buckets](performance-research.md#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping) (the L2 bucket-tail cliff starts at bb = 18), so fine buckets cannot live in the global layout. P3: a counting-sort/register-pair r1 built in shared instead emits the exact pair multiset and is **1.75× slower** — its carve prices r1's cycles as derive ~2.5 + emit arithmetic ~1.8 + **all bookkeeping ~0.6** of 4.9 ms. There is no 2× in the match, for any organization of it; any rewrite's ceiling is ~0.6 ms/round |
 
 **Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.12× short.
 **Goal 1 — the low-power gap — is closed by measurement**, not by exhaustion of effort:
