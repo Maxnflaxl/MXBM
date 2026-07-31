@@ -925,6 +925,38 @@ pair the cap with the rung — `sudo mxbm ... --pl <cap> --mclk 5001` (both rest
 exit), or `sudo nvidia-smi -pl <cap> -lmc 5001,5001` once at boot on rigs that mine
 unprivileged. At or above ~180 W, never.
 
+**lolMiner was swept at the same rung the same evening** (same ABBA discipline, its
+sol/s from its own steady 15 s windows — its definition, not comparable to ours
+row-for-row; the watts are one instrument for both). It rides the rung too, but only
+to ~126 W: its store-everything design needs ~17.7 GB/solve, so on the rung it
+plateaus at **~34 sol/s flat from 120 W up** — its own DRAM roofline at the reduced
+interface (263–301 GB/s sustained depending on its per-solve counting; at or near the
+rung's ceiling either way), against our plateau of 43.6. Below ~126 W its interface
+refund is *larger* than ours (+24 % at 100 W against our +14 %) — it was burning even
+more of a tiny budget on bandwidth. Net, with each miner at its best memory clock per
+cap, the low-band gap roughly halves in the 120–160 W band (from ~25–29 % to ~11–16 %
+on reported figures) and *widens* at the 100 W floor.
+
+| cap | MXBM sol/s @10251 | @5001 | MXBM J/sol @10251 | @5001 | lolMiner sol/s @10251 | @5001 |
+|---|---|---|---|---|---|---|
+| 100 W | 18.6 | 21.85 | 5.36 | 4.57 | 23.25 | 28.85 |
+| 120 W | 25.0 | 29.3 | 4.79 | 4.09 | 32.2 | 34.05 |
+| 140 W | 31.6 | 35.65 | 4.43 | 3.94 | 39.75 | 34.0 |
+| 160 W | 38.3 | 41.9 | 4.18 | 3.79 | 47.85 | 34.1 |
+| 180 W | 45.25 | 43.2 | 3.98 | 4.12 | — | — |
+| 200 W | 50.75 | 43.3 | 3.94 | 4.54 | — | — |
+| 220 W | 56.05 | 43.55 | 3.92 | 4.93 | — | — |
+| 250 W | 58.2 | 43.65 | 4.29 | 5.25 | — | — |
+| 285 W | 59.5 | 43.65 | 4.78 | 5.27 | — | — |
+
+*The lolMiner dashes above 160 W are "not measured", and deliberately: its
+stock-memory curve at 180–285 W is already in the head-to-head table above, and its
+rung column cannot move — it is bandwidth-bound there, proven inside the sweep itself
+(140 → 160 W added 20 W of draw and 0.1 sol/s). Re-measuring a plateau three points
+already pin would be arms spent on a foregone answer.*
+
+![Both miners at both memory rungs: speed and MXBM's J/solution against the cap](tools/mclk-curve.svg)
+
 ### The memory traffic is compulsory
 
 Per solve, against the minimum the round schedule and record widths require —

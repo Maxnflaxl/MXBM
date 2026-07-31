@@ -2554,6 +2554,41 @@ What this does to the standing conclusions:
 - The 10501 null stands unchanged: that was an up-rung being refused; this down-rung
   was honored in every arm and the `MEM` column proves it.
 
+**The lolMiner arm ran the same evening** (`rootruns/run_mclk_lol.sh`, same ABBA
+discipline, MEM sampled — no refusals; its sol/s from its own steady 15 s windows with
+the ramping first window dropped, its definition throughout). Drift-cancelled pair
+means, reported sol/s:
+
+| cap | 10251 | 5001 | Δ |
+|---|---|---|---|
+| 100 W | 23.25 | **28.85** | **+24.1 %** |
+| 120 W | 32.2 | **34.05** | **+5.7 %** |
+| 140 W | 39.75 | 34.0 | −14.5 % |
+| 160 W | 47.85 | 34.1 | −28.7 % |
+
+Three readings, one per hypothesis the arm existed to test:
+
+- **The rung is NOT exclusively ours — but the 130–173 W window is.** lolMiner's
+  crossover is ~126 W against our ~173: between them we gain 8–11 % while it loses
+  14–29 %. That window is exactly where eco-minded rigs run.
+- **Its rung plateau is the store design's signature**: ~34 sol/s flat from 120 W up
+  = 17.7 GB/solve against the reduced interface (263–301 GB/s sustained depending on
+  its per-solve counting — at or near the rung's ceiling under either basis), the
+  mirror of our 43.6 sol/s plateau at 13.0 GB/solve. Both miners now exhibit the
+  same roofline behavior on the same rung, each at the height its bytes-per-solve
+  dictates — re-derivation's smaller appetite is worth +28 % of plateau.
+- **Part of the "mysterious 2.3× work-per-clock" dissolves at the floor**: +24 % at
+  100 W from the interface refund alone says a large slice of lolMiner's 100 W budget
+  was memory-interface power, not core work. Below ~126 W its refund exceeds ours
+  (+24 vs +14 %) because it was burning more interface watts to begin with.
+
+Net head-to-head, each at its best memory clock per cap (reported bases, not
+strictly comparable): the low-band gap roughly **halves in 120–160 W** (~25–29 % →
++16/+11.5/+14 % at 120/140/160) and **widens at the 100 W floor** (+32 %). For the
+Tier-2 eco-pipeline question this re-prices the prize: a store design cannot hold its
+speed on the rung in the 130–173 W window, so the pipeline's projected +20–30 %
+shrinks to ~+11–16 % there — the deep floor (≤120 W) remains its strongest case.
+
 </details>
 
 ### lolMiner is NOT duty-cycling — the low-end gap is real work-per-clock

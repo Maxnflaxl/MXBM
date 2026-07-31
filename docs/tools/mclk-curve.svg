@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+<rect width="1000" height="640" fill="#fcfcfb"/>
+<text x="74" y="28" font-size="15" font-weight="bold" fill="#0b0b0b">The 5001 MHz memory rung pays MXBM below ~173 W; lolMiner can only follow it to ~126 W</text>
+<text x="74" y="48" font-size="11" fill="#52514e">RTX 4070 Ti SUPER, 2026-07-31, one evening: ABBA-bracketed arms per cap, memory clock sampled during every arm (no rung refused),</text>
+<text x="74" y="63" font-size="11" fill="#52514e">MXBM measured in the miner loop with draw from the card's energy counter. Each miner's sol/s is its OWN definition; the watts are one instrument.</text>
+<text x="74" y="78" font-size="11" fill="#52514e">The flat right-hand traces are each design's DRAM roofline on the reduced interface: 13.0 GB/solve plateaus at 43.6 sol/s, 17.7 GB/solve at 34.</text>
+<rect x="236.2" y="118" width="200.6" height="262" fill="#2a78d6" fill-opacity="0.085"/>
+<line x1="436.8" y1="118" x2="436.8" y2="380" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="440.8" y="131" font-size="10" fill="#52514e">MXBM crossover ~173 W</text>
+<line x1="236.2" y1="118" x2="236.2" y2="380" stroke="#eb6834" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="240.2" y="131" font-size="10" fill="#52514e">lolMiner crossover ~126 W</text>
+<text x="336.5" y="370" font-size="10" font-weight="bold" fill="#0b0b0b" text-anchor="middle">rung pays MXBM, costs lolMiner</text>
+<line x1="74" y1="355.4" x2="966" y2="355.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="358.4" font-size="10" fill="#898781" text-anchor="end">20</text>
+<line x1="74" y1="299.6" x2="966" y2="299.6" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="302.6" font-size="10" fill="#898781" text-anchor="end">30</text>
+<line x1="74" y1="243.7" x2="966" y2="243.7" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="246.7" font-size="10" fill="#898781" text-anchor="end">40</text>
+<line x1="74" y1="187.8" x2="966" y2="187.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="190.8" font-size="10" fill="#898781" text-anchor="end">50</text>
+<line x1="74" y1="132.0" x2="966" y2="132.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="135.0" font-size="10" fill="#898781" text-anchor="end">60</text>
+<line x1="74" y1="118" x2="74" y2="380" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="74" y1="380" x2="966" y2="380" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="125.2" y1="380" x2="125.2" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="210.6" y1="380" x2="210.6" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="295.9" y1="380" x2="295.9" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="381.3" y1="380" x2="381.3" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="466.7" y1="380" x2="466.7" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="552.0" y1="380" x2="552.0" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="637.4" y1="380" x2="637.4" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="765.4" y1="380" x2="765.4" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="914.8" y1="380" x2="914.8" y2="384" stroke="#c3c2b7" stroke-width="1"/>
+<text x="74" y="108" font-size="11" fill="#52514e">sol/s (each miner's own basis)</text>
+<polyline points="125.2,337.3 210.6,287.3 295.9,245.1 381.3,199.8" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="125.2" cy="337.3" r="6" fill="#fcfcfb"/>
+<circle cx="125.2" cy="337.3" r="4" fill="#eb6834"><title>cap 100 W: 23.25 sol/s</title></circle>
+<circle cx="210.6" cy="287.3" r="6" fill="#fcfcfb"/>
+<circle cx="210.6" cy="287.3" r="4" fill="#eb6834"><title>cap 120 W: 32.2 sol/s</title></circle>
+<circle cx="295.9" cy="245.1" r="6" fill="#fcfcfb"/>
+<circle cx="295.9" cy="245.1" r="4" fill="#eb6834"><title>cap 140 W: 39.75 sol/s</title></circle>
+<circle cx="381.3" cy="199.8" r="6" fill="#fcfcfb"/>
+<circle cx="381.3" cy="199.8" r="4" fill="#eb6834"><title>cap 160 W: 47.85 sol/s</title></circle>
+<polyline points="125.2,306.0 210.6,276.9 295.9,277.2 381.3,276.7" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="125.2" cy="306.0" r="5.5" fill="#fcfcfb"/>
+<circle cx="125.2" cy="306.0" r="3.5" fill="#eb6834"><title>cap 100 W: 28.85 sol/s</title></circle>
+<circle cx="210.6" cy="276.9" r="5.5" fill="#fcfcfb"/>
+<circle cx="210.6" cy="276.9" r="3.5" fill="#eb6834"><title>cap 120 W: 34.05 sol/s</title></circle>
+<circle cx="295.9" cy="277.2" r="5.5" fill="#fcfcfb"/>
+<circle cx="295.9" cy="277.2" r="3.5" fill="#eb6834"><title>cap 140 W: 34 sol/s</title></circle>
+<circle cx="381.3" cy="276.7" r="5.5" fill="#fcfcfb"/>
+<circle cx="381.3" cy="276.7" r="3.5" fill="#eb6834"><title>cap 160 W: 34.1 sol/s</title></circle>
+<polyline points="125.2,363.2 210.6,327.5 295.9,290.6 381.3,253.2 466.7,214.4 552.0,183.6 637.4,154.0 765.4,142.0 914.8,134.8" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="125.2" cy="363.2" r="6" fill="#fcfcfb"/>
+<circle cx="125.2" cy="363.2" r="4" fill="#2a78d6"><title>cap 100 W: 18.6 sol/s</title></circle>
+<circle cx="210.6" cy="327.5" r="6" fill="#fcfcfb"/>
+<circle cx="210.6" cy="327.5" r="4" fill="#2a78d6"><title>cap 120 W: 25 sol/s</title></circle>
+<circle cx="295.9" cy="290.6" r="6" fill="#fcfcfb"/>
+<circle cx="295.9" cy="290.6" r="4" fill="#2a78d6"><title>cap 140 W: 31.6 sol/s</title></circle>
+<circle cx="381.3" cy="253.2" r="6" fill="#fcfcfb"/>
+<circle cx="381.3" cy="253.2" r="4" fill="#2a78d6"><title>cap 160 W: 38.3 sol/s</title></circle>
+<circle cx="466.7" cy="214.4" r="6" fill="#fcfcfb"/>
+<circle cx="466.7" cy="214.4" r="4" fill="#2a78d6"><title>cap 180 W: 45.25 sol/s</title></circle>
+<circle cx="552.0" cy="183.6" r="6" fill="#fcfcfb"/>
+<circle cx="552.0" cy="183.6" r="4" fill="#2a78d6"><title>cap 200 W: 50.75 sol/s</title></circle>
+<circle cx="637.4" cy="154.0" r="6" fill="#fcfcfb"/>
+<circle cx="637.4" cy="154.0" r="4" fill="#2a78d6"><title>cap 220 W: 56.05 sol/s</title></circle>
+<circle cx="765.4" cy="142.0" r="6" fill="#fcfcfb"/>
+<circle cx="765.4" cy="142.0" r="4" fill="#2a78d6"><title>cap 250 W: 58.2 sol/s</title></circle>
+<circle cx="914.8" cy="134.8" r="6" fill="#fcfcfb"/>
+<circle cx="914.8" cy="134.8" r="4" fill="#2a78d6"><title>cap 285 W: 59.5 sol/s</title></circle>
+<polyline points="125.2,345.1 210.6,303.5 295.9,268.0 381.3,233.1 466.7,225.8 552.0,225.3 637.4,223.9 765.4,223.3 914.8,223.3" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="125.2" cy="345.1" r="5.5" fill="#fcfcfb"/>
+<circle cx="125.2" cy="345.1" r="3.5" fill="#2a78d6"><title>cap 100 W: 21.85 sol/s</title></circle>
+<circle cx="210.6" cy="303.5" r="5.5" fill="#fcfcfb"/>
+<circle cx="210.6" cy="303.5" r="3.5" fill="#2a78d6"><title>cap 120 W: 29.3 sol/s</title></circle>
+<circle cx="295.9" cy="268.0" r="5.5" fill="#fcfcfb"/>
+<circle cx="295.9" cy="268.0" r="3.5" fill="#2a78d6"><title>cap 140 W: 35.65 sol/s</title></circle>
+<circle cx="381.3" cy="233.1" r="5.5" fill="#fcfcfb"/>
+<circle cx="381.3" cy="233.1" r="3.5" fill="#2a78d6"><title>cap 160 W: 41.9 sol/s</title></circle>
+<circle cx="466.7" cy="225.8" r="5.5" fill="#fcfcfb"/>
+<circle cx="466.7" cy="225.8" r="3.5" fill="#2a78d6"><title>cap 180 W: 43.2 sol/s</title></circle>
+<circle cx="552.0" cy="225.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="552.0" cy="225.3" r="3.5" fill="#2a78d6"><title>cap 200 W: 43.3 sol/s</title></circle>
+<circle cx="637.4" cy="223.9" r="5.5" fill="#fcfcfb"/>
+<circle cx="637.4" cy="223.9" r="3.5" fill="#2a78d6"><title>cap 220 W: 43.55 sol/s</title></circle>
+<circle cx="765.4" cy="223.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="765.4" cy="223.3" r="3.5" fill="#2a78d6"><title>cap 250 W: 43.65 sol/s</title></circle>
+<circle cx="914.8" cy="223.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="914.8" cy="223.3" r="3.5" fill="#2a78d6"><title>cap 285 W: 43.65 sol/s</title></circle>
+<line x1="74" y1="521.8" x2="966" y2="521.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="524.8" font-size="10" fill="#898781" text-anchor="end">4.0</text>
+<line x1="74" y1="464.8" x2="966" y2="464.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="467.8" font-size="10" fill="#898781" text-anchor="end">5.0</text>
+<line x1="74" y1="430" x2="74" y2="548" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="74" y1="548" x2="966" y2="548" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="125.2" y1="548" x2="125.2" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="125.2" y="564" font-size="10" fill="#898781" text-anchor="middle">100 W</text>
+<line x1="210.6" y1="548" x2="210.6" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="210.6" y="564" font-size="10" fill="#898781" text-anchor="middle">120 W</text>
+<line x1="295.9" y1="548" x2="295.9" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="295.9" y="564" font-size="10" fill="#898781" text-anchor="middle">140 W</text>
+<line x1="381.3" y1="548" x2="381.3" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="381.3" y="564" font-size="10" fill="#898781" text-anchor="middle">160 W</text>
+<line x1="466.7" y1="548" x2="466.7" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="466.7" y="564" font-size="10" fill="#898781" text-anchor="middle">180 W</text>
+<line x1="552.0" y1="548" x2="552.0" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="552.0" y="564" font-size="10" fill="#898781" text-anchor="middle">200 W</text>
+<line x1="637.4" y1="548" x2="637.4" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="637.4" y="564" font-size="10" fill="#898781" text-anchor="middle">220 W</text>
+<line x1="765.4" y1="548" x2="765.4" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="765.4" y="564" font-size="10" fill="#898781" text-anchor="middle">250 W</text>
+<line x1="914.8" y1="548" x2="914.8" y2="552" stroke="#c3c2b7" stroke-width="1"/>
+<text x="914.8" y="564" font-size="10" fill="#898781" text-anchor="middle">285 W</text>
+<text x="74" y="420" font-size="11" fill="#52514e">MXBM J/solution, energy counter (LOWER is better; MXBM only -- a cross-miner J/solution would divide by incomparable bases)</text>
+<line x1="436.8" y1="430" x2="436.8" y2="548" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
+<polyline points="125.2,444.3 210.6,476.7 295.9,497.3 381.3,511.5 466.7,522.9 552.0,525.2 637.4,526.3 765.4,505.2 914.8,477.3" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="125.2" cy="444.3" r="6" fill="#fcfcfb"/>
+<circle cx="125.2" cy="444.3" r="4" fill="#2a78d6"><title>cap 100 W: 5.36 J/solution</title></circle>
+<circle cx="210.6" cy="476.7" r="6" fill="#fcfcfb"/>
+<circle cx="210.6" cy="476.7" r="4" fill="#2a78d6"><title>cap 120 W: 4.79 J/solution</title></circle>
+<circle cx="295.9" cy="497.3" r="6" fill="#fcfcfb"/>
+<circle cx="295.9" cy="497.3" r="4" fill="#2a78d6"><title>cap 140 W: 4.43 J/solution</title></circle>
+<circle cx="381.3" cy="511.5" r="6" fill="#fcfcfb"/>
+<circle cx="381.3" cy="511.5" r="4" fill="#2a78d6"><title>cap 160 W: 4.18 J/solution</title></circle>
+<circle cx="466.7" cy="522.9" r="6" fill="#fcfcfb"/>
+<circle cx="466.7" cy="522.9" r="4" fill="#2a78d6"><title>cap 180 W: 3.98 J/solution</title></circle>
+<circle cx="552.0" cy="525.2" r="6" fill="#fcfcfb"/>
+<circle cx="552.0" cy="525.2" r="4" fill="#2a78d6"><title>cap 200 W: 3.94 J/solution</title></circle>
+<circle cx="637.4" cy="526.3" r="6" fill="#fcfcfb"/>
+<circle cx="637.4" cy="526.3" r="4" fill="#2a78d6"><title>cap 220 W: 3.92 J/solution</title></circle>
+<circle cx="765.4" cy="505.2" r="6" fill="#fcfcfb"/>
+<circle cx="765.4" cy="505.2" r="4" fill="#2a78d6"><title>cap 250 W: 4.29 J/solution</title></circle>
+<circle cx="914.8" cy="477.3" r="6" fill="#fcfcfb"/>
+<circle cx="914.8" cy="477.3" r="4" fill="#2a78d6"><title>cap 285 W: 4.78 J/solution</title></circle>
+<polyline points="125.2,489.3 210.6,516.6 295.9,525.2 381.3,533.7 466.7,514.9 552.0,491.0 637.4,468.8 765.4,450.5 914.8,449.4" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="125.2" cy="489.3" r="5.5" fill="#fcfcfb"/>
+<circle cx="125.2" cy="489.3" r="3.5" fill="#2a78d6"><title>cap 100 W: 4.57 J/solution</title></circle>
+<circle cx="210.6" cy="516.6" r="5.5" fill="#fcfcfb"/>
+<circle cx="210.6" cy="516.6" r="3.5" fill="#2a78d6"><title>cap 120 W: 4.09 J/solution</title></circle>
+<circle cx="295.9" cy="525.2" r="5.5" fill="#fcfcfb"/>
+<circle cx="295.9" cy="525.2" r="3.5" fill="#2a78d6"><title>cap 140 W: 3.94 J/solution</title></circle>
+<circle cx="381.3" cy="533.7" r="5.5" fill="#fcfcfb"/>
+<circle cx="381.3" cy="533.7" r="3.5" fill="#2a78d6"><title>cap 160 W: 3.79 J/solution</title></circle>
+<circle cx="466.7" cy="514.9" r="5.5" fill="#fcfcfb"/>
+<circle cx="466.7" cy="514.9" r="3.5" fill="#2a78d6"><title>cap 180 W: 4.12 J/solution</title></circle>
+<circle cx="552.0" cy="491.0" r="5.5" fill="#fcfcfb"/>
+<circle cx="552.0" cy="491.0" r="3.5" fill="#2a78d6"><title>cap 200 W: 4.54 J/solution</title></circle>
+<circle cx="637.4" cy="468.8" r="5.5" fill="#fcfcfb"/>
+<circle cx="637.4" cy="468.8" r="3.5" fill="#2a78d6"><title>cap 220 W: 4.93 J/solution</title></circle>
+<circle cx="765.4" cy="450.5" r="5.5" fill="#fcfcfb"/>
+<circle cx="765.4" cy="450.5" r="3.5" fill="#2a78d6"><title>cap 250 W: 5.25 J/solution</title></circle>
+<circle cx="914.8" cy="449.4" r="5.5" fill="#fcfcfb"/>
+<circle cx="914.8" cy="449.4" r="3.5" fill="#2a78d6"><title>cap 285 W: 5.27 J/solution</title></circle>
+<circle cx="381.3" cy="533.7" r="7.5" fill="#fcfcfb"/>
+<circle cx="381.3" cy="533.7" r="5.5" fill="#2a78d6"></circle>
+<text x="381.3" y="553.7" font-size="10" font-weight="bold" fill="#0b0b0b" text-anchor="middle">the card's efficiency record: 3.79 J/solution at 160 W + 5001</text>
+<line x1="88" y1="148" x2="110" y2="148" stroke="#eb6834" stroke-width="2"/>
+<circle cx="99" cy="148" r="5.5" fill="#fcfcfb"/>
+<circle cx="99" cy="148" r="3.5" fill="#eb6834"></circle>
+<text x="118" y="152" font-size="11" fill="#52514e">lolMiner @10251</text>
+<line x1="88" y1="164" x2="110" y2="164" stroke="#eb6834" stroke-width="2" stroke-dasharray="6 4"/>
+<circle cx="99" cy="164" r="5.5" fill="#fcfcfb"/>
+<circle cx="99" cy="164" r="3.5" fill="#eb6834"></circle>
+<text x="118" y="168" font-size="11" fill="#52514e">lolMiner @5001</text>
+<line x1="88" y1="180" x2="110" y2="180" stroke="#2a78d6" stroke-width="2"/>
+<circle cx="99" cy="180" r="5.5" fill="#fcfcfb"/>
+<circle cx="99" cy="180" r="3.5" fill="#2a78d6"></circle>
+<text x="118" y="184" font-size="11" fill="#52514e">MXBM @10251</text>
+<line x1="88" y1="196" x2="110" y2="196" stroke="#2a78d6" stroke-width="2" stroke-dasharray="6 4"/>
+<circle cx="99" cy="196" r="5.5" fill="#fcfcfb"/>
+<circle cx="99" cy="196" r="3.5" fill="#2a78d6"></circle>
+<text x="118" y="200" font-size="11" fill="#52514e">MXBM @5001</text>
+<text x="74" y="582" font-size="10" fill="#898781">x is the cap. Solid = stock memory (10251 MHz), dashed = the 5001 rung. All y axes are truncated.</text>
+<text x="74" y="598" font-size="10" fill="#898781">Generated from the table in docs/performance.md by docs/tools/plot_mclk.py -- reproduce with docs-internal/rootruns/run_mclk_eco.sh and run_mclk_lol.sh.</text>
+</svg>
