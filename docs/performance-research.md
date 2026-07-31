@@ -2494,6 +2494,68 @@ other side.
 
 </details>
 
+### The 5001 memory rung: −8.5 to −14.4 % below its ~173 W crossover — the largest low-band lever ever measured here
+<details>
+<summary>Details</summary>
+
+*(2026-07-31, `docs-internal/rootruns/run_mclk_eco.sh`, raw logs in
+`rootruns/mclk-eco/`. The lead's mechanism was the ledger's own: below ~190 W the
+solver is issue-bound while the memory clock does NOT scale with a core cap — 10251 MHz
+at 100 W and at 285 — so the GDDR6X interface draws a fixed slice of a tiny budget for
+bandwidth nothing is using. `-lmc 5001` frees interface watts the capped core re-spends
+as clock. Method carried all three of the same day's lessons: miner-loop arms through
+the shipping `--benchmark` binary, ABBA brackets per cap so drift cancels in the pair
+means, the memory clock sampled during every arm — no arm refused the rung — and draw
+and J/solution read from the energy counter.)*
+
+Nine caps × two rungs, drift-cancelled pair means:
+
+| cap | 10251 MHz | 5001 MHz | Δ speed | J/solution 10251 → 5001 |
+|---|---|---|---|---|
+| 100 W | 108.3 ms | **92.9** | **−14.3 %** | 5.36 → **4.57** |
+| 120 W | 79.7 | **68.3** | **−14.4 %** | 4.79 → **4.09** |
+| 140 W | 63.3 | **56.5** | **−10.8 %** | 4.43 → **3.94** |
+| 160 W | 52.7 | **48.2** | **−8.5 %** | 4.18 → **3.79** |
+| 180 W | 44.8 | 47.0 | +4.9 % | 3.98 → 4.12 |
+| 200 W | 39.4 | 46.8 | +18.8 % | 3.94 → 4.54 |
+| 220 W | 35.4 | 46.6 | +31.6 % | 3.92 → 4.93 |
+| 250 W | 34.3 | 46.6 | +35.9 % | 4.29 → 5.25 |
+| 285 W | 33.5 | 46.5 | +38.8 % | 4.78 → 5.27 |
+
+**The crossover is ~173 W** (linear between −8.5 % at 160 and +4.9 % at 180) — above
+the lead's own demand-arithmetic prediction of 140–160 W: the freed interface watts
+buy more than the arithmetic priced.
+
+**Above ~200 W the rung column is a wall, and the wall is a measurement.** 46.5–46.8 ms
+flat from 200 W to 285, with draw saturating at ~230 W under a 285 W cap — the card
+cannot even spend its budget. That is this solver's own DRAM roofline at the rung:
+13.0 GB/solve / 46.5 ms = **280 GB/s sustained, 87 % of the rung's 320 GB/s peak** —
+the same saturation behavior lolMiner shows at stock, now reproduced on our own solver
+by shrinking the interface instead of growing the demand. It also explains the shape of
+the low-band wins: at 160 W the rung arm (48.2 ms) sits 3.7 % off that roofline, so the
+gain is already bandwidth-clipped; by 120 W the core is the only constraint at either
+rung and the win is the full interface-power refund (−14 %).
+
+**160 W + 5001 is the new global efficiency record: 3.79 J/solution** (0.264 sol/s/W,
+41.9 sol/s at 159 W measured draw), beating the previous peak of ~3.83 at 200 W on
+stock memory. The efficiency-optimal operating point moved, and it moved onto the rung.
+
+What this does to the standing conclusions:
+
+- **Capped-rig guidance changes**: below ~170 W the cap should always be paired with
+  `-lmc 5001` (`nvidia-smi -lmc 5001,5001`, or MXBM's `--mclk 5001` under root). The
+  head-to-head low band narrows by roughly a third — at 160 W MXBM moves 38.3 →
+  41.9 sol/s against lolMiner's ~50 — without closing.
+- **A strategy note for the eco-pipeline question**: a store-everything design needs
+  ~17.7 GB/solve, which floors at ≥63 ms on the rung's 280 GB/s — the rung is a lever
+  only a re-derivation design can pull this hard. The owed lolMiner arm at the rung
+  would measure exactly this; if its low-cap numbers *also* jump, part of its 2.3×
+  work-per-clock dissolves into memory-interface power instead.
+- The 10501 null stands unchanged: that was an up-rung being refused; this down-rung
+  was honored in every arm and the `MEM` column proves it.
+
+</details>
+
 ### lolMiner is NOT duty-cycling — the low-end gap is real work-per-clock
 <details>
 <summary>Details</summary>

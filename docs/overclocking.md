@@ -77,6 +77,14 @@ points — refinement bounds the tail, it never restarts the sweep). Both passes
 one curve and one verdict. An explicit `--tune-caps` list runs single-pass: a chosen
 grid means exactly those points.
 
+**Capped below ~170 W: pair the cap with `--mclk 5001`** (measured 2026-07-31, the
+largest low-band lever on record: −8.5 % ms/solve at 160 W growing to −14.4 % at 120,
+and the card's efficiency record at 160 W + rung — see
+[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record)).
+The mirror warning holds: at ~180 W and above the rung loses, +39 % at stock, because
+the solver hits its own DRAM roofline at the rung's bandwidth. Strictly a low-cap
+pairing, applied and restored like every other knob here.
+
 The recommendation has two numbers: the **knee** — climbing from the lowest cap, the
 highest one where each extra watt still returns at least `--tune-knee` sol/s (default
 0.07/W, the one number that is a preference rather than a measurement) — and the

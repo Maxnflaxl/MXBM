@@ -905,6 +905,25 @@ not bind. `benchmarks/mclk_rung.sh` reproduces this; its `MEM_MHz` column exists
 so the null cannot be mistaken for a measurement of the rung. What was measured is that
 the lever cannot be applied, not that it does not pay.
 
+### Below stock the OTHER rung pays: −8.5 to −14.4 % under caps below ~173 W, and a new efficiency record
+
+The down-rung is the up-rung's mirror, and it is honored: `-lmc 5001,5001` held in
+every arm of an 18-arm ABBA-bracketed sweep (2026-07-31, miner loop, energy-counter
+draw; full table and mechanism in
+[the research doc](performance-research.md#the-5001-memory-rung-85-to-144--below-its-173-w-crossover--the-largest-low-band-lever-ever-measured-here)).
+Under a core power cap the memory clock does not scale, so the interface burns a fixed
+slice of a small budget for bandwidth nothing is using; at 5001 MHz those watts come
+back as core clock. Measured: **−14.3 % at 100 W, −14.4 % at 120, −10.8 % at 140,
+−8.5 % at 160; crossover ~173 W; above it the rung is a wall** (46.5 ms flat from
+200 W up — the solver's own DRAM roofline at 280 GB/s sustained, 87 % of the rung's
+peak, with draw saturating at ~230 W under a 285 W cap).
+
+**The efficiency-optimal operating point moved onto the rung: 160 W + 5001 MHz gives
+3.79 J/solution** (0.264 sol/s/W; 41.9 sol/s at 159 W drawn), beating the previous
+~3.83 peak at 200 W on stock memory. Guidance for capped rigs: below ~170 W, always
+pair the cap with the rung — `sudo nvidia-smi -pl <cap> -lmc 5001,5001`, or MXBM's
+`--pl <cap> --mclk 5001` under root. At or above ~180 W, never.
+
 ### The memory traffic is compulsory
 
 Per solve, against the minimum the round schedule and record widths require —
