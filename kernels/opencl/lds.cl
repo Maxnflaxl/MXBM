@@ -18,6 +18,20 @@
 #ifndef LDS_V2
 #define LDS_V2 1
 #endif
+// Geometry baked at build time: the host picks bb/sm/caps BEFORE it compiles the
+// program, so the per-child bucket shift and the 64-bit slot multiplies stop
+// carrying runtime operands. MEASURED NULL on Ada (20 paired arms, solve-count
+// instrument at 0.038 % reproducibility, diff -0.008 %); kept because sm_61 does
+// 32-bit multiply as multi-instruction XMAD, where a runtime operand should cost
+// real time. GEO_BAKED=0 keeps the runtime args -- the A/B channel, and what the
+// off-line-geometry tests drive.
+#ifndef GEO_BAKED
+#define GEO_BAKED 0
+#define GEO_BB 16u
+#define GEO_SM 1u
+#define GEO_INCAP 1u
+#define GEO_OUTCAP 1u
+#endif
 #ifndef LDS_WG
 #define LDS_WG 256u
 #endif
@@ -638,24 +652,29 @@ void NAME(                                                                      
     __local uint  tab[(TAB)]; __local uint gcount;                                    \
     __local uint  cnt8[(SPILL) ? 8 : 1];                                              \
     uint lId = get_local_id(0);                                                       \
-    uint submaskCount = 1u << submask_bits;                                           \
+    /* GEO_BAKED folds these to literals; otherwise they are the kernel args. */      \
+    const uint bb_ = (GEO_BAKED) ? GEO_BB : bucket_bits;                              \
+    const uint sm_ = (GEO_BAKED) ? GEO_SM : submask_bits;                             \
+    const uint incap_  = (GEO_BAKED) ? GEO_INCAP  : in_bucket_cap;                    \
+    const uint outcap_ = (GEO_BAKED) ? GEO_OUTCAP : out_bucket_cap;                   \
+    uint submaskCount = 1u << sm_;                                                    \
     uint bucket = get_group_id(0) / submaskCount;                                     \
     uint mask   = get_group_id(0) % submaskCount;                                     \
     uint cnt = in_counts[bucket];                                                     \
-    if (cnt > in_bucket_cap) cnt = in_bucket_cap;                                     \
+    if (cnt > incap_) cnt = incap_;                                                   \
     /* Bucket is uniform per workgroup, so the half select costs nothing per element. */ \
     __global const ulong* restrict in_belem = (bucket < in_half) ? in_lo : in_hi;     \
-    size_t base = (size_t)(bucket < in_half ? bucket : bucket - in_half) * in_bucket_cap; \
+    size_t base = (size_t)(bucket < in_half ? bucket : bucket - in_half) * incap_; \
     /* Side plane indexes by GLOBAL slot: the plane never splits. */                  \
-    size_t side_base = (size_t)bucket * in_bucket_cap;                                \
+    size_t side_base = (size_t)bucket * incap_;                                \
     /* SPILL state: xb = extra split bits (level chosen ONCE, never escalated -- an  \
        escalation after a walk would re-emit the coarser parts' children), xp = the  \
        part being processed this pass, nparts = 1 << xb. Without SPILL the loop runs \
        exactly once and this is the old kernel. */                                    \
     uint xb = 0u, xp = 0u, nparts = 1u, counted = 0u;                                 \
     while (xp < nparts) {                                                             \
-    uint sbits = submask_bits + xb;                                                   \
-    uint pmask = mask | (xp << submask_bits);                                         \
+    uint sbits = sm_ + xb;                                                   \
+    uint pmask = mask | (xp << sm_);                                         \
     if (lId == 0) gcount = 0;                                                         \
     for (uint i = lId; i < (TAB); i += LDS_WG) tab[i] = LDS_EMPTY;                    \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
@@ -762,7 +781,7 @@ void NAME(                                                                      
             for (uint p = lId; p < cnt; p += LDS_WG) {                                \
                 uint k2 = (uint)(in_belem[(base + p) * (INSTR)] & 0xFFu);             \
                 if ((k2 & (submaskCount - 1u)) != mask) continue;                     \
-                atomic_inc(&cnt8[(k2 >> submask_bits) & 7u]);                         \
+                atomic_inc(&cnt8[(k2 >> sm_) & 7u]);                         \
             }                                                                         \
             barrier(CLK_LOCAL_MEM_FENCE);                                             \
             uint lv = 1u;                                                             \
@@ -828,7 +847,7 @@ void NAME(                                                                      
         /* lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode --   \
            and it is filled by this point (the derive modes fill it just above). */   \
         uint hkk = (PERFECT) ? (uint)(lwork[pos*(INW)] & 0xFFFFFFu) : lkey[pos];      \
-        uint hk = (hkk >> submask_bits) & ((TAB) - 1u);                               \
+        uint hk = (hkk >> sm_) & ((TAB) - 1u);                               \
         lchain[pos] = atomic_xchg(&tab[hk], pos);                                     \
     }                                                                                \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
@@ -876,10 +895,10 @@ void NAME(                                                                      
                     }                                                                 \
                 }                                                                     \
                 uint ckey = (uint)(c[0] & 0xFFFFFFu);                                 \
-                uint cb = ckey >> (24u - bucket_bits);                                \
+                uint cb = ckey >> (24u - bb_);                                \
                 uint cpos = ABL_HIT(32, LMODE) ? ((pos * 7u + walk) & 1023u)          \
                                               : atomic_inc(&out_counts[cb]);          \
-                if (cpos < out_bucket_cap) {                                          \
+                if (cpos < outcap_) {                                          \
                     /* The dense gi is NOT just a cost. It removes a global atomic to \
                        replace it with the bucket slot (cb*cap + cpos) -- measured     \
                        4.5 ms SLOWER, because consecutive gi values make the two       \
@@ -891,7 +910,7 @@ void NAME(                                                                      
                     __global ulong* restrict out_belem =                              \
                         (cb < out_half) ? out_lo : out_hi;                            \
                     size_t od = ((size_t)(cb < out_half ? cb : cb - out_half)         \
-                                 * out_bucket_cap + cpos) * (OUTSTR);                 \
+                                 * outcap_ + cpos) * (OUTSTR);                 \
                     if (ABL_HIT(1, LMODE)) { /* payload write ablated */ }                      \
                     else if ((LMODE) == LMODE_SEED) {                                 \
                         /* 16 B PAIR RECORD instead of the 72 B element: round 2       \
@@ -928,7 +947,7 @@ void NAME(                                                                      
                             for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w]; \
                             out_belem[od + (OUTW)] = r3_p0(ctree[0], ctree[1], ctree[2]); \
                         }                                                             \
-                        side_out[(size_t)cb * out_bucket_cap + cpos] =                \
+                        side_out[(size_t)cb * outcap_ + cpos] =                \
                             r3_p1(ctree[2], ctree[3], cgi);                           \
                     } else if ((LDS_V2) && ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3)) { \
                         __global ulong2* v = (__global ulong2*)(out_belem + od);      \

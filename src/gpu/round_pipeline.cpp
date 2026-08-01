@@ -967,9 +967,20 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
                              const uint64_t pp[4], const std::atomic<bool>* abort, bool verbose) {
     PipelineResult result;
     auto tPipeline = clk::now();
-    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
-                                         std::string(kLdsClSource)}, rowbucket_cl_opts());
     const uint32_t nb = pb.fb_num_buckets, cap = pb.fb_bucket_cap, capacity = pb.capacity;
+    // GEO_BAKED (see lds.cl for the measurement): cached_program keys on the options
+    // string, so each geometry gets its own build. MXBM_NO_GEOBAKE restores the
+    // runtime args, giving both arms from one binary.
+    std::string opts = rowbucket_cl_opts();
+    if (!std::getenv("MXBM_NO_GEOBAKE")) {
+        uint32_t bbv0 = 0; for (uint32_t t = nb; t > 1u; t >>= 1) ++bbv0;
+        opts += " -DGEO_BAKED=1 -DGEO_BB=" + std::to_string(bbv0) + "u"
+              + " -DGEO_SM=" + std::to_string(pb.fb_submask_bits) + "u"
+              + " -DGEO_INCAP=" + std::to_string(cap) + "u"
+              + " -DGEO_OUTCAP=" + std::to_string(cap) + "u";
+    }
+    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource),
+                                         std::string(kLdsClSource)}, opts);
     // Sweepable for tuning: the sub-mask split sets how many times each bucket is
     // rescanned (2^submaskBits) against the LDS a group needs. See MXBM_BB/MXBM_SM.
     uint32_t bbv = 0; for (uint32_t t = pb.fb_num_buckets; t > 1u; t >>= 1) ++bbv;

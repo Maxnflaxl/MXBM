@@ -3455,21 +3455,51 @@ it was never occupancy-bound, exactly as its `LDS_TCAP` comment says.
   LDS, and pinning it would take that freedom away on every card we cannot
   measure. Left at the driver's choice, with the null recorded in the kernel so
   it is not re-proposed.
-- **Baking the residual geometry (`bb`, `sm`, the bucket caps) — implemented,
-  measured, REVERTED.** These were the last runtime kernel args on the fast
-  path, and the host picks all four *before* it builds the program, so they
-  could be literals: the per-child bucket shift and the two 64-bit slot
-  multiplies would stop carrying runtime operands. Built it (`GEO_BAKED`, the
-  geometry appended to the options string so `cached_program` keys on it),
-  KAT-green both ways, two bracketed rounds: **33.60 baked against 33.65
-  runtime**, a wash. Reverted — it bought nothing and cost an options-string
-  path, a second kernel code path and an env var.
+- **Baking the residual geometry (`bb`, `sm`, the bucket caps) — a properly
+  powered null, and the instrument is the story.** These were the last runtime
+  kernel args on the fast path, and the host picks all four *before* it builds
+  the program, so they can be literals: the per-child bucket shift and the two
+  64-bit slot multiplies stop carrying runtime operands. Built as `GEO_BAKED`,
+  with the geometry appended to the options string so `cached_program` keys on
+  it and **both arms come from one binary** (`MXBM_NO_GEOBAKE` selects).
 
-  **This closes the compile-time-constants family on this backend.** The
+  First reading was four `bench_rounds` arms each: 33.60 against 33.65, called
+  a wash. **That call was underpowered** — the effect under test (0.15 %) is
+  half the documented within-session band, so it was not evidence of absence.
+  Re-run properly, 20 paired 60 s miner arms, order alternated:
+
+  | instrument | baked | runtime | diff |
+  |---|---|---|---|
+  | ms/solve median, n=10 each | 33.900 | 33.920 | +0.020 ms, t=0.80 |
+  | **solves per 60 s, n=10 each** | **1760.6** | **1760.7** | **−0.14 solves, −0.008 %, t=0.26** |
+
+  **The ms median cannot answer this question**: it prints to 0.1 ms and 17 of
+  20 runs read exactly 33.9, so the quantisation is five times the effect. The
+  solve *count* over a fixed window is not quantised that way — the runtime arm
+  reproduced to **sd 0.7 solves in 1760, 0.038 %** — and at that resolution the
+  difference is 0.008 %, sign-inconsistent with the first pass. This is now a
+  null with the power to mean it.
+
+  **Kept anyway, enabled, for a reason the reference card cannot test.** On
+  sm_61 a 32-bit integer multiply is *multiple instructions* (XMAD sequences;
+  CUDA C Programming Guide Table 4), where Ada has a native IMAD — so a runtime
+  operand in the per-child slot arithmetic costs materially more on the Pascal
+  and Turing cards the record-set split just made reachable than it does here.
+  It is measured non-negative on Ada, correct in both modes, and
+  `MXBM_NO_GEOBAKE` makes the small-card measurement a one-command experiment
+  for whoever first has the hardware. Deleting it would mean rewriting it to
+  ask that question.
+
+  **What this does close is the compile-time-constants family on Ada.** The
   −26 ms that started it was never about constants as such; it was about a
   dynamically-indexed private array escaping scratch (`t[8]` in `apply_mix`).
-  These four index nothing, so folding them buys nothing. *Look for the dynamic
-  index first; the constant is the fix, not the diagnosis.*
+  These four index nothing, so folding them buys nothing here. *Look for the
+  dynamic index first; the constant is the fix, not the diagnosis.*
+
+  Method note: one baked arm in twenty read 1705 solves / 35.2 ms — 3 % slow
+  with the clock unchanged at 2760 MHz, i.e. an external transient, not an arm
+  effect. It moved the naive mean by 5.6 solves and would have inverted the
+  verdict on its own. Medians and an explicit outlier check, not means alone.
 
 </details>
 
