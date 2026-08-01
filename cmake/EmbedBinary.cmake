@@ -1,11 +1,5 @@
-# Embed an arbitrary binary file as a C array.
-#
-# The compiled metallib is embedded rather than loaded from disk so `mxbm` stays
-# a single self-contained binary with no runtime file lookup -- the same reason
-# the OpenCL kernel SOURCES are embedded by cmake/EmbedKernels.cmake. The only
-# difference is that this input is binary, so it goes through HEX rather than
-# being quoted as a string literal.
-#
+# Embed an arbitrary binary file as a C array, so mxbm stays a single
+# self-contained binary with no runtime file lookup.
 # Invoked as: cmake -DIN_FILE=... -DOUT_FILE=... -P EmbedBinary.cmake
 file(READ ${IN_FILE} _hex HEX)
 string(LENGTH "${_hex}" _hexlen)

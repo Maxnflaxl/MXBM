@@ -41,7 +41,7 @@ if(MXBM_HAVE_BEAM_ORACLE)
   add_test(NAME differential COMMAND test_differential)
 endif()
 
-find_package(OpenSSL REQUIRED)   # transport (later task); fail early if absent
+find_package(OpenSSL REQUIRED)
 add_library(mxbm_json INTERFACE)
 target_include_directories(mxbm_json INTERFACE third_party)
 
@@ -196,8 +196,7 @@ add_test(NAME overclock COMMAND test_overclock)
 add_executable(mxbm src/main.cpp src/cli/options.cpp src/miner/tune.cpp)
 target_link_libraries(mxbm PRIVATE mxbm_nvml)
 target_include_directories(mxbm PRIVATE third_party)   # tune.cpp: nlohmann/json
-# main.cpp asks the geometry question itself (the power-limit restart notice), so the
-# dependency is direct, not just transitive through whichever GPU backend is built in.
+# Direct, not transitive: main.cpp asks the geometry question itself (restart notice).
 target_link_libraries(mxbm PRIVATE mxbm_geom)
 target_include_directories(mxbm PRIVATE src)
 target_link_libraries(mxbm PRIVATE mxbm_miner)
@@ -224,9 +223,6 @@ add_dependencies(mxbm_version mxbm_version_gen)
 add_executable(test_version tests/test_version.cpp)
 target_include_directories(test_version PRIVATE tests src)
 target_link_libraries(test_version PRIVATE mxbm_version)
-# The expected prefix comes from project() itself, so the cross-check needs no
-# hand-maintained literal: a version bump cannot fail this test, only a runtime
-# string that disagrees with CMakeLists can.
 target_compile_definitions(test_version PRIVATE
     MXBM_EXPECT_PREFIX="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.")
 add_test(NAME version COMMAND test_version)
@@ -335,9 +331,6 @@ if(OpenCL_FOUND)
   target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/gpu_solver.cpp)
 
-  # Wire the GPU solver into the mxbm binary itself (mxbm target already
-  # exists -- defined above -- so this just adds mxbm_gpu's PUBLIC
-  # include dirs / OpenCL::OpenCL / mxbm_beamhash link requirements to it).
   target_link_libraries(mxbm PRIVATE mxbm_gpu)
   target_compile_definitions(mxbm PRIVATE MXBM_HAVE_OPENCL)
 
@@ -386,16 +379,12 @@ if(OpenCL_FOUND)
   target_link_libraries(test_gpu_seed PRIVATE mxbm_gpu)
   add_test(NAME gpu_seed COMMAND test_gpu_seed)
 
-  # Phase-D3 P1: sort-based collision-finder building blocks (kernels/opencl/
-  # sort.cl) verified in isolation vs CPU std::sort / group-by-key oracles.
   add_executable(test_gpu_sort tests/test_gpu_sort.cpp)
   add_dependencies(test_gpu_sort mxbm_kernels_gen)
   target_include_directories(test_gpu_sort PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_sort PRIVATE mxbm_gpu)
   add_test(NAME gpu_sort COMMAND test_gpu_sort)
 
-  # P2a: LDS-local bucketed collision finder (kernels/opencl/lds.cl) validated in
-  # isolation vs a CPU group-by-key oracle + an empirical fork sweep.
   add_executable(test_lds_collide tests/test_lds_collide.cpp)
   add_dependencies(test_lds_collide mxbm_kernels_gen)
   target_include_directories(test_lds_collide PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
@@ -440,12 +429,9 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_rounds PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_rounds PRIVATE mxbm_gpu)
   add_test(NAME gpu_rounds COMMAND test_gpu_rounds)
-  # Phase-B exit milestone: a real full 2^25 GPU Wagner search (5 rounds,
-  # ~2^30 key-compares/round) -- compute-heavy but observed ~3s on an M3 Max;
-  # generous timeout so a slow-but-correct run on lesser hardware isn't killed.
-  # Pin the bare gate to the sort path (deterministic across hardware); the fused
-  # row-bucket default is auto-selected by device memory and covered by the
-  # gpu_*_rowbucket gates below.
+  # Full 2^25 GPU Wagner search (~3 s on an M3 Max); generous timeout so
+  # slow-but-correct hardware is not killed. Sort path pinned: deterministic
+  # across hardware; the row-bucket default is covered by the gates below.
   set_tests_properties(gpu_rounds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_gpu_recover tests/test_gpu_recover.cpp)
@@ -453,9 +439,7 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_recover PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_recover PRIVATE mxbm_gpu)
   add_test(NAME gpu_recover COMMAND test_gpu_recover)
-  # Phase-C Task 1: runs the same full 2^25 GPU Wagner search as gpu_rounds
-  # (~2-3s on an M3 Max) plus a cheap on-device recovery pass; same generous
-  # timeout as gpu_rounds for the same reason (slow-but-correct hardware).
+  # The same search plus the recovery pass; same timeout rationale as gpu_rounds.
   set_tests_properties(gpu_recover PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   add_executable(test_gpu_solver tests/test_gpu_solver.cpp)
@@ -469,10 +453,7 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_multi PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_multi PRIVATE mxbm_gpu)
   add_test(NAME gpu_multi COMMAND test_gpu_multi)
-  # Phase-C Task 2 -- THE MILESTONE: GpuSolver::solve() runs the same full
-  # 2^25 GPU Wagner search as gpu_rounds/gpu_recover (~2-3s on an M3 Max)
-  # plus recovery plus the CPU verify gate; same generous timeout for the
-  # same reason (slow-but-correct hardware).
+  # solve() end to end over the same search; same timeout rationale.
   set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
   # Phase-D3: the sort-based collision finder (key_extract -> radix sort ->
@@ -532,15 +513,11 @@ else()
 endif()
 
 # ---- Apple Metal GPU solver (optional component) ----
-# Optional in exactly the same way CUDA and OpenCL are. The Metal toolchain ships
-# SEPARATELY from Xcode (xcodebuild -downloadComponent MetalToolchain), so a Mac
-# with only the Command Line Tools builds and tests everything else unaffected.
-#
-# Why Metal at all, when OpenCL already runs on macOS: Apple's OpenCL is a
-# deprecated 1.2-era shim that cannot build the fused row-bucket kernels at all
-# (clCreateKernel -> CL_INVALID_KERNEL), which confines macOS to the SLOWEST of
-# the three collision finders. Metal is the only route to the fused pipeline on
-# this hardware. See docs-internal/superpowers/specs for the measured baseline.
+# Optional in exactly the same way CUDA and OpenCL are; the toolchain ships
+# separately from Xcode (xcodebuild -downloadComponent MetalToolchain). Metal
+# exists because Apple's OpenCL cannot build the fused row-bucket kernels
+# (clCreateKernel -> CL_INVALID_KERNEL), which would confine macOS to the
+# slowest collision finder.
 if(APPLE)
   execute_process(COMMAND xcrun --find metallib
                   OUTPUT_VARIABLE MXBM_METALLIB_BIN
@@ -607,8 +584,6 @@ if(MXBM_HAVE_METAL)
   set_source_files_properties(src/gpu/metal_solver.mm src/gpu/metal_telemetry.mm
                               PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 
-  # Wire the Metal solver into the mxbm binary itself. The target already exists
-  # (defined above), so this just adds mxbm_metal's PUBLIC requirements to it.
   target_link_libraries(mxbm PRIVATE mxbm_metal)
   target_compile_definitions(mxbm PRIVATE MXBM_HAVE_METAL)
 
@@ -639,9 +614,8 @@ if(MXBM_HAVE_METAL)
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_entry COMMAND test_metal_entry)
 
-  # THE MILESTONE: the full fused pipeline through solve(), gated on the 3 KAT
-  # goldens. Same generous timeout as the OpenCL golden gates, for the same
-  # reason (slow-but-correct hardware must not be killed).
+  # The full fused pipeline through solve(), gated on the 3 KAT goldens; same
+  # timeout rationale as the OpenCL golden gates.
   add_executable(test_metal_solver tests/test_metal_solver.mm)
   target_include_directories(test_metal_solver PRIVATE tests src src/beamhash)
   target_link_libraries(test_metal_solver PRIVATE mxbm_metal)
