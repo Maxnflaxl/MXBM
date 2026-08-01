@@ -1066,12 +1066,18 @@ void round5_fused_lds(
     // LDS_TCAP, not LDS_FCAP: this kernel stages 24 B/element, an eighth of a round
     // block, so its cap never constrained occupancy -- it keeps covering the group
     // TAIL rather than inheriting the spill-backed near-mean cap of the rounds.
+    // Same perfect-hash argument as the fused rounds (LDS_PERFECT_TAB): on the
+    // bb + sm = 17 line only 7 key bits vary inside a group, so the 128-entry table
+    // covers them exactly -- same chain <=> same full key, and lkey plus the walk's
+    // compare are dead. run_pipeline_rowbucket's geometry check guards this kernel
+    // too, and -DLDS_PERFECT_TAB=0 restores the keyed walk at 512 entries.
+    #define LDS_R5TAB (LDS_PERFECT_TAB ? LDS_FTAB : LDS_TABSIZE)
     __local ulong lwork[LDS_R5W * LDS_TCAP];
     __local uint  lgi[LDS_TCAP];
     __local uint  llead[LDS_TCAP];
-    __local uint  lkey[LDS_TCAP];
+    __local uint  lkey[LDS_PERFECT_TAB ? 1 : LDS_TCAP];
     __local uint  lchain[LDS_TCAP];
-    __local uint  tab[LDS_TABSIZE];
+    __local uint  tab[LDS_R5TAB];
     __local uint  gcount;
 
     uint lId = get_local_id(0);
@@ -1080,7 +1086,7 @@ void round5_fused_lds(
     uint mask   = get_group_id(0) % submaskCount;
 
     if (lId == 0) gcount = 0;
-    for (uint i = lId; i < LDS_TABSIZE; i += LDS_WG) tab[i] = LDS_EMPTY;
+    for (uint i = lId; i < LDS_R5TAB; i += LDS_WG) tab[i] = LDS_EMPTY;
     barrier(CLK_LOCAL_MEM_FENCE);
 
     uint cnt = in_counts[bucket];
@@ -1096,7 +1102,8 @@ void round5_fused_lds(
         uint pos = atomic_inc(&gcount);
         if (pos < LDS_TCAP) {
             lwork[pos*LDS_R5W] = q.x;
-            lgi[pos] = (uint)(q.y >> 32); llead[pos] = (uint)q.y; lkey[pos] = key;
+            lgi[pos] = (uint)(q.y >> 32); llead[pos] = (uint)q.y;
+            if (!LDS_PERFECT_TAB) lkey[pos] = key;
         } else atomic_inc(&drops[1]);
 #else
         uint key = (uint)(in_belem[d] & 0xFFFFFFu);
@@ -1105,7 +1112,8 @@ void round5_fused_lds(
         if (pos < LDS_TCAP) {
             for (uint w = 0; w < LDS_R5W; ++w) lwork[pos*LDS_R5W + w] = in_belem[d + w];
             ulong meta = in_belem[d + LDS_R5W];
-            lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key;
+            lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta;
+            if (!LDS_PERFECT_TAB) lkey[pos] = key;
         } else atomic_inc(&drops[1]);
 #endif
     }
@@ -1113,17 +1121,19 @@ void round5_fused_lds(
     uint total = gcount < LDS_TCAP ? gcount : LDS_TCAP;
 
     for (uint pos = lId; pos < total; pos += LDS_WG) {
-        uint hk = (lkey[pos] >> submask_bits) & (LDS_TABSIZE - 1u);
+        // lwork[pos] is work word 0, whose low 24 bits ARE the key.
+        uint kk = LDS_PERFECT_TAB ? (uint)(lwork[pos*LDS_R5W] & 0xFFFFFFu) : lkey[pos];
+        uint hk = (kk >> submask_bits) & (LDS_R5TAB - 1u);
         lchain[pos] = atomic_xchg(&tab[hk], pos);
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
     for (uint pos = lId; pos < total; pos += LDS_WG) {
-        uint key = lkey[pos];
+        uint key = LDS_PERFECT_TAB ? 0u : lkey[pos];
         uint oth = lchain[pos], walk = 0;
         while (oth != LDS_EMPTY) {
             if (++walk > 64u) { atomic_inc(&drops[3]); break; }
-            if (lkey[oth] == key) {
+            if (LDS_PERFECT_TAB || lkey[oth] == key) {
                 uint la = llead[pos], lb = llead[oth], ga = lgi[pos], gb = lgi[oth];
                 uint leftPos = pos, rightPos = oth;
                 if (lb < la || (lb == la && gb < ga)) { leftPos = oth; rightPos = pos; }

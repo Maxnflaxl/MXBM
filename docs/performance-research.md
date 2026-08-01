@@ -3422,6 +3422,20 @@ CUDA (MIO instruction-queue pressure) rather than measured on this path —
 NVIDIA's OpenCL still cannot be profiled. The Ada result transfers; whether the
 same shapes pay on Pascal/Turing is round-two tester data.
 
+**The terminal round joined the perfect table too — and it is a TIME NULL here.**
+`round5_fused_lds` was the last kernel still running the 512-entry keyed walk
+after the 07-31 backport did the rounds. On the `bb+sm=17` line the same
+perfect-hash argument applies, so `lkey` and the walk's compare are dead: the
+kernel's LDS falls **11,268 → 8,200 B (−27 %)**, which on paper takes it from 4
+resident workgroups to 5 inside OpenCL's 48 KB. Measured 33.7/33.6 → 33.6/33.5
+ms — **+0.1 ms, under the 0.34 ms floor, i.e. nothing.** Kept anyway, on the
+same grounds CUDA shipped its −0.07 ms version: it deletes code rather than
+adding a knob, the redundancy is *proved* (not tuned), and it removes a
+divergence between the two backends. `-DLDS_PERFECT_TAB=0` restores the keyed
+walk in the terminal round as it already did in the rounds. The reason a −27 %
+LDS cut buys no time is that the terminal round is ~0.9 ms of a 34 ms solve;
+it was never occupancy-bound, exactly as its `LDS_TCAP` comment says.
+
 </details>
 
 ## Established limits
