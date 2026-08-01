@@ -1,0 +1,225 @@
+# Build the release archives (Linux tar.gz, Windows zip) in the shape lolMiner
+# ships -- unpack, edit the mine script, run. Only one mine script per platform
+# ships: HeroMiners, the endpoint we have actually run against. Uploads
+# artifacts; does not create a release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string for the archive name (e.g. 0.6.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              cmake ninja-build libssl-dev ocl-icd-opencl-dev opencl-headers
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-toolkit-13-3
+          echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+
+      # No GPU on the runner, so the `native` arch default must be pinned.
+      # Built on 24.04: the binary needs 24.04's glibc or newer. The resource
+      # guard (default ON) scopes itself to this fatbin's sm_89 cubin.
+      - name: configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+                -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90;120" 2>&1 | tee configure.log
+          grep -q 'CUDA found' configure.log
+
+      - name: build
+        run: cmake --build build --parallel
+
+      # The input reaches the shell via env, never by template interpolation;
+      # slashes become dashes so the archive dir cannot nest.
+      - name: version
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          V="$INPUT_VERSION"
+          [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
+          V="${V//\//-}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "dir=mxbm-$V-linux-x86_64" >> "$GITHUB_OUTPUT"
+
+      - name: assemble archive
+        run: |
+          set -euo pipefail
+          D="${{ steps.v.outputs.dir }}"
+          mkdir -p "$D/logs"
+
+          cp build/mxbm                      "$D/mxbm"
+          cp LICENSE                         "$D/license.txt"
+          cp NOTICE                          "$D/NOTICE"
+          cp packaging/readme.txt            "$D/readme.txt"
+          cp packaging/mxbm.cfg              "$D/mxbm.cfg"
+          cp packaging/user_config.json      "$D/user_config.json"
+          cp packaging/mine_beam.sh          "$D/mine_beam.sh"
+          cp packaging/benchmark.sh          "$D/benchmark.sh"
+          cp packaging/emergency.sh          "$D/emergency.sh"
+          chmod +x "$D"/mxbm "$D"/*.sh
+
+          touch "$D/logs/.keep"
+
+          # The dev address ships on purpose (it is mine_beam.sh's default
+          # wallet); any OTHER 64+ hex string in a text file is a leaked
+          # address that would have every user mining to it. -o prints the
+          # bare matches so each is compared against kDevAddress exactly.
+          DEV=$(grep -oE '[0-9a-f]{64,}' src/miner/devfee.cpp | head -1)
+          [ -n "$DEV" ]
+          if grep -rEnio --exclude=mxbm '[0-9a-f]{64,}' "$D" | grep -iv ":$DEV\$"; then
+              echo "::error::something that looks like a wallet address is in the archive"
+              exit 1
+          fi
+
+          # Derived from the assembled dir so the list cannot drift; runs after
+          # the wallet scan because the sums themselves are 64-hex strings.
+          ( cd "$D" && find . -type f ! -name SHA256SUMS -printf '%P\n' \
+                       | LC_ALL=C sort | xargs sha256sum > SHA256SUMS )
+          # Neutral ownership for safe extraction as root; sorted, commit-dated
+          # entries keep the archive reproducible.
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime="@$(git log -1 --format=%ct)" \
+              -czf "$D.tar.gz" "$D"
+          sha256sum "$D.tar.gz" | tee "$D.tar.gz.sha256"
+          echo "### archive" >> "$GITHUB_STEP_SUMMARY"
+          tar -tzf "$D.tar.gz" | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+
+      # Touches no GPU and no network. If the layout broke, it shows here.
+      - name: smoke-test the packaged binary
+        run: |
+          cd "${{ steps.v.outputs.dir }}"
+          ./mxbm --version
+          ./mxbm --help > /dev/null
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.v.outputs.dir }}
+          path: |
+            ${{ steps.v.outputs.dir }}.tar.gz
+            ${{ steps.v.outputs.dir }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  # windows-2022, NOT -2025: the 2025 image ships VS 18 (2026), which CUDA
+  # 13.3's host-compiler check does not accept; 2022 ships VS 2022.
+  windows-x86_64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: deps
+        shell: bash
+        run: vcpkg install openssl:x64-windows opencl:x64-windows
+
+      - name: cuda toolkit
+        uses: ./.github/actions/setup-cuda-windows
+
+      # Ninja, with cl/nvcc from the environment the setup action replayed.
+      # No GPU on the runner, so the `native` arch default must be pinned.
+      - name: configure
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+                -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+                -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
+                -DCMAKE_CUDA_COMPILER=nvcc \
+                -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90;120" 2>&1 | tee configure.log
+          grep -q 'CUDA found' configure.log
+
+      - name: build
+        run: cmake --build build --parallel
+
+      # The input reaches the shell via env, never by template interpolation;
+      # slashes become dashes so the archive dir cannot nest.
+      - name: version
+        id: v
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          V="$INPUT_VERSION"
+          [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
+          V="${V//\//-}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "dir=mxbm-$V-windows-x86_64" >> "$GITHUB_OUTPUT"
+
+      - name: assemble archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          D="${{ steps.v.outputs.dir }}"
+          mkdir -p "$D/logs"
+
+          cp build/mxbm.exe                  "$D/mxbm.exe"
+          # vcpkg's applocal step parks the DLLs the exe needs next to it
+          # (OpenSSL, and the Khronos OpenCL ICD loader). An unmatched glob
+          # fails the cp: no DLLs would mean that step silently stopped running.
+          cp build/*.dll                     "$D/"
+          cp LICENSE                         "$D/license.txt"
+          cp NOTICE                          "$D/NOTICE"
+          cp packaging/readme.txt            "$D/readme.txt"
+          cp packaging/mxbm.cfg              "$D/mxbm.cfg"
+          cp packaging/user_config.json      "$D/user_config.json"
+          cp packaging/mine_beam.bat         "$D/mine_beam.bat"
+          cp packaging/benchmark.bat         "$D/benchmark.bat"
+          cp packaging/emergency.bat         "$D/emergency.bat"
+
+          touch "$D/logs/.keep"
+
+          # The dev address ships on purpose (it is mine_beam.bat's default
+          # wallet); any OTHER 64+ hex string in a text file is a leaked
+          # address that would have every user mining to it. -o prints the
+          # bare matches so each is compared against kDevAddress exactly.
+          DEV=$(grep -oE '[0-9a-f]{64,}' src/miner/devfee.cpp | head -1)
+          [ -n "$DEV" ]
+          if grep -rEnio --exclude=mxbm.exe --exclude='*.dll' '[0-9a-f]{64,}' "$D" | grep -iv ":$DEV\$"; then
+              echo "::error::something that looks like a wallet address is in the archive"
+              exit 1
+          fi
+
+          # Derived from the assembled dir so the list cannot drift; runs after
+          # the wallet scan because the sums themselves are 64-hex strings.
+          ( cd "$D" && find . -type f ! -name SHA256SUMS -printf '%P\n' \
+                       | LC_ALL=C sort | xargs sha256sum > SHA256SUMS )
+          # Commit-dated mtimes; zip (unlike the Linux tar) is only
+          # deterministic-ish, and that is accepted.
+          find "$D" -exec touch -d "@$(git log -1 --format=%ct)" {} +
+          7z a -tzip -mx=9 "$D.zip" "$D" > /dev/null
+          sha256sum "$D.zip" | tee "$D.zip.sha256"
+          echo "### archive" >> "$GITHUB_STEP_SUMMARY"
+          ( cd "$D" && find . -type f | LC_ALL=C sort | sed 's/^/    /' ) >> "$GITHUB_STEP_SUMMARY"
+
+      # Touches no GPU and no network. If the layout broke, it shows here.
+      - name: smoke-test the packaged binary
+        shell: bash
+        run: |
+          cd "${{ steps.v.outputs.dir }}"
+          ./mxbm.exe --version
+          ./mxbm.exe --help > /dev/null
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.v.outputs.dir }}
+          path: |
+            ${{ steps.v.outputs.dir }}.zip
+            ${{ steps.v.outputs.dir }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

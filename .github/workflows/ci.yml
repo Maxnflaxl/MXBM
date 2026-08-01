@@ -1,0 +1,108 @@
+# Compile-only: the correctness gate needs a real GPU and runs on the rig.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# PRs supersede their own older runs; a started master run always finishes,
+# so a broken push stays red instead of grey-cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # No GPU on either runner, so the `native` arch default must be
+          # pinned; sm_89 matches the resource guard's occupancy contract.
+          - name: linux
+            os: ubuntu-24.04
+            cmake_args: >-
+              -DCMAKE_CUDA_ARCHITECTURES=89
+              -DMXBM_CUDA_RESOURCE_GUARD=ON
+
+          # windows-2022, NOT -2025: the 2025 image ships VS 18 (2026), which
+          # CUDA 13.3's host-compiler check does not accept; 2022 ships VS 2022.
+          # Ninja here too -- the setup-cuda-windows action replays the vcvars64
+          # environment -- and the compilers are pinned to cl because CMake's
+          # Ninja search tries clang (also on the VS PATH) before cl. The
+          # configure step runs under bash, so the env var expands there.
+          # CMAKE_CUDA_COMPILER pre-set makes check_language() a no-op, so a
+          # broken CUDA toolchain fails configure LOUDLY with nvcc's real error
+          # instead of silently disabling the solver.
+          - name: windows
+            os: windows-2022
+            cmake_args: >-
+              -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+              -DCMAKE_C_COMPILER=cl
+              -DCMAKE_CXX_COMPILER=cl
+              -DCMAKE_CUDA_COMPILER=nvcc
+              -DCMAKE_CUDA_ARCHITECTURES=89
+              -DMXBM_CUDA_RESOURCE_GUARD=ON
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              cmake ninja-build libssl-dev ocl-icd-opencl-dev opencl-headers
+
+      - name: cuda toolkit (linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-toolkit-13-3
+          echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+
+      - name: deps (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: vcpkg install openssl:x64-windows opencl:x64-windows
+
+      - name: cuda toolkit (windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-cuda-windows
+
+      - name: configure
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+                ${{ matrix.cmake_args }} 2>&1 | tee configure.log
+
+      # A GATE, not just a report: both platforms install CUDA and an OpenCL
+      # SDK, so "not found" is broken toolchain wiring -- it already shipped
+      # one green Windows build with the CUDA solver silently disabled.
+      - name: backends detected
+        shell: bash
+        run: |
+          { echo "### ${{ matrix.name }}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          grep -E 'CUDA (found|not found)|OpenCL (found|not found)' configure.log \
+            | tee -a "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning::no backend status lines matched in configure.log (CMake wording changed?)"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if grep -qE 'CUDA not found|OpenCL not found' configure.log; then
+              echo "::error::a required backend was not found"
+              command -v nvcc && nvcc --version || echo "nvcc is NOT on PATH"
+              echo "$PATH" | tr ':' '\n' | grep -i cuda || echo "no CUDA dir in PATH"
+              grep -in -A40 'cuda' build/CMakeFiles/CMakeConfigureLog.yaml 2>/dev/null | head -200
+              exit 1
+          fi
+
+      - name: build
+        run: cmake --build build --parallel

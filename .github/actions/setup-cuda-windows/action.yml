@@ -1,0 +1,59 @@
+# The CUDA + MSVC build environment on a GPU-less Windows runner, first-party.
+# The toolkit comes from the network installer run silently with only the
+# subpackages the build needs -- nvcc to compile, cudart to link,
+# cuobjdump/nvdisasm for the resource guard. The build uses Ninja, NOT the VS
+# generator: the VS route needs MSBuild integration files whose absence fails
+# silently (the installer ignores unknown subpackage names without error), and
+# that is how a green build shipped without CUDA once. Ninja finds nvcc on
+# PATH and nvcc finds cl.exe from the vcvars64 environment replayed below.
+name: setup-cuda-windows
+description: Install the CUDA toolkit and replay the MSVC environment for Ninja builds
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: |
+        $full = "13.3.1"; $short = "13.3"
+        $exe = "$env:RUNNER_TEMP\cuda_setup.exe"
+        Invoke-WebRequest "https://developer.download.nvidia.com/compute/cuda/$full/network_installers/cuda_${full}_windows_network.exe" -OutFile $exe
+        # crt_ is the compiler-header subpackage CUDA 13.x split out of nvcc --
+        # without it cuda_runtime.h dies on crt/host_config.h. Every name here
+        # must be EXACTLY right: an unknown one can abort the whole install
+        # (cccl_13.3, guessed, took nvcc down with it), and the installer's
+        # exit code says nothing either way -- the header assertions below are
+        # what actually proves the install.
+        $sub = @("nvcc_$short", "crt_$short", "nvvm_$short", "cudart_$short",
+                 "cuobjdump_$short", "nvdisasm_$short")
+        $p = Start-Process -FilePath $exe -ArgumentList (@("-s") + $sub) -Wait -NoNewWindow -PassThru
+        Write-Host "installer exit code: $($p.ExitCode)"
+        $cuda = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v$short"
+        if (!(Test-Path "$cuda\bin\nvcc.exe")) { throw "nvcc.exe missing after CUDA install" }
+        if (!(Test-Path "$cuda\include\cuda_runtime.h")) { throw "cuda_runtime.h missing after CUDA install" }
+        if (!(Test-Path "$cuda\include\crt\host_config.h")) { throw "crt/host_config.h missing after CUDA install" }
+        if (!(Test-Path "$cuda\nvvm\bin\cicc.exe")) { throw "nvvm/bin/cicc.exe missing after CUDA install" }
+        Add-Content $env:GITHUB_ENV  "CUDA_PATH=$cuda"
+        Add-Content $env:GITHUB_PATH "$cuda\bin"
+    - shell: pwsh
+      run: |
+        # Replay vcvars64 into the job environment: new PATH entries via
+        # GITHUB_PATH, changed variables (INCLUDE, LIB, ...) via GITHUB_ENV.
+        $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+        $vs = & $vswhere -latest -products * -property installationPath
+        if (-not $vs) { throw "vswhere found no Visual Studio instance" }
+        $before = @{}
+        Get-ChildItem env: | ForEach-Object { $before[$_.Name] = $_.Value }
+        $after = cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul 2>&1 && set"
+        if ($LASTEXITCODE -ne 0) { throw "vcvars64.bat failed" }
+        foreach ($line in $after) {
+          if ($line -notmatch '^([^=]+)=(.*)$') { continue }
+          $k = $Matches[1]; $v = $Matches[2]
+          if ($k -ieq 'PATH') {
+            foreach ($p in $v.Split(';')) {
+              if ($p -and -not (($before['Path'] -split ';') -contains $p)) {
+                Add-Content $env:GITHUB_PATH $p
+              }
+            }
+          } elseif ($before[$k] -ne $v) {
+            Add-Content $env:GITHUB_ENV "$k=$v"
+          }
+        }
