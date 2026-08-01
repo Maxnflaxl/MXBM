@@ -259,13 +259,13 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 cmake --build build -j
 
 # pipeline median over 20 solves, gated on the KAT goldens
-MXBM_BENCH=20 ./build/test_metal_solver
+MXBM_BENCH=20 ./build/tests/test_metal_solver
 
 # per-phase GPU time (GPUStartTime/GPUEndTime, not wall clock)
-MXBM_METAL_TIMING=1 ./build/test_metal_solver
+MXBM_METAL_TIMING=1 ./build/tests/test_metal_solver
 
 # the A/B behind the SEEDF default -- no rebuild needed, both pairs are compiled in
-MXBM_METAL_REBUILD=1 MXBM_BENCH=20 ./build/test_metal_solver
+MXBM_METAL_REBUILD=1 MXBM_BENCH=20 ./build/tests/test_metal_solver
 
 # sustained, through the miner
 ./build/mxbm --benchmark BEAM-III --benchmark-seconds 60
@@ -338,8 +338,8 @@ broken on your GPU, that is a bug report we want, not a disappointment to manage
 
 | GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Reported by |
 |---|---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 58.9 | 33.8 | 284 | 0.207 | reference card |
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 58.6 | 34.0 | 284 | 0.206 | reference card, fallback path (2026-08-01) |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 60.2 | 33.1 | 284 | 0.212 | reference card (2026-08-02) |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 59.4 | 33.5 | 284 | 0.209 | reference card, fallback path (2026-08-02, both arms same session) |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | reference card |
 
 Both sol/s figures are sustained `--benchmark` runs, not pipeline medians, so they are

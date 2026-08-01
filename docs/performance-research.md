@@ -24,7 +24,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
-| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays |
+| [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -227,7 +227,9 @@ r3 and r4; `MXBM_COB_DUMMY=1` gives the co-blocks zero work (prices displacement
 real entry launched separately). `--pipe2` runs the two-solve software pipeline with
 `fused_pair` (r4(i) ‖ r1(i+1) in one launch); `MXBM_P2_VAR=1` gives r1 two thirds of the
 residency. On the shipped miner, `MXBM_NO_SPEC=1` disables speculative entry
-co-scheduling for A/Bs. `-DMXBM_MB_SEED=N` / `-DMXBM_MB_RD2=N` force a register budget
+co-scheduling for A/Bs — on **either** backend since the OpenCL port
+(2026-08-02), where `MXBM_CO_STRIDE=N` also sweeps the displacement ratio
+(default 3; measured null across 2–6 on Ada, kept as a per-card lever). `-DMXBM_MB_SEED=N` / `-DMXBM_MB_RD2=N` force a register budget
 (`__launch_bounds__` minBlocks) on r1 / r2 — measured null, shared memory caps first.
 `-DMXBM_PAIR128=0` restores r2's two scalar pair-record loads
 ([shipped on 2026-07-31](#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms)).
@@ -3500,6 +3502,74 @@ it was never occupancy-bound, exactly as its `LDS_TCAP` comment says.
   with the clock unchanged at 2760 MHz, i.e. an external transient, not an arm
   effect. It moved the naive mean by 5.6 solves and would have inverted the
   verdict on its own. Medians and an explicit outlier check, not means alone.
+
+</details>
+
+### Speculative entry, ported to OpenCL: the entry pass hides inside round 4 (−0.35 ms)
+<details>
+<summary>Details</summary>
+
+*(2026-08-02. The last structural CUDA win not on this path. There it is worth
+−0.45 ms; the mechanism is plain grid-index dispatch, so nothing about it
+needed OpenCL to grow a feature.)*
+
+**The mechanism.** Round 4's grid gains one *entry* workgroup per `co_stride - 1`
+round workgroups, interleaved by index rather than appended — appending would
+schedule them all in the tail, which is the second-stream null over again. Entry
+groups return before the first barrier, and barriers are per-workgroup, so the
+round groups never see them. The entry output moves to its own set (`spec_elem`,
++314–372 MiB by rung) because `fb_elem[0]` is overwritten by round 2 and could
+carry nothing across a solve. `GpuSolver` learns the engine's nonce stride, so
+the next solve finds its entry pass already done.
+
+Measured, 20 arms, paired and order-alternated, one binary (`MXBM_NO_SPEC`
+switches the arms), solve count over a fixed 60 s window as the instrument:
+
+| | no-spec | spec |
+|---|---|---|
+| solves / 60 s | 1764.9 | **1783.2** |
+| ms/solve | 33.996 | **33.647** |
+| printed median ms | 33.85 | 33.54 |
+
+**+18.3 solves paired (+1.04 %), sd 7.0, t = 8.29 on 9 df.** 2.00 verified
+solutions/solve in all 20 arms. Miner loop, 120 s: **33.5 ms/solve median, 59.4
+sol/s, 4.78 J/solution**. Same-session CUDA on the same card: 33.1 ms, 60.2
+sol/s, 4.72 J — the fallback's gap is **1.012×**.
+
+**The size is the evidence.** The entry pass costs ~2.4 ms standing alone, 7 %
+of a solve. If speculation merely *skipped* it the gain would be ~7 %; recovering
+1 % means about a fifth of it hid in round 4's stalls and the rest displaced real
+round work — the same fraction CUDA measured. A result near 7 % would have meant
+a correctness bug, not a triumph.
+
+**`co_stride` is a null across a 3× range.** Strides 2 / 3 / 4 / 6 — dedicating
+50 % / 33 % / 25 % / 17 % of the grid to entry groups — measured 1783.0 / 1784.8 /
+1783.8 / 1785.0 solves, a 0.11 % spread against a per-arm sd of ~5. The work hides
+whether it is given a sixth of the groups or half of them, so the mechanism is
+robust rather than tuned. Default stays CUDA's 3; `MXBM_CO_STRIDE` remains the
+per-card lever.
+
+**The control that mattered.** Correctness here is not visible in timing: a
+mis-speculated entry set still produces survivors, just useless ones. Seeding the
+speculation one nonce off collapsed verified solutions from 2.00/solve to **0.01**
+— so the 2.00 in the real build can only come from round 4 having produced *this*
+nonce's entry set. Nothing in the suite reached the path before (`run_pipeline`'s
+tests pass no `SpecEntry`, and it takes three fixed-stride solves before a
+prediction lands), so `test_gpu_solver` now walks n₀−2, n₀−1, n₀ onto the KAT
+nonce and asserts both the goldens and that the hit *happened*.
+
+**A silent-failure mode found while wiring it.** The solver first marked the
+speculation valid whenever it *asked* for one. But `run_pipeline` returns early on
+abort, possibly before round 4 ran — and the next matching solve would then have
+read the previous nonce's entry set and mined nothing for that nonce, with no
+error anywhere. `SpecEntry::seeded`, set only by the actual co-block launch, is
+the fix. Today's caller happens to be safe (aborts arrive with a job change, which
+fails the input compare); that is the caller's accident, not the contract's.
+
+**Reach is not traded for it.** The buffers are allocated only after the rung
+ladder has settled, best-effort: a card that cannot spare 0.31–0.36 GiB simply
+runs the entry standalone. Sizing them into the rung choice would let a card lose
+a whole rung — a measured ~1 ms of geometry — to buy a third of one.
 
 </details>
 

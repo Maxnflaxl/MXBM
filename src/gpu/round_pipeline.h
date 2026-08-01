@@ -88,6 +88,27 @@ struct PipelineBuffers {
                                // access is 16 B aligned. Empty under quad.
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
+    // SPECULATIVE ENTRY. The entry output moves to its own set (+nb*cap*8 B) so it can
+    // SURVIVE the solve that produced it -- fb_elem[0] is overwritten by round 2. Round
+    // 4 seeds the next nonce into it as co-blocks and the next solve skips its own entry
+    // pass. Best-effort: without the bytes these stay empty and the entry runs standalone
+    // into fb_elem[0], as before. At 8 B/element the set never needs the half-split.
+    Mem spec_elem;             // ulong[nb*cap] entry output
+    Mem spec_counts;           // uint[nb] arrival counters for it
+    bool spec_on = false;      // both allocated and MXBM_NO_SPEC unset
+};
+
+// What the caller knows that the pipeline cannot: it sees one prePow and no nonce, so
+// the solver owns the learned stride and tells it (a) whether spec_elem already holds
+// THIS solve's entry output, (b) which prePow to seed next. nullptr = never speculate.
+struct SpecEntry {
+    bool hit = false;              // spec_elem holds this solve's entry: skip it
+    bool seed_next = false;        // co-schedule next_pp's entry inside round 4
+    uint64_t next_pp[4] = {0, 0, 0, 0};
+    // Set by the pipeline: round 4 really did launch the co-blocks. An abort returns
+    // before round 4, and a caller trusting seed_next alone would then claim a hit next
+    // solve and read the PREVIOUS nonce's entry set -- mining nothing, silently.
+    bool seeded = false;
 };
 
 // Per-round constants for the fused row-bucket kernels. These are BAKED IN at
@@ -229,7 +250,8 @@ struct PipelineResult {
     double t_seed_ms = 0.0, t_survivor_ms = 0.0, t_total_ms = 0.0;
 };
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
-                             const std::atomic<bool>* abort = nullptr, bool verbose = true);
+                             const std::atomic<bool>* abort = nullptr, bool verbose = true,
+                             SpecEntry* spec = nullptr);
 
 // Recover: for each survivor (a work[0] slot index from run_pipeline's
 // survivor_scan), walk its consolidated back-ref ancestry on-device (the

@@ -612,7 +612,32 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
 // spill at a near-mean cap, while the generic round_fused_lds -- validated by tests
 // at arbitrary geometries where the perfect-hash argument does not hold -- keeps the
 // legacy behavior (tail-covering 384, keyed walk, drop-on-overflow).
-#define FUSED_LDS(NAME, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR, FCAP, TAB, PERFECT, SPILL) \
+// CO-BLOCKS (COB): round 4 hosts the NEXT nonce's entry pass as separate workgroups
+// interleaved through its grid -- every co_stride-th group is an entry group.
+// Interleaved, not appended, so every dispatch wave carries the mix. Entry groups
+// return before the first barrier, and barriers are per-workgroup, so the round
+// groups are unaffected. From CUDA's COBLOCKS (fused_round.cuh): round 4 is 82 % of
+// DRAM peak but 29 % SM, and hosting the entry there measured cheaper than running it
+// alone. COB=0 adds neither args nor dispatch, so the other kernels are unchanged.
+#define COB_ARGS_0
+#define COB_ARGS_1 , __global const ulong* restrict co_pp4, uint co_count,            \
+    uint co_bucket_cap, uint co_stride, __global uint* restrict co_counts,            \
+    __global ulong* restrict co_lo, __global ulong* restrict co_hi, uint co_half
+#define COB_DISPATCH_0
+#define COB_DISPATCH_1                                                                \
+    if (grp % co_stride == co_stride - 1u) {                                          \
+        uint eb = grp / co_stride;                    /* rank among entry groups */   \
+        uint nE = (uint)get_num_groups(0) / co_stride;                                \
+        if (nE == 0u) nE = 1u;                        /* a zero stride would hang */  \
+        for (uint g = eb * LDS_WG + lId; g < co_count; g += nE * LDS_WG)              \
+            bh3_entry_body(g, co_pp4, bb_, co_bucket_cap, 1u, co_counts,              \
+                           co_lo, co_hi, co_half, drops);                             \
+        return;                                                                       \
+    }                                                                                 \
+    grp -= grp / co_stride;                           /* rank among round groups */
+#define FUSED_LDS(NAME, ...)     FUSED_LDS_C(NAME, 0, __VA_ARGS__)
+#define FUSED_LDS_COB(NAME, ...) FUSED_LDS_C(NAME, 1, __VA_ARGS__)
+#define FUSED_LDS_C(NAME, COB, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR, FCAP, TAB, PERFECT, SPILL) \
 __kernel __attribute__((reqd_work_group_size(LDS_WG, 1, 1)))                          \
 void NAME(                                                                            \
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
@@ -637,7 +662,8 @@ void NAME(                                                                      
     __global ulong* restrict side_out,                                                \
     __global uint* restrict all_left, __global uint* restrict all_right,              \
     __global uint* restrict gi_counter, __global uint* restrict drops,                \
-    __global const ulong* restrict pp4) {                                            \
+    __global const ulong* restrict pp4                                               \
+    COB_ARGS_##COB ) {                                                               \
     /* Mode-dependent sizes. Round 1's gi IS its leaf (both are the seed index), so  \
        LMODE_SEED keeps ONE copy in lleaf and lgi collapses. `lead` is leaf 0 of the \
        element's own prefix in every mode whose payload is leaves, so only LMODE_USE \
@@ -658,8 +684,10 @@ void NAME(                                                                      
     const uint incap_  = (GEO_BAKED) ? GEO_INCAP  : in_bucket_cap;                    \
     const uint outcap_ = (GEO_BAKED) ? GEO_OUTCAP : out_bucket_cap;                   \
     uint submaskCount = 1u << sm_;                                                    \
-    uint bucket = get_group_id(0) / submaskCount;                                     \
-    uint mask   = get_group_id(0) % submaskCount;                                     \
+    uint grp = (uint)get_group_id(0);                                                 \
+    COB_DISPATCH_##COB                                                                \
+    uint bucket = grp / submaskCount;                                                 \
+    uint mask   = grp % submaskCount;                                                 \
     uint cnt = in_counts[bucket];                                                     \
     if (cnt > incap_) cnt = incap_;                                                   \
     /* Bucket is uniform per workgroup, so the half select costs nothing per element. */ \
@@ -1024,20 +1052,15 @@ FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
 // element DIRECTLY into round-1 FAT buckets (no flat work[1]/leaves[1]). gi = seed
 // index (recover reads it as a leaf at row 0); lead = leaves[0] = idx.
-// No reqd_work_group_size here, unlike the fused kernels: pinning it to 256 (what
-// CUDA's entry_scatter uses) measured NULL on Ada across two bracketed ABBA rounds,
-// and this kernel is a flat 1-D map with no LDS, so the driver's own choice is the
-// better default on the cards we cannot measure.
-__kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint begin, uint count,
-                                     uint bucket_bits, uint bucket_cap, uint stride,
-                                     __global uint* restrict counts,
-                                     __global ulong* restrict belem_lo,
-                                     __global ulong* restrict belem_hi,
-                                     uint half_buckets,
-                                     __global uint* restrict drops) {
-    uint g = (uint)get_global_id(0);
-    if (g >= count) return;
-    uint idx = begin + g;
+// The per-element half lives in its own function so round 4's co-block variant can
+// run it from its own workgroups (COB_DISPATCH_1) instead of duplicating it.
+static void bh3_entry_body(uint idx, __global const ulong* restrict pp4,
+                           uint bucket_bits, uint bucket_cap, uint stride,
+                           __global uint* restrict counts,
+                           __global ulong* restrict belem_lo,
+                           __global ulong* restrict belem_hi,
+                           uint half_buckets,
+                           __global uint* restrict drops) {
     ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
     ulong e[7];
     bh3_seed_element(pp, idx, e);
@@ -1057,6 +1080,29 @@ __kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint be
         belem[d] = ((ulong)idx << 32) | (ulong)key;
     } else atomic_inc(&drops[1]);
 }
+
+// No reqd_work_group_size here, unlike the fused kernels: pinning it to 256 (what
+// CUDA's entry_scatter uses) measured NULL on Ada across two bracketed ABBA rounds,
+// and this kernel is a flat 1-D map with no LDS, so the driver's own choice is the
+// better default on the cards we cannot measure.
+__kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint begin, uint count,
+                                     uint bucket_bits, uint bucket_cap, uint stride,
+                                     __global uint* restrict counts,
+                                     __global ulong* restrict belem_lo,
+                                     __global ulong* restrict belem_hi,
+                                     uint half_buckets,
+                                     __global uint* restrict drops) {
+    uint g = (uint)get_global_id(0);
+    if (g >= count) return;
+    bh3_entry_body(begin + g, pp4, bucket_bits, bucket_cap, stride, counts,
+                   belem_lo, belem_hi, half_buckets, drops);
+}
+
+// Round 4 again, hosting the next nonce's entry as co-blocks. Instantiated here, not
+// beside its siblings, because the dispatch calls bh3_entry_body. Parameters must
+// match round_fused_6_5 exactly -- a drifting copy would mine a different round 4.
+FUSED_LDS_COB(round_fused_6_5_cob, 6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u,
+              LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
 
 // TERMINAL (round 5) for the fused row-bucket path: like round_fused_lds but NO
 // child mix/scatter -- combine colliding round-5 pairs at Lout(5)=24 and detect the

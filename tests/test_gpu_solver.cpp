@@ -109,6 +109,33 @@ int main() {
     perf_line("solve#2", secs2);
     verify_goldens(sols2, "solve#2");
 
+    // SPECULATIVE ENTRY. Nothing else in the suite reaches it: run_pipeline's own tests
+    // pass no SpecEntry, and it takes THREE solves at a fixed nonce stride before a
+    // prediction can land. Walk n0-2, n0-1, n0 so the hit falls on the KAT nonce -- the
+    // goldens are then the assertion, and a wrong entry set cannot produce them.
+    // Asserting the hit HAPPENED matters as much: without it this passes trivially the
+    // day speculation stops engaging.
+    if (s.speculation_available()) {
+        std::printf("  speculative entry: walking a fixed nonce stride onto the KAT nonce...\n");
+        uint64_t n0 = 0; std::memcpy(&n0, kat::nonce0, 8);
+        uint8_t nonce[8];
+        for (int step = 2; step >= 1; --step) {   // n0-2 then n0-1: teaches the stride
+            const uint64_t n = n0 - (uint64_t)step;
+            std::memcpy(nonce, &n, 8);
+            (void)s.solve(kat::input32, nonce);
+        }
+        check(!s.last_solve_speculated(), "the stride-learning solves are honest misses");
+        std::vector<std::array<uint8_t, 104>> sols3 = s.solve(kat::input32, kat::nonce0);
+        std::printf("  solve #5 on the KAT nonce: speculated=%s\n",
+                    s.last_solve_speculated() ? "yes" : "NO");
+        check(s.last_solve_speculated(),
+              "solve #5 was SERVED by speculation -- its entry pass came from solve #4's round 4");
+        verify_goldens(sols3, "speculated");
+    } else {
+        std::printf("  speculative entry: unavailable (MXBM_NO_SPEC, or the buffers did "
+                    "not fit) -- skipped\n");
+    }
+
     // MXBM_SOLRATE=N: run N solves over DISTINCT nonces and report the mean number of
     // CPU-VERIFIED solutions per solve. This is the factor that converts solve/s into the
     // sol/s figure quoted against other miners, and it CANNOT be measured on the KAT

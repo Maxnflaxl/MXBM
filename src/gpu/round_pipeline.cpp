@@ -247,6 +247,25 @@ static void release_rowbucket(PipelineBuffers& p) {
     }
     p.fb_gictr = Mem(); p.fb_side = Mem();
     p.left = Mem(); p.right = Mem(); p.counters = Mem();
+    p.spec_elem = Mem(); p.spec_counts = Mem(); p.spec_on = false;
+}
+
+// Speculative-entry buffers, allocated only once the ladder has SETTLED. Throughput is
+// a luxury; reach is not. Sizing them into the rung choice would let a card lose a rung
+// for them -- a measured ~1 ms of geometry for a hoped-for fraction of one. Touched so
+// a lazy allocation cannot fail later, during mining.
+static void alloc_spec_entry(Runtime& rt, PipelineBuffers& p) {
+    if (std::getenv("MXBM_NO_SPEC")) return;
+    const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
+    try {
+        p.spec_elem   = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
+        p.spec_counts = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
+        rt.fill_u32(p.spec_elem.get(), 0u, nslots * 2);
+        rt.fill_u32(p.spec_counts.get(), 0u, p.fb_num_buckets);
+        p.spec_on = true;
+    } catch (const ClError&) {
+        p.spec_elem = Mem(); p.spec_counts = Mem(); p.spec_on = false;
+    }
 }
 
 static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
@@ -287,6 +306,7 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
         p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
         p.rowbucket = true;
         alloc_rowbucket(rt, b, p);
+        alloc_spec_entry(rt, p);
         return p;
     }
     // Buffers/out_capacity are sized to b.capacity (= seed count + headroom) so a
@@ -964,7 +984,8 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
 // all-zero survivors. Back-refs (pb.left/right, row (r-1)*capacity by gi) and
 // recover are shared with the sort path. Same PipelineResult contract.
 static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, const Budget& b,
-                             const uint64_t pp[4], const std::atomic<bool>* abort, bool verbose) {
+                             const uint64_t pp[4], const std::atomic<bool>* abort, bool verbose,
+                             SpecEntry* spec) {
     PipelineResult result;
     auto tPipeline = clk::now();
     const uint32_t nb = pb.fb_num_buckets, cap = pb.fb_bucket_cap, capacity = pb.capacity;
@@ -1012,6 +1033,12 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     // prePow, needed by the entry AND by round 1 (which re-derives seeds from indices).
     uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
     Mem mpp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
+    // The speculated nonce's prePow. Created before the first enqueue: a blocking write
+    // later would drain the in-order queue and undo the de-bubble. Per-solve, not in
+    // PipelineBuffers -- round 4 is its only reader.
+    Mem mSpecPp;
+    if (spec && pb.spec_on && spec->seed_next)
+        mSpecPp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, spec->next_pp);
 
     // DE-BUBBLE (#23): in production (verbose=false) enqueue fills+kernels ASYNC on
     // the in-order queue and let the final survivor/drops readbacks drain once,
@@ -1020,22 +1047,29 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     auto RUN  = [&](cl_kernel k, size_t g, size_t l) { if (verbose) rt.run1d(k, g, l); else rt.run1d_async(k, g, l); };
     auto FILL = [&](cl_mem bm, uint32_t v, size_t c) { if (verbose) rt.fill_u32(bm, v, c); else rt.fill_u32_async(bm, v, c); };
 
-    // ENTRY: mix seeds + scatter into round-1 FAT buckets (set 0).
+    // ENTRY: mix seeds + scatter into round-1 FAT buckets. Under speculation the
+    // destination is the spec set instead of set 0 -- one code path, so a hit and a
+    // miss differ only in whether the pass runs. That set is never split, so binding
+    // it twice with half == nb keeps hi undereferenced.
+    const bool specOn = pb.spec_on && spec != nullptr;
+    const bool specHit = specOn && spec->hit;
+    cl_mem r1Counts = specOn ? pb.spec_counts.get() : pb.fb_counts[0].get();
+    cl_mem r1ElemLo = specOn ? pb.spec_elem.get()   : pb.fb_elem[0].get();
+    cl_mem r1ElemHi = specOn ? r1ElemLo
+                            : (pb.fb_elem_hi[0] ? pb.fb_elem_hi[0].get() : r1ElemLo);
+    const uint32_t r1Half = specOn ? nb : pb.fb_half[0];
     auto tSeed = clk::now();
-    FILL(pb.fb_counts[0].get(), 0u, nb);
-    {
+    if (!specHit) {
+        FILL(r1Counts, 0u, nb);
         Kernel k = rt.kernel(prog, "round1_mix_scatter_fat");
-        cl_mem ppMem = mpp.get(), cnt = pb.fb_counts[0].get(), dr = mdrops.get();
-        // Unsplit binds the same buffer twice; half == nb keeps hi undereferenced.
-        cl_mem beLo = pb.fb_elem[0].get();
-        cl_mem beHi = pb.fb_elem_hi[0] ? pb.fb_elem_hi[0].get() : beLo;
+        cl_mem ppMem = mpp.get(), dr = mdrops.get();
         for (uint32_t begin = 0; begin < total; begin += batch) {
             uint32_t count = (total - begin < batch) ? (total - begin) : batch;
             rt.set_arg(k.get(), 0, sizeof(cl_mem), &ppMem); rt.set_arg(k.get(), 1, begin); rt.set_arg(k.get(), 2, count);
             rt.set_arg(k.get(), 3, bucketBits); rt.set_arg(k.get(), 4, cap); rt.set_arg(k.get(), 5, kFbStride[1]);
-            rt.set_arg(k.get(), 6, sizeof(cl_mem), &cnt);
-            rt.set_arg(k.get(), 7, sizeof(cl_mem), &beLo); rt.set_arg(k.get(), 8, sizeof(cl_mem), &beHi);
-            rt.set_arg(k.get(), 9, pb.fb_half[0]);
+            rt.set_arg(k.get(), 6, sizeof(cl_mem), &r1Counts);
+            rt.set_arg(k.get(), 7, sizeof(cl_mem), &r1ElemLo); rt.set_arg(k.get(), 8, sizeof(cl_mem), &r1ElemHi);
+            rt.set_arg(k.get(), 9, r1Half);
             rt.set_arg(k.get(), 10, sizeof(cl_mem), &dr);
             RUN(k.get(), count, 0);
         }
@@ -1066,15 +1100,23 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
         // Rounds 2 and 3 switch TOGETHER between record formats -- r2's out-stride is
         // r3's in-stride, so a mismatch would have r3 read a record r2 never wrote.
+        // Round 4 hosts the next nonce's entry as co-blocks when this solve is
+        // speculating; every other round, and an unspeculated round 4, is unchanged.
+        const bool cob = (r == 4) && specOn && spec->seed_next;
         const char* fusedName = "round_fused_lds";
         if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
         else if (r == 2) fusedName = pb.fb_quad ? "round_fused_rd2q" : "round_fused_rd2";
         else if (r == 3) fusedName = pb.fb_quad ? "round_fused_rd3"  : "round_fused_7_6";
-        else if (r == 4) fusedName = "round_fused_6_5";
+        else if (r == 4) fusedName = cob ? "round_fused_6_5_cob" : "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
-        cl_mem ic = pb.fb_counts[inSet].get(),  oc = pb.fb_counts[outSet].get();
-        cl_mem ieLo = pb.fb_elem[inSet].get();
-        cl_mem ieHi = pb.fb_elem_hi[inSet] ? pb.fb_elem_hi[inSet].get() : ieLo;
+        // Round 1 reads whatever the entry pass wrote into -- the spec set under
+        // speculation, set 0 otherwise (r1Half is nb for the never-split spec set).
+        cl_mem ic = (r == 1) ? r1Counts : pb.fb_counts[inSet].get();
+        cl_mem oc = pb.fb_counts[outSet].get();
+        cl_mem ieLo = (r == 1) ? r1ElemLo : pb.fb_elem[inSet].get();
+        cl_mem ieHi = (r == 1) ? r1ElemHi
+                     : (pb.fb_elem_hi[inSet] ? pb.fb_elem_hi[inSet].get() : ieLo);
+        const uint32_t inHalf = (r == 1) ? r1Half : pb.fb_half[inSet];
         cl_mem oeLo = pb.fb_elem[outSet].get();
         cl_mem oeHi = pb.fb_elem_hi[outSet] ? pb.fb_elem_hi[outSet].get() : oeLo;
         cl_mem aL = pb.left.get(), aR = pb.right.get(), gc = pb.fb_gictr.get(), dr = mdrops.get();
@@ -1097,7 +1139,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, recStride(r));
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ieLo); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ieHi);
-        rt.set_arg(k.get(), a++, pb.fb_half[inSet]);
+        rt.set_arg(k.get(), a++, inHalf);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &sp);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &oeLo); rt.set_arg(k.get(), a++, sizeof(cl_mem), &oeHi);
@@ -1106,7 +1148,31 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
         cl_mem ppm = mpp.get(); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ppm);
-        RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
+        size_t groups = (size_t)nb << submaskBits;
+        if (cob) {
+            // Zeroing the spec counters belongs HERE: after round 1 read them on the
+            // in-order queue, before round 4 refills them. Same ordering CudaSolver uses.
+            FILL(pb.spec_counts.get(), 0u, nb);
+            // One entry group per (stride - 1) round groups, so the default 3 displaces
+            // a third of the grid -- CUDA's ratio. Which ratio pays depends on how much
+            // idle round 4 has, a per-card property, so MXBM_CO_STRIDE sweeps it.
+            static const uint32_t coStride = [] {
+                const char* e = std::getenv("MXBM_CO_STRIDE");
+                const int v = e ? std::atoi(e) : 0;
+                return (v >= 2 && v <= 64) ? (uint32_t)v : 3u;
+            }();
+            cl_mem cpp = mSpecPp.get(), ccnt = pb.spec_counts.get(), cel = pb.spec_elem.get();
+            rt.set_arg(k.get(), a++, sizeof(cl_mem), &cpp);
+            rt.set_arg(k.get(), a++, total); rt.set_arg(k.get(), a++, cap);
+            rt.set_arg(k.get(), a++, coStride);
+            rt.set_arg(k.get(), a++, sizeof(cl_mem), &ccnt);
+            rt.set_arg(k.get(), a++, sizeof(cl_mem), &cel);
+            rt.set_arg(k.get(), a++, sizeof(cl_mem), &cel);   // never split: bound twice
+            rt.set_arg(k.get(), a++, nb);
+            groups += groups / (coStride - 1u);
+            spec->seeded = true;
+        }
+        RUN(k.get(), groups * 256u, 256u);
         // MXBM_OCC=1: read this round's arrival counts and report the occupancy
         // distribution. fb_cap_for's headroom is a guess; this measures the tail it
         // actually has to cover.
@@ -1179,8 +1245,8 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
 }
 
 PipelineResult run_pipeline(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4],
-                             const std::atomic<bool>* abort, bool verbose) {
-    if (pb.rowbucket) return run_pipeline_rowbucket(rt, pb, b, pp, abort, verbose);
+                             const std::atomic<bool>* abort, bool verbose, SpecEntry* spec) {
+    if (pb.rowbucket) return run_pipeline_rowbucket(rt, pb, b, pp, abort, verbose, spec);
     PipelineResult result;
     auto tPipeline = clk::now();
 

@@ -106,7 +106,7 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 58.6 | 34.0 | fallback / `--solver opencl` — 2026-08-01, after [the 128-bit family port](performance-research.md#the-128-bit-family-ported-to-opencl-side-plane--vector-access--pair128-54-ms) (−5.4 ms); the CUDA gap is now ~1.02× |
+| **OpenCL** | 59.4 | 33.5 | fallback / `--solver opencl` — 2026-08-02, after [speculative entry](performance-research.md#speculative-entry-ported-to-opencl-the-entry-pass-hides-inside-round-4-035-ms) (−0.35 ms) on top of [the 128-bit family port](performance-research.md#the-128-bit-family-ported-to-opencl-side-plane--vector-access--pair128-54-ms) (−5.4 ms); against same-session CUDA (33.1 ms) the gap is **1.012×** |
 | **CUDA** | **59.8**[^drift] | **33.3**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
@@ -125,8 +125,13 @@ figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
     record. See [how far these figures
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
     Every A/B on this page was interleaved, so the deltas are unaffected; only the scale
-    moves. OpenCL is a single 120 s miner benchmark (3,506 solves, 2026-08-01), measured
-    opportunistically rather than under the controlled-conditions protocol.
+    moves. OpenCL is a single 120 s miner benchmark (3,551 solves, 2026-08-02), measured
+    opportunistically rather than under the controlled-conditions protocol. **The 1.012×
+    backend gap is NOT this row minus that one** — comparing headline figures measured on
+    different days is exactly what the band above forbids. It comes from a same-session
+    pair on 2026-08-02: CUDA 33.1 ms / 60.2 sol/s, OpenCL 33.5 ms / 59.4 sol/s, both
+    120 s, minutes apart. Cross-day, the same two numbers read as parity, which is how
+    this page briefly claimed it.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
@@ -1202,7 +1207,7 @@ occupancy work that produced Ada's numbers has no direct equivalent here.
 
 - `./build/bench_rounds 20` — median over 20 runs of the **solver pipeline** (entry through
   terminal). This is the controlled number used to make optimization decisions.
-- `./build/test_gpu_solver` — **end-to-end `GpuSolver::solve()`**, including survivor
+- `./build/tests/test_gpu_solver` — **end-to-end `GpuSolver::solve()`**, including survivor
   readback, back-reference recovery and CPU verification. Take `solve #2` (steady state,
   persistent buffers); `solve #1` pays one-off allocation. This is what a miner reports,
   so it is the headline.
@@ -1219,9 +1224,9 @@ sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
 | Command | What it measures |
 |---|---|
 | `./build/bench_rounds 20` | Median ms/solve over 20 solves + drop-free gate |
-| `./build/test_gpu_rounds` | Per-round timing, drop counters, survivor count |
-| `./build/test_gpu_solver` | End-to-end solve incl. recovery and CPU verification |
-| `./build/test_lds_collide` | All isolated kernel benches and the correctness oracles |
+| `./build/tests/test_gpu_rounds` | Per-round timing, drop counters, survivor count |
+| `./build/tests/test_gpu_solver` | End-to-end solve incl. recovery and CPU verification |
+| `./build/tests/test_lds_collide` | All isolated kernel benches and the correctness oracles |
 | `ctest --test-dir build` | Full suite (37 tests) |
 
 Correctness gates that must stay green for any performance change:

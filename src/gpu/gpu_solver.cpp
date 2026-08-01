@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace mxbm { namespace gpu {
 
@@ -82,13 +83,37 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
     uint64_t prePow[4];
     bh3::compute_prepow(input, 32, nonce, extra0, prePow);
 
+    // Speculative entry: learn the engine's nonce stride, then tell the pipeline whether
+    // last solve's round 4 already produced THIS solve's entry output, and which prePow
+    // to seed for the next. See GpuSolver's members and PipelineBuffers::spec_elem.
+    SpecEntry spec;
+    uint64_t nonceLE = 0; std::memcpy(&nonceLE, nonce, 8);
+    const bool sameJob = have_last_ && std::memcmp(last_input_, input, 32) == 0;
+    if (sameJob) { learned_delta_ = nonceLE - last_nonce_; have_delta_ = true; }
+    have_last_ = true; last_nonce_ = nonceLE; std::memcpy(last_input_, input, 32);
+    spec.hit = spec_valid_ && spec_nonce_ == nonceLE
+            && std::memcmp(spec_input_, input, 32) == 0;
+    spec_hit_ = spec.hit && pb_.spec_on;
+    spec.seed_next = have_delta_;
+    spec_valid_ = false;
+    if (spec.seed_next) {
+        const uint64_t nextLE = nonceLE + learned_delta_;
+        uint8_t nextNonce[8]; std::memcpy(nextNonce, &nextLE, 8);
+        bh3::compute_prepow(input, 32, nextNonce, extra0, spec.next_pp);
+    }
+
     // The full 5-round search, reusing this solver's PERSISTENT pb_/budget_
     // (allocated once in the constructor, never reallocated here) -- and
     // abortable via &abort_, polled by run_pipeline between rounds.
     // verbose=false: continuous production mining calls solve() once per
     // nonce attempt, so the per-round printf (default-on for the direct
     // pipeline tests) would spam stdout every round of every attempt.
-    PipelineResult res = run_pipeline(rt_, pb_, budget_, prePow, &abort_, /*verbose=*/false);
+    PipelineResult res = run_pipeline(rt_, pb_, budget_, prePow, &abort_, /*verbose=*/false, &spec);
+    if (spec.seeded) {                     // round 4 seeded (nonce + delta) for next time
+        spec_valid_ = true;
+        spec_nonce_ = nonceLE + learned_delta_;
+        std::memcpy(spec_input_, input, 32);
+    }
 
     // THE CPU VERIFY GATE (permanent anti-cheat): only candidates that pass
     // bh3::is_valid_solution -- which recomputes prePow from the candidate's
@@ -130,8 +155,12 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
     if (profile) {
         double total = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tSolve).count();
         double sps = total > 0.0 ? 1000.0 / total : 0.0;
-        std::printf("[prof] total=%.1fms  %.2f solve/s (~%.1f sol/s | the reference miner ref ~53) | seed=%.1f",
-                    total, sps, sps * 1.9, res.t_seed_ms);
+        // spec: did this solve's entry pass come free from the previous solve's round 4.
+        // "off" = buffers did not fit, or MXBM_NO_SPEC; a steady run of "miss" means the
+        // nonce stride is not being predicted.
+        std::printf("[prof] total=%.1fms  %.2f solve/s (~%.1f sol/s | the reference miner ref ~53) | spec=%s seed=%.1f",
+                    total, sps, sps * 1.9,
+                    !pb_.spec_on ? "off" : spec.hit ? "hit" : "miss", res.t_seed_ms);
         for (int r = 0; r < 5; ++r) {
             const RoundStats& st = res.rounds[r];
             std::printf(" r%d=%.1f[mx%.1f sc%.1f mt%.1f]", r + 1,
