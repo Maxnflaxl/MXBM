@@ -3436,6 +3436,26 @@ walk in the terminal round as it already did in the rounds. The reason a −27 %
 LDS cut buys no time is that the terminal round is ~0.9 ms of a 34 ms solve;
 it was never occupancy-bound, exactly as its `LDS_TCAP` comment says.
 
+**The cheap-flag batch: three nulls, one of them instructive.**
+
+- **`-cl-nv-opt-level`.** The build options string had been empty since the
+  path was written, so this was free to try: 2, 3 (default) and 4 all read
+  33.5–33.6 ms. **Positive-controlled** — `-cl-nv-opt-level=0` reads
+  **179.7 ms**, 5.3×, so the flag demonstrably reaches ptxas and the null is
+  the compiler's answer, not a dropped argument. Same shape as the CUDA
+  compiler axis: the default is already the local optimum.
+- **`restrict` on `round5_fused_lds`.** Every pointer, matching the fused
+  rounds. Null on time; kept, being free information to the compiler.
+- **`reqd_work_group_size(256)` on the entry kernel — measured, then
+  REVERTED.** The first bracketed round read −0.25 ms and the second, with the
+  arm order reversed, read +0.3; pooled, 33.625 vs 33.65 ms. The apparent win
+  was session drift, and the reversed bracket is the only reason it did not get
+  written down as one. CUDA pins its `entry_scatter` at 256 because CUDA has no
+  driver-choice mechanism; OpenCL does, this kernel is a flat 1-D map with no
+  LDS, and pinning it would take that freedom away on every card we cannot
+  measure. Left at the driver's choice, with the null recorded in the kernel so
+  it is not re-proposed.
+
 </details>
 
 ## Established limits

@@ -1005,6 +1005,10 @@ FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u,
 // single-leaf tree {idx}) -- exactly round1_mix_seeds -- then scatter the mixed
 // element DIRECTLY into round-1 FAT buckets (no flat work[1]/leaves[1]). gi = seed
 // index (recover reads it as a leaf at row 0); lead = leaves[0] = idx.
+// No reqd_work_group_size here, unlike the fused kernels: pinning it to 256 (what
+// CUDA's entry_scatter uses) measured NULL on Ada across two bracketed ABBA rounds,
+// and this kernel is a flat 1-D map with no LDS, so the driver's own choice is the
+// better default on the cards we cannot measure.
 __kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint begin, uint count,
                                      uint bucket_bits, uint bucket_cap, uint stride,
                                      __global uint* restrict counts,
@@ -1044,13 +1048,13 @@ __kernel __attribute__((reqd_work_group_size(LDS_WG, 1, 1)))
 void round5_fused_lds(
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint Lout, uint out_off,
     uint in_stride,
-    __global const uint*  in_counts,
-    __global const ulong* in_lo,       // packed: work[0..4], meta=(gi<<32)|lead --
-    __global const ulong* in_hi,       // as bucket-halves when split, see FUSED_LDS
+    __global const uint*  restrict in_counts,
+    __global const ulong* restrict in_lo,   // packed: work[0..4], meta=(gi<<32)|lead --
+    __global const ulong* restrict in_hi,   // as bucket-halves when split, see FUSED_LDS
     uint in_half,
-    __global uint*  all_left, __global uint* all_right,   // indexed by survivor slot (row out_off)
-    __global uint*  surv_slots, __global uint* surv_count, uint surv_cap,
-    __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
+    __global uint* restrict all_left, __global uint* restrict all_right,  // by survivor slot
+    __global uint* restrict surv_slots, __global uint* restrict surv_count, uint surv_cap,
+    __global uint* restrict drops) {    // [1]=group ovf, [3]=chain cap, [2]=surv ovf
     // Round-5 input = ONE work word, not the 5 significant ones round 4 produces.
     // The terminal test is z = OR(c[0..6]) after bh3_combine at Lout(5) = 24, which
     // forces c[1..6] to zero and masks c[0] to 24 bits; and
