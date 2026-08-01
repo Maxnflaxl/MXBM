@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(MXBM VERSION 0.6 LANGUAGES C CXX)
+project(MXBM VERSION 0.7 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE)
@@ -224,6 +224,11 @@ add_dependencies(mxbm_version mxbm_version_gen)
 add_executable(test_version tests/test_version.cpp)
 target_include_directories(test_version PRIVATE tests src)
 target_link_libraries(test_version PRIVATE mxbm_version)
+# The expected prefix comes from project() itself, so the cross-check needs no
+# hand-maintained literal: a version bump cannot fail this test, only a runtime
+# string that disagrees with CMakeLists can.
+target_compile_definitions(test_version PRIVATE
+    MXBM_EXPECT_PREFIX="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.")
 add_test(NAME version COMMAND test_version)
 
 # Row-bucket geometry and footprint arithmetic. Its own library because BOTH backends

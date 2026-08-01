@@ -25,8 +25,11 @@ int main() {
     check(version() != nullptr && *version(), "version non-empty");
     check(shape_ok(version()), "version shape N.N.N [hex7|nogit]");
     // Pins that the runtime string really comes from project(VERSION ...) in
-    // CMakeLists.txt rather than a stale hardcoded stamp -- so this literal
-    // must be bumped in step with it.
-    check(strncmp(version(), "0.6.", 4) == 0, "major.minor from project()");
+    // CMakeLists.txt rather than a stale hardcoded stamp. The expected prefix
+    // is fed in by CMake (MXBM_EXPECT_PREFIX), so a version bump cannot fail
+    // this check -- only a generated header that disagrees with a fresh
+    // configure can, which is the actual defect it exists to catch.
+    check(strncmp(version(), MXBM_EXPECT_PREFIX, strlen(MXBM_EXPECT_PREFIX)) == 0,
+          "major.minor from project()");
     return summary("version");
 }
