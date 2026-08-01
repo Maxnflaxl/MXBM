@@ -645,3 +645,17 @@ if(MXBM_HAVE_METAL)
                               COMPILE_FLAGS "-fobjc-arc")
   add_test(NAME metal_telemetry COMMAND test_metal_telemetry)
 endif()
+
+# Test binaries land in build/tests/ instead of beside the miner: 49 of them otherwise
+# bury mxbm, the libraries and the generated sources in a directory listing. ctest is
+# unaffected -- add_test(COMMAND <target>) resolves the target's real location at
+# generate time, not a hardcoded path. bench_rounds deliberately stays at the top level:
+# it is a benchmark rather than a test, and the perf docs reference it by path.
+get_property(_mxbm_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+             PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_t IN LISTS _mxbm_targets)
+  if(_t MATCHES "^test_")
+    set_target_properties(${_t} PROPERTIES
+                          RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+  endif()
+endforeach()

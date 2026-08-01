@@ -53,10 +53,10 @@ Two figures are quoted throughout the docs and they measure different things:
 # End-to-end GpuSolver::solve(), including survivor readback, back-reference
 # recovery and CPU verification. This is what a miner reports, so it is the headline.
 # Take solve #2 -- solve #1 pays one-off allocation.
-./build/test_gpu_solver
+./build/tests/test_gpu_solver
 
 # Verified solutions per solve, over distinct prePows.
-MXBM_SOLRATE=20 ./build/test_gpu_solver
+MXBM_SOLRATE=20 ./build/tests/test_gpu_solver
 
 # Offline solver benchmark, no pool and no wallet.
 ./build/mxbm --benchmark BEAM-III --benchmark-seconds 120
