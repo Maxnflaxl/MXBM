@@ -40,17 +40,33 @@ const RbRung* rb_rungs(int& n) {
     return kRungs;
 }
 
+size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad) {
+    size_t total = 0, single = 0;
+    rowbucket_bytes(capacity, bb, total, single, quad);
+    const size_t half = single / 2;                     // nb is even on every rung
+    const size_t backrefs = (size_t)5 * capacity * 4;   // left/right rows never split
+    return half > backrefs ? half : backrefs;
+}
+
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
-                           bool allow_quad, unsigned power_limit_w) {
+                           bool allow_quad, unsigned power_limit_w, bool allow_split) {
     // The low-power exception to the ladder's order. (17,0) is NOT a rung: it loses
     // 10.9 % at stock, so it can only be reached by policy under a cap -- and the
     // policy is currently DISARMED (kRbLowPowerW == 0: the measured crossover failed
     // reproduction; the constant's comment tells the story). Same fit rules as the
     // ladder; if it does not fit, the ladder answers exactly as without the hint.
+    // The figure max_alloc binds on: the whole larger set, or -- when the backend
+    // can split each set into two bucket-halves -- whatever rowbucket_single_split
+    // says is the largest piece left.
+    auto binding_single = [&](uint32_t bb, bool quad, size_t single) {
+        if (!allow_split) return single;
+        const size_t s = rowbucket_single_split(capacity, bb, quad);
+        return s < single ? s : single;
+    };
     if (kRbLowPowerW != 0 && power_limit_w != 0 && power_limit_w < kRbLowPowerW) {
         size_t total = 0, single = 0;
         rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false);
-        if ((!max_alloc || single <= (size_t)max_alloc)
+        if ((!max_alloc || binding_single(17u, false, single) <= (size_t)max_alloc)
             && (!global_mem || total + (size_t)(1ull << 30) <= (size_t)global_mem))
             return { 17u, 0u, false, true };
     }
@@ -61,7 +77,7 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
         if (r.quad && !allow_quad) continue;
         size_t total = 0, single = 0;
         rowbucket_bytes(capacity, r.bb, total, single, r.quad);
-        if (max_alloc && single > (size_t)max_alloc) continue;
+        if (max_alloc && binding_single(r.bb, r.quad, single) > (size_t)max_alloc) continue;
         if (global_mem && total + (size_t)(1ull << 30) > (size_t)global_mem) continue;
         return { r.bb, r.sm, r.quad, true };
     }

@@ -12,6 +12,12 @@
 // it validates the bucketing + chaining MECHANISM independent of the real 56 B
 // element (whose LDS-staging strategy is a P2b fork). key = bits[0,24).
 
+// 128-bit record access on the even-stride paths (staging loads + emit stores).
+// -DLDS_V2=0 restores the scalar loops for A/Bs; the r2->r3 side plane is
+// STRUCTURAL (reader and writer agree via the record stride) and does not toggle.
+#ifndef LDS_V2
+#define LDS_V2 1
+#endif
 #ifndef LDS_WG
 #define LDS_WG 256u
 #endif
@@ -600,9 +606,21 @@ void NAME(                                                                      
     uint sBuild, uint in_stride, uint out_stride,                                     \
     /* restrict: the ping-pong sets are distinct buffers and every output array is    \
        disjoint from every input, so the compiler may reorder loads across stores.    \
-       Without it each store barriers the loads that follow. */                       \
-    __global const uint* restrict in_counts, __global const ulong* restrict in_belem, \
-    __global uint* restrict out_counts, __global ulong* restrict out_belem,           \
+       Without it each store barriers the loads that follow.                          \
+       lo/hi + half: a record set over the driver's single-allocation cap arrives as  \
+       two bucket-halves. Unsplit, the SAME buffer arrives twice with half == nb, so  \
+       hi is never dereferenced and the restrict promise holds either way. */         \
+    /* side_in/side_out: the r2->r3 side plane (packed only) -- record stride 8    \
+       keeps 16 B alignment, the 9th word lives at the element's global slot in    \
+       its own never-split buffer. Other rounds get a dummy binding, untouched. */ \
+    __global const uint* restrict in_counts,                                          \
+    __global const ulong* restrict in_lo, __global const ulong* restrict in_hi,       \
+    uint in_half,                                                                     \
+    __global const ulong* restrict side_in,                                           \
+    __global uint* restrict out_counts,                                               \
+    __global ulong* restrict out_lo, __global ulong* restrict out_hi,                 \
+    uint out_half,                                                                    \
+    __global ulong* restrict side_out,                                                \
     __global uint* restrict all_left, __global uint* restrict all_right,              \
     __global uint* restrict gi_counter, __global uint* restrict drops,                \
     __global const ulong* restrict pp4) {                                            \
@@ -625,7 +643,11 @@ void NAME(                                                                      
     uint mask   = get_group_id(0) % submaskCount;                                     \
     uint cnt = in_counts[bucket];                                                     \
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;                                     \
-    size_t base = (size_t)bucket * in_bucket_cap;                                     \
+    /* Bucket is uniform per workgroup, so the half select costs nothing per element. */ \
+    __global const ulong* restrict in_belem = (bucket < in_half) ? in_lo : in_hi;     \
+    size_t base = (size_t)(bucket < in_half ? bucket : bucket - in_half) * in_bucket_cap; \
+    /* Side plane indexes by GLOBAL slot: the plane never splits. */                  \
+    size_t side_base = (size_t)bucket * in_bucket_cap;                                \
     /* SPILL state: xb = extra split bits (level chosen ONCE, never escalated -- an  \
        escalation after a walk would re-emit the coarser parts' children), xp = the  \
        part being processed this pass, nparts = 1 << xb. Without SPILL the loop runs \
@@ -639,7 +661,13 @@ void NAME(                                                                      
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
     for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
         size_t d = (base + p) * (INSTR);                                              \
-        ulong rec0 = in_belem[d];                                                     \
+        ulong rec0; ulong rec1 = 0ul;                                                 \
+        if ((LDS_V2) && (LMODE) == LMODE_RD2) {                                       \
+            /* PAIR128: both words of the 16 B pair record in one aligned load,       \
+               BEFORE the filter -- mirrors CUDA's MXBM_PAIR128 (-0.145 ms there). */ \
+            ulong2 q = *((__global const ulong2*)(in_belem + d));                     \
+            rec0 = q.x; rec1 = q.y;                                                   \
+        } else rec0 = in_belem[d];                                                    \
         uint key = (uint)(rec0 & 0xFFFFFFu);                                          \
         if ((key & ((1u << sbits) - 1u)) != pmask) continue;                          \
         uint pos = atomic_inc(&gcount);                                               \
@@ -659,7 +687,7 @@ void NAME(                                                                      
             } else if ((LMODE) == LMODE_RD2) {                                        \
                 /* Unpack the 16 B pair record. Cheap field extraction only -- the     \
                    two seed derivations are deferred to the expand loop below. */      \
-                ulong rec1 = in_belem[d + 1u];                                        \
+                if (!(LDS_V2)) rec1 = in_belem[d + 1u];                               \
                 uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
                 lgi[pos] = rd2_gi(rec1);                                              \
                 if (!(PERFECT)) lkey[pos] = key;                                      \
@@ -676,9 +704,20 @@ void NAME(                                                                      
                 lleaf[pos*(LEAFW) + 2] = rd3_i2(w1);                                   \
                 lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                   \
             } else if ((LMODE) == LMODE_EMIT) {                                       \
-                /* 72 B round-3 record: 7 work words then the packed leaves+gi. */     \
-                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
-                ulong p0 = in_belem[d + (INW)], p1 = in_belem[d + (INW) + 1u];        \
+                /* Stride-8 r2 record [work0..6 | p0], p1 in the side plane: 4 x 16 B \
+                   loads where 9 scalars were (CUDA: the MIO-queue win, 41.5->35.3). */ \
+                ulong p0, p1 = side_in[side_base + p];                                \
+                if (LDS_V2) {                                                         \
+                    __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
+                    ulong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];                \
+                    lwork[pos*(INW) + 0] = q0.x; lwork[pos*(INW) + 1] = q0.y;         \
+                    lwork[pos*(INW) + 2] = q1.x; lwork[pos*(INW) + 3] = q1.y;         \
+                    lwork[pos*(INW) + 4] = q2.x; lwork[pos*(INW) + 5] = q2.y;         \
+                    lwork[pos*(INW) + 6] = q3.x; p0 = q3.y;                           \
+                } else {                                                              \
+                    for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
+                    p0 = in_belem[d + (INW)];                                         \
+                }                                                                     \
                 lgi[pos] = r3_gi(p1);                                                 \
                 if (!(PERFECT)) lkey[pos] = key;                                      \
                 lleaf[pos*(LEAFW) + 0] = r3_l0(p0);                                   \
@@ -692,7 +731,16 @@ void NAME(                                                                      
                    overlap across the 8 staging iterations, so moving them into a
                    single-iteration loop removes that memory-level parallelism and adds
                    an LDS round-trip. Divergence costs compute, not bandwidth. */      \
-                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
+                if ((LDS_V2) && (LMODE) == LMODE_USE) {                               \
+                    /* Stride-8 r3 record: the 6 work words as 3 x 16 B loads. RAW    \
+                       keeps the scalar loop (runtime stride, no alignment claim). */  \
+                    __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
+                    ulong2 q0 = v[0], q1 = v[1], q2 = v[2];                           \
+                    lwork[pos*(INW) + 0] = q0.x; lwork[pos*(INW) + 1] = q0.y;         \
+                    lwork[pos*(INW) + 2] = q1.x; lwork[pos*(INW) + 3] = q1.y;         \
+                    lwork[pos*(INW) + 4] = q2.x; lwork[pos*(INW) + 5] = q2.y;         \
+                } else                                                                \
+                    for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
                 ulong meta = in_belem[d + (INW)];                                     \
                 lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta;               \
                 if (!(PERFECT)) lkey[pos] = key;                                      \
@@ -839,15 +887,24 @@ void NAME(                                                                      
                        scatter them over a 190 MB row. Same reason the per-bucket      \
                        atomic_inc beats a computed slot. Do not retry. */              \
                     uint cgi = ABL_HIT(64, LMODE) ? pos : atomic_inc(gi_counter);     \
-                    size_t od = ((size_t)cb * out_bucket_cap + cpos) * (OUTSTR);      \
+                    /* One predictable select per child; free (measured 2026-08-01). */ \
+                    __global ulong* restrict out_belem =                              \
+                        (cb < out_half) ? out_lo : out_hi;                            \
+                    size_t od = ((size_t)(cb < out_half ? cb : cb - out_half)         \
+                                 * out_bucket_cap + cpos) * (OUTSTR);                 \
                     if (ABL_HIT(1, LMODE)) { /* payload write ablated */ }                      \
                     else if ((LMODE) == LMODE_SEED) {                                 \
                         /* 16 B PAIR RECORD instead of the 72 B element: round 2       \
                            re-derives the work state from these two indices, so the    \
                            work words and the leaf payload need not be stored at all.  \
                            ctree[0]/ctree[1] are the two parent seed indices. */       \
-                        out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
-                        out_belem[od + 1u] = rd2_w1(ctree[1], cgi);                   \
+                        if (LDS_V2)                                                   \
+                            *((__global ulong2*)(out_belem + od)) =                   \
+                                (ulong2)(rd2_w0(ckey, ctree[0]), rd2_w1(ctree[1], cgi)); \
+                        else {                                                        \
+                            out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);              \
+                            out_belem[od + 1u] = rd2_w1(ctree[1], cgi);               \
+                        }                                                             \
                     } else if ((LMODE) == LMODE_RD2 && (OUTSTR) == 3u) {              \
                         /* QUAD RECORD: key, four leaves, gi in 3 u64 where the packed \
                            record below takes 9. The work words are dropped entirely;  \
@@ -858,11 +915,30 @@ void NAME(                                                                      
                         out_belem[od + 1u] = rd3_w1(ctree[1], ctree[2]);              \
                         out_belem[od + 2u] = rd3_w2(ctree[3], cgi);                   \
                     } else if ((LMODE) == LMODE_RD2) {                                \
-                        /* 72 B: 7 work words + 4 leaves + gi, no separate meta word.  \
-                           lead == ctree[0] == leaf 0, so storing it again was waste. */ \
-                        for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
-                        out_belem[od + (OUTW)]      = r3_p0(ctree[0], ctree[1], ctree[2]); \
-                        out_belem[od + (OUTW) + 1u] = r3_p1(ctree[2], ctree[3], cgi); \
+                        /* Stride-8 record [work0..6 | p0]; p1 to the side plane at   \
+                           the GLOBAL slot (the plane never splits). lead == ctree[0] \
+                           == leaf 0, so storing it again was waste. */               \
+                        if (LDS_V2) {                                                 \
+                            __global ulong2* v = (__global ulong2*)(out_belem + od);  \
+                            v[0] = (ulong2)(c[0], c[1]);                              \
+                            v[1] = (ulong2)(c[2], c[3]);                              \
+                            v[2] = (ulong2)(c[4], c[5]);                              \
+                            v[3] = (ulong2)(c[6], r3_p0(ctree[0], ctree[1], ctree[2])); \
+                        } else {                                                      \
+                            for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w]; \
+                            out_belem[od + (OUTW)] = r3_p0(ctree[0], ctree[1], ctree[2]); \
+                        }                                                             \
+                        side_out[(size_t)cb * out_bucket_cap + cpos] =                \
+                            r3_p1(ctree[2], ctree[3], cgi);                           \
+                    } else if ((LDS_V2) && ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3)) { \
+                        __global ulong2* v = (__global ulong2*)(out_belem + od);      \
+                        v[0] = (ulong2)(c[0], c[1]);                                  \
+                        v[1] = (ulong2)(c[2], c[3]);                                  \
+                        v[2] = (ulong2)(c[4], c[5]);                                  \
+                        v[3] = (ulong2)(((ulong)cgi << 32) | (ulong)ctree[0], contribOut); \
+                    } else if ((LDS_V2) && (LMODE) == LMODE_USE) {                    \
+                        *((__global ulong2*)(out_belem + od)) =                       \
+                            (ulong2)(c[0], ((ulong)cgi << 32) | (ulong)ctree[0]);     \
                     } else {                                                          \
                         for (uint w = 0; w < (OUTW); ++w) out_belem[od + w] = c[w];   \
                         out_belem[od + (OUTW)] = ((ulong)cgi << 32) | (ulong)ctree[0]; \
@@ -899,8 +975,8 @@ void NAME(                                                                      
 // configuration at runtime for A/Bs.
 FUSED_LDS(round_fused_seed, 7, 7, 1, LMODE_SEED, 424u, 2u, 1u, 2u, 2u, 1u, 2u,
           LDS_FCAP_R1, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)  // r1: seeds in, 16 B pair record out
-FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 9u,
-          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r2: re-derives from the pair record
+FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 8u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r2: stride-8 record + side plane
 // RUNTIME-PARAMETERISED variant: the constants are the kernel's own runtime args, so
 // this one kernel still validates the fused mechanism generically across r=1..4
 // (tests/test_lds_collide.cpp, test_fused_round). Not on the pipeline path -- the four
@@ -911,8 +987,8 @@ FUSED_LDS(round_fused_rd2,  7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 9u,
 // does not hold.
 FUSED_LDS(round_fused_lds,  7, 7, 2, LMODE_RAW, Lout, padnum_next, sIn, sOut, sBuild, in_stride, out_stride,
           384u, LDS_TABSIZE, 0, 0)
-FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 9u, 8u,
-          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r3 fallback (full packed record)
+FUSED_LDS(round_fused_7_6,  7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 8u, 8u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r3 fallback (stride-8 + side plane)
 // QUAD-RECORD PAIR (rowbucket_geom.h `quad`). Only the strides and round 3's mode
 // change: the record carries the same INFORMATION either way, just not the same bytes.
 // r2 emits 3 u64 instead of 9, and set 0's stride collapses 9 -> 3 with it, which is
@@ -932,7 +1008,9 @@ FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u,
 __kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint begin, uint count,
                                      uint bucket_bits, uint bucket_cap, uint stride,
                                      __global uint* restrict counts,
-                                     __global ulong* restrict belem,
+                                     __global ulong* restrict belem_lo,
+                                     __global ulong* restrict belem_hi,
+                                     uint half_buckets,
                                      __global uint* restrict drops) {
     uint g = (uint)get_global_id(0);
     if (g >= count) return;
@@ -950,7 +1028,9 @@ __kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint be
         // NOT stored -- round 1 re-derives it from the index while staging into LDS
         // (LMODE_SEED). gi, lead and leaf0 are all the index for a seed element, so
         // nothing else needs carrying. Measured 2.5 ms vs 18.2 ms for the 72 B record.
-        size_t d = ((size_t)b*bucket_cap + pos) * stride;
+        // lo/hi + half_buckets: split record set, see the FUSED_LDS note.
+        __global ulong* restrict belem = (b < half_buckets) ? belem_lo : belem_hi;
+        size_t d = ((size_t)(b < half_buckets ? b : b - half_buckets)*bucket_cap + pos) * stride;
         belem[d] = ((ulong)idx << 32) | (ulong)key;
     } else atomic_inc(&drops[1]);
 }
@@ -965,7 +1045,9 @@ void round5_fused_lds(
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint Lout, uint out_off,
     uint in_stride,
     __global const uint*  in_counts,
-    __global const ulong* in_belem,    // packed: work[0..4], meta=(gi<<32)|lead
+    __global const ulong* in_lo,       // packed: work[0..4], meta=(gi<<32)|lead --
+    __global const ulong* in_hi,       // as bucket-halves when split, see FUSED_LDS
+    uint in_half,
     __global uint*  all_left, __global uint* all_right,   // indexed by survivor slot (row out_off)
     __global uint*  surv_slots, __global uint* surv_count, uint surv_cap,
     __global uint*  drops) {            // [1]=group ovf, [3]=chain cap, [2]=surv ovf
@@ -1003,9 +1085,20 @@ void round5_fused_lds(
 
     uint cnt = in_counts[bucket];
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
-    size_t base = (size_t)bucket * in_bucket_cap;
+    __global const ulong* in_belem = (bucket < in_half) ? in_lo : in_hi;
+    size_t base = (size_t)(bucket < in_half ? bucket : bucket - in_half) * in_bucket_cap;
     for (uint p = lId; p < cnt; p += LDS_WG) {
         size_t d = (base + p) * LDS_R5STR;
+#if LDS_V2
+        ulong2 q = *((__global const ulong2*)(in_belem + d));
+        uint key = (uint)(q.x & 0xFFFFFFu);
+        if ((key & (submaskCount - 1u)) != mask) continue;
+        uint pos = atomic_inc(&gcount);
+        if (pos < LDS_TCAP) {
+            lwork[pos*LDS_R5W] = q.x;
+            lgi[pos] = (uint)(q.y >> 32); llead[pos] = (uint)q.y; lkey[pos] = key;
+        } else atomic_inc(&drops[1]);
+#else
         uint key = (uint)(in_belem[d] & 0xFFFFFFu);
         if ((key & (submaskCount - 1u)) != mask) continue;
         uint pos = atomic_inc(&gcount);
@@ -1014,6 +1107,7 @@ void round5_fused_lds(
             ulong meta = in_belem[d + LDS_R5W];
             lgi[pos] = (uint)(meta >> 32); llead[pos] = (uint)meta; lkey[pos] = key;
         } else atomic_inc(&drops[1]);
+#endif
     }
     barrier(CLK_LOCAL_MEM_FENCE);
     uint total = gcount < LDS_TCAP ? gcount : LDS_TCAP;

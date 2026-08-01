@@ -74,7 +74,18 @@ struct PipelineBuffers {
     bool fb_quad = false;            // 24 B quad record for r2 -> r3; see rowbucket_geom.h
     uint32_t fb_stride[2] = {0, 0};  // u64/element actually allocated PER SET (the two
                                // differ) -- read this rather than re-deriving the width
-    Mem fb_elem[2];            // ulong[nb*cap*fb_stride]
+    // A set that busts the driver's single-allocation cap (VRAM/4 on NVIDIA --
+    // what held the OpenCL floor at 11 GB) splits into two bucket-halves.
+    // Unsplit: fb_elem_hi empty, fb_half == nb, launch sites bind fb_elem twice
+    // and the hi pointer is never dereferenced. MXBM_SPLIT=1 forces the split --
+    // the 16 GB dev rig's only way to run this path.
+    Mem fb_elem[2];            // ulong[nb*cap*fb_stride], or the LOW bucket-half
+    Mem fb_elem_hi[2];         // the HIGH bucket-half when split; empty otherwise
+    uint32_t fb_half[2] = {0, 0};   // buckets in fb_elem[i]; == fb_num_buckets unsplit
+    Mem fb_side;               // r2->r3 side plane (packed only): the record's 9th
+                               // word, ulong[nb*cap], indexed by GLOBAL slot and
+                               // never split. Keeps the record stride 8 so every
+                               // access is 16 B aligned. Empty under quad.
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
 };

@@ -585,8 +585,16 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
       rt.set_arg(k.get(),a++,sIn); rt.set_arg(k.get(),a++,sOut); rt.set_arg(k.get(),a++,0u/*out_off*/);
       rt.set_arg(k.get(),a++,sOut/*sBuild: RAW variant builds exactly what it stores*/);
       rt.set_arg(k.get(),a++,inStride); rt.set_arg(k.get(),a++,outStride);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ic); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ie);
-      rt.set_arg(k.get(),a++,sizeof(cl_mem),&oc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&oe);
+      // Unsplit record sets: the one buffer twice, half == numBuckets (hi unused).
+      // Side-plane args are RAW-inert dummies.
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ic);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ie); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ie);
+      rt.set_arg(k.get(),a++,numBuckets);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&ie);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&oc);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&oe); rt.set_arg(k.get(),a++,sizeof(cl_mem),&oe);
+      rt.set_arg(k.get(),a++,numBuckets);
+      rt.set_arg(k.get(),a++,sizeof(cl_mem),&oe);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&aL); rt.set_arg(k.get(),a++,sizeof(cl_mem),&aR);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&gc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&dr);
       cl_mem ppm=mInElem.get(); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ppm); /*unused by RAW*/
@@ -852,8 +860,11 @@ static void test_seed_rederivation(Runtime& rt, cl_program prog) {
         cl_mem p2=mPP.get(), c=mCnt.get(), be=mFat.get(), dr=mDr.get(); uint32_t z=0, st=9;
         rt.set_arg(k.get(),0,sizeof(cl_mem),&p2); rt.set_arg(k.get(),1,z); rt.set_arg(k.get(),2,N);
         rt.set_arg(k.get(),3,bb); rt.set_arg(k.get(),4,cap); rt.set_arg(k.get(),5,st);
-        rt.set_arg(k.get(),6,sizeof(cl_mem),&c); rt.set_arg(k.get(),7,sizeof(cl_mem),&be);
-        rt.set_arg(k.get(),8,sizeof(cl_mem),&dr);
+        rt.set_arg(k.get(),6,sizeof(cl_mem),&c);
+        // Unsplit: same buffer twice, half == nb (hi never dereferenced).
+        rt.set_arg(k.get(),7,sizeof(cl_mem),&be); rt.set_arg(k.get(),8,sizeof(cl_mem),&be);
+        rt.set_arg(k.get(),9,nb);
+        rt.set_arg(k.get(),10,sizeof(cl_mem),&dr);
         auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
         return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
     std::printf("  entry storing 72 B packed record (today)            : %.2f ms\n", tf);

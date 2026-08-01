@@ -153,7 +153,10 @@ static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
     // takes the largest single allocation from 2.76 to 2.45 GiB, which is under the
     // CL_DEVICE_MAX_MEM_ALLOC_SIZE of an 11 GB card -- a whole device class that was
     // falling back to the ~5x slower sort path.
-    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, d.global_mem, /*allow_quad=*/true);
+    // allow_split: sets over CL_DEVICE_MAX_MEM_ALLOC_SIZE go in as bucket-halves
+    // (fb_elem_hi) -- what took the OpenCL floor from 11 GB to CUDA's ~5.7 GiB.
+    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, d.global_mem,
+                                         /*allow_quad=*/true, 0, /*allow_split=*/true);
     // MXBM_QUAD forces the record format on a card that would not otherwise need it,
     // which is the only way to exercise this path on a 16 GB device.
     return { g.bb, g.sm, g.quad || std::getenv("MXBM_QUAD") != nullptr };
@@ -173,32 +176,109 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     const RbGeom g = rb_pick_geometry(rt, capacity);
     size_t total = 0, single = 0;
     rowbucket_bytes(capacity, g.bb, total, single, g.quad);
-    if (single > (size_t)d.max_alloc) return false;
+    // max_alloc binds on the split figure when smaller. Checked here too, not just
+    // in rb_geometry_for: MXBM_BB/MXBM_SM bypass the ladder yet still get the split.
+    size_t bind = single;
+    { const size_t s = rowbucket_single_split(capacity, g.bb, g.quad);
+      if (s < bind) bind = s; }
+    if (bind > (size_t)d.max_alloc) return false;
     if (total + (size_t)(1ull << 30) > (size_t)d.global_mem) return false;
     return true;
 }
 
 // Fused row-bucket allocation: FAT bucket ping-pong + left/right for recover. No
 // flat work[]/leaves[]/sort scratch (the buckets ARE the resident storage). Sized
-// so bucketDrops==0 at 2^25 (cap ~1.75x mean) -- ~12 GB, fits 16 GB.
-static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
-    const RbGeom g = rb_pick_geometry(rt, p.capacity);
-    p.fb_num_buckets  = 1u << g.bb;
-    p.fb_submask_bits = g.sm;
+// so bucketDrops==0 at 2^25 (cap ~1.75x mean).
+static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
+                                uint32_t bb, uint32_t sm, bool quad) {
+    p.fb_num_buckets  = 1u << bb;
+    p.fb_submask_bits = sm;
     p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
-    p.fb_quad = g.quad;
+    p.fb_quad = quad;
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
+    const uint64_t maxAlloc = rt.device().max_alloc;
+    const bool forceSplit = std::getenv("MXBM_SPLIT") != nullptr;
     for (int i = 0; i < 2; ++i) {
-        p.fb_elem[i]   = rt.alloc(CL_MEM_READ_WRITE, nslots * fb_set_stride((int)i, g.quad) * 8);
-        p.fb_stride[i] = fb_set_stride((int)i, g.quad);
+        p.fb_stride[i] = fb_set_stride((int)i, quad);
+        // Packed set 0 allocates stride-8 records; the 9th word (r3_p1) lives in
+        // fb_side so every record access is 16 B aligned. Slot cost stays 9 u64
+        // (rowbucket_bytes' figure), split 8 + 1.
+        if (i == 0 && !quad) p.fb_stride[i] = 8u;
+        const size_t bytes = nslots * p.fb_stride[i] * 8;
+        // A set the driver's single-allocation cap refuses whole goes in as two
+        // bucket-halves; the kernels select by child bucket (fb_half). MXBM_SPLIT
+        // forces it, which is how the 16 GB dev rig exercises this path at all.
+        if (forceSplit || (maxAlloc != 0 && bytes > (size_t)maxAlloc)) {
+            const size_t halfBytes = (nslots / 2) * p.fb_stride[i] * 8;
+            p.fb_elem[i]    = rt.alloc(CL_MEM_READ_WRITE, halfBytes);
+            p.fb_elem_hi[i] = rt.alloc(CL_MEM_READ_WRITE, halfBytes);
+            p.fb_half[i]    = p.fb_num_buckets / 2;
+        } else {
+            p.fb_elem[i]    = rt.alloc(CL_MEM_READ_WRITE, bytes);
+            p.fb_elem_hi[i] = Mem();
+            p.fb_half[i]    = p.fb_num_buckets;
+        }
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
+    if (!quad) p.fb_side = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
     // Consolidated back-ref rows for recover (5 rounds x capacity, indexed by gi).
     const size_t backrefBytes = (size_t)5 * p.capacity * 4;
     p.left  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
     p.right = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
     p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
+    // clCreateBuffer is lazy on NVIDIA: a rung the card cannot really hold fails at
+    // first USE, long after the arithmetic said yes. Touch every multi-GB allocation
+    // so the commit happens HERE, where alloc_rowbucket's ladder can still step down.
+    auto touch = [&](const Mem& m, size_t bytes) { if (m) rt.fill_u32(m.get(), 0u, bytes / 4); };
+    for (int i = 0; i < 2; ++i) {
+        const size_t nsl = (p.fb_half[i] == p.fb_num_buckets) ? nslots : nslots / 2;
+        touch(p.fb_elem[i], nsl * p.fb_stride[i] * 8);
+        touch(p.fb_elem_hi[i], nsl * p.fb_stride[i] * 8);
+    }
+    touch(p.fb_side, nslots * 8);
+    touch(p.left, backrefBytes); touch(p.right, backrefBytes);
+}
+
+static void release_rowbucket(PipelineBuffers& p) {
+    for (int i = 0; i < 2; ++i) {
+        p.fb_elem[i] = Mem(); p.fb_elem_hi[i] = Mem(); p.fb_counts[i] = Mem();
+        p.fb_half[i] = 0; p.fb_stride[i] = 0;
+    }
+    p.fb_gictr = Mem(); p.fb_side = Mem();
+    p.left = Mem(); p.right = Mem(); p.counters = Mem();
+}
+
+static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
+    const RbGeom g = rb_pick_geometry(rt, p.capacity);
+    // An explicit MXBM_BB/MXBM_SM geometry is the user's choice: never stepped down.
+    if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM")) {
+        try_alloc_rowbucket(rt, p, g.bb, g.sm, g.quad);
+        return;
+    }
+    // The allocator can refuse a rung the arithmetic accepted (a compositor's
+    // gigabyte is invisible in global_mem): step DOWN, as CudaSolver does.
+    int n = 0;
+    const RbRung* rungs = rb_rungs(n);
+    int start = 0;
+    for (int i = 0; i < n; ++i)
+        if (rungs[i].bb == g.bb && rungs[i].sm == g.sm && rungs[i].quad == g.quad) { start = i; break; }
+    for (int i = start; i < n; ++i) {
+        try {
+            try_alloc_rowbucket(rt, p, rungs[i].bb, rungs[i].sm, rungs[i].quad);
+            if (i != start)
+                std::fprintf(stderr, "[mxbm] row-bucket rung (%u,%u)%s refused by the "
+                             "allocator; stepped down to (%u,%u)%s\n",
+                             rungs[start].bb, rungs[start].sm, rungs[start].quad ? " quad" : "",
+                             rungs[i].bb, rungs[i].sm, rungs[i].quad ? " quad" : "");
+            return;
+        } catch (const ClError&) {
+            release_rowbucket(p);
+        }
+    }
+    throw ClError(CL_MEM_OBJECT_ALLOCATION_FAILURE,
+                  "no row-bucket rung fits at allocation time (VRAM held by other "
+                  "processes?); free device memory and retry");
 }
 
 PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
@@ -934,13 +1014,18 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     FILL(pb.fb_counts[0].get(), 0u, nb);
     {
         Kernel k = rt.kernel(prog, "round1_mix_scatter_fat");
-        cl_mem ppMem = mpp.get(), cnt = pb.fb_counts[0].get(), be = pb.fb_elem[0].get(), dr = mdrops.get();
+        cl_mem ppMem = mpp.get(), cnt = pb.fb_counts[0].get(), dr = mdrops.get();
+        // Unsplit binds the same buffer twice; half == nb keeps hi undereferenced.
+        cl_mem beLo = pb.fb_elem[0].get();
+        cl_mem beHi = pb.fb_elem_hi[0] ? pb.fb_elem_hi[0].get() : beLo;
         for (uint32_t begin = 0; begin < total; begin += batch) {
             uint32_t count = (total - begin < batch) ? (total - begin) : batch;
             rt.set_arg(k.get(), 0, sizeof(cl_mem), &ppMem); rt.set_arg(k.get(), 1, begin); rt.set_arg(k.get(), 2, count);
             rt.set_arg(k.get(), 3, bucketBits); rt.set_arg(k.get(), 4, cap); rt.set_arg(k.get(), 5, kFbStride[1]);
-            rt.set_arg(k.get(), 6, sizeof(cl_mem), &cnt); rt.set_arg(k.get(), 7, sizeof(cl_mem), &be);
-            rt.set_arg(k.get(), 8, sizeof(cl_mem), &dr);
+            rt.set_arg(k.get(), 6, sizeof(cl_mem), &cnt);
+            rt.set_arg(k.get(), 7, sizeof(cl_mem), &beLo); rt.set_arg(k.get(), 8, sizeof(cl_mem), &beHi);
+            rt.set_arg(k.get(), 9, pb.fb_half[0]);
+            rt.set_arg(k.get(), 10, sizeof(cl_mem), &dr);
             RUN(k.get(), count, 0);
         }
     }
@@ -976,19 +1061,37 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         else if (r == 3) fusedName = pb.fb_quad ? "round_fused_rd3"  : "round_fused_7_6";
         else if (r == 4) fusedName = "round_fused_6_5";
         Kernel k = rt.kernel(prog, fusedName);
-        cl_mem ic = pb.fb_counts[inSet].get(),  ie = pb.fb_elem[inSet].get();
-        cl_mem oc = pb.fb_counts[outSet].get(), oe = pb.fb_elem[outSet].get();
+        cl_mem ic = pb.fb_counts[inSet].get(),  oc = pb.fb_counts[outSet].get();
+        cl_mem ieLo = pb.fb_elem[inSet].get();
+        cl_mem ieHi = pb.fb_elem_hi[inSet] ? pb.fb_elem_hi[inSet].get() : ieLo;
+        cl_mem oeLo = pb.fb_elem[outSet].get();
+        cl_mem oeHi = pb.fb_elem_hi[outSet] ? pb.fb_elem_hi[outSet].get() : oeLo;
         cl_mem aL = pb.left.get(), aR = pb.right.get(), gc = pb.fb_gictr.get(), dr = mdrops.get();
+        // Side plane: r2 writes it, r3 reads it; other rounds (and quad) never touch
+        // it, so the dummy binding is safe (same precedent as round_match's all_lead).
+        cl_mem sp = pb.fb_side ? pb.fb_side.get() : gc;
+        // The packed r2->r3 record allocates stride 8 (9th word in the plane); the
+        // slot-cost table still says 9, so patch the runtime stride args to match.
+        auto recStride = [&](int rr) {
+            const uint32_t s = fb_round_stride(rr, pb.fb_quad);
+            return s == 9u ? 8u : s;
+        };
         int a = 0;
         rt.set_arg(k.get(), a++, bucketBits); rt.set_arg(k.get(), a++, submaskBits);
         rt.set_arg(k.get(), a++, cap); rt.set_arg(k.get(), a++, cap);
         rt.set_arg(k.get(), a++, Lout); rt.set_arg(k.get(), a++, LmixNext); rt.set_arg(k.get(), a++, padNext);
         rt.set_arg(k.get(), a++, sIn); rt.set_arg(k.get(), a++, sOut); rt.set_arg(k.get(), a++, outOff);
         rt.set_arg(k.get(), a++, sBuild);
-        rt.set_arg(k.get(), a++, fb_round_stride(r - 1, pb.fb_quad));
-        rt.set_arg(k.get(), a++, fb_round_stride(r, pb.fb_quad));
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ie);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &oe);
+        rt.set_arg(k.get(), a++, recStride(r - 1));
+        rt.set_arg(k.get(), a++, recStride(r));
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ieLo); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ieHi);
+        rt.set_arg(k.get(), a++, pb.fb_half[inSet]);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &sp);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oc);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oeLo); rt.set_arg(k.get(), a++, sizeof(cl_mem), &oeHi);
+        rt.set_arg(k.get(), a++, pb.fb_half[outSet]);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &sp);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
         cl_mem ppm = mpp.get(); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ppm);
@@ -1028,13 +1131,17 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     {
         Kernel k = rt.kernel(prog, "round5_fused_lds");
         uint32_t outOff5 = (uint32_t)(5 - 1) * capacity, Lout5 = lout_for(5);
-        cl_mem ic = pb.fb_counts[inSet].get(), ie = pb.fb_elem[inSet].get();
+        cl_mem ic = pb.fb_counts[inSet].get();
+        cl_mem ieLo = pb.fb_elem[inSet].get();
+        cl_mem ieHi = pb.fb_elem_hi[inSet] ? pb.fb_elem_hi[inSet].get() : ieLo;
         cl_mem aL = pb.left.get(), aR = pb.right.get(), ss = mSurvSlots.get(), sc = mSurvCount.get(), dr = mdrops.get();
         int a = 0;
         rt.set_arg(k.get(), a++, bucketBits); rt.set_arg(k.get(), a++, submaskBits); rt.set_arg(k.get(), a++, cap);
         rt.set_arg(k.get(), a++, Lout5); rt.set_arg(k.get(), a++, outOff5);
         rt.set_arg(k.get(), a++, kFbStride[5]);
-        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ie);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ic);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &ieLo); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ieHi);
+        rt.set_arg(k.get(), a++, pb.fb_half[inSet]);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ss); rt.set_arg(k.get(), a++, sizeof(cl_mem), &sc);
         rt.set_arg(k.get(), a++, survCap); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);

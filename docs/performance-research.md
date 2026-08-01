@@ -3312,6 +3312,118 @@ geometries cannot host, at ~190 ms.
 
 ---
 
+### The record-set split: OpenCL reaches CUDA's 5.7 GiB floor and gets faster doing it
+<details>
+<summary>Details</summary>
+
+*(2026-08-01. Found while planning the OpenCL small-card work: the first tester
+round was about to send a 1660 Ti and a GTX 1080 against a build whose OpenCL
+path refuses below ~10 GiB reported — the flat 256 B/element budget fires before
+the geometry ladder is consulted, and NVIDIA's `max_alloc = ¼ VRAM` blocks every
+rung's 2.45–3.27 GiB record array anyway. lolMiner's floor is 3–4 GB.)*
+
+Two host-side fixes and one kernel change:
+
+- **The ladder is the authority.** `budget_full_rowbucket()` builds the full-2^25
+  budget and `rowbucket_viable()` decides; the flat divisor now gates only the
+  sort path. (The same disease as the 2026-07-25 "396 B/element" fix, one layer
+  up: a conservative flat figure refusing cards the real allocation would fit.)
+- **Bucket-half split.** A record set that busts `max_alloc` is allocated as two
+  buffers, buckets `[0, nb/2)` / `[nb/2, nb)`. The fused kernels take lo/hi + a
+  half count: the input select is once per workgroup (bucket is uniform), the
+  emit select once per child. Unsplit binds one buffer twice with `half == nb`,
+  so the hi pointer is never dereferenced. `MXBM_SPLIT=1` forces the split on a
+  card that does not need it — the 16 GB rig's only way to run the code path.
+- **Allocator step-down + touch.** OpenCL now walks the rung list on allocation
+  failure exactly as CUDA does. `clCreateBuffer` is lazy on NVIDIA, so each big
+  buffer is touched (`clEnqueueFillBuffer`) at alloc time — the commit fails
+  where the ladder can still step, not at first launch.
+
+Measured (interleaved ABBA, `bench_rounds 20` pipeline medians, KAT 3/3 and
+drops 0 in every arm; 49/49 suite green in both modes):
+
+| arm | ms |
+|---|---|
+| baseline (pre-change binary) | 39.8 / 39.7 |
+| new kernels, unsplit | **38.6 / 38.6** |
+| new kernels, `MXBM_SPLIT=1` | 38.6 / 38.7 (second bracket 38.5/38.6 unsplit) |
+
+**The split itself is free** — pipeline and 60 s miner medians identical to the
+decimal (38.9 ms/solve, 1,536 vs 1,535 solves, 50.9 sol/s both arms, energy
+counter within 0.2 %).
+
+**Standing unexplained: the new kernels are −1.1 ms (−2.9 %) with the split OFF.**
+Both brackets agree (39.8/39.7 vs 38.6/38.6). The change on that path is the
+per-workgroup base-pointer select, a per-child compare+select, and a 22→26 arg
+list — nothing that should pay. Candidate mechanism: hoisting `in_belem` into an
+explicit uniform local pointer changed what the compiler proves loop-invariant in
+the staging loops. Not yet chased through `MXBM_CL_VERBOSE` register deltas; the
+gain is banked but its mechanism is unnamed, so do not build on it.
+
+Reach outcome (arithmetic pinned by `test_rowbucket_geom`, table in
+[HW_REQUIREMENTS](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)):
+11–12 GB cards climb to packed (16,1) — they were on quad (15,2) at 45.1 ms or
+(14,3) — 10 GB joins at (16,1), 8 GB at split (15,2), 6 GB at quad (14,3). The
+OpenCL floor moves 11 GB → ~5.7 GiB reported, equal to CUDA's. **No sub-11-GB
+card exists on the rig**: `MXBM_SPLIT=1` is the local proxy, and the first real
+validation is the testers' 1080/1660 Ti (TESTERS.md).
+
+</details>
+
+### The 128-bit family, ported to OpenCL: side plane + vector access + PAIR128 (−5.4 ms)
+<details>
+<summary>Details</summary>
+
+*(2026-08-01, same day as the split. The largest CUDA win never ported: 128-bit
+record access was worth 41.5 → 35.3 ms there in 2026-07-25, via the MIO
+instruction-queue mechanism, and `lds.cl` had no vector types at all. Blocked on
+the same precondition CUDA hit: r2's 9-u64 record stride leaves nothing 16 B
+aligned.)*
+
+Ported as three pieces, mirroring `fused_round.cuh` shape-for-shape:
+
+- **Side plane** (structural, not toggleable): the packed r2→r3 record drops to
+  stride 8 `[work0..6 | p0]`; the 9th word (`r3_p1`) lives in `fb_side`, its own
+  never-split buffer indexed by GLOBAL slot. Slot cost stays 9 u64, so
+  `rowbucket_bytes`' totals are untouched; `single` is now ~12 % conservative for
+  packed rungs, which the split makes moot.
+- **Vector access** (`-DLDS_V2=0` restores scalar): staging 4 × 16 B loads for r3
+  (was 9 scalars), 3 × for r4's work words; emit 4 × 16 B stores for r2-packed
+  and r3 (both formats), 1 × for r1's pair record and r4's 16 B record; the
+  terminal round's 16 B record in one load. Quad's 24 B record stays scalar
+  (CUDA measured the padding trade against it — "fewer instructions AND fewer
+  bytes").
+- **PAIR128**: r2 stages its 16 B pair record in one aligned load, before the
+  sub-mask filter, exactly where CUDA's `MXBM_PAIR128` sits.
+
+Measured (interleaved ABBA, `bench_rounds 20` medians; KAT 3/3 + drops 0 in
+every arm and every mode combination — quad, split, quad+split, `LDS_V2=0`;
+49/49 suite green):
+
+| arm | ms |
+|---|---|
+| baseline (record-set-split build) | 39.1 / 38.7 |
+| **new, vectors on** | **33.4 / 33.5** |
+| new, `-DLDS_V2=0` (plane only, scalar) | 39.5 / 39.3 |
+| quad: baseline → new | 40.0/40.1 → 39.1/38.9 (−1.05) |
+
+The decomposition reproduces CUDA's history exactly: **the plane alone is a
+wash** (what "un-pad round 2" measured there) and **the vectors are the whole
+−5.7 ms**. Zero spill stores/loads in every `-cl-nv-verbose` report.
+
+Miner loop, 120 s opportunistic: **34.0 ms/solve median, 58.6 sol/s, 4.84
+J/solution** (3,506 solves, 2.01 solutions/solve — short-run high side; quote
+the ms). `MXBM_SPLIT=1` identical to the decimal. Against CUDA's 33.3–33.5 the
+fallback's gap is now **~1.02×** (was 1.16× a week ago, 1.22× at the port), and
+the OpenCL path passes the 53 sol/s lolMiner target on its own.
+
+Standing note: the profiler-free mechanism attribution here is inherited from
+CUDA (MIO instruction-queue pressure) rather than measured on this path —
+NVIDIA's OpenCL still cannot be profiled. The Ada result transfers; whether the
+same shapes pay on Pascal/Turing is round-two tester data.
+
+</details>
+
 ## Established limits
 <details>
 <summary>Details</summary>

@@ -60,4 +60,10 @@ struct Budget {
 Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom = 0.85,
                       uint32_t bytes_per_element = kBytesPerElement);
 
+// The full-2^25-layer budget for the row-bucket path, where the GEOMETRY LADDER
+// (rowbucket_viable), not the flat divisor above, is the authority. Callers must
+// ask rowbucket_viable() whether it stands -- using it unchecked would allocate
+// an unfittable pipeline.
+Budget budget_full_rowbucket(uint64_t global_mem, uint64_t max_alloc);
+
 }} // namespace mxbm::gpu

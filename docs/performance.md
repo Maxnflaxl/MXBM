@@ -106,7 +106,7 @@ gives the 2026-07-25 row its ±2.3 (600 solutions → 4.1 %).
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 49.7 | 40.0 | fallback / `--solver opencl` — 2026-07-31, after [the match-win backport](performance-research.md#the-cuda-match-wins-backported-to-opencl-perfect-table--spill--per-round-caps-06-ms) |
+| **OpenCL** | 58.6 | 34.0 | fallback / `--solver opencl` — 2026-08-01, after [the 128-bit family port](performance-research.md#the-128-bit-family-ported-to-opencl-side-plane--vector-access--pair128-54-ms) (−5.4 ms); the CUDA gap is now ~1.02× |
 | **CUDA** | **59.8**[^drift] | **33.3**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
@@ -125,7 +125,7 @@ figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
     record. See [how far these figures
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
     Every A/B on this page was interleaved, so the deltas are unaffected; only the scale
-    moves. OpenCL is a single 60 s miner benchmark (1,494 solves, 2026-07-31), measured
+    moves. OpenCL is a single 120 s miner benchmark (3,506 solves, 2026-08-01), measured
     opportunistically rather than under the controlled-conditions protocol.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,

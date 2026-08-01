@@ -339,6 +339,7 @@ broken on your GPU, that is a bug report we want, not a disappointment to manage
 | GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Reported by |
 |---|---|---|---|---|---|---|---|---|
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 58.9 | 33.8 | 284 | 0.207 | reference card |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 58.6 | 34.0 | 284 | 0.206 | reference card, fallback path (2026-08-01) |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | reference card |
 
 Both sol/s figures are sustained `--benchmark` runs, not pipeline medians, so they are

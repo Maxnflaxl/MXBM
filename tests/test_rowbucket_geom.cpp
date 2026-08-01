@@ -165,6 +165,48 @@ int main() {
             check(rungs[i].bb + rungs[i].sm == 17u, "every rung is on the bb + sm == 17 line");
     }
 
+    section("split record sets take the OpenCL floor from 11 GB to CUDA's ~5.7 GiB");
+    {
+        // allow_split: the OpenCL backend can allocate each record set as two
+        // bucket-halves (fb_elem_hi), so CL_DEVICE_MAX_MEM_ALLOC_SIZE binds on
+        // rowbucket_single_split() -- half the larger set, or the never-split
+        // back-ref row when bigger -- instead of on the whole set. Default false:
+        // every row above is unchanged, and CUDA (max_alloc 0) never wants it.
+        const size_t backrefs = (size_t)5 * cap * 4;                // 0.64 GiB
+        check(rowbucket_single_split(cap, 16, false) > 1.60*GiB
+           && rowbucket_single_split(cap, 16, false) < 1.70*GiB,
+              "(16,1) split piece ~1.63 GiB (half of 3.27)");
+        check(rowbucket_single_split(cap, 14, true) > backrefs,
+              "even the smallest rung's half-set still exceeds the back-ref row");
+
+        // The NVIDIA-OpenCL decision (max_alloc = VRAM/4), quad + split allowed --
+        // what rb_pick_geometry actually asks since the split shipped. Every card
+        // class that used to be sort-path or refused now gets a fast-path rung,
+        // and the 11-12 GB class climbs to the FINEST geometry.
+        struct { const char* card; double vram; int bb; bool quad; bool viable; const char* why; } want[] = {
+            { "16 GB", 15.59, 16, false, true,  "16 GB: finest packed, split never engages" },
+            { "12 GB", 11.60, 16, false, true,  "12 GB: (16,1) via split -- was (14,3), two rungs finer" },
+            { "11 GB", 10.60, 16, false, true,  "11 GB: (16,1) via split -- was quad (15,2)" },
+            { "8 GB",   8.00, 15, false, true,  "8 GB: packed (15,2), same rung CUDA picks -- was REFUSED" },
+            { "6 GB",   6.00, 15, true,  true,  "6 GB: quad (15,2) -- was refused" },
+            { "5.7 GB", 5.70, 14, true,  true,  "5.7 GiB: quad (14,3) -- the floor, now shared with CUDA" },
+            { "5 GB",   5.00,  0, false, false, "5.0 GiB: below the floor either way" },
+        };
+        for (const auto& w : want) {
+            const RbGeometry g = rb_geometry_for(cap, gib(w.vram)/4, gib(w.vram),
+                                                 /*allow_quad=*/true, 0, /*allow_split=*/true);
+            check(g.viable == w.viable && (!w.viable || (g.bb == (uint32_t)w.bb && g.quad == w.quad)),
+                  w.why);
+        }
+        // The claim stated as its two halves, so a regression is named:
+        check(!rb_geometry_for(cap, gib(8.0)/4, gib(8.0), true, 0, false).viable
+           &&  rb_geometry_for(cap, gib(8.0)/4, gib(8.0), true, 0, true ).viable,
+              "8 GB: the split alone is what makes the card viable");
+        check(rb_geometry_for(cap, gib(10.60)/4, gib(10.60), true, 0, true).bb == 16u
+           && rb_geometry_for(cap, gib(10.60)/4, gib(10.60), true, 0, false).bb == 15u,
+              "11 GB: the split alone is what buys the finer rung");
+    }
+
     section("the power-cap policy is DISARMED: every wattage hint is inert");
     {
         // The eco sweep measured a ~190 W crossover for (17,0) and the selection

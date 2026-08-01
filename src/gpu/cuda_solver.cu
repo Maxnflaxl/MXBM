@@ -64,10 +64,10 @@ static_assert(kQuadStride == fb_round_stride(2, true) &&
 // power_limit_w = 0 (the availability/enumeration callers): viability must not depend
 // on the cap -- (17,0) is a preference among geometries that fit, never a requirement.
 RbGeometry pick_geometry(uint64_t global_mem, unsigned power_limit_w = 0) {
-    // allow_quad: the 24 B record is implemented in the CUDA kernels only, so this is
-    // the one caller that passes true. It costs +14 % time and buys no watts at any cap
-    // (measured), so the ladder only reaches for it when a card cannot host a packed
-    // rung -- which is exactly what takes the CUDA path below 6.5 GiB.
+    // allow_quad: costs +14 % time and buys no watts at any cap (measured), so the
+    // ladder only reaches for it when a card cannot host a packed rung -- which is
+    // exactly what takes the CUDA path below 6.5 GiB. (Both backends carry the quad
+    // kernels since 2026-07-28; each caller states its capability itself.)
     RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem,
                                    /*allow_quad=*/true, power_limit_w);
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;

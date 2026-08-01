@@ -100,10 +100,12 @@ constexpr unsigned kRbLowPowerW = 0;
 // in scatter locality what the quad record pays in re-derivation arithmetic, and the
 // arithmetic is cheaper. Sorting the rungs by footprint would pick the wrong one.
 //
-// The quad record is CUDA-only -- it is implemented in kernels/cuda/fused_round.cuh and
-// has no OpenCL counterpart -- so `allow_quad` is false by default and only the CUDA
-// backend passes true. It buys no speed and no watts at any power cap (measured; see
-// docs/performance.md), so it is purely what lets a smaller card run at all.
+// The quad record exists on BOTH backends (kernels/cuda/fused_round.cuh;
+// round_fused_rd2q/rd3 in kernels/opencl/lds.cl since 2026-07-28). `allow_quad`
+// stays a parameter -- false by default -- so the packed-only ladder remains
+// individually testable and each caller states its capability explicitly. It buys
+// no speed and no watts at any power cap (measured; see docs/performance.md), so
+// it is purely what lets a smaller card run at all.
 //
 //   max_alloc : largest single allocation the backend permits. OpenCL is bound by
 //               CL_DEVICE_MAX_MEM_ALLOC_SIZE (VRAM/4 on NVIDIA); CUDA has no such
@@ -111,6 +113,11 @@ constexpr unsigned kRbLowPowerW = 0;
 //   bb/sm     : bucket bits and sub-mask bits, always summing to 17
 //   quad      : use the 24 B quad record for round 2 -> round 3
 //   viable    : false when no rung will fit
+//   allow_split : the backend can allocate each record set as two bucket-halves
+//               (PipelineBuffers::fb_elem_hi), so a rung binds max_alloc on
+//               rowbucket_single_split() -- half the larger set, or the never-split
+//               back-ref row when that is bigger -- instead of on the whole set.
+//               The OpenCL backend passes true; CUDA never needs it (max_alloc 0).
 //   power_limit_w : the board power limit observed at startup, in watts; 0 means
 //               unknown or uncapped and changes nothing. Below kRbLowPowerW the
 //               (17,0) rung is preferred when its 8.35 GiB fits -- currently
@@ -118,7 +125,13 @@ constexpr unsigned kRbLowPowerW = 0;
 //               value is inert. Only the CUDA backend passes a real value.
 struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
-                           bool allow_quad = false, unsigned power_limit_w = 0);
+                           bool allow_quad = false, unsigned power_limit_w = 0,
+                           bool allow_split = false);
+
+// Largest single allocation when each record set may split into two bucket-halves:
+// half the larger set, or the never-split back-ref rows if bigger. The arithmetic
+// behind allow_split, exposed so viability and the tests ask the same question.
+size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad);
 
 // The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
 // backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said

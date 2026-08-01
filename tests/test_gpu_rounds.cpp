@@ -85,6 +85,7 @@ int main() {
         if (pb.rowbucket) {
             const uint64_t ns = (uint64_t)pb.fb_num_buckets * pb.fb_bucket_cap;
             actual = ns*(pb.fb_stride[0] + pb.fb_stride[1])*8
+                   + (pb.fb_side ? ns*8 : 0)          // packed r2->r3 side plane
                    + 2*(uint64_t)pb.fb_num_buckets*4 + 2*5*C*4;
         } else {
             actual = 2*C*7*8 + 2*9*C*4 + 2*5*C*4 + (uint64_t)b.num_buckets*(1 + b.slots_per_bucket)*4

@@ -21,6 +21,13 @@ GpuSolver::GpuSolver(unsigned index) : rt_(index) {
     // that capacity, fall back to the sort-path budget, which is what will run.
     budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc,
                              0.85, kBytesPerElementRowbucket);
+    // The flat divisor is the full-fat (16,1) figure; a card it refuses may still
+    // host the FULL 2^25 layer on a coarser/quad rung with split record sets. The
+    // ladder, not the divisor, is the row-bucket authority -- ask it before refusing.
+    if (!budget_can_find_solutions(budget_.elems_per_round)) {
+        Budget full = budget_full_rowbucket(rt_.device().global_mem, rt_.device().max_alloc);
+        if (rowbucket_viable(rt_, full)) budget_ = full;
+    }
     if (!rowbucket_viable(rt_, budget_))
         budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc,
                                  0.85, kBytesPerElementSort);

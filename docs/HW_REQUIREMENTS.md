@@ -17,8 +17,8 @@ report; BeamHash III yields ~1.9 solutions per solve.
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
 | **VRAM — CUDA backend (the default)** | **6 GB** — needs > 5.7 GiB *reported*. 10 GB and up get the fastest geometry; below that the ladder steps down, 7–33 % slower |
-| **VRAM — OpenCL backend (fallback)** | **11 GB** — the single-allocation ceiling binds first, and the [quad record](performance-research.md#the-quad-record-on-opencl-takes-11-gb-cards-off-the-sort-path-190--45-ms) is what clears it at 11 GB; see [limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit) |
-| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (CUDA, with the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)); 6.50 GiB is the OpenCL floor |
+| **VRAM — OpenCL backend (fallback)** | **6 GB** — needs > 5.7 GiB *reported*, same floor as CUDA. Splitting each record set into two bucket-halves (2026-08-01) clears NVIDIA's VRAM/4 single-allocation cap, which used to hold the floor at 11 GB; see [limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit) |
+| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (either backend, with the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)) |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -54,27 +54,23 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 | Row-bucket, quad record (both backends) | **5.28 GiB** | 169 B | 2.90 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
-The largest single allocation matters independently of total VRAM: OpenCL reports
-`CL_DEVICE_MAX_MEM_ALLOC_SIZE`, commonly **¼ of VRAM** on NVIDIA. The row-bucket path's
-3.27 GiB record array therefore needs a card reporting ≥ ~3.3 GiB max-alloc; below that
-`rb_pick_geometry()` steps the bucket geometry down one notch at a time (16,1) → (15,2) →
-(14,3), which needs only 2.76 GiB and costs ~5 % speed, and only if even that will not fit
-does the path fall back to the sort path (~5× slower).
+The largest single allocation used to matter independently of total VRAM: OpenCL
+reports `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, commonly **¼ of VRAM** on NVIDIA, against
+record arrays the ladder cannot shrink below 2.45 GiB. Since 2026-08-01 a set that
+would bust the cap is allocated as **two bucket-halves** (the kernels select by child
+bucket; measured free), so the cap no longer decides which rung a card gets — total
+VRAM does, for both backends. CUDA never had the ceiling (no
+`CL_DEVICE_MAX_MEM_ALLOC_SIZE` equivalent), which is why its floor used to sit a
+whole size class lower; the floors are now the same ~5.7 GiB reported.
 
-**CUDA is not subject to that ceiling** — there is no `CL_DEVICE_MAX_MEM_ALLOC_SIZE`
-equivalent, so `CudaSolver` allocates its 3.27 GiB record array at the fastest (16,1)
-geometry on any card with the total memory for it. This is why the CUDA threshold is a
-whole size class lower than the OpenCL one.
-
-CUDA walks the *same* ladder, from the same `rb_geometry_for()`, bounded by total VRAM
-alone — and then checks the prediction against the allocator, stepping down again if the
-memory is not actually free (a desktop compositor can be holding a gigabyte). It also
-walks **three further rungs OpenCL does not have**, using the 24 B quad record: the full
-six-rung table, with its measured times, is under
-[limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit). Every rung
-is KAT-gated with drops zero, and the allocator retry walks the rung list rather than the
-geometry, so a card that loses a packed rung to a busy desktop falls through onto the quad
-ones instead of being refused.
+Both backends walk the *same* six-rung ladder, from the same `rb_geometry_for()`
+(the full table with measured times is under
+[limitation 1](#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)) —
+and then check the prediction against the allocator, stepping down again if the
+memory is not actually free (a desktop compositor can be holding a gigabyte). Every
+rung is KAT-gated with drops zero, and the allocator retry walks the rung list
+rather than the geometry, so a card that loses a packed rung to a busy desktop falls
+through onto the quad ones instead of being refused.
 
 ---
 
@@ -113,8 +109,8 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **58.9 sol/s** | 48.2 sol/s |
-| End-to-end solve | **33.8 ms** | 41.0 ms |
+| Throughput | **58.9 sol/s** | 58.6 sol/s |
+| End-to-end solve | **33.8 ms** | 34.0 ms |
 | Board power | 284 W — the card's 285 W limit, `sw_power_cap` active 99–100 % of the time | — |
 | Efficiency | 0.207 sol/s/W stock, **0.245 at 220 W**, peak 0.253 at 200 W | — |
 
@@ -128,8 +124,8 @@ lolMiner capped to the same limits are in
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces (±4.1 %, 1σ).
 BeamHash III yields ~1.98 *verified* solutions per solve, measured independently on both
-backends. `./build/bench_rounds 20` reports the pipeline-only median instead (40.3 ms on
-OpenCL), which is the controlled number used to make optimization decisions.
+backends. `./build/bench_rounds 20` reports the pipeline-only median instead (33.4 ms on
+OpenCL, 2026-08-01), which is the controlled number used to make optimization decisions.
 
 See [performance.md](performance.md) for the measured state, and
 [performance-research.md](performance-research.md) for the full optimization history.
@@ -142,16 +138,29 @@ These are open issues in MXBM, not properties of BeamHash III.
 
 ### 1. Below 11 GB, OpenCL is capped by its single-allocation limit
 
-Not by total VRAM. Worked through from `compute_budget()` and `rb_pick_geometry()`:
+**RESOLVED 2026-08-01** (title kept for its inbound links). NVIDIA's OpenCL reports
+`max_alloc = ¼ VRAM`, so the record arrays (2.45–3.27 GiB)
+used to bind long before total VRAM did: an 11 GB card fell to the sort path and
+anything smaller refused. Each record set is now allocated as **two bucket-halves**
+when one buffer would bust the cap (kernels select by child bucket; measured free —
+pipeline and 60 s miner medians identical to unsplit), which puts the OpenCL ladder
+on the same rungs and the same ~5.7 GiB floor as CUDA. Worked through from
+`compute_budget()` and `rb_pick_geometry()` (times are CUDA-measured; the OpenCL
+path runs the same rung ~1.16× slower):
 
-| Card | reported gmem / max_alloc | OpenCL | CUDA |
-|---|---|---|---|
-| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | full, geometry (16,1) | full, (16,1), 35.1 ms |
-| 12 GB | 11.60 / 2.90 GiB | full, geometry (14,3), ~5 % slower | full, (16,1), 35.1 ms |
-| 11 GB | 10.60 / 2.65 GiB | full, but on the **sort path** (~5× slower) | full, (16,1), 35.1 ms |
-| 10 GB | 9.70 / 2.42 GiB | **refuses** — sort path fits only 0.93 × 2^25 | full, (16,1), 35.1 ms |
-| 8 GB | 7.70 / 1.93 GiB | **refuses** — 0.74 × 2^25 | full, (15,2), 36.0 ms |
-| 6 GB | 5.70 / 1.43 GiB | **refuses** | full, **quad (14,3)**, 44.8 ms |
+| Card | reported gmem / max_alloc | OpenCL — was | OpenCL — now | CUDA |
+|---|---|---|---|---|
+| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | (16,1) | (16,1), unsplit | (16,1), 35.1 ms |
+| 12 GB | 11.60 / 2.90 GiB | (14,3), ~5 % slower | **(16,1)**, split | (16,1), 35.1 ms |
+| 11 GB | 10.60 / 2.65 GiB | quad (15,2), 45.1 ms | **(16,1)**, split | (16,1), 35.1 ms |
+| 10 GB | 9.70 / 2.42 GiB | **refused** | **(16,1)**, split | (16,1), 35.1 ms |
+| 8 GB | 8.00 / 2.00 GiB | **refused** | **(15,2)**, split | (15,2), 36.0 ms |
+| 6 GB | 5.70 / 1.43 GiB | **refused** | **quad (14,3)**, split | quad (14,3), 44.8 ms |
+
+The back-ref rows (0.64 GiB) never split; they bind only below ~2.6 GiB of VRAM,
+which is under the floor anyway. If the allocator refuses a rung the arithmetic
+accepted (VRAM held by other processes), the OpenCL path now steps down the ladder
+exactly as CUDA does, rather than failing the solver.
 
 **The CUDA ladder has two axes, and it is ordered by measured time rather than by
 footprint** — because the two disagree. All six rungs are KAT-gated and drop-free:
@@ -182,21 +191,20 @@ footprint specifically, so those cards were refused by both backends and mined n
 they now run the full search one rung down the ladder. The CUDA floor moved again on
 2026-07-28, to 5.7 GiB reported, when the quad record joined the ladder as a second axis.
 
-The seed layer itself is not the problem at any of these sizes: at 256 B/element a full
-2^25 layer needs only 8.59 GiB, so `elems_per_round` stays at 2^25 down to ~10.1 GiB of
-reported VRAM. What binds first is that NVIDIA's OpenCL reports `max_alloc = ¼ VRAM`,
-and the coarsest row-bucket geometry still wants a 2.76 GiB record array — i.e. an
-11 GB card or smaller cannot host *any* row-bucket geometry and drops to the sort path,
-whose 284 B/element no longer fits a full layer at 10 GB.
+The seed layer itself was never the problem at these sizes: what bound was NVIDIA's
+`max_alloc = ¼ VRAM` against record arrays the ladder could not shrink below 2.45 GiB —
+resolved by the bucket-half split above. The OpenCL floor is now the same total-VRAM
+floor as CUDA's; only the sort path (284 B/element, ~10.4 GiB reported) still carries
+a flat per-element bound, and no card class needs it.
 
 **This was the "~1.65× too conservative budget" (fixed 2026-07-25):** `compute_budget`
 used a single 396 B/element figure left over from a six-buffer design, which granted a
 full search only above 14.6 GiB — 16 GB cards only. It is now sized per path (256 B
 row-bucket, 284 B sort; measured 239 and 264) and the geometry adapts to the device.
-
-Remaining work, in order of value: splitting the row-bucket record array into two
-buffers would put 10–11 GB cards on the fast path under OpenCL too, since the constraint
-is the size of the *largest single* allocation and not the total.
+A second instance of the same disease fell 2026-08-01: the flat 256 B/element check
+refused small cards before the ladder could offer a rung that fits, so on the
+row-bucket path the ladder (`rowbucket_viable`) is now the authority and the flat
+figure only gates the sort path.
 
 ### 2. Memory efficiency is ~2.4× off the algorithm's design target
 

@@ -1,4 +1,5 @@
 #include "gpu/budget.h"
+#include "gpu/rowbucket_geom.h"   // kRbCapacity: the ladder's own capacity figure
 namespace mxbm { namespace gpu {
 
 static uint64_t min_u64(uint64_t a, uint64_t b) { return a < b ? a : b; }
@@ -49,6 +50,27 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom,
 
     uint64_t batch = min_u64(b.target_elems, max_alloc / kSeedElemBytes);
     batch = min_u64(batch, b.elems_per_round);
+    if (batch == 0) batch = 1;
+    b.seed_batch = (uint32_t)batch;
+    return b;
+}
+
+Budget budget_full_rowbucket(uint64_t global_mem, uint64_t max_alloc) {
+    Budget b;
+    b.global_mem = global_mem;
+    b.max_alloc  = max_alloc;
+    b.usable     = (uint64_t)((double)global_mem * 0.85);
+    b.bytes_per_element = kBytesPerElementRowbucket;
+    b.target_elems = 1u << kTargetElemsLog2;
+    b.elems_per_round = b.target_elems;
+    b.capacity = kRbCapacity;      // 2^25 + 2^25/32, what the ladder sizes against
+    // The sort-path bucket fields, at exactly compute_budget()'s full-layer values
+    // -- unused on the row-bucket path, but the legacy/LDS opt-in paths read them
+    // and a zeroed Budget would surprise those.
+    b.bucket_bits = 20u; b.num_buckets = 1u << 20;
+    b.slots_per_bucket = 64u;
+    uint64_t batch = max_alloc ? min_u64(b.target_elems, max_alloc / kSeedElemBytes)
+                               : b.target_elems;
     if (batch == 0) batch = 1;
     b.seed_batch = (uint32_t)batch;
     return b;
