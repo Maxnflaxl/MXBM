@@ -3455,6 +3455,21 @@ it was never occupancy-bound, exactly as its `LDS_TCAP` comment says.
   LDS, and pinning it would take that freedom away on every card we cannot
   measure. Left at the driver's choice, with the null recorded in the kernel so
   it is not re-proposed.
+- **Baking the residual geometry (`bb`, `sm`, the bucket caps) — implemented,
+  measured, REVERTED.** These were the last runtime kernel args on the fast
+  path, and the host picks all four *before* it builds the program, so they
+  could be literals: the per-child bucket shift and the two 64-bit slot
+  multiplies would stop carrying runtime operands. Built it (`GEO_BAKED`, the
+  geometry appended to the options string so `cached_program` keys on it),
+  KAT-green both ways, two bracketed rounds: **33.60 baked against 33.65
+  runtime**, a wash. Reverted — it bought nothing and cost an options-string
+  path, a second kernel code path and an env var.
+
+  **This closes the compile-time-constants family on this backend.** The
+  −26 ms that started it was never about constants as such; it was about a
+  dynamically-indexed private array escaping scratch (`t[8]` in `apply_mix`).
+  These four index nothing, so folding them buys nothing. *Look for the dynamic
+  index first; the constant is the fix, not the diagnosis.*
 
 </details>
 
