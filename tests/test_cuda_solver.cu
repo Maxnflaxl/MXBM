@@ -10,6 +10,12 @@
 #include <cstring>
 #include <stdexcept>
 
+#ifdef _WIN32
+// MSVC has no setenv/unsetenv; _putenv_s covers both (empty value = remove).
+static int setenv(const char* k, const char* v, int) { return _putenv_s(k, v); }
+static int unsetenv(const char* k) { return _putenv_s(k, ""); }
+#endif
+
 using namespace mxbm;
 
 static void solve_the_kat(gpu::CudaSolver& s, const char* geom) {

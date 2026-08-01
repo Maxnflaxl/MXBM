@@ -1,5 +1,12 @@
 #include "gpu/nvml.h"
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <cstring>
 #include <initializer_list>
 #include <vector>
@@ -77,18 +84,36 @@ NvmlWrite map_write(nvmlReturn_t rc) {
     return NvmlWrite::Failed;
 }
 
-template<class F> void bind(F& fn, const char* name) { fn = (F)dlsym(g_lib, name); }
+// dlopen/LoadLibrary behind one set of names, so the bind list below reads
+// the same on both platforms.
+#ifdef _WIN32
+void* lib_open() {
+    // nvml.dll ships with the driver into System32; very old drivers parked it
+    // in NVSMI, which is not on PATH.
+    if (HMODULE h = LoadLibraryA("nvml.dll")) return (void*)h;
+    return (void*)LoadLibraryA("C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+}
+void  lib_close(void* h) { FreeLibrary((HMODULE)h); }
+void* lib_sym(void* h, const char* name) { return (void*)GetProcAddress((HMODULE)h, name); }
+#else
+void* lib_open() {
+    // .so.1 is the versioned name the driver installs; the unversioned one only exists
+    // when a toolkit is present.
+    for (const char* so : {"libnvidia-ml.so.1", "libnvidia-ml.so"})
+        if (void* h = dlopen(so, RTLD_LAZY | RTLD_LOCAL)) return h;
+    return nullptr;
+}
+void  lib_close(void* h) { dlclose(h); }
+void* lib_sym(void* h, const char* name) { return dlsym(h, name); }
+#endif
+
+template<class F> void bind(F& fn, const char* name) { fn = (F)lib_sym(g_lib, name); }
 
 } // namespace
 
 bool nvml_init() {
     if (g_ready) return true;
-    // .so.1 is the versioned name the driver installs; the unversioned one only exists
-    // when a toolkit is present.
-    for (const char* so : {"libnvidia-ml.so.1", "libnvidia-ml.so"}) {
-        g_lib = dlopen(so, RTLD_LAZY | RTLD_LOCAL);
-        if (g_lib) break;
-    }
+    g_lib = lib_open();
     if (!g_lib) return false;
 
     bind(p_init,     "nvmlInit_v2");
@@ -128,11 +153,11 @@ bool nvml_init() {
     bind(p_fan_set,    "nvmlDeviceSetFanSpeed_v2");
     bind(p_fan_auto,   "nvmlDeviceSetDefaultFanSpeed_v2");
     bind(p_fan_range,  "nvmlDeviceGetMinMaxFanSpeed");
-    if (!p_init || !p_handle) { dlclose(g_lib); g_lib = nullptr; return false; }
+    if (!p_init || !p_handle) { lib_close(g_lib); g_lib = nullptr; return false; }
 
-    if (p_init() != NVML_SUCCESS)              { dlclose(g_lib); g_lib = nullptr; return false; }
+    if (p_init() != NVML_SUCCESS)              { lib_close(g_lib); g_lib = nullptr; return false; }
     if (p_handle(0, &g_dev) != NVML_SUCCESS)   { if (p_shutdown) p_shutdown();
-                                                 dlclose(g_lib); g_lib = nullptr; return false; }
+                                                 lib_close(g_lib); g_lib = nullptr; return false; }
     // Every device, in NVML's own order -- which is by PCI bus id, the same key
     // CudaSolver::enumerate() sorts on, so index N means the same card in both.
     g_devs.clear();
@@ -153,7 +178,7 @@ bool nvml_init() {
 void nvml_shutdown() {
     if (!g_ready) return;
     if (p_shutdown) p_shutdown();
-    if (g_lib) dlclose(g_lib);
+    if (g_lib) lib_close(g_lib);
     g_lib = nullptr; g_dev = nullptr; g_devs.clear(); g_ready = false;
 }
 

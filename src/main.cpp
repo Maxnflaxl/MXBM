@@ -136,10 +136,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+#ifndef _WIN32
     // OpenSSL's internal write() has no MSG_NOSIGNAL and SO_NOSIGPIPE is
     // Darwin-only: on Linux a pool dropping mid-TLS-write would SIGPIPE-kill
     // the process instead of surfacing a write error to the reconnect loop.
+    // (Windows has no SIGPIPE; a dead socket just returns a write error.)
     std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     ui::console::init(opts.nocolor);
 
@@ -379,8 +382,13 @@ int main(int argc, char** argv) {
                 ocreq.pl.clear();
                 ui::console::error("--pl auto: no stored tune for this card in "
                                    + miner::tune_store_path()
+#ifdef _WIN32
+                                   + " - run `mxbm --tune` once from an Administrator "
+                                     "terminal; continuing at the card's current limit");
+#else
                                    + " - run `sudo mxbm --tune` once; continuing at "
                                      "the card's current limit");
+#endif
             }
         }
         const bool any = !(ocreq.pl.empty() && ocreq.cclk.empty() && ocreq.mclk.empty()

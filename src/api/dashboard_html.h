@@ -12,6 +12,9 @@ namespace mxbm { namespace api {
 // HISTORY IS CLIENT-SIDE. miner::Stats keeps windowed rates and counters, not a
 // time series, so there is none to serve: the browser accumulates its own ring
 // from page load, and a reload starts it over.
+// Three adjacent raw literals, not one: MSVC caps a single literal at 16380
+// bytes (C2026) and the concatenated whole at 65535. The split points are
+// arbitrary line boundaries; adjacent literals concatenate byte-exactly.
 inline const char* dashboard_html() {
     return R"HTML(<!doctype html>
 <html lang="en">
@@ -238,7 +241,7 @@ CHARTS.forEach(function (cfg) {
     var pw = r.width - AXIS_W - (cfg.rightNow ? AXIS_W : PAD_R);
     var count = Math.max(hist.length, 2);
     var i = Math.round((e.clientX - r.left - AXIS_W) / pw * (count - 1));
-    cfg.hover = Math.max(0, Math.min(hist.length - 1, i));
+)HTML" R"HTML(    cfg.hover = Math.max(0, Math.min(hist.length - 1, i));
     drawChart(cfg);
   });
   cfg.el.addEventListener('mouseleave', function () {
@@ -463,7 +466,7 @@ function drawChart(cfg) {
   var alt = (!Rt.length && cfg.altAxis) ? cfg.altAxis() : null;
   cfg.rightNow = (Rt.length > 0) || !!alt;
   var padR = cfg.rightNow ? AXIS_W : PAD_R;
-  var pw = w - AXIS_W - padR, ph = h - PAD_T - PAD_B;
+)HTML" R"HTML(  var pw = w - AXIS_W - padR, ph = h - PAD_T - PAD_B;
 
   var scaleL = unionScale(L);
   L.forEach(function (e) { e.scale = scaleL; });

@@ -9,9 +9,11 @@
 #include <fstream>
 #include <thread>
 
+#ifndef _WIN32
 #include <pwd.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include "gpu/nvml.h"
 #include "miner/benchmark.h"
@@ -25,8 +27,14 @@ using nlohmann::json;
 
 // Under sudo the store must land in the INVOKING user's config dir: --tune runs as
 // root (NVML writes demand it) but --pl auto runs unprivileged every day, and a file
-// in /root/.config is one the daily launch will never see.
+// in /root/.config is one the daily launch will never see. Windows has no such
+// indirection to undo -- an elevated prompt keeps the same user profile, so
+// %APPDATA% is already where the daily launch will look.
 std::string config_home() {
+#ifdef _WIN32
+    if (const char* a = std::getenv("APPDATA"); a && *a) return a;
+    return ".";
+#else
     if (const char* x = std::getenv("XDG_CONFIG_HOME"); x && *x) return x;
     if (geteuid() == 0) {
         if (const char* su = std::getenv("SUDO_USER"); su && *su)
@@ -34,16 +42,22 @@ std::string config_home() {
     }
     if (const char* h = std::getenv("HOME"); h && *h) return std::string(h) + "/.config";
     return ".";
+#endif
 }
 
 // Root-created files in a user directory must end up owned by the user, or the next
-// --tune run WITHOUT sudo cannot rewrite its own store.
+// --tune run WITHOUT sudo cannot rewrite its own store. (On Windows elevation does
+// not change the owning user; nothing to fix up.)
 void chown_to_sudo_user(const std::string& path) {
+#ifdef _WIN32
+    (void)path;
+#else
     if (geteuid() != 0) return;
     const char* u = std::getenv("SUDO_UID");
     const char* g = std::getenv("SUDO_GID");
     if (!u || !g) return;
     (void)chown(path.c_str(), (uid_t)atoi(u), (gid_t)atoi(g));
+#endif
 }
 
 // Sleeps in slices so Ctrl+C (via `stop`) is honoured within ~200 ms.
@@ -105,9 +119,14 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     // a refusal here proves nothing was changed, and every later write would have
     // failed the same way.
     if (gpu::nvml_set_power_limit(pl0.current_w) != gpu::NvmlWrite::Ok) {
+#ifdef _WIN32
+        ui::console::error("--tune sets power limits, and every NVML write needs "
+                           "elevation. Re-run from an Administrator terminal");
+#else
         ui::console::error("--tune sets power limits, and every NVML write needs root. "
                            "Re-run under sudo (the result is stored in your own config "
                            "dir, not root's, so daily runs stay unprivileged)");
+#endif
         return 1;
     }
 

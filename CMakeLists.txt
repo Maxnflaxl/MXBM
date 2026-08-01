@@ -69,6 +69,9 @@ add_test(NAME difficulty COMMAND test_difficulty)
 
 target_sources(mxbm_stratum PRIVATE src/stratum/transport.cpp)
 target_link_libraries(mxbm_stratum PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+if(WIN32)
+  target_link_libraries(mxbm_stratum PUBLIC ws2_32)
+endif()
 
 find_package(Threads REQUIRED)
 add_executable(test_transport_loopback tests/test_transport_loopback.cpp)
@@ -169,6 +172,9 @@ target_include_directories(mxbm_api PUBLIC src)
 # mxbm_nvml: /summary's Energy_J reads the card's energy counter directly -- the
 # snapshot has no energy field because the counter is the instrument, not telemetry.
 target_link_libraries(mxbm_api PUBLIC mxbm_miner mxbm_json mxbm_version mxbm_nvml)
+if(WIN32)
+  target_link_libraries(mxbm_api PUBLIC ws2_32)
+endif()
 
 add_executable(test_api tests/test_api.cpp)
 target_include_directories(test_api PRIVATE tests src)
@@ -267,6 +273,15 @@ if(CMAKE_CUDA_COMPILER)
   target_link_libraries(test_cuda_solver PRIVATE mxbm_cuda)
   target_compile_features(test_cuda_solver PRIVATE cuda_std_17)
   add_test(NAME cuda_solver COMMAND test_cuda_solver)
+
+  if(MSVC)
+    # CUDA 13's cccl headers hard-error under cl's traditional preprocessor;
+    # the host side of every .cu compile needs the conforming one.
+    target_compile_options(mxbm_cuda PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>)
+    target_compile_options(test_cuda_solver PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>)
+  endif()
 
   # The register / shared-memory cliff contract. Host-only and GPU-free: it reads the
   # linked library with cuobjdump -res-usage and asserts that each kernel still reaches

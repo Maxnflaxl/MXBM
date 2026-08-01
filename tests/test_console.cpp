@@ -4,7 +4,14 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <io.h>
+#define dup    _dup
+#define dup2   _dup2
+#define fileno _fileno
+#else
 #include <unistd.h>
+#endif
 
 #include "check.h"
 #include "ui/console.h"

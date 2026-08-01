@@ -55,7 +55,13 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <io.h>
+#define popen  _popen
+#define pclose _pclose
+#else
 #include <unistd.h>
+#endif
 
 #ifndef MXBM_CUOBJDUMP
 #define MXBM_CUOBJDUMP "cuobjdump"
@@ -263,14 +269,32 @@ void failf(const char* fmt, ...) {
 }
 
 const char* cuobjdump_path() {
+#ifdef _WIN32
+    // The CMake-configured path has no extension and forward slashes; cmd.exe
+    // wants both fixed before it will execute it.
+    static std::string p = [] {
+        std::string s = std::string(MXBM_CUOBJDUMP) + ".exe";
+        for (char& c : s) if (c == '/') c = '\\';
+        return s;
+    }();
+    if (_access(p.c_str(), 0) == 0) return p.c_str();
+#else
     static std::string p = MXBM_CUOBJDUMP;
     if (!p.empty() && ::access(p.c_str(), X_OK) == 0) return p.c_str();
+#endif
     return "cuobjdump";
 }
 
 bool run_cuobjdump(std::string& out) {
+#ifdef _WIN32
+    // cmd.exe quoting: one extra outer pair -- cmd strips the first and last
+    // quote and runs the rest verbatim, spaces in Program Files included.
+    const std::string cmd = std::string("\"\"") + cuobjdump_path() + "\" -res-usage \"" +
+                            MXBM_CUDA_LIB + "\" 2>&1\"";
+#else
     const std::string cmd = std::string("'") + cuobjdump_path() + "' -res-usage '" +
                             MXBM_CUDA_LIB + "' 2>&1";
+#endif
     FILE* f = ::popen(cmd.c_str(), "r");
     if (!f) return false;
     char buf[4096];

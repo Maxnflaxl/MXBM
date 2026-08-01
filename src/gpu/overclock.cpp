@@ -65,7 +65,12 @@ void describe_failure(OcResult& r, NvmlWrite w, const char* unit) {
     case NvmlWrite::NoPermission:
         r.status = OcStatus::NoPermission;
         std::snprintf(buf, sizeof buf,
+#ifdef _WIN32
+            "%s %ld%s not applied: insufficient permission - re-run from an "
+            "Administrator terminal. "
+#else
             "%s %ld%s not applied: insufficient permission - re-run under sudo. "
+#endif
             "Mining continues at the card's current setting.", r.knob, r.requested, unit);
         break;
     case NvmlWrite::Unsupported:

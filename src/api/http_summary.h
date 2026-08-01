@@ -5,10 +5,11 @@
 // Lifecycle mirrors miner::Engine/ui::Ticker (start() spawns one worker
 // thread, stop() signals it and joins, the destructor calls stop()). The
 // accept-loop thread blocks in poll() on TWO file descriptors -- the listen
-// socket and the read end of a self-pipe (stop_pipe_) -- rather than in
-// accept(). stop() writes one byte to the pipe, which wakes poll()
-// deterministically, THEN joins, THEN closes the listen fd and both pipe ends.
-// The self-pipe is what makes the wakeup portable: closing the listen fd does
+// socket and the read end of a wakeup channel (stop_pipe_: a self-pipe on
+// POSIX, a loopback socket pair on Windows; net/compat.h) -- rather than in
+// accept(). stop() writes one byte to it, which wakes poll()
+// deterministically, THEN joins, THEN closes the listen fd and both ends.
+// The wakeup channel is what makes this portable: closing the listen fd does
 // not reliably wake a concurrent accept() on Linux (it does on macOS/BSD), so
 // stop() could otherwise hang in join() until the next inbound connection.
 //
@@ -19,10 +20,11 @@
 // Every response is `Connection: close` -- one request per connection, no
 // keep-alive, no pipelining, no chunked bodies.
 //
-// SIGPIPE is ignored process-wide before this class is ever used (main.cpp),
-// so a write into a dropped connection just returns -1/EPIPE -- no per-write
-// MSG_NOSIGNAL guard is needed (contrast stratum::Transport::raw_write, which
-// can be used before that point, e.g. in unit tests).
+// SIGPIPE is ignored process-wide before this class is ever used (main.cpp;
+// Windows has no SIGPIPE at all), so a write into a dropped connection just
+// returns an error -- no per-write MSG_NOSIGNAL guard is needed (contrast
+// stratum::Transport::raw_write, which can be used before that point, e.g. in
+// unit tests).
 #pragma once
 #include <cstdint>
 #include <string>

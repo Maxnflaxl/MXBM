@@ -9,10 +9,7 @@
 
 #include <chrono>
 #include <string>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
+#include "net/compat.h"
 
 using namespace mxbm;
 using namespace mxbm::api;
@@ -24,32 +21,32 @@ namespace {
 // answers Connection: close, so EOF ends the response) or a 5s SO_RCVTIMEO
 // fires. Returns "" if the connect fails, e.g. after stop() closed the listener.
 std::string http_get(uint16_t port, const std::string& request) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    net::startup();
+    int fd = net::to_fd(socket(AF_INET, SOCK_STREAM, 0));
     if (fd < 0) return "";
 
-    timeval tv{}; tv.tv_sec = 5; tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    net::set_recv_timeout(fd, 5);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(port);
 
-    if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        close(fd);
+    if (connect(net::from_fd(fd), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        net::close_fd(fd);
         return "";
     }
 
-    send(fd, request.data(), request.size(), 0);
+    send(net::from_fd(fd), request.data(), (int)request.size(), 0);
 
     std::string resp;
     char buf[4096];
     while (true) {
-        ssize_t n = recv(fd, buf, sizeof(buf), 0);
+        ssize_t n = recv(net::from_fd(fd), buf, (int)sizeof(buf), 0);
         if (n <= 0) break;   // EOF (Connection: close), timeout, or error
         resp.append(buf, static_cast<size_t>(n));
     }
-    close(fd);
+    net::close_fd(fd);
     return resp;
 }
 
@@ -236,13 +233,13 @@ int main() {
 
     // -- stop() closes the port --
     {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        int fd = net::to_fd(socket(AF_INET, SOCK_STREAM, 0));
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         addr.sin_port = htons(port);
-        bool connected = (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
-        close(fd);
+        bool connected = (connect(net::from_fd(fd), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+        net::close_fd(fd);
         check(!connected, "connect() fails after stop()");
     }
 

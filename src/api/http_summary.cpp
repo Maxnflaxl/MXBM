@@ -4,11 +4,7 @@
 #include <chrono>
 #include <cstdio>
 
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
+#include "net/compat.h"
 
 #include "nlohmann/json.hpp"
 #include "gpu/nvml.h"
@@ -65,7 +61,8 @@ std::string http_response(int code, const char* reason,
 void send_all(int fd, const std::string& data) {
     size_t sent = 0;
     while (sent < data.size()) {
-        ssize_t n = send(fd, data.data() + sent, data.size() - sent, 0);
+        ssize_t n = send(net::from_fd(fd), data.data() + sent,
+                         static_cast<int>(data.size() - sent), 0);
         if (n <= 0) return;   // dead socket
         sent += static_cast<size_t>(n);
     }
@@ -94,27 +91,33 @@ HttpSummary::~HttpSummary() { stop(); }
 bool HttpSummary::start(uint16_t port, const miner::Stats& stats, const char* version) {
     if (started_) return true;   // idempotent
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (!net::startup()) return false;
+
+    int fd = net::to_fd(socket(AF_INET, SOCK_STREAM, 0));
     if (fd < 0) return false;
 
+#ifndef _WIN32
+    // POSIX-only: on Windows SO_REUSEADDR means "allow hijacking the port",
+    // and rebinding after a close needs no flag there anyway.
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#endif
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);   // 0.0.0.0 -- see class comment
     addr.sin_port = htons(port);                // port 0 -> kernel assigns an ephemeral port
 
-    if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) { ::close(fd); return false; }
-    if (listen(fd, kListenBacklog) < 0) { ::close(fd); return false; }
+    if (bind(net::from_fd(fd), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) { net::close_fd(fd); return false; }
+    if (listen(net::from_fd(fd), kListenBacklog) < 0) { net::close_fd(fd); return false; }
 
     sockaddr_in bound{};
     socklen_t boundlen = sizeof(bound);
-    if (getsockname(fd, reinterpret_cast<sockaddr*>(&bound), &boundlen) < 0) { ::close(fd); return false; }
+    if (getsockname(net::from_fd(fd), reinterpret_cast<sockaddr*>(&bound), &boundlen) < 0) { net::close_fd(fd); return false; }
 
     // Must exist before the thread is spawned: accept_loop polls stop_pipe_[0]
     // from its very first iteration.
-    if (::pipe(stop_pipe_) < 0) { ::close(fd); return false; }
+    if (!net::signal_pair(stop_pipe_)) { net::close_fd(fd); return false; }
 
     stats_ = &stats;
     version_ = version ? version : "";
@@ -133,14 +136,14 @@ void HttpSummary::stop() {
 
     // Wake accept_loop() out of poll(). Must precede the join: the loop cannot
     // see the stop request until this byte lands.
-    if (stop_pipe_[1] >= 0) { (void)::write(stop_pipe_[1], "x", 1); }
+    if (stop_pipe_[1] >= 0) net::signal_send(stop_pipe_[1]);
 
     if (accept_thread_.joinable()) accept_thread_.join();
 
     // Safe only after the join: the wakeup above, not this close, ends the loop.
-    if (listen_fd_ >= 0) { ::close(listen_fd_); listen_fd_ = -1; }
-    if (stop_pipe_[0] >= 0) { ::close(stop_pipe_[0]); stop_pipe_[0] = -1; }
-    if (stop_pipe_[1] >= 0) { ::close(stop_pipe_[1]); stop_pipe_[1] = -1; }
+    if (listen_fd_ >= 0) { net::close_fd(listen_fd_); listen_fd_ = -1; }
+    if (stop_pipe_[0] >= 0) { net::close_fd(stop_pipe_[0]); stop_pipe_[0] = -1; }
+    if (stop_pipe_[1] >= 0) { net::close_fd(stop_pipe_[1]); stop_pipe_[1] = -1; }
 
     started_ = false;
 }
@@ -148,30 +151,27 @@ void HttpSummary::stop() {
 void HttpSummary::accept_loop(int fd, int stop_read_fd) {
     // poll() on the listen socket AND the self-pipe's read end rather than
     // blocking in accept(), which has no portable wakeup (see class comment).
-    struct pollfd fds[2] = {};
-    fds[0].fd = fd;
+    net::pollfd_t fds[2] = {};
+    fds[0].fd = net::from_fd(fd);
     fds[0].events = POLLIN;
-    fds[1].fd = stop_read_fd;
+    fds[1].fd = net::from_fd(stop_read_fd);
     fds[1].events = POLLIN;
 
     while (true) {
-        int pr = ::poll(fds, 2, -1);
+        int pr = net::poll_fds(fds, 2, -1);
         if (pr < 0) {
-            if (errno == EINTR) continue;   // signal: retry, not fatal
-            break;                          // genuine poll() failure
+            if (net::transient(net::last_error())) continue;   // signal: retry, not fatal
+            break;                                             // genuine poll() failure
         }
 
         if (fds[1].revents & POLLIN) break;   // stop() wrote the wakeup byte
 
         if (fds[0].revents & POLLIN) {
-            int conn = accept(fd, nullptr, nullptr);
+            int conn = net::to_fd(accept(net::from_fd(fd), nullptr, nullptr));
             if (conn < 0) {
                 // Signal, peer reset, or a momentarily full fd table: all
                 // transient, so drop this attempt, not the whole server.
-                if (errno == EINTR || errno == ECONNABORTED ||
-                    errno == EMFILE || errno == ENFILE) {
-                    continue;
-                }
+                if (net::transient(net::last_error())) continue;
                 break;   // non-transient
             }
             handle_connection(conn);   // closes conn itself when done
@@ -180,10 +180,7 @@ void HttpSummary::accept_loop(int fd, int stop_read_fd) {
 }
 
 void HttpSummary::handle_connection(int conn_fd) const {
-    timeval tv{};
-    tv.tv_sec = kRecvTimeoutSec;
-    tv.tv_usec = 0;
-    setsockopt(conn_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    net::set_recv_timeout(conn_fd, kRecvTimeoutSec);
 
     // Read until the end of the header block, bounded by the 4 KiB cap and the
     // SO_RCVTIMEO above. Both bail out the same way: header_end stays npos and
@@ -192,7 +189,7 @@ void HttpSummary::handle_connection(int conn_fd) const {
     size_t header_end = std::string::npos;
     while (header_end == std::string::npos && buf.size() < kMaxRequestBytes) {
         char chunk[1024];
-        ssize_t n = recv(conn_fd, chunk, sizeof(chunk), 0);
+        ssize_t n = recv(net::from_fd(conn_fd), chunk, (int)sizeof(chunk), 0);
         if (n <= 0) break;   // timeout, error, or peer closed early
         buf.append(chunk, static_cast<size_t>(n));
         header_end = buf.find("\r\n\r\n");
@@ -222,7 +219,7 @@ void HttpSummary::handle_connection(int conn_fd) const {
         send_all(conn_fd, response);
     }
 
-    ::close(conn_fd);
+    net::close_fd(conn_fd);
 }
 
 // ---------------------------------------------------------------------

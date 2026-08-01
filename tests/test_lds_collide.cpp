@@ -16,6 +16,13 @@
 using namespace mxbm;
 using namespace mxbm::gpu;
 
+#ifdef _MSC_VER
+#include <intrin.h>
+static int ctz32(uint32_t x) { unsigned long i = 0; _BitScanForward(&i, x); return (int)i; }
+#else
+static int ctz32(uint32_t x) { return (int)__builtin_ctz(x); }
+#endif
+
 static const uint32_t WG = 256;
 
 static uint64_t sm(uint64_t& s){ uint64_t z=(s+=0x9E3779B97F4A7C15ULL);
@@ -125,7 +132,7 @@ static void test_correctness(Runtime& rt, cl_program prog) {
         auto got = run_collide(rt, prog, elems, c.bucketBits, c.submaskBits, bucketCap, outCap, drops, nullptr);
         char msg[160];
         std::snprintf(msg, sizeof msg, "N=2^%d distinctBits=%u b=%u s=%u: %zu pairs, drops={%u,%u,%u,%u}",
-            (int)__builtin_ctz(c.N), c.distinctBits, c.bucketBits, c.submaskBits, orc.size(),
+            ctz32(c.N), c.distinctBits, c.bucketBits, c.submaskBits, orc.size(),
             drops[0],drops[1],drops[2],drops[3]);
         bool dropsZero = (drops[0]|drops[1]|drops[2]|drops[3])==0;
         check(dropsZero, (std::string("no drops -- ")+msg).c_str());
@@ -216,7 +223,7 @@ static void test_combine(Runtime& rt, cl_program prog) {
         uint32_t outCap=(uint32_t)orc.n+4096u, drops[4];
         Digest got=run_combine(rt,prog,w,c.bucketBits,c.submaskBits,bucketCap,Lout,outCap,drops,nullptr);
         char msg[160]; std::snprintf(msg,sizeof msg,"N=2^%d db=%u b=%u s=%u: %llu children, drops={%u,%u,%u,%u}",
-            (int)__builtin_ctz(c.N),c.distinctBits,c.bucketBits,c.submaskBits,(unsigned long long)orc.n,drops[0],drops[1],drops[2],drops[3]);
+            ctz32(c.N),c.distinctBits,c.bucketBits,c.submaskBits,(unsigned long long)orc.n,drops[0],drops[1],drops[2],drops[3]);
         check((drops[0]|drops[1]|drops[2]|drops[3])==0,(std::string("no drops -- ")+msg).c_str());
         check(got==orc,(std::string("child digest == oracle -- ")+msg).c_str());
     }
@@ -519,7 +526,7 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
                              uint32_t bucketBits, uint32_t submaskBits,
                              uint32_t inCap, uint32_t outCap, bool exact) {
     char title[128]; std::snprintf(title,sizeof title,
-        "STEP B: round_fused_lds r=%d->%d, N=2^%d (%s)", r, r+1, (int)__builtin_ctz(N),
+        "STEP B: round_fused_lds r=%d->%d, N=2^%d (%s)", r, r+1, ctz32(N),
         exact?"exact multiset vs cpu_round":"scale: drops==0 + count");
     section(title);
     const uint32_t sIn = 1u << (r-1);          // = sleaves_for(r) for r<=4 (full subtree)

@@ -1,17 +1,13 @@
-// TCP + TLS line transport: blocking POSIX sockets, optional OpenSSL client
-// TLS. Line-delimited protocol ('\n'); recv_line buffers partial reads in
-// rxbuf_ and enforces a 64 KiB line cap. Reconnect is driven by the caller
-// (stratum::Client, Task 5) — connect() tears down any prior state first, so
-// it doubles as a reset.
+// TCP + TLS line transport: blocking sockets (POSIX or Winsock via
+// net/compat.h), optional OpenSSL client TLS. Line-delimited protocol ('\n');
+// recv_line buffers partial reads in rxbuf_ and enforces a 64 KiB line cap.
+// Reconnect is driven by the caller (stratum::Client, Task 5) — connect()
+// tears down any prior state first, so it doubles as a reset.
 #include "stratum/transport.h"
 
 #include <cstdint>
-#include <netdb.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
+
+#include "net/compat.h"
 
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
@@ -27,15 +23,15 @@ constexpr size_t kMaxLine = 64 * 1024;   // 64 KiB line cap (recv_line only)
 ssize_t raw_write(int fd, SSL* ssl, const char* buf, size_t len) {
     if (ssl) return SSL_write(ssl, buf, static_cast<int>(len));
 #ifdef MSG_NOSIGNAL
-    return send(fd, buf, len, MSG_NOSIGNAL);
+    return send(net::from_fd(fd), buf, static_cast<int>(len), MSG_NOSIGNAL);
 #else
-    return send(fd, buf, len, 0);
+    return send(net::from_fd(fd), buf, static_cast<int>(len), 0);
 #endif
 }
 
 ssize_t raw_read(int fd, SSL* ssl, char* buf, size_t len) {
     if (ssl) return SSL_read(ssl, buf, static_cast<int>(len));
-    return recv(fd, buf, len, 0);
+    return recv(net::from_fd(fd), buf, static_cast<int>(len), 0);
 }
 } // namespace
 
@@ -43,6 +39,8 @@ Transport::~Transport() { close(); }
 
 bool Transport::connect(const std::string& host, uint16_t port, bool tls, bool verify) {
     close();   // idempotent: discard any prior connection/TLS state first
+
+    if (!net::startup()) return false;
 
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
@@ -57,9 +55,9 @@ bool Transport::connect(const std::string& host, uint16_t port, bool tls, bool v
     int fd = -1;
     peer_ip_.clear();
     for (addrinfo* ai = results; ai != nullptr; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        fd = net::to_fd(socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol));
         if (fd < 0) continue;
-        if (::connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) {
+        if (::connect(net::from_fd(fd), ai->ai_addr, (int)ai->ai_addrlen) == 0) {
             // Record which of the resolved addresses actually answered -- the
             // loop may have walked past several that did not.
             char ip[INET6_ADDRSTRLEN] = {0};
@@ -72,7 +70,7 @@ bool Transport::connect(const std::string& host, uint16_t port, bool tls, bool v
             if (src && inet_ntop(ai->ai_family, src, ip, sizeof ip)) peer_ip_ = ip;
             break;
         }
-        ::close(fd);
+        net::close_fd(fd);
         fd = -1;
     }
     freeaddrinfo(results);
@@ -81,7 +79,7 @@ bool Transport::connect(const std::string& host, uint16_t port, bool tls, bool v
 
 #ifdef SO_NOSIGPIPE
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+    setsockopt(net::from_fd(fd), SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
 
     fd_ = fd;
@@ -164,7 +162,7 @@ void Transport::close() {
         ctx_ = nullptr;
     }
     if (fd_ >= 0) {
-        ::close(fd_);
+        net::close_fd(fd_);
         fd_ = -1;
     }
     rxbuf_.clear();

@@ -38,7 +38,11 @@ std::string usage_text() {
         "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
         "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
         "  --tune                 measure this card's power/speed curve and recommend a\n"
+#ifdef _WIN32
+        "                         --pl value (needs admin, ~25 min, no pool): a coarse pass\n"
+#else
         "                         --pl value (needs root, ~25 min, no pool): a coarse pass\n"
+#endif
         "                         across the card's band, ~10 W steps around the knee, the\n"
         "                         card's low memory rung at the capped points -- so the\n"
         "                         verdict can also say when to add --mclk -- and a final\n"

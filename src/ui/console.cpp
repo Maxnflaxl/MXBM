@@ -7,7 +7,11 @@
 #include <ctime>
 #include <mutex>
 
+#ifdef _WIN32
+#include <direct.h>
+#else
 #include <sys/stat.h>
+#endif
 
 namespace mxbm { namespace ui { namespace console {
 
@@ -31,11 +35,16 @@ const char* const kBlue  = "\033[1;34m";
 const char* const kYellow = "\033[33m";
 const char* const kReset = "\033[0m";
 
-// localtime_r, not std::localtime: the latter returns a shared static buffer.
+// localtime_r/localtime_s, not std::localtime: the latter returns a shared
+// static buffer.
 std::tm local_now() {
     std::time_t t = std::time(nullptr);
     std::tm out{};
+#ifdef _WIN32
+    localtime_s(&out, &t);
+#else
     localtime_r(&t, &out);
+#endif
     return out;
 }
 
@@ -103,7 +112,11 @@ bool open_log(const std::string& path, std::string* resolved_path) {
     if (target.empty()) {
         // mkdir failing is not checked separately: if the directory is neither
         // created nor already there, the fopen below fails and reports it.
+#ifdef _WIN32
+        ::_mkdir("logs");
+#else
         ::mkdir("logs", 0755);
+#endif
         std::tm tm = local_now();
         char name[64];
         std::snprintf(name, sizeof name, "logs/mxbm_%04d-%02d-%02d_%02d-%02d-%02d.log",
