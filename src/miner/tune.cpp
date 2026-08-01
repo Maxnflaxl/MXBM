@@ -109,7 +109,7 @@ bool tune_stored_rung(const std::string& device_key, unsigned& mhz_out,
 
 int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
              const TuneConfig& cfg, std::atomic<bool>& stop) {
-    const gpu::PowerLimit pl0 = gpu::nvml_power_limit();
+    const gpu::PowerLimit pl0 = gpu::nvml_power_limit(cfg.device);
     if (!pl0.valid) {
         ui::console::error("--tune: this card reports no power limit, so there is "
                            "no knob to sweep");
@@ -118,7 +118,7 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     // Permission probe FIRST, as a no-op write of the value already on the card:
     // a refusal here proves nothing was changed, and every later write would have
     // failed the same way.
-    if (gpu::nvml_set_power_limit(pl0.current_w) != gpu::NvmlWrite::Ok) {
+    if (gpu::nvml_set_power_limit(cfg.device, pl0.current_w) != gpu::NvmlWrite::Ok) {
 #ifdef _WIN32
         ui::console::error("--tune sets power limits, and every NVML write needs "
                            "elevation. Re-run from an Administrator terminal");
@@ -162,12 +162,12 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     // The memory-clock lock is reset only if the rung pass set it -- a user's own
     // --mclk (which disables the pass) must not be unlocked out from under them.
     struct Restore {
-        unsigned w; bool mem = false;
+        unsigned dev; unsigned w; bool mem = false;
         ~Restore() {
-            if (mem) gpu::nvml_reset_locked_mem_clock();
-            gpu::nvml_set_power_limit(w);
+            if (mem) gpu::nvml_reset_locked_mem_clock(dev);
+            gpu::nvml_set_power_limit(dev, w);
         }
-    } restore{pl0.current_w};
+    } restore{cfg.device, pl0.current_w};
 
     // One measured point: set the cap (and, for rung arms, lock the memory clock),
     // let the governor settle, then run the SAME Engine path mining runs while a
@@ -175,12 +175,12 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     // did not HOLD the rung is REFUSED (cap_w = 0), never a data point -- the 10501
     // null was a refused rung, and a refusal must not masquerade as "does not pay".
     auto measure = [&](unsigned cap, unsigned mclk, TunePoint& out) -> bool {
-        if (gpu::nvml_set_power_limit(cap) != gpu::NvmlWrite::Ok) {
+        if (gpu::nvml_set_power_limit(cfg.device, cap) != gpu::NvmlWrite::Ok) {
             ui::console::error(fmt("--tune: setting %u W failed mid-sweep; aborting", cap));
             return false;
         }
         if (mclk) {
-            if (gpu::nvml_set_locked_mem_clock(mclk, mclk) != gpu::NvmlWrite::Ok) {
+            if (gpu::nvml_set_locked_mem_clock(cfg.device, mclk, mclk) != gpu::NvmlWrite::Ok) {
                 ui::console::info(fmt("    %u MHz memory lock refused; skipping rung arms", mclk));
                 out = TunePoint{};
                 return !stop.load(std::memory_order_relaxed);
@@ -193,14 +193,14 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
         std::vector<unsigned> mems;
         std::thread sampler([&] {
             while (!done.load(std::memory_order_relaxed)) {
-                const gpu::Telemetry t = gpu::nvml_sample(0);
+                const gpu::Telemetry t = gpu::nvml_sample(cfg.device);
                 if (t.have_power) draws.push_back(t.power_w);
                 if (t.have_mem) mems.push_back(t.mem_clock_mhz);
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
         });
         unsigned long long e0 = 0, e1 = 0;
-        const bool e_ok = gpu::nvml_total_energy_mj(e0);
+        const bool e_ok = gpu::nvml_total_energy_mj(e0, cfg.device);
         const BenchmarkResult r = run_benchmark(solver, stats, per, stop);
         done.store(true, std::memory_order_relaxed);
         sampler.join();
@@ -221,7 +221,7 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
         const size_t skip = draws.size() / 5;
         for (size_t i = skip; i < draws.size(); ++i) mean += draws[i];
         if (draws.size() > skip) mean /= (double)(draws.size() - skip);
-        if (e_ok && gpu::nvml_total_energy_mj(e1) && e1 > e0 && r.elapsed_s > 0.0)
+        if (e_ok && gpu::nvml_total_energy_mj(e1, cfg.device) && e1 > e0 && r.elapsed_s > 0.0)
             mean = (double)(e1 - e0) / 1000.0 / r.elapsed_s;
         out = TunePoint{cap, mean, r.sol_per_s, r.median_ms};
         return !stop.load(std::memory_order_relaxed);
@@ -286,7 +286,7 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
     std::vector<TunePoint> rung_pts;
     unsigned rung_mhz = 0;
     if (cfg.rung_pass) {
-        rung_mhz = tune_rung_pick(gpu::nvml_supported_mem_clocks(0));
+        rung_mhz = tune_rung_pick(gpu::nvml_supported_mem_clocks(cfg.device));
         if (rung_mhz) {
             const TuneVerdict sofar = tune_verdict(points, cfg.knee_marginal);
             std::vector<unsigned> rcaps;
@@ -315,7 +315,7 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
                     rung_pts.push_back(p);
                 }
                 if (restore.mem) {
-                    gpu::nvml_reset_locked_mem_clock();
+                    gpu::nvml_reset_locked_mem_clock(cfg.device);
                     restore.mem = false;
                 }
             }
@@ -373,7 +373,7 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
                 series.push_back(p);
             }
             if (restore.mem) {
-                gpu::nvml_reset_locked_mem_clock();
+                gpu::nvml_reset_locked_mem_clock(cfg.device);
                 restore.mem = false;
             }
         }

@@ -342,30 +342,31 @@ int main(int argc, char** argv) {
         ocreq.moff = opts.mem_offset;
         ocreq.fan  = opts.fan;
 
-        // --pl auto: the value a --tune run stored for THIS card, resolved into a
-        // plain wattage here -- after the card is known, before the numeric
-        // validation below would choke on the word.
-        if (ocreq.pl == "auto") {
+        // --pl auto: the value a --tune run stored, resolved PER CARD at apply
+        // time -- each card has its own store entry, so on a multi-GPU rig each
+        // gets its own wattage (or its own "no stored tune" complaint).
+        auto resolve_pl_auto = [&](unsigned pos, const std::string& prefix,
+                                   gpu::OcRequest r) -> gpu::OcRequest {
+            if (r.pl != "auto") return r;
             // The key prefers NVML's own device name so it resolves on any
             // backend build; the CUDA enumeration is the fallback. Both produce
             // the same string on NVIDIA cards, so stores stay compatible.
             std::string key;
             if (have_nvml) {
-                const std::string n = gpu::nvml_device_name((unsigned)device_index);
+                const std::string n = gpu::nvml_device_name(pos);
                 if (!n.empty())
-                    key = n + "@" + gpu::nvml_pci_address((unsigned)device_index);
+                    key = n + "@" + gpu::nvml_pci_address(pos);
             }
 #ifdef MXBM_HAVE_CUDA
-            if (key.empty() && (size_t)device_index < cuda_devices.size())
-                key = cuda_devices[(size_t)device_index].name + "@"
-                    + (have_nvml ? gpu::nvml_pci_address((unsigned)device_index)
-                                 : std::string());
+            if (key.empty() && (size_t)pos < cuda_devices.size())
+                key = cuda_devices[(size_t)pos].name + "@"
+                    + (have_nvml ? gpu::nvml_pci_address(pos) : std::string());
 #endif
             std::string date;
             const unsigned w = key.empty() ? 0u : miner::tune_stored_knee(key, date);
             if (w) {
-                ocreq.pl = std::to_string(w);
-                ui::console::info("--pl auto: " + std::to_string(w)
+                r.pl = std::to_string(w);
+                ui::console::info(prefix + "--pl auto: " + std::to_string(w)
                                   + " W, tuned for this card on " + date
                                   + " (re-run --tune after driver or cooling changes)");
                 // Recommended, never auto-applied: locking a memory clock the user
@@ -373,14 +374,14 @@ int main(int argc, char** argv) {
                 unsigned rmhz = 0, rbelow = 0;
                 if (opts.mem_clock.empty() && miner::tune_stored_rung(key, rmhz, rbelow)
                     && w < rbelow) {
-                    ui::console::info("--pl auto: at this cap the tune also measured "
-                                      "the " + std::to_string(rmhz)
+                    ui::console::info(prefix + "--pl auto: at this cap the tune also "
+                                      "measured the " + std::to_string(rmhz)
                                       + " MHz memory rung faster - consider adding "
                                         "--mclk " + std::to_string(rmhz));
                 }
             } else {
-                ocreq.pl.clear();
-                ui::console::error("--pl auto: no stored tune for this card in "
+                r.pl.clear();
+                ui::console::error(prefix + "--pl auto: no stored tune for this card in "
                                    + miner::tune_store_path()
 #ifdef _WIN32
                                    + " - run `mxbm --tune` once from an Administrator "
@@ -390,7 +391,8 @@ int main(int argc, char** argv) {
                                      "the card's current limit");
 #endif
             }
-        }
+            return r;
+        };
         const bool any = !(ocreq.pl.empty() && ocreq.cclk.empty() && ocreq.mclk.empty()
                            && ocreq.coff.empty() && ocreq.moff.empty() && ocreq.fan.empty());
 
@@ -404,6 +406,7 @@ int main(int argc, char** argv) {
         };
         for (const auto& c : checks) {
             if (c.spec.empty()) continue;
+            if (&c.spec == &ocreq.pl && c.spec == "auto") continue;   // resolved per card above
             long v = 0; bool found = false; std::string perr;
             if (!gpu::oc_parse_list(c.spec, 0, v, found, perr, c.sign)) {
                 ui::console::error(std::string("Invalid ") + c.flag + " \"" + c.spec + "\": " + perr);
@@ -435,11 +438,26 @@ int main(int argc, char** argv) {
                 // then fails -- "it tried and could not" is the useful log, and
                 // silence is the one outcome that is not.
                 ui::console::info("Applying overclock settings...");
-                for (const gpu::OcResult& r : gpu::oc_apply(ocreq)) {
-                    if (r.status == gpu::OcStatus::Applied || r.status == gpu::OcStatus::Clamped)
-                        ui::console::info(r.message);
-                    else
-                        ui::console::error(r.message);
+                // Once per card that will actually run: mining applies to every
+                // selected device (each per-GPU list entry lands at its own
+                // position), benchmark and tune only to the card they measure.
+                std::vector<unsigned> oc_targets;
+                if (benchmark_mode || opts.tune)
+                    oc_targets.push_back(device_index >= 0 ? (unsigned)device_index : 0u);
+                else
+                    oc_targets.assign(selected_devices.begin(), selected_devices.end());
+                if (oc_targets.empty()) oc_targets.push_back(0u);
+                const bool multi = oc_targets.size() > 1;
+                for (unsigned pos : oc_targets) {
+                    const std::string prefix =
+                        multi ? "GPU " + std::to_string(pos) + ": " : std::string();
+                    const gpu::OcRequest r = resolve_pl_auto(pos, prefix, ocreq);
+                    for (const gpu::OcResult& res : gpu::oc_apply(pos, r)) {
+                        if (res.status == gpu::OcStatus::Applied || res.status == gpu::OcStatus::Clamped)
+                            ui::console::info(prefix + res.message);
+                        else
+                            ui::console::error(prefix + res.message);
+                    }
                 }
                 if (opts.no_oc_reset)
                     ui::console::info("--no-oc-reset: applied settings will be left on the card at exit");
@@ -455,7 +473,10 @@ int main(int argc, char** argv) {
     // Zero means "no limit known" and selects nothing.
     unsigned startup_pl_w = 0;
     if (have_nvml) {
-        const gpu::PowerLimit board_pl = gpu::nvml_power_limit();
+        // The PRIMARY card's limit, not device 0's -- with --devices 1 the two
+        // can differ, and geometry priced against another card's cap is wrong.
+        const gpu::PowerLimit board_pl =
+            gpu::nvml_power_limit(device_index >= 0 ? (unsigned)device_index : 0u);
         if (board_pl.valid) startup_pl_w = board_pl.current_w;
     }
 
@@ -474,16 +495,31 @@ int main(int argc, char** argv) {
             ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
             gpu_attempt_failed = true;
         }
-        // The remaining selected devices. A card that fails to initialise is
+        // The remaining selected devices -- MINING only: benchmark and tune
+        // measure one card, and allocating gigabytes on cards that will never
+        // run is cost without product. A card that fails to initialise is
         // reported and skipped rather than taking the rig down with it: on a
         // multi-GPU box the whole point is that the others keep mining.
-        for (size_t k = 1; solver && k < selected_devices.size(); ++k) {
+        for (size_t k = 1; solver && !benchmark_mode && !opts.tune
+                           && k < selected_devices.size(); ++k) {
             const size_t pos = selected_devices[k];
+            // A card the CUDA path cannot drive is skipped with directions, not
+            // constructed into a kernel-launch failure the watchdog would read
+            // as a dead GPU (MIXED_RIG.md phase 1).
+            if (pos < cuda_devices.size() && !cuda_devices[pos].viable) {
+                ui::console::error("Device " + std::to_string(pos) + " ("
+                                   + cuda_devices[pos].name + "): the CUDA path needs "
+                                   "compute capability 8.0 or newer and a geometry that "
+                                   "fits. Run a second instance with --solver opencl "
+                                   "--devices " + std::to_string(pos)
+                                   + ". Continuing without it.");
+                continue;
+            }
             const int idx = pos < cuda_devices.size() ? cuda_devices[pos].index : (int)pos;
             try {
                 // Each card gets ITS observed limit -- NVML orders by bus id, the same
                 // order `pos` indexes -- because a mixed rig can cap the cards apart.
-                const gpu::PowerLimit epl = have_nvml ? gpu::nvml_power_limit_at((unsigned)pos)
+                const gpu::PowerLimit epl = have_nvml ? gpu::nvml_power_limit((unsigned)pos)
                                                       : gpu::PowerLimit{};
                 auto cs = std::make_unique<gpu::CudaSolver>(idx, epl.valid ? epl.current_w : 0u);
                 extra_labels.push_back(cs->device().name);
@@ -530,6 +566,23 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
             gpu_attempt_failed = true;
+        }
+        // The remaining selected devices -- MINING only, mirroring the CUDA
+        // extras loop (MIXED_RIG.md phase 2). OpenCL indices are the user's
+        // selection used directly; see cl_index above for why there is no
+        // translation step here.
+        for (size_t k = 1; solver && !benchmark_mode && !opts.tune
+                           && k < selected_devices.size(); ++k) {
+            const unsigned pos = selected_devices[k];
+            try {
+                auto gs = std::make_unique<gpu::GpuSolver>(pos);
+                extra_labels.push_back(gs->device().name);
+                extra_solvers.push_back(std::move(gs));
+            } catch (const std::exception& e) {
+                ui::console::error("Device " + std::to_string(pos)
+                                   + " could not be initialised (" + e.what()
+                                   + ") - continuing without it");
+            }
         }
     }
 #endif
@@ -599,7 +652,7 @@ int main(int argc, char** argv) {
             d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
             d.has_util = t.have_util;           d.util_pct      = t.util_pct;
             if (row == 0 && watch_pl && !pl_noticed->load(std::memory_order_relaxed)) {
-                const gpu::PowerLimit now = gpu::nvml_power_limit_at(nvml_index[0]);
+                const gpu::PowerLimit now = gpu::nvml_power_limit(nvml_index[0]);
                 if (now.valid && now.current_w != pl0) {
                     const gpu::RbGeometry was = gpu::rb_geometry_for(
                         gpu::kRbCapacity, 0, mem0, /*allow_quad=*/true, pl0);
@@ -695,6 +748,9 @@ int main(int argc, char** argv) {
             return 1;
         }
         miner::TuneConfig tcfg;
+        // The card the solver was constructed on -- the sweep's writes and its
+        // measurements must target the same silicon.
+        tcfg.device = device_index >= 0 ? (unsigned)device_index : 0u;
         tcfg.seconds_per_point = opts.tune_seconds;
         tcfg.knee_marginal = opts.tune_knee;
         // An explicit cap list is a chosen grid: measure exactly those points, no

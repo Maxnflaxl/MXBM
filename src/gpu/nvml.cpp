@@ -23,7 +23,8 @@ constexpr nvmlReturn_t NVML_ERROR_INSUFFICIENT_SIZE = 7;
 using nvmlDevice_t = void*;
 
 void*        g_lib = nullptr;
-nvmlDevice_t g_dev = nullptr;          // device 0; the OC writes still target it
+nvmlDevice_t g_dev = nullptr;          // device 0; init bookkeeping only -- every
+                                       // read/write resolves its own dev_at(index)
 std::vector<nvmlDevice_t> g_devs;      // every device, for per-card telemetry
 bool         g_ready = false;
 
@@ -253,8 +254,7 @@ PowerLimit read_power_limit(nvmlDevice_t dev) {
 }
 } // namespace
 
-PowerLimit nvml_power_limit()                  { return read_power_limit(g_dev); }
-PowerLimit nvml_power_limit_at(unsigned index) { return read_power_limit(dev_at(index)); }
+PowerLimit nvml_power_limit(unsigned index) { return read_power_limit(dev_at(index)); }
 
 std::string nvml_device_name(unsigned index) {
     nvmlDevice_t d = dev_at(index);
@@ -292,21 +292,23 @@ bool nvml_total_energy_mj(unsigned long long& mj, unsigned index) {
     return true;
 }
 
-NvmlWrite nvml_set_power_limit(unsigned watts) {
-    if (!g_ready || !p_pl_set) return NvmlWrite::Unsupported;
-    return map_write(p_pl_set(g_dev, watts * 1000u));
+NvmlWrite nvml_set_power_limit(unsigned index, unsigned watts) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_pl_set || !d) return NvmlWrite::Unsupported;
+    return map_write(p_pl_set(d, watts * 1000u));
 }
 
 // --- clock offsets -------------------------------------------------------
 
 namespace {
 // Offsets are read the same way for both domains; only the symbols differ.
-ClockOffset read_offset(nvmlReturn_t (*get)(nvmlDevice_t, int*),
+ClockOffset read_offset(nvmlDevice_t dev,
+                        nvmlReturn_t (*get)(nvmlDevice_t, int*),
                         nvmlReturn_t (*range)(nvmlDevice_t, int*, int*)) {
     ClockOffset o;
-    if (!g_ready || !get) return o;
+    if (!g_ready || !get || !dev) return o;
     int v = 0;
-    if (get(g_dev, &v) != NVML_SUCCESS) return o;
+    if (get(dev, &v) != NVML_SUCCESS) return o;
     o.current_mhz = v;
     o.valid = true;
     // The band is separately optional. Leaving it 0/0 lets the caller tell
@@ -314,58 +316,67 @@ ClockOffset read_offset(nvmlReturn_t (*get)(nvmlDevice_t, int*),
     // and an unclamped write is the driver's problem to reject, not ours to
     // guess at.
     int lo = 0, hi = 0;
-    if (range && range(g_dev, &lo, &hi) == NVML_SUCCESS) { o.min_mhz = lo; o.max_mhz = hi; }
+    if (range && range(dev, &lo, &hi) == NVML_SUCCESS) { o.min_mhz = lo; o.max_mhz = hi; }
     return o;
 }
 } // namespace
 
-ClockOffset nvml_core_clock_offset() { return read_offset(p_coff_get, p_coff_range); }
-ClockOffset nvml_mem_clock_offset()  { return read_offset(p_moff_get, p_moff_range); }
+ClockOffset nvml_core_clock_offset(unsigned index) { return read_offset(dev_at(index), p_coff_get, p_coff_range); }
+ClockOffset nvml_mem_clock_offset(unsigned index)  { return read_offset(dev_at(index), p_moff_get, p_moff_range); }
 
-NvmlWrite nvml_set_core_clock_offset(int mhz) {
-    if (!g_ready || !p_coff_set) return NvmlWrite::Unsupported;
-    return map_write(p_coff_set(g_dev, mhz));
+NvmlWrite nvml_set_core_clock_offset(unsigned index, int mhz) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_coff_set || !d) return NvmlWrite::Unsupported;
+    return map_write(p_coff_set(d, mhz));
 }
-NvmlWrite nvml_set_mem_clock_offset(int mhz) {
-    if (!g_ready || !p_moff_set) return NvmlWrite::Unsupported;
-    return map_write(p_moff_set(g_dev, mhz));
+NvmlWrite nvml_set_mem_clock_offset(unsigned index, int mhz) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_moff_set || !d) return NvmlWrite::Unsupported;
+    return map_write(p_moff_set(d, mhz));
 }
 
 // --- locked clocks -------------------------------------------------------
 
-unsigned nvml_max_core_clock_mhz() {
+unsigned nvml_max_core_clock_mhz(unsigned index) {
     unsigned v = 0;
-    if (!g_ready || !p_maxclock) return 0;
-    return p_maxclock(g_dev, /*NVML_CLOCK_SM=*/1, &v) == NVML_SUCCESS ? v : 0;
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_maxclock || !d) return 0;
+    return p_maxclock(d, /*NVML_CLOCK_SM=*/1, &v) == NVML_SUCCESS ? v : 0;
 }
-unsigned nvml_max_mem_clock_mhz() {
+unsigned nvml_max_mem_clock_mhz(unsigned index) {
     unsigned v = 0;
-    if (!g_ready || !p_maxclock) return 0;
-    return p_maxclock(g_dev, /*NVML_CLOCK_MEM=*/2, &v) == NVML_SUCCESS ? v : 0;
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_maxclock || !d) return 0;
+    return p_maxclock(d, /*NVML_CLOCK_MEM=*/2, &v) == NVML_SUCCESS ? v : 0;
 }
 
-NvmlWrite nvml_set_locked_core_clock(unsigned lo, unsigned hi) {
-    if (!g_ready || !p_lock_core) return NvmlWrite::Unsupported;
-    return map_write(p_lock_core(g_dev, lo, hi));
+NvmlWrite nvml_set_locked_core_clock(unsigned index, unsigned lo, unsigned hi) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_lock_core || !d) return NvmlWrite::Unsupported;
+    return map_write(p_lock_core(d, lo, hi));
 }
-NvmlWrite nvml_set_locked_mem_clock(unsigned lo, unsigned hi) {
-    if (!g_ready || !p_lock_mem) return NvmlWrite::Unsupported;
-    return map_write(p_lock_mem(g_dev, lo, hi));
+NvmlWrite nvml_set_locked_mem_clock(unsigned index, unsigned lo, unsigned hi) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_lock_mem || !d) return NvmlWrite::Unsupported;
+    return map_write(p_lock_mem(d, lo, hi));
 }
-NvmlWrite nvml_reset_locked_core_clock() {
-    if (!g_ready || !p_unlock_core) return NvmlWrite::Unsupported;
-    return map_write(p_unlock_core(g_dev));
+NvmlWrite nvml_reset_locked_core_clock(unsigned index) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_unlock_core || !d) return NvmlWrite::Unsupported;
+    return map_write(p_unlock_core(d));
 }
-NvmlWrite nvml_reset_locked_mem_clock() {
-    if (!g_ready || !p_unlock_mem) return NvmlWrite::Unsupported;
-    return map_write(p_unlock_mem(g_dev));
+NvmlWrite nvml_reset_locked_mem_clock(unsigned index) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_unlock_mem || !d) return NvmlWrite::Unsupported;
+    return map_write(p_unlock_mem(d));
 }
 
 // --- fans ----------------------------------------------------------------
 
-FanInfo nvml_fans() {
+FanInfo nvml_fans(unsigned index) {
     FanInfo f;
-    if (!g_ready) return f;
+    nvmlDevice_t g_dev = dev_at(index);
+    if (!g_ready || !g_dev) return f;
     unsigned n = 0;
     // A card with no readable fan count but a readable speed is still a card
     // with one fan -- laptops and blower cards do this -- so fall back rather
@@ -384,13 +395,15 @@ FanInfo nvml_fans() {
     return f;
 }
 
-NvmlWrite nvml_set_fan_speed(unsigned fan, unsigned pct) {
-    if (!g_ready || !p_fan_set) return NvmlWrite::Unsupported;
-    return map_write(p_fan_set(g_dev, fan, pct));
+NvmlWrite nvml_set_fan_speed(unsigned index, unsigned fan, unsigned pct) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_fan_set || !d) return NvmlWrite::Unsupported;
+    return map_write(p_fan_set(d, fan, pct));
 }
-NvmlWrite nvml_reset_fan(unsigned fan) {
-    if (!g_ready || !p_fan_auto) return NvmlWrite::Unsupported;
-    return map_write(p_fan_auto(g_dev, fan));
+NvmlWrite nvml_reset_fan(unsigned index, unsigned fan) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_fan_auto || !d) return NvmlWrite::Unsupported;
+    return map_write(p_fan_auto(d, fan));
 }
 
 }} // namespace mxbm::gpu

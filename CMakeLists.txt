@@ -458,6 +458,12 @@ if(OpenCL_FOUND)
   target_include_directories(test_gpu_solver PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
   target_link_libraries(test_gpu_solver PRIVATE mxbm_gpu)
   add_test(NAME gpu_solver COMMAND test_gpu_solver)
+
+  add_executable(test_gpu_multi tests/test_gpu_multi.cpp)
+  add_dependencies(test_gpu_multi mxbm_kernels_gen)
+  target_include_directories(test_gpu_multi PRIVATE tests src src/beamhash ${CMAKE_BINARY_DIR})
+  target_link_libraries(test_gpu_multi PRIVATE mxbm_gpu)
+  add_test(NAME gpu_multi COMMAND test_gpu_multi)
   # Phase-C Task 2 -- THE MILESTONE: GpuSolver::solve() runs the same full
   # 2^25 GPU Wagner search as gpu_rounds/gpu_recover (~2-3s on an M3 Max)
   # plus recovery plus the CPU verify gate; same generous timeout for the

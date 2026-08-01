@@ -32,20 +32,24 @@ namespace {
 struct FakeCard { bool valid=false; unsigned current=0, min=0, max=0; NvmlWrite result=NvmlWrite::Ok; };
 FakeCard g_fake;
 std::vector<unsigned> g_writes;
+std::vector<unsigned> g_write_devs;   // which device each write (incl. restore) hit
 
-PowerLimit fake_read() {
+PowerLimit fake_read(unsigned) {
     PowerLimit p;
     p.valid = g_fake.valid; p.current_w = g_fake.current;
     p.default_w = g_fake.current; p.min_w = g_fake.min; p.max_w = g_fake.max;
     return p;
 }
-NvmlWrite fake_write(unsigned w) {
-    if (g_fake.result == NvmlWrite::Ok) { g_writes.push_back(w); g_fake.current = w; }
+NvmlWrite fake_write(unsigned dev, unsigned w) {
+    if (g_fake.result == NvmlWrite::Ok) {
+        g_writes.push_back(w); g_write_devs.push_back(dev); g_fake.current = w;
+    }
     return g_fake.result;
 }
 void fake_reset(unsigned cur, unsigned lo, unsigned hi, NvmlWrite res) {
     g_fake = FakeCard{true, cur, lo, hi, res};
     g_writes.clear();
+    g_write_devs.clear();
     oc_reset_state_for_test();
     const PowerOps ops = { &fake_read, &fake_write };
     oc_set_power_ops(ops);
@@ -68,27 +72,27 @@ void logf(const char* fmt, ...) {
     g_clk_log += buf;
 }
 
-ClockOffset fk_coff_read() { ClockOffset o; o.valid = true; o.current_mhz = g_coff_cur;
+ClockOffset fk_coff_read(unsigned) { ClockOffset o; o.valid = true; o.current_mhz = g_coff_cur;
                              o.min_mhz = -1000; o.max_mhz = 1000; return o; }
-ClockOffset fk_moff_read() { ClockOffset o; o.valid = true; o.current_mhz = g_moff_cur;
+ClockOffset fk_moff_read(unsigned) { ClockOffset o; o.valid = true; o.current_mhz = g_moff_cur;
                              o.min_mhz = -2000; o.max_mhz = 6000; return o; }
-NvmlWrite fk_coff_write(int v) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+NvmlWrite fk_coff_write(unsigned, int v) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
                                  logf("coff=%d;", v); g_coff_cur = v; return NvmlWrite::Ok; }
-NvmlWrite fk_moff_write(int v) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+NvmlWrite fk_moff_write(unsigned, int v) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
                                  logf("moff=%d;", v); g_moff_cur = v; return NvmlWrite::Ok; }
-unsigned fk_max_core() { return 3150; }
-unsigned fk_max_mem()  { return 10501; }
-NvmlWrite fk_lock_core(unsigned lo, unsigned hi) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+unsigned fk_max_core(unsigned) { return 3150; }
+unsigned fk_max_mem(unsigned)  { return 10501; }
+NvmlWrite fk_lock_core(unsigned, unsigned lo, unsigned hi) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
                                                    logf("lockcore=%u,%u;", lo, hi); return NvmlWrite::Ok; }
-NvmlWrite fk_lock_mem(unsigned lo, unsigned hi)  { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+NvmlWrite fk_lock_mem(unsigned, unsigned lo, unsigned hi)  { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
                                                    logf("lockmem=%u,%u;", lo, hi); return NvmlWrite::Ok; }
-NvmlWrite fk_unlock_core() { logf("unlockcore;"); return NvmlWrite::Ok; }
-NvmlWrite fk_unlock_mem()  { logf("unlockmem;");  return NvmlWrite::Ok; }
-FanInfo fk_fan_read() { FanInfo f; f.valid = true; f.count = 2; f.pct = g_fan_cur;
+NvmlWrite fk_unlock_core(unsigned) { logf("unlockcore;"); return NvmlWrite::Ok; }
+NvmlWrite fk_unlock_mem(unsigned)  { logf("unlockmem;");  return NvmlWrite::Ok; }
+FanInfo fk_fan_read(unsigned) { FanInfo f; f.valid = true; f.count = 2; f.pct = g_fan_cur;
                         f.min_pct = 30; f.max_pct = 100; return f; }
-NvmlWrite fk_fan_write(unsigned i, unsigned p) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
+NvmlWrite fk_fan_write(unsigned, unsigned i, unsigned p) { if (g_clk_fail != NvmlWrite::Ok) return g_clk_fail;
                                                  logf("fan%u=%u;", i, p); return NvmlWrite::Ok; }
-NvmlWrite fk_fan_reset(unsigned i) { logf("fanauto%u;", i); return NvmlWrite::Ok; }
+NvmlWrite fk_fan_reset(unsigned, unsigned i) { logf("fanauto%u;", i); return NvmlWrite::Ok; }
 
 void fake_clock_reset() {
     g_clk_log.clear();
@@ -160,7 +164,7 @@ int main() {
     section("apply, clamp and restore against a fake device");
     fake_reset(285, 100, 366, NvmlWrite::Ok);
     {
-        const OcResult r = oc_apply_power_limit("220");
+        const OcResult r = oc_apply_power_limit(0, "220");
         check(r.status == OcStatus::Applied, "in-band value applies");
         check(r.applied == 220, "the requested value is what is applied");
         check(g_writes.size() == 1 && g_writes[0] == 220, "220 W reached the device");
@@ -176,7 +180,7 @@ int main() {
 
     fake_reset(285, 100, 366, NvmlWrite::Ok);
     {
-        const OcResult r = oc_apply_power_limit("50");
+        const OcResult r = oc_apply_power_limit(0, "50");
         check(r.status == OcStatus::Clamped, "below the band reports Clamped, not Applied");
         check(r.applied == 100 && g_writes.size() == 1 && g_writes[0] == 100,
               "clamped UP to the device minimum, and that is what was written");
@@ -184,7 +188,7 @@ int main() {
     }
     fake_reset(285, 100, 366, NvmlWrite::Ok);
     {
-        const OcResult r = oc_apply_power_limit("500");
+        const OcResult r = oc_apply_power_limit(0, "500");
         check(r.status == OcStatus::Clamped, "above the band reports Clamped");
         check(r.applied == 366 && g_writes[0] == 366, "clamped DOWN to the device maximum");
     }
@@ -192,7 +196,7 @@ int main() {
     section("a refused write leaves nothing to restore");
     fake_reset(285, 100, 366, NvmlWrite::NoPermission);
     {
-        const OcResult r = oc_apply_power_limit("220");
+        const OcResult r = oc_apply_power_limit(0, "220");
         check(r.status == OcStatus::NoPermission, "no permission is reported as such");
         check(!oc_has_pending_restore(),
               "a write that never landed must not schedule a restore");
@@ -201,16 +205,16 @@ int main() {
         check(r.message.find("sudo") != std::string::npos, "the message names the cause");
     }
     fake_reset(285, 100, 366, NvmlWrite::Unsupported);
-    check(oc_apply_power_limit("220").status == OcStatus::Unsupported,
+    check(oc_apply_power_limit(0, "220").status == OcStatus::Unsupported,
           "an unsupported knob is reported as such");
     fake_reset(285, 100, 366, NvmlWrite::Failed);
-    check(oc_apply_power_limit("220").status == OcStatus::Failed, "a rejected write is reported");
+    check(oc_apply_power_limit(0, "220").status == OcStatus::Failed, "a rejected write is reported");
 
     section("--no-oc-reset leaves the setting applied");
     fake_reset(285, 100, 366, NvmlWrite::Ok);
     {
         oc_set_restore_enabled(false);
-        oc_apply_power_limit("220");
+        oc_apply_power_limit(0, "220");
         check(g_writes.size() == 1, "the apply itself still happened");
         oc_restore();
         check(g_writes.size() == 1, "--no-oc-reset means exit writes nothing back");
@@ -220,7 +224,7 @@ int main() {
     section("'*' never touches the device");
     fake_reset(285, 100, 366, NvmlWrite::Ok);
     {
-        const OcResult r = oc_apply_power_limit("*");
+        const OcResult r = oc_apply_power_limit(0, "*");
         check(r.status == OcStatus::NotRequested, "'*' is a skip, not an apply");
         check(g_writes.empty(), "'*' issues no write at all");
     }
@@ -230,7 +234,7 @@ int main() {
         g_writes.clear();
         g_fake = FakeCard{};                       // valid = false
         oc_reset_state_for_test();
-        const OcResult r = oc_apply_power_limit("220");
+        const OcResult r = oc_apply_power_limit(0, "220");
         check(r.status == OcStatus::Unsupported, "no readable limit -> Unsupported");
         check(g_writes.empty(), "and no write is attempted");
     }
@@ -252,7 +256,7 @@ int main() {
     fake_clock_reset();
     {
         OcRequest req; req.coff = "150"; req.moff = "-200";
-        const std::vector<OcResult> rs = oc_apply(req);
+        const std::vector<OcResult> rs = oc_apply(0, req);
         check(rs.size() == 2, "one result per requested knob, none for the rest");
         check(rs[0].status == OcStatus::Applied && rs[0].applied == 150, "core offset applied");
         check(rs[1].status == OcStatus::Applied && rs[1].applied == -200,
@@ -266,7 +270,7 @@ int main() {
     fake_clock_reset();
     {
         OcRequest req; req.cclk = "2100"; req.mclk = "10000";
-        const std::vector<OcResult> rs = oc_apply(req);
+        const std::vector<OcResult> rs = oc_apply(0, req);
         check(rs.size() == 2 && rs[0].applied == 2100 && rs[1].applied == 10000,
               "both clocks locked at the requested values");
         check(g_clk_log == "lockcore=2100,2100;lockmem=10000,10000;",
@@ -279,7 +283,7 @@ int main() {
     fake_clock_reset();
     {
         OcRequest req; req.cclk = "9000";              // above the fake's 3150 max
-        const std::vector<OcResult> rs = oc_apply(req);
+        const std::vector<OcResult> rs = oc_apply(0, req);
         check(rs[0].status == OcStatus::Clamped && rs[0].applied == 3150,
               "a locked clock is clamped to the device maximum");
         check(rs[0].requested == 9000, "and the request is still reported, so the clamp shows");
@@ -288,19 +292,19 @@ int main() {
     fake_clock_reset();
     {
         OcRequest req; req.coff = "5000";              // above the fake's +1000
-        const std::vector<OcResult> rs = oc_apply(req);
+        const std::vector<OcResult> rs = oc_apply(0, req);
         check(rs[0].status == OcStatus::Clamped && rs[0].applied == 1000,
               "an offset is clamped to the band the driver reports");
         OcRequest low; low.coff = "-5000";
         fake_clock_reset();
-        check(oc_apply(low)[0].applied == -1000, "and clamped at the bottom of it too");
+        check(oc_apply(0, low)[0].applied == -1000, "and clamped at the bottom of it too");
     }
 
     section("--fan drives every fan the card has");
     fake_clock_reset();
     {
         OcRequest req; req.fan = "70";
-        const std::vector<OcResult> rs = oc_apply(req);
+        const std::vector<OcResult> rs = oc_apply(0, req);
         check(rs[0].status == OcStatus::Applied && rs[0].applied == 70, "fan target applied");
         check(g_clk_log == "fan0=70;fan1=70;",
               "BOTH fans are set -- one left on the driver's curve is not the setting asked for");
@@ -311,7 +315,7 @@ int main() {
     fake_clock_reset();
     {
         OcRequest req; req.fan = "10";                 // below the fake's 30 % floor
-        check(oc_apply(req)[0].applied == 30, "fan speed clamps up to the device minimum");
+        check(oc_apply(0, req)[0].applied == 30, "fan speed clamps up to the device minimum");
     }
 
     section("a knob that fails leaves nothing of ITS OWN to restore");
@@ -319,7 +323,7 @@ int main() {
     g_clk_fail = NvmlWrite::NoPermission;
     {
         OcRequest req; req.coff = "150";
-        const std::vector<OcResult> rs = oc_apply(req);
+        const std::vector<OcResult> rs = oc_apply(0, req);
         check(rs[0].status == OcStatus::NoPermission, "no permission is reported as such");
         check(rs[0].message.find("sudo") != std::string::npos, "the message names the cause");
         check(!oc_has_pending_restore(), "a write that never landed schedules no restore");
@@ -332,7 +336,7 @@ int main() {
     fake_clock_reset();
     {
         OcRequest req; req.coff = "*"; req.cclk = "";
-        check(oc_apply(req).empty(), "'*' and an unset flag produce no results at all");
+        check(oc_apply(0, req).empty(), "'*' and an unset flag produce no results at all");
         check(g_clk_log.empty(), "and issue no writes");
     }
 
@@ -357,7 +361,7 @@ int main() {
         std::printf("  SKIP: NVML unavailable\n");
         return summary("overclock");
     }
-    const PowerLimit pl = nvml_power_limit();
+    const PowerLimit pl = nvml_power_limit(0);
     if (!pl.valid) {
         std::printf("  SKIP: device reports no power limit\n");
         nvml_shutdown();
@@ -373,5 +377,32 @@ int main() {
     check(pl.default_w == 0 || (pl.default_w >= pl.min_w && pl.default_w <= pl.max_w),
           "default limit, when reported, lies inside the band");
     nvml_shutdown();
+    section("per-device apply and restore");
+    {
+        // The write AND the restore must land on the card that was applied to,
+        // and the per-GPU list entry must be read at that card's own position
+        // -- the two halves of MIXED_RIG.md phase 0.
+        fake_reset(285, 100, 285, NvmlWrite::Ok);
+        const OcResult r = oc_apply_power_limit(2, "240,*,250");
+        check(r.status == OcStatus::Applied && r.applied == 250,
+              "device 2 reads its own list entry, not device 0's");
+        check(r.device == 2, "the result names the device it landed on");
+        check(g_write_devs.size() == 1 && g_write_devs[0] == 2,
+              "the write went to device 2");
+        oc_restore();
+        check(g_write_devs.size() == 2 && g_write_devs[1] == 2,
+              "the restore went back to device 2, nobody else");
+        check(g_writes[1] == 285, "and put back device 2's previous value");
+    }
+    {
+        // Two cards applied, both restored -- one visit each.
+        fake_reset(285, 100, 285, NvmlWrite::Ok);
+        (void)oc_apply_power_limit(0, "200,220");
+        (void)oc_apply_power_limit(1, "200,220");
+        oc_restore();
+        check(g_write_devs.size() == 4 && g_write_devs[2] != g_write_devs[3],
+              "restore visits each applied device exactly once");
+    }
+
     return summary("overclock");
 }

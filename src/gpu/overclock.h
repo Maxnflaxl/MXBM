@@ -37,6 +37,7 @@ enum class OcStatus {
 
 struct OcResult {
     OcStatus    status = OcStatus::NotRequested;
+    unsigned    device = 0;     // which card this landed on (bus order)
     const char* knob   = "";    // "--pl", "--cclk", ... for grouping and logs
     // In the knob's own unit: watts, MHz, MHz of offset, or fan percent.
     // Signed because an offset may legitimately be negative -- a downclock is
@@ -64,17 +65,19 @@ struct OcRequest {
 bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& found,
                    std::string& err, bool allow_negative = false);
 
-// Applies every requested knob to the device and returns one result per knob
-// that was actually requested. Never throws; read the statuses.
+// Applies every requested knob to DEVICE (bus order; also the index each
+// per-GPU list entry is read at, so "240,*,260" finally lands per card) and
+// returns one result per knob that was actually requested. Never throws; read
+// the statuses. Call once per selected device.
 //
 // ORDER MATTERS and is: power limit, core offset, memory offset, locked core
 // clock, locked memory clock, fan. The V/F curve is shaped before anything is
 // pinned onto it, and the fan is set last, against the thermal load the other
-// settings imply. Restore runs in exactly the reverse order.
-std::vector<OcResult> oc_apply(const OcRequest& req);
+// settings imply. Restore runs in exactly the reverse order, per device.
+std::vector<OcResult> oc_apply(unsigned device, const OcRequest& req);
 
 // The narrow entry point --pl had before the other knobs existed.
-OcResult oc_apply_power_limit(const std::string& spec);
+OcResult oc_apply_power_limit(unsigned device, const std::string& spec);
 
 // Puts back everything oc_apply changed. Idempotent, so the atexit hook and the
 // signal handler can both call it. No-op when --no-oc-reset was given.
@@ -103,9 +106,12 @@ bool oc_has_pending_restore();
 // practice meant they were not exercised at all -- mutation testing found nine
 // separate breakages that no test noticed. Injecting a fake is what makes those
 // testable on any machine; production leaves the defaults in place.
+// Every op takes the device first, mirroring the nvml_* signatures -- so a
+// fake can assert not just WHAT was written but WHERE, which is the failure
+// mode phase 0 of MIXED_RIG.md exists to kill.
 struct PowerOps {
-    PowerLimit (*read)();
-    NvmlWrite  (*write)(unsigned watts);
+    PowerLimit (*read)(unsigned device);
+    NvmlWrite  (*write)(unsigned device, unsigned watts);
 };
 void oc_set_power_ops(const PowerOps& ops);   // tests only
 
@@ -113,19 +119,19 @@ void oc_set_power_ops(const PowerOps& ops);   // tests only
 // PowerOps so a test that only cares about --pl does not have to supply
 // thirteen function pointers it will never call.
 struct ClockOps {
-    ClockOffset (*core_offset_read)();
-    NvmlWrite   (*core_offset_write)(int mhz);
-    ClockOffset (*mem_offset_read)();
-    NvmlWrite   (*mem_offset_write)(int mhz);
-    unsigned    (*max_core_mhz)();
-    unsigned    (*max_mem_mhz)();
-    NvmlWrite   (*lock_core)(unsigned lo, unsigned hi);
-    NvmlWrite   (*unlock_core)();
-    NvmlWrite   (*lock_mem)(unsigned lo, unsigned hi);
-    NvmlWrite   (*unlock_mem)();
-    FanInfo     (*fan_read)();
-    NvmlWrite   (*fan_write)(unsigned fan, unsigned pct);
-    NvmlWrite   (*fan_reset)(unsigned fan);
+    ClockOffset (*core_offset_read)(unsigned device);
+    NvmlWrite   (*core_offset_write)(unsigned device, int mhz);
+    ClockOffset (*mem_offset_read)(unsigned device);
+    NvmlWrite   (*mem_offset_write)(unsigned device, int mhz);
+    unsigned    (*max_core_mhz)(unsigned device);
+    unsigned    (*max_mem_mhz)(unsigned device);
+    NvmlWrite   (*lock_core)(unsigned device, unsigned lo, unsigned hi);
+    NvmlWrite   (*unlock_core)(unsigned device);
+    NvmlWrite   (*lock_mem)(unsigned device, unsigned lo, unsigned hi);
+    NvmlWrite   (*unlock_mem)(unsigned device);
+    FanInfo     (*fan_read)(unsigned device);
+    NvmlWrite   (*fan_write)(unsigned device, unsigned fan, unsigned pct);
+    NvmlWrite   (*fan_reset)(unsigned device, unsigned fan);
 };
 void oc_set_clock_ops(const ClockOps& ops);   // tests only
 

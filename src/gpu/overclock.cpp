@@ -10,22 +10,25 @@
 namespace mxbm { namespace gpu {
 namespace {
 
-// What to put back, and whether to bother. Plain globals rather than a class:
-// the signal handler below has to reach them, and a handler cannot safely walk
-// an object graph it does not own.
+// What to put back, and whether to bother -- PER DEVICE. Plain atomics in
+// fixed arrays rather than a class or a vector: the signal handler below has
+// to reach them, and a handler cannot safely walk an object graph it does not
+// own -- a compile-time array it can. 16 is far above any rig this targets;
+// an index past it is refused at apply time, never silently aliased.
 //
 // One flag per knob, because "0" is a legitimate previous value for an offset
 // and a legitimate fan percent, so a sentinel value cannot mean "nothing to
 // undo" the way g_prev_pl_w's zero can.
-std::atomic<unsigned> g_prev_pl_w{0};        // 0 => nothing to restore
-std::atomic<bool>     g_coff_applied{false};
-std::atomic<int>      g_prev_coff{0};
-std::atomic<bool>     g_moff_applied{false};
-std::atomic<int>      g_prev_moff{0};
-std::atomic<bool>     g_core_locked{false};
-std::atomic<bool>     g_mem_locked{false};
-std::atomic<bool>     g_fan_applied{false};
-std::atomic<unsigned> g_fan_count{0};
+constexpr unsigned kMaxOcDevices = 16;
+std::atomic<unsigned> g_prev_pl_w[kMaxOcDevices];    // 0 => nothing to restore
+std::atomic<bool>     g_coff_applied[kMaxOcDevices];
+std::atomic<int>      g_prev_coff[kMaxOcDevices];
+std::atomic<bool>     g_moff_applied[kMaxOcDevices];
+std::atomic<int>      g_prev_moff[kMaxOcDevices];
+std::atomic<bool>     g_core_locked[kMaxOcDevices];
+std::atomic<bool>     g_mem_locked[kMaxOcDevices];
+std::atomic<bool>     g_fan_applied[kMaxOcDevices];
+std::atomic<unsigned> g_fan_count[kMaxOcDevices];
 std::atomic<bool>     g_restore_enabled{true};
 std::atomic<bool>     g_atexit_installed{false};
 
@@ -92,13 +95,15 @@ void describe_failure(OcResult& r, NvmlWrite w, const char* unit) {
 // Reads one knob's entry out of a per-GPU list. Returns false when there is
 // nothing to do -- either the flag was not given, or '*' skipped this GPU, or
 // the list was malformed, in which case `r` already carries the complaint.
-bool want(const std::string& spec, const char* knob, bool allow_negative, OcResult& r) {
+bool want(const std::string& spec, unsigned device, const char* knob,
+          bool allow_negative, OcResult& r) {
     r.knob = knob;
+    r.device = device;
     if (spec.empty()) return false;
     long v = 0;
     bool found = false;
     std::string err;
-    if (!oc_parse_list(spec, 0, v, found, err, allow_negative)) {
+    if (!oc_parse_list(spec, device, v, found, err, allow_negative)) {
         r.status  = OcStatus::Failed;
         r.message = std::string(knob) + " " + spec + ": " + err;
         return false;
@@ -168,11 +173,16 @@ bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& f
     return true;
 }
 
-OcResult oc_apply_power_limit(const std::string& spec) {
+OcResult oc_apply_power_limit(unsigned device, const std::string& spec) {
     OcResult r;
-    if (!want(spec, "--pl", /*allow_negative=*/false, r)) return r;
+    if (!want(spec, device, "--pl", /*allow_negative=*/false, r)) return r;
+    if (device >= kMaxOcDevices) {
+        r.status  = OcStatus::Failed;
+        r.message = "--pl: device index out of range for restore bookkeeping";
+        return r;
+    }
 
-    const PowerLimit pl = g_ops.read();
+    const PowerLimit pl = g_ops.read(device);
     if (!pl.valid) {
         r.status  = OcStatus::Unsupported;
         r.message = "--pl: this device does not report a power limit; continuing at stock";
@@ -186,7 +196,7 @@ OcResult oc_apply_power_limit(const std::string& spec) {
     const bool clamped = clamp_to(target, pl.min_w, pl.max_w);
     r.applied = target;
 
-    const NvmlWrite w = g_ops.write((unsigned)target);
+    const NvmlWrite w = g_ops.write(device, (unsigned)target);
     if (w != NvmlWrite::Ok) {
         char buf[256];
         describe_failure(r, w, " W");
@@ -198,7 +208,7 @@ OcResult oc_apply_power_limit(const std::string& spec) {
     // Only now is there something to undo. Recording the PREVIOUS value rather
     // than the default means a user who had already set a limit outside MXBM
     // gets their own value back, not the factory one.
-    g_prev_pl_w.store(pl.current_w);
+    g_prev_pl_w[device].store(pl.current_w);
     oc_install_restore_hooks();
 
     char buf[256];
@@ -221,14 +231,14 @@ namespace {
 // --coff / --moff. The offset shifts the whole V/F curve, so the card keeps
 // managing itself and the setting shows up as instability rather than as a
 // refusal if it is too aggressive.
-OcResult apply_offset(const std::string& spec, const char* knob,
-                      ClockOffset (*read)(), NvmlWrite (*write)(int),
+OcResult apply_offset(const std::string& spec, unsigned device, const char* knob,
+                      ClockOffset (*read)(unsigned), NvmlWrite (*write)(unsigned, int),
                       std::atomic<bool>& applied_flag, std::atomic<int>& prev_slot,
                       const char* domain) {
     OcResult r;
-    if (!want(spec, knob, /*allow_negative=*/true, r)) return r;
+    if (!want(spec, device, knob, /*allow_negative=*/true, r)) return r;
 
-    const ClockOffset o = read();
+    const ClockOffset o = read(device);
     if (!o.valid) {
         r.status  = OcStatus::Unsupported;
         r.message = std::string(knob) + ": this device does not expose a " + domain
@@ -243,7 +253,7 @@ OcResult apply_offset(const std::string& spec, const char* knob,
     const bool clamped = clamp_to(target, o.min_mhz, o.max_mhz);
     r.applied = target;
 
-    const NvmlWrite w = write((int)target);
+    const NvmlWrite w = write(device, (int)target);
     if (w != NvmlWrite::Ok) { describe_failure(r, w, " MHz"); return r; }
 
     prev_slot.store(o.current_mhz);
@@ -272,13 +282,14 @@ OcResult apply_offset(const std::string& spec, const char* knob,
 
 // --cclk / --mclk. A lock takes clock management away from the driver, so
 // there is no "previous lock" to write back and the restore is a reset call.
-OcResult apply_lock(const std::string& spec, const char* knob,
-                    unsigned (*max_mhz)(), NvmlWrite (*lock)(unsigned, unsigned),
+OcResult apply_lock(const std::string& spec, unsigned device, const char* knob,
+                    unsigned (*max_mhz)(unsigned),
+                    NvmlWrite (*lock)(unsigned, unsigned, unsigned),
                     std::atomic<bool>& locked_flag, const char* domain) {
     OcResult r;
-    if (!want(spec, knob, /*allow_negative=*/false, r)) return r;
+    if (!want(spec, device, knob, /*allow_negative=*/false, r)) return r;
 
-    const unsigned hi = max_mhz();
+    const unsigned hi = max_mhz(device);
     r.max = hi;
     long target = r.requested;
     // Only an upper bound is known. NVML has no "minimum lockable clock", and
@@ -288,7 +299,7 @@ OcResult apply_lock(const std::string& spec, const char* knob,
 
     // Both ends of the range get the same value: "run at exactly this clock" is
     // what --cclk promises, and a range would let the driver pick within it.
-    const NvmlWrite w = lock((unsigned)target, (unsigned)target);
+    const NvmlWrite w = lock(device, (unsigned)target, (unsigned)target);
     if (w != NvmlWrite::Ok) { describe_failure(r, w, " MHz"); return r; }
 
     locked_flag.store(true);
@@ -309,9 +320,9 @@ OcResult apply_lock(const std::string& spec, const char* knob,
     return r;
 }
 
-OcResult apply_fan(const std::string& spec) {
+OcResult apply_fan(const std::string& spec, unsigned device) {
     OcResult r;
-    if (!want(spec, "--fan", /*allow_negative=*/true, r)) return r;
+    if (!want(spec, device, "--fan", /*allow_negative=*/true, r)) return r;
     // Negative is allowed through the parser only so "-0" and a stray sign do
     // not read as a grammar error; an actual negative fan speed is nonsense.
     if (r.requested < 0) {
@@ -320,7 +331,7 @@ OcResult apply_fan(const std::string& spec) {
         return r;
     }
 
-    const FanInfo f = g_clk.fan_read();
+    const FanInfo f = g_clk.fan_read(device);
     if (!f.valid) {
         r.status  = OcStatus::Unsupported;
         r.message = "--fan: this device does not report a controllable fan; continuing on auto";
@@ -340,15 +351,15 @@ OcResult apply_fan(const std::string& spec) {
     NvmlWrite w = NvmlWrite::Ok;
     unsigned done = 0;
     for (unsigned i = 0; i < f.count; ++i) {
-        w = g_clk.fan_write(i, (unsigned)target);
+        w = g_clk.fan_write(device, i, (unsigned)target);
         if (w != NvmlWrite::Ok) break;
         ++done;
     }
     if (done == 0) { describe_failure(r, w, " %"); return r; }
 
     // Record however many actually took, so restore hands back exactly those.
-    g_fan_count.store(done);
-    g_fan_applied.store(true);
+    g_fan_count[device].store(done);
+    g_fan_applied[device].store(true);
     oc_install_restore_hooks();
 
     char buf[256];
@@ -375,7 +386,7 @@ OcResult apply_fan(const std::string& spec) {
 
 } // namespace
 
-std::vector<OcResult> oc_apply(const OcRequest& req) {
+std::vector<OcResult> oc_apply(unsigned device, const OcRequest& req) {
     std::vector<OcResult> out;
     auto keep = [&out](OcResult r) {
         // A knob that was never asked for produces no line at all; one that was
@@ -383,17 +394,25 @@ std::vector<OcResult> oc_apply(const OcRequest& req) {
         // reportable, including the failures -- especially the failures.
         if (r.status != OcStatus::NotRequested) out.push_back(std::move(r));
     };
+    if (device >= kMaxOcDevices) {
+        OcResult r;
+        r.device  = device;
+        r.status  = OcStatus::Failed;
+        r.message = "overclock: device index out of range for restore bookkeeping";
+        out.push_back(std::move(r));
+        return out;
+    }
 
-    keep(oc_apply_power_limit(req.pl));
-    keep(apply_offset(req.coff, "--coff", g_clk.core_offset_read, g_clk.core_offset_write,
-                      g_coff_applied, g_prev_coff, "Core"));
-    keep(apply_offset(req.moff, "--moff", g_clk.mem_offset_read, g_clk.mem_offset_write,
-                      g_moff_applied, g_prev_moff, "Memory"));
-    keep(apply_lock(req.cclk, "--cclk", g_clk.max_core_mhz, g_clk.lock_core,
-                    g_core_locked, "Core"));
-    keep(apply_lock(req.mclk, "--mclk", g_clk.max_mem_mhz, g_clk.lock_mem,
-                    g_mem_locked, "Memory"));
-    keep(apply_fan(req.fan));
+    keep(oc_apply_power_limit(device, req.pl));
+    keep(apply_offset(req.coff, device, "--coff", g_clk.core_offset_read, g_clk.core_offset_write,
+                      g_coff_applied[device], g_prev_coff[device], "Core"));
+    keep(apply_offset(req.moff, device, "--moff", g_clk.mem_offset_read, g_clk.mem_offset_write,
+                      g_moff_applied[device], g_prev_moff[device], "Memory"));
+    keep(apply_lock(req.cclk, device, "--cclk", g_clk.max_core_mhz, g_clk.lock_core,
+                    g_core_locked[device], "Core"));
+    keep(apply_lock(req.mclk, device, "--mclk", g_clk.max_mem_mhz, g_clk.lock_mem,
+                    g_mem_locked[device], "Memory"));
+    keep(apply_fan(req.fan, device));
     return out;
 }
 
@@ -413,12 +432,14 @@ void oc_reset_power_ops() {
     };
 }
 void oc_reset_state_for_test() {
-    g_prev_pl_w.store(0);
-    g_coff_applied.store(false); g_prev_coff.store(0);
-    g_moff_applied.store(false); g_prev_moff.store(0);
-    g_core_locked.store(false);
-    g_mem_locked.store(false);
-    g_fan_applied.store(false);  g_fan_count.store(0);
+    for (unsigned d = 0; d < kMaxOcDevices; ++d) {
+        g_prev_pl_w[d].store(0);
+        g_coff_applied[d].store(false); g_prev_coff[d].store(0);
+        g_moff_applied[d].store(false); g_prev_moff[d].store(0);
+        g_core_locked[d].store(false);
+        g_mem_locked[d].store(false);
+        g_fan_applied[d].store(false);  g_fan_count[d].store(0);
+    }
     g_restore_enabled.store(true);
 }
 
@@ -434,8 +455,12 @@ void oc_install_restore_hooks() {
 
 bool oc_has_pending_restore() {
     if (!g_restore_enabled.load()) return false;
-    return g_prev_pl_w.load() != 0 || g_coff_applied.load() || g_moff_applied.load()
-        || g_core_locked.load() || g_mem_locked.load() || g_fan_applied.load();
+    for (unsigned d = 0; d < kMaxOcDevices; ++d) {
+        if (g_prev_pl_w[d].load() != 0 || g_coff_applied[d].load() || g_moff_applied[d].load()
+            || g_core_locked[d].load() || g_mem_locked[d].load() || g_fan_applied[d].load())
+            return true;
+    }
+    return false;
 }
 
 void oc_restore() {
@@ -443,20 +468,22 @@ void oc_restore() {
     // exchange, not load-then-store, on every knob: makes the whole thing
     // idempotent even if a signal arrives while atexit is already running it.
     //
-    // Reverse of the apply order. The fan goes back to the driver's curve first
-    // so the card is cooling itself normally while the clocks come down, and
-    // the power limit is restored last so nothing is unlocked into a higher
-    // clock than the old limit would have allowed.
-    if (g_fan_applied.exchange(false)) {
-        const unsigned n = g_fan_count.exchange(0);
-        for (unsigned i = 0; i < n; ++i) (void)g_clk.fan_reset(i);
+    // Reverse of the apply order, per device. The fan goes back to the
+    // driver's curve first so the card is cooling itself normally while the
+    // clocks come down, and the power limit is restored last so nothing is
+    // unlocked into a higher clock than the old limit would have allowed.
+    for (unsigned d = 0; d < kMaxOcDevices; ++d) {
+        if (g_fan_applied[d].exchange(false)) {
+            const unsigned n = g_fan_count[d].exchange(0);
+            for (unsigned i = 0; i < n; ++i) (void)g_clk.fan_reset(d, i);
+        }
+        if (g_mem_locked[d].exchange(false))  (void)g_clk.unlock_mem(d);
+        if (g_core_locked[d].exchange(false)) (void)g_clk.unlock_core(d);
+        if (g_moff_applied[d].exchange(false)) (void)g_clk.mem_offset_write(d, g_prev_moff[d].exchange(0));
+        if (g_coff_applied[d].exchange(false)) (void)g_clk.core_offset_write(d, g_prev_coff[d].exchange(0));
+        const unsigned prev = g_prev_pl_w[d].exchange(0);
+        if (prev) (void)g_ops.write(d, prev);
     }
-    if (g_mem_locked.exchange(false))  (void)g_clk.unlock_mem();
-    if (g_core_locked.exchange(false)) (void)g_clk.unlock_core();
-    if (g_moff_applied.exchange(false)) (void)g_clk.mem_offset_write(g_prev_moff.exchange(0));
-    if (g_coff_applied.exchange(false)) (void)g_clk.core_offset_write(g_prev_coff.exchange(0));
-    const unsigned prev = g_prev_pl_w.exchange(0);
-    if (prev) (void)g_ops.write(prev);
 }
 
 }} // namespace mxbm::gpu

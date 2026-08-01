@@ -67,18 +67,13 @@ struct PowerLimit {
     unsigned max_w       = 0;
 };
 
-// Reads device 0's limit and the band the DRIVER permits. Clamping against
-// these is a fact about the installed card rather than an assumption about
-// someone else's silicon, which is what the open question in
-// docs/overclocking.md ("Clamps") was waiting on.
-PowerLimit nvml_power_limit();
-
-// The same, for any device by index -- bus order, the order --devices selects
-// from. What geometry selection and the restart notice read: the limit that is
-// actually ON the card, whether --pl put it there or nvidia-smi did before
-// launch. An out-of-range index reads as "no limit reported", never as another
-// card's.
-PowerLimit nvml_power_limit_at(unsigned index);
+// Reads the device's limit and the band the DRIVER permits -- bus order, the
+// order --devices selects from. Clamping against these is a fact about the
+// installed card rather than an assumption about someone else's silicon. What
+// geometry selection and the restart notice read: the limit that is actually
+// ON the card, whether --pl put it there or nvidia-smi did before launch. An
+// out-of-range index reads as "no limit reported", never as another card's.
+PowerLimit nvml_power_limit(unsigned index);
 
 // The memory clocks the DRIVER supports on this card, in MHz, unsorted as NVML
 // reports them (10501/10251/5001/810/405 on the reference card). What --tune's
@@ -100,11 +95,15 @@ inline unsigned nvml_mw_to_w(unsigned mw) { return (mw + 500u) / 1000u; }
 
 enum class NvmlWrite { Ok, NoPermission, Unsupported, Failed };
 
-// Sets device 0's limit. Every NVML write needs root (verified: called as uid
-// 1000 with the value the card already had, a true no-op, it still returns
-// NVML_ERROR_NO_PERMISSION), so NoPermission is the expected outcome for an
-// ordinary user and callers must report it as a cause, not a crash.
-NvmlWrite nvml_set_power_limit(unsigned watts);
+// Sets the device's limit. EVERY write below takes the device index first --
+// the single-card era's implicit device 0 is what let a multi-GPU rig cap one
+// card while measuring another (MIXED_RIG.md phase 0). Every NVML write needs
+// root (verified: called as uid 1000 with the value the card already had, a
+// true no-op, it still returns NVML_ERROR_NO_PERMISSION), so NoPermission is
+// the expected outcome for an ordinary user and callers must report it as a
+// cause, not a crash. An out-of-range index fails; it never writes another
+// card.
+NvmlWrite nvml_set_power_limit(unsigned index, unsigned watts);
 
 // --- clocks and fans -----------------------------------------------------
 //
@@ -129,22 +128,22 @@ struct ClockOffset {
     int  min_mhz = 0, max_mhz = 0;   // the driver's permitted band
 };
 
-ClockOffset nvml_core_clock_offset();
-ClockOffset nvml_mem_clock_offset();
-NvmlWrite   nvml_set_core_clock_offset(int mhz);
-NvmlWrite   nvml_set_mem_clock_offset(int mhz);
+ClockOffset nvml_core_clock_offset(unsigned index);
+ClockOffset nvml_mem_clock_offset(unsigned index);
+NvmlWrite   nvml_set_core_clock_offset(unsigned index, int mhz);
+NvmlWrite   nvml_set_mem_clock_offset(unsigned index, int mhz);
 
 // The card's maximum for a clock domain, 0 when unreported. Used to clamp
 // --cclk/--mclk against the hardware rather than against a constant of ours.
-unsigned nvml_max_core_clock_mhz();
-unsigned nvml_max_mem_clock_mhz();
+unsigned nvml_max_core_clock_mhz(unsigned index);
+unsigned nvml_max_mem_clock_mhz(unsigned index);
 
 // Locked clocks take a (min, max) pair; MXBM pins both to the same value,
 // which is what "run at exactly this clock" means and what --cclk promises.
-NvmlWrite nvml_set_locked_core_clock(unsigned min_mhz, unsigned max_mhz);
-NvmlWrite nvml_set_locked_mem_clock(unsigned min_mhz, unsigned max_mhz);
-NvmlWrite nvml_reset_locked_core_clock();
-NvmlWrite nvml_reset_locked_mem_clock();
+NvmlWrite nvml_set_locked_core_clock(unsigned index, unsigned min_mhz, unsigned max_mhz);
+NvmlWrite nvml_set_locked_mem_clock(unsigned index, unsigned min_mhz, unsigned max_mhz);
+NvmlWrite nvml_reset_locked_core_clock(unsigned index);
+NvmlWrite nvml_reset_locked_mem_clock(unsigned index);
 
 struct FanInfo {
     bool     valid = false;
@@ -153,11 +152,11 @@ struct FanInfo {
     unsigned min_pct = 0, max_pct = 0;   // driver-reported band, 0/0 if unknown
 };
 
-FanInfo   nvml_fans();
-NvmlWrite nvml_set_fan_speed(unsigned fan, unsigned pct);
+FanInfo   nvml_fans(unsigned index);
+NvmlWrite nvml_set_fan_speed(unsigned index, unsigned fan, unsigned pct);
 // Hands the fan back to the driver's own curve. NOT the same as writing the
 // speed we first read: that would leave it pinned at a fixed value forever,
 // which on a card that later gets hot is a way to cook it.
-NvmlWrite nvml_reset_fan(unsigned fan);
+NvmlWrite nvml_reset_fan(unsigned index, unsigned fan);
 
 }} // namespace mxbm::gpu

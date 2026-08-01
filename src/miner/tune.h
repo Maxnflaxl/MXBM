@@ -155,6 +155,11 @@ inline unsigned tune_rung_below(std::vector<TunePoint> stock, std::vector<TunePo
 }
 
 struct TuneConfig {
+    // The card being tuned, bus order -- the SAME card every NVML write in the
+    // sweep targets and the same index the solver was constructed on. The
+    // single-card era's implicit device 0 is what let --tune sweep one card
+    // while measuring another (MIXED_RIG.md phase 0).
+    unsigned device = 0;
     int    seconds_per_point = 60;
     double knee_marginal = 0.07;   // sol/s per W below which more watts stop paying
     std::vector<unsigned> caps;    // empty = tune_default_caps() from the driver band
