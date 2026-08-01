@@ -1,0 +1,5 @@
+# Batch files must be CRLF in every checkout -- the Windows release job ships
+# them byte-for-byte from the runner's working tree. Shell scripts stay LF for
+# the same reason, whatever platform the clone happens on.
+*.bat text eol=crlf
+*.sh  text eol=lf
