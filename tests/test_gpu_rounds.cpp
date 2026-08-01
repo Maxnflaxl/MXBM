@@ -205,6 +205,15 @@ int main() {
     // known solutions must survive the search. Do NOT weaken this to >=0 or
     // catch/ignore a failure -- a 0 here is a real, reportable bug.
     check(res.survivors >= 1, "GPU 5-round search yields is_zero survivor(s) on KAT input");
+    // And an UPPER bound, which this test went without until 2026-08-01: a
+    // deliberately corrupted geometry constant made the search report 1024
+    // survivors -- garbage -- and the assertion above passed it. This test does
+    // not verify the goldens themselves (test_gpu_solver does), so without a
+    // ceiling it certifies almost nothing about the search's output. The KAT
+    // input has exactly 3, and every observed run produces 3; a failure here
+    // means either a real regression or that the gi tie-break nondeterminism
+    // reaches the survivor count, which would itself be worth knowing.
+    check(res.survivors == 3, "exactly the KAT's 3 survivors -- not a garbage explosion");
 
     return summary("gpu_rounds");
 }
