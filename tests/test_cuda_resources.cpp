@@ -512,20 +512,37 @@ int check_listing(const SmModel& m, const std::string& out, bool report) {
     return bad;
 }
 
-// Add `delta` to the REG: value of one named function in a cuobjdump listing. Used only
-// by the self-check.
+// Add `delta` to the REG: value of one named function in a cuobjdump listing,
+// INSIDE the kArch section -- a multi-arch fatbin lists every kernel once per
+// architecture and the first textual occurrence is another arch's copy, which
+// the parser rightly ignores. Perturbing there made the self-check declare the
+// guard blind on the first multi-arch build, so this walks sections exactly
+// like parse_res_usage. Used only by the self-check.
 bool bump_reg(std::string& s, const std::string& mangled, int delta) {
-    const size_t f = s.find(" Function " + mangled + ":");
-    if (f == std::string::npos) return false;
-    const size_t r = s.find("REG:", f);
-    if (r == std::string::npos) return false;
-    const size_t v = r + 4;
-    size_t e = v;
-    while (e < s.size() && s[e] >= '0' && s[e] <= '9') ++e;
-    if (e == v) return false;
-    const int now = std::atoi(s.c_str() + v);
-    s.replace(v, e - v, std::to_string(now + delta));
-    return true;
+    const std::string fn = " Function " + mangled + ":";
+    bool inArch = false, atFunc = false;
+    std::string line;
+    size_t lineStart = 0;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i != s.size() && s[i] != '\n') { line += s[i]; continue; }
+        if (line.find("arch =") != std::string::npos) {
+            inArch = line.find(kArch) != std::string::npos;
+            atFunc = false;
+        } else if (inArch && line.compare(0, fn.size(), fn) == 0) {
+            atFunc = true;
+        } else if (atFunc && line.find("REG:") != std::string::npos) {
+            const size_t v = lineStart + line.find("REG:") + 4;
+            size_t e = v;
+            while (e < s.size() && s[e] >= '0' && s[e] <= '9') ++e;
+            if (e == v) return false;
+            const int now = std::atoi(s.c_str() + v);
+            s.replace(v, e - v, std::to_string(now + delta));
+            return true;
+        }
+        line.clear();
+        lineStart = i + 1;
+    }
+    return false;
 }
 
 // kWG is the launch width for six of the nine kernels and it is a #define, so it can be
