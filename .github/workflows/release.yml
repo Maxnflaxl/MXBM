@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # the version stamp is MAJ.MIN.<commit count>; shallow = .1
 
       - name: deps
         run: |
@@ -56,6 +58,9 @@ jobs:
           V="$INPUT_VERSION"
           [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
           V="${V//\//-}"
+          # A bare v0.7 tag gains the commit count, so the archive name carries
+          # the same three-part version the binary prints.
+          case "$V" in *.*.*) ;; *) V="$V.$(git rev-list --count HEAD)" ;; esac
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "dir=mxbm-$V-linux-x86_64" >> "$GITHUB_OUTPUT"
 
@@ -124,6 +129,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # the version stamp is MAJ.MIN.<commit count>; shallow = .1
 
       - name: deps
         shell: bash
@@ -158,6 +165,9 @@ jobs:
           V="$INPUT_VERSION"
           [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
           V="${V//\//-}"
+          # A bare v0.7 tag gains the commit count, so the archive name carries
+          # the same three-part version the binary prints.
+          case "$V" in *.*.*) ;; *) V="$V.$(git rev-list --count HEAD)" ;; esac
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "dir=mxbm-$V-windows-x86_64" >> "$GITHUB_OUTPUT"
 
