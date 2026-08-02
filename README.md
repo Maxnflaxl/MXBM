@@ -127,7 +127,7 @@ In rough priority order:
 | **Efficiency at low power** | lolMiner holds 0.2991 sol/s/W at 175 W where MXBM peaks at 0.2575 on stock memory, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock). **Half of that gap has since been closed by the memory clock**: below ~173 W the 5001 MHz rung is worth 8.5–14.4 %, which moves MXBM's own record to [0.264 sol/s/W — 3.79 J/solution at 160 W](docs/performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record) and roughly halves the 120–160 W deficit. The rest is open: [traffic supplies at most 17 % of the clock deficit](docs/performance.md#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found), so a store-everything eco pipeline is the remaining candidate |
 | **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — on *both* backends since the [record-set split](docs/performance-research.md#the-record-set-split-opencl-reaches-cudas-57-gib-floor-and-gets-faster-doing-it) lifted OpenCL's single-allocation ceiling. What is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
-| **Per-GPU verification** | Multi-GPU and mixed-backend rigs are built and unit-tested, but have never run on a machine with more than one card. The device join has 45 assertions and needs no GPU; what needs hardware is per-card power control, the skip path on a real unsupported card, and two backends live in one process |
+| **Per-GPU verification** | A two-card rig (3060 Ti + 4070 SUPER) ran [21 minutes on a pool](docs/performance.md#third-party-hardware--a-two-card-rig-2026-08-02), 42 shares, 42 accepted, and found two defects in per-card power control that are now fixed. Both cards chose CUDA, so the case the join exists for — two *different* backends live in one process — is still unexercised, as is the skip path on a card no backend can drive |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline that runs on both,
 then vendor-tuned backends per vendor.
@@ -166,10 +166,13 @@ holds the harnesses: `power_bench.sh` (sol/s and J/sol), `stage_power.sh`
 (per-kernel time and power attribution), `power_sweep.sh` (the speed/power
 curve; needs root) and `collect_report.sh` (a paste-ready report).
 
-**MXBM has only ever been measured on one GPU.** If you run it on anything else,
-`benchmarks/collect_report.sh` produces a report in one command and there is an
-issue template waiting for it — results from hardware we do not have are the
-single most useful contribution to the project right now.
+**Almost every figure here comes from one GPU.** The exceptions are an M3 Max and
+a [contributed two-card rig](docs/performance.md#third-party-hardware--a-two-card-rig-2026-08-02)
+(RTX 3060 Ti + 4070 SUPER), which immediately showed that the memory-clock rung's
+crossover is a property of the card and moved 50 W on different silicon. If you
+run MXBM on anything else, `benchmarks/collect_report.sh` produces a report in one
+command and there is an issue template waiting for it — results from hardware we
+do not have are the single most useful contribution to the project right now.
 
 Comparing miners is harder than it looks: reported `sol/s` is implementation-defined,
 and MXBM measures a 17 % spread between "solutions found" and "solutions that verify"

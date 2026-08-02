@@ -1219,6 +1219,95 @@ sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
 
 ---
 
+## Third-party hardware — a two-card rig, 2026-08-02
+
+The first MXBM measurements from a machine we do not own, and the first from a rig
+with more than one card. Contributed by a tester (`--tune` sweeps plus a 21-minute
+pool session, MXBM 0.7.253, driver 610.62, Windows). Both cards ran CUDA. Not
+comparable to the 4070 Ti SUPER figures above except in shape — different silicon,
+different cooling, a different room.
+
+**RTX 4070 SUPER** (Ada, 12 GB, 192-bit), stock memory:
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 220 | 213.8 | 43.88 | 44.8 | 0.2053 |
+| 212 | 205.3 | 44.83 | 43.5 | 0.2183 |
+| 202 | 195.8 | 44.28 | 44.4 | 0.2262 |
+| 196 | 191.1 | 44.13 | 44.9 | 0.2309 |
+| 192 | 187.5 | 42.87 | 45.7 | 0.2287 |
+| 182 | 176.9 | 41.77 | 46.9 | 0.2361 |
+| 172 | 167.6 | 42.30 | 46.2 | 0.2524 |
+| 148 | 144.3 | 36.93 | 53.7 | 0.2559 |
+| 124 | 121.1 | 30.25 | 66.4 | 0.2498 |
+| 100 | 97.2 | 22.41 | 87.6 | 0.2305 |
+
+**RTX 3060 Ti** (Ampere, 8 GB), stock memory:
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 200 | 195.2 | 22.41 | 88.1 | 0.1148 |
+| 180 | 175.9 | 21.92 | 90.5 | 0.1246 |
+| 160 | 155.9 | 21.04 | 94.4 | 0.1350 |
+| 150 | 146.5 | 20.79 | 95.9 | 0.1419 |
+| 140 | 136.7 | 19.70 | 100.5 | 0.1442 |
+| 130 | 126.8 | 19.11 | 104.7 | 0.1506 |
+| 120 | 116.9 | 17.14 | 115.8 | 0.1467 |
+| 100 | 98.0 | 11.71 | 171.9 | 0.1196 |
+
+### The memory rung's crossover is a property of the card, not of the algorithm
+
+The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER
+([the record](#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record)).
+On the 4070 SUPER it pays only below **~121 W**, and above that it is expensive:
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 172 | 156.9 | 30.20 | 66.5 | 0.1925 |
+| 148 | 139.0 | 30.15 | 66.5 | 0.2169 |
+| 124 | 116.8 | 29.84 | 67.3 | 0.2555 |
+| 120 | 113.4 | 29.60 | 66.6 | 0.2609 |
+| 110 | 107.0 | 28.50 | 70.3 | **0.2663** |
+| 100 | 97.9 | 25.62 | 78.0 | 0.2616 |
+
+At 148–172 W the rung costs ~29 %. The mechanism is visible in the column: from
+172 W down to 120 W the time is **pinned at ~66.5 ms regardless of cap**, so the
+memory system is binding and the power cap is not. This card has a 192-bit bus
+against the reference card's 256-bit, so at the same 5001 MHz it has three
+quarters of the bandwidth — enough to move the crossover by 50 W. `--tune`
+measured this without being told, and recommended the rung only below 121 W,
+which is the behaviour the feature was built for.
+
+**The 3060 Ti got no rung pass at all**, and said nothing about why: its GDDR6
+runs at 6801 MHz stock and does not offer a 5001 rung. Correct behaviour reported
+as silence — the sweep should name the skip.
+
+### Open: the tune harness and the miner loop disagree by ~10 %
+
+`--tune` measured the 4070 SUPER at **43.88 sol/s @ 220 W**; the live miner
+reported **48.12 @ 219 W** in the same session, and the pool-side rate supports
+the higher figure. The discrepancy runs in the harder direction — during the
+sweep the other card was idle, during mining it was at 82 °C with its fan at
+96 %. The card's reported rate also climbed 41.7 → 48.1 across twenty minutes
+while its core clock *fell* 2700 → 2550 MHz, which should not happen for a
+compute-bound kernel. Unreproduced and unexplained; not to be used for a
+cross-miner comparison until it is.
+
+### The multi-GPU path itself
+
+21 minutes, both cards in one process, **42 shares found, 42 accepted, 0 stale, 0
+rejected**, no errors or warnings. The pool-side rate converged onto the miner's
+own total over the session and tracked it to within ~4 % across the last five
+statistics blocks (0.6 % at the closest). Two defects fell out of it, both since fixed: `--pl auto`
+resolved a per-card wattage and then handed it to the apply path as a bare
+number, which is GPU 0's list entry — so every card after the first announced a
+cap and silently kept its stock limit; and the startup device block introduced
+the run as "Device 0" whichever card was primary. Still unexercised on real
+hardware: two *different* backends live in one process (both cards chose CUDA),
+and the skip path on a card no backend can drive.
+
+---
+
 ## Benchmarks and gates
 
 | Command | What it measures |
