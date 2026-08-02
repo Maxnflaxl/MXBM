@@ -233,6 +233,14 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #ifndef MXBM_MB_RD2
 #define MXBM_MB_RD2 0
 #endif
+// Round 3's budget. Shared memory caps it at 3 resident blocks whatever this says, so
+// the point is not occupancy but the REGISTER FILE: at 80 registers r3's three blocks
+// hold 61,440 of the SM's 65,536, and the 4,096 left cannot host the co-resident entry
+// block that speculative entry wants (256 threads x 46 = 11,776). Forcing 64 leaves
+// 16,384. 0 = compiler default.
+#ifndef MXBM_MB_EMIT
+#define MXBM_MB_EMIT 0
+#endif
 
 // MXBM_PAIR128: round 2 stages its 16 B pair record with one LD.128 instead of two
 // LD.64 (INSTR is 2, so d*8 is 16 B aligned -- same argument as the record loads in
@@ -936,7 +944,8 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          // before the freed registers can matter (5 x 23.6 KB > 100 KB for r2), so
          // occupancy there is closed from BOTH resources. Kept as an instrument.
          int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
-                        : LMODE == LM_RD2  ? MXBM_MB_RD2 : 0)>
+                        : LMODE == LM_RD2  ? MXBM_MB_RD2
+                        : LMODE == LM_EMIT ? MXBM_MB_EMIT : 0)>
 __global__ __launch_bounds__(kWG, MINBLOCKS)
 void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,

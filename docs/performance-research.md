@@ -3715,6 +3715,81 @@ direction is claiming more than the passes exist to give.
 
 ---
 
+### Three standing candidates, measured and closed: the entry pass, the host loop, the group cap
+<details>
+<summary>Details</summary>
+
+*(2026-08-02, the three directions left open after the siphash and tail families.
+All null; the value is in the mechanisms, which are sharper than "measured null".)*
+
+**1. The entry pass cannot be hosted in round 3, and the register file was not
+what stopped it.** ~2.2 ms of entry's 2.68 is still exposed after speculative
+entry recovers 0.45, and r3 runs at 21 % SM utilisation for 9.5 ms, so it looks
+like the obvious host. The stated obstacle was residency: r3's three blocks at
+**80 registers** hold 61,440 of the SM's 65,536, leaving 4,096 — short of the
+11,776 a 256-thread entry block needs. `MXBM_MB_EMIT=4` removes that obstacle
+exactly: r3 drops to **64 registers with zero spill**, freeing 16,384, and it
+costs nothing (34.63 / 34.64 against 34.59 / 34.69 sequential).
+
+It changes nothing. Entry as co-blocks, stride 3, 40 nonces:
+
+| host | stock r3 (80 reg) | r3 capped to 64 reg |
+|---|---|---|
+| **r4** (shipping) | **34.26** | **34.24** |
+| r3 | 34.80 | 34.76 |
+
+Hosting in r3 is *worse than not overlapping at all* (sequential 34.64), with or
+without the registers. The mechanism is visible in the traffic table: **no round
+has both an idle SM and an idle memory system.** r1 and r2 run at 200 and
+323 GB/s — a third and a half of peak — and are saturated on issue; r3 and r4 run
+at 508 and 538 and are saturated on memory. Entry needs both at once, so wherever
+it is put it displaces the thing that round is short of. That, and not any
+particular mechanism's failure, is why the whole overlap family tops out at
+~0.5 ms.
+
+**2. The host loop has no gap to reclaim.** The kernel-time accounting already
+summed to ~100 % of a solve, but that was arithmetic over replays rather than an
+observation of the card. `utilization.gpu` sampled through a 35 s miner benchmark
+reads **100 % on every sample**, against a 2 % idle baseline. Whatever the
+readback, the recovery kernel and the CPU verify cost, they are not costing GPU
+time.
+
+**3. The group cap is still 320, and round 3's fourth block is still worth
+nothing.** `MXBM_FCAP` re-swept on the current kernels — the last sweep predates
+the perfect table, the spill, LD.128 and co-blocks:
+
+| FCAP | r1 | r2 | r3 | r4 | solve |
+|---|---|---|---|---|---|
+| 288 | 5 | 4 | **4** | 4 | +0.37 % |
+| **320** | 5 | 4 | 3 | 4 | — |
+| 352 | 5 | 3 | 3 | 4 | worse |
+| 384 | 5 | 3 | 3 | 3 | worse |
+
+288 buys r3 the fourth resident block the ledger has twice said it does not want,
+and this time it is priced per round rather than in aggregate: **r3's marginal
+time moves +0.007 ms**, 9.890 → 9.897. The block is free and useless. The overall
++0.37 % is the spill: at 288 the cap sits at mean + 1.5σ where 320 is mean + 3.4σ.
+A per-round cap cannot rescue it, because there is nothing to rescue.
+
+**And the finding that came out of the three.** Pricing each round's scattered
+payload store with `MXBM_ABL_EMIT`:
+
+| | r1 | r2 | r3 | r4 |
+|---|---|---|---|---|
+| the store costs | **0.00** | 1.41 | 0.54 | **0.00** |
+
+**Writes are free; reads are not.** Three of the four rounds pay nothing at all
+for the bytes they scatter, and that sharpens "bytes are nearly free" into
+something directional: any trade that buys compute with *written* bytes has
+already been given its bytes for free and still has to win on the read side,
+which is where [R2_FULL](#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does)
+and the [quad record](#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)
+both actually lost.
+
+</details>
+
+---
+
 ## Established limits
 <details>
 <summary>Details</summary>
