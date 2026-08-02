@@ -571,6 +571,7 @@ int main(int argc, char** argv) {
     };
 
     size_t verified = 0; uint32_t worstDrop = 0;
+    uint32_t maxSurv = 0; size_t sumSurv = 0;   // the survCap clamp is the one silent loss
     std::vector<double> ms;
     cudaDeviceSynchronize();
     unsigned long long e0 = 0;
@@ -589,12 +590,13 @@ int main(int argc, char** argv) {
             const bool more = (i + 1 < n);
             if (more) nonce_for(i + 1, nxt);
             auto t0 = std::chrono::steady_clock::now();
-            uint32_t d = 0;
+            uint32_t d = 0, sv = 0;
             auto v = s.pipe2_iter(kat::input32, cur, more ? nxt : nullptr, i & 1, &d);
             cudaDeviceSynchronize();
             ms.push_back(std::chrono::duration<double,std::milli>(
                              std::chrono::steady_clock::now() - t0).count());
             verified += v.size(); worstDrop |= d;
+            if (sv > maxSurv) maxSurv = sv; sumSurv += sv;
         }
     } else if (fuse) {
         // Solve i's round `co_round` hosts solve i+1's entry pass, so entry_scatter is
@@ -610,8 +612,8 @@ int main(int argc, char** argv) {
             const bool more = (i + 1 < n);
             if (more) nonce_for(i + 1, nxt);
             auto t0 = std::chrono::steady_clock::now();
-            uint32_t d = 0;
-            auto v = s.finish_solve(kat::input32, cur, slot, s.sMain, []{}, nullptr, &d,
+            uint32_t d = 0, sv = 0;
+            auto v = s.finish_solve(kat::input32, cur, slot, s.sMain, []{}, &sv, &d,
                                     more ? nxt : nullptr, (i + 1) & 1);
             // NOSCATTER is a diagnostic: the co-tenant computes but stores nothing, so it
             // cannot feed the next solve. Launch the real entry as well, making the
@@ -625,17 +627,19 @@ int main(int argc, char** argv) {
             ms.push_back(std::chrono::duration<double,std::milli>(
                              std::chrono::steady_clock::now() - t0).count());
             verified += v.size(); worstDrop |= d;
+            if (sv > maxSurv) maxSurv = sv; sumSurv += sv;
         }
     } else if (!overlap) {
         for (int i = 0; i < n; ++i) {
             nonce_for(i, nonce);
             auto t0 = std::chrono::steady_clock::now();
-            uint32_t d = 0;
-            auto v = s.solve(kat::input32, nonce, nullptr, &d);
+            uint32_t d = 0, sv = 0;
+            auto v = s.solve(kat::input32, nonce, &sv, &d);
             cudaDeviceSynchronize();
             ms.push_back(std::chrono::duration<double,std::milli>(
                              std::chrono::steady_clock::now() - t0).count());
             verified += v.size(); worstDrop |= d;
+            if (sv > maxSurv) maxSurv = sv; sumSurv += sv;
         }
     } else {
         uint8_t cur[8], nxt[8];
@@ -645,7 +649,7 @@ int main(int argc, char** argv) {
             nonce_for(i, cur);
             const int slot = i & 1;
             auto t0 = std::chrono::steady_clock::now();
-            uint32_t d = 0;
+            uint32_t d = 0, sv = 0;
             // after_r1 fires once r1(i) is ISSUED and its read of `slot` is ordered by
             // r1Done -- the earliest point the next entry can be safely queued.
             auto v = s.finish_solve(kat::input32, cur, slot, s.sMain,
@@ -654,10 +658,11 @@ int main(int argc, char** argv) {
                         uint8_t nn[8]; nonce_for(i + 1, nn);
                         s.launch_entry(kat::input32, nn, (i + 1) & 1, s.sEntry);
                     }
-                }, nullptr, &d);
+                }, &sv, &d);
             ms.push_back(std::chrono::duration<double,std::milli>(
                              std::chrono::steady_clock::now() - t0).count());
             verified += v.size(); worstDrop |= d;
+            if (sv > maxSurv) maxSurv = sv; sumSurv += sv;
             (void)nxt;
         }
         cudaDeviceSynchronize();
@@ -682,6 +687,8 @@ int main(int argc, char** argv) {
                (double)(e1 - e0) / wall);
     printf("solutions : %.2f verified/solve  =>  %.1f sol/s\n", spersolve, spersolve*1000.0/per);
     printf("drops     : %u  %s\n", worstDrop, worstDrop ? "*** NONZERO -- RESULT INVALID ***" : "(clean)");
+    printf("survivors : %.2f mean, %u max of %u cap %s\n", (double)sumSurv / n, maxSurv, 1024u,
+           maxSurv >= 1024u ? "*** CLAMPED -- SOLUTIONS LOST SILENTLY ***" : "(headroom)");
 
     if (occ_on()) {
         // Normalised the way fb_cap_for is written -- (max - mean)/sqrt(mean) with

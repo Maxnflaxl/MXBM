@@ -3790,6 +3790,67 @@ both actually lost.
 
 ---
 
+### The algorithm itself: what the PoW fixes, what is free, and the yield we actually get
+<details>
+<summary>Details</summary>
+
+*(2026-08-02. Asked directly: forget the implementation, is the SEARCH better?
+The answer is bounded from both ends — measured yield on one side, the PoW
+definition on the other.)*
+
+**We already find every solution there is.** 200 distinct nonces, sequential
+path, KAT-gated:
+
+| | |
+|---|---|
+| verified solutions / solve | **2.04** |
+| survivors / solve | **2.04 mean, 7 max**, against a 1024 cap |
+| drops (bucket, pair, chain-walk) | **0** |
+
+Two things fall out. **Survivors equal verified solutions exactly**, so the
+terminal round emits no candidate that fails the CPU's distinct-leaf and
+`indexAfter` checks — there is no filtering loss to reclaim. And the survivor cap
+— the one place a candidate could vanish with no counter behind it, since
+`hs > survCap` is a silent clamp on both backends — has **146× headroom**. It is
+now printed by `cuda/pipeline`, so the day it stops having headroom, somebody
+sees it.
+
+Against theory: Wagner on ⟨144,5⟩ with N = 2^25 is parameterised to yield ~2
+solutions per nonce, and 2.04 is that. **There is no yield to win** — only time.
+
+**What the PoW fixes, and therefore what cannot be chosen:**
+
+- **N = 2^25.** The index is 25 bits, so that is the whole space — and it is also
+  Wagner's fixed point, since N²/2^25 = N is what keeps a layer the same size
+  across rounds. Fewer seeds is the (epr/2^25)^32 collapse
+  ([the partial-search caveat](HW_REQUIREMENTS.md#the-partial-search-caveat)); more do not exist.
+- **Five rounds, 24 bits each, and the width schedule** 448 → 424 → 400 → 376 →
+  … The verifier recomputes it, so a solution found any other way is not a
+  solution.
+- **Seven siphashes per seed element**, and `apply_mix` every round.
+- **`apply_mix` sums rotations rather than XOR-ing them.** This is the load-bearing
+  one, and it is deliberate. Under XOR the mix would be linear, a child's key would
+  be a function of its parents' keys, and the whole match could run on keys without
+  ever materialising a child — which is exactly what BeamHash **I** allowed with its
+  16 B element, and exactly what Fork2 removed
+  ([limit 1](#established-limits)). The `+` is why the element is 56 B and why every
+  record-narrowing idea in this document runs into re-derivation instead of algebra.
+
+**What is actually free** is the search's *organisation* — bucket versus sort,
+store versus re-derive, record widths, occupancy, overlap, geometry — which is
+what every entry above is about, and it is the part that has been optimised to
+the point where the closures are structural.
+
+**Where algorithmic headroom does still exist, and it is not stock speed:**
+the memory–time trade (streaming / in-place layer reuse, the route to the 3 GB
+target) and the store-everything eco pipeline for the low-power band. Both are
+[leads](#current-focus-and-open-leads) already, and both trade time for something
+other than time.
+
+</details>
+
+---
+
 ## Established limits
 <details>
 <summary>Details</summary>
