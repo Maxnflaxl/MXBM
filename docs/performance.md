@@ -1255,6 +1255,16 @@ different cooling, a different room.
 | 120 | 116.9 | 17.14 | 115.8 | 0.1467 |
 | 100 | 98.0 | 11.71 | 171.9 | 0.1196 |
 
+![Every measured card's speed and efficiency against the cap it was given](tools/cards-curve.svg)
+
+Every card MXBM has been measured on, in one picture — generated from the tables
+above and the head-to-head table by `docs/tools/plot_cards.py`, so it cannot drift
+from them. **It is not a controlled comparison**: the reference card was swept on
+Linux with caps set by `nvidia-smi`, the other two by `--tune` on Windows in
+another machine with different cooling, so cross-card *distances* carry all of
+that. What survives it is the shape of each curve and where its own peak sits,
+which is what someone choosing a cap actually needs.
+
 ### The memory rung's crossover is a property of the card, not of the algorithm
 
 The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER
