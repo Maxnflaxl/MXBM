@@ -3614,22 +3614,31 @@ and apply_mix, so the element counts and every other access stay representative:
 | r1 | 5.117 | 5.301 | **0.00** (the ablation measured *slower*, inside drift) |
 | r2 | 10.170 | 8.758 | **1.41** |
 
-**What the two rounds are, then.** Solving `M + D = 5.12` and `M + 2D + 1.41 =
-10.17` — r1 derives 7 siphashes per element, r2 rebuilds 14 — gives **D = 3.64 ms
-per 235 M siphashes** and **M ≈ 1.5 ms of match machinery per round**. The check:
-the entry pass is the same 7 siphashes per element *without* the machinery and
-costs 2.68 ms, the same derivation ~26 % cheaper at 6 blocks/SM instead of 5.
-
-So **r1 and r2 stand in exactly the ratio of their siphash counts** — 235 M
-against 470 M predicts 2.00, measured 1.99 — and ~11 ms of the 33.5 ms solve is
-re-derivation. That is one number behind two standing results at once: why every
-byte-side lever in these two rounds has been null (their bytes are free or nearly
-so), and why *both* directions of the store-instead-of-derive trade lose
+**What the two rounds are, then.** r1 and r2 stand in the ratio of their siphash
+counts — 235 M against 470 M predicts 2.00, measured 1.99 — and ~11 ms of the
+33.5 ms solve is re-derivation. That one number sits behind two standing results:
+why every byte-side lever in these two rounds has been null (their bytes are free
+or nearly so), and why *both* directions of the store-instead-of-derive trade lose
 ([R2_FULL](#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does), the
 [quad record](#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)).
 The way to speed up the top half is fewer siphashes, and the schedule fixes how
 many: 7 per seed element, 14 to rebuild a pair, every word load-bearing (the
 child's top word reads the parent's, which reads the seed's).
+
+> **Correction, same day: the ratio is real, the arithmetic behind it was not.**
+> This section first solved `M + D = 5.12` and `M + 2D + 1.41 = 10.17` for a
+> derivation of 3.64 ms and 1.5 ms of match machinery per round. That assumes r1
+> and r2 have the SAME machinery, and they do not — r1 reads 8 B and writes 16,
+> r2 reads 16 and writes 72, at 5 blocks/SM against 4. Measured directly instead,
+> by removing one of the nine derivation passes a group needs
+> ([below](#the-tail-and-the-elements-with-no-partner-a-family-priced-and-closed)):
+> **the derivation is ~2.8 ms in r1 and ~3.5 ms in r2**, not 3.6 and 7.3. r2's is
+> well under twice r1's, which says the extra 7 siphashes partly hide in the
+> traffic r2 has and r1 does not. The 1.99 : 2.00 agreement is then a coincidence
+> of two rounds whose machinery differs by about as much as their derivation does.
+> `MXBM_ABL_DERIVE` cannot be used to price this — it replaces the work state with
+> a spread, which moves every key and blows the walk up: both rounds read ~10.0 ms
+> under it, r1 *slower* by 4.7 ms than with the derivation left in.
 
 **Three ways of making the siphash itself cheaper — all already taken by the
 compiler.** Each was worth checking precisely because it would otherwise stay
@@ -3643,6 +3652,64 @@ plausible forever:
 
 `MXBM_PP_CONST` stays in the tree as the closure's instrument, off by default and
 codegen-neutral when off, the same way `MXBM_LWORK_SOA` does.
+
+</details>
+
+### The tail, and the elements with no partner: a family priced and closed
+<details>
+<summary>Details</summary>
+
+*(2026-08-02. Two inefficiencies that are visible from the source and turn out to
+be worth much less than they look. Both probes are in the tree, off by default and
+byte-identical SASS when off, so the family can be re-priced rather than
+re-argued.)*
+
+**The shapes.** A staged group holds `capacity / 2^17` = **264** elements and a
+block is **256** threads, so the expand loop needs `ceil(264/32)` = **9 warp
+passes** for 8.25 passes of work — the last one runs 8 lanes of 32. Separately,
+the walk only ever reads an element that shares its chain slot with another, and
+at 264 elements over a 128-entry perfect table `e^-2.06` = **12.8 %** of a group
+is alone in its slot: every one of those pays a full 7- or 14-siphash rebuild for
+a work state nothing reads.
+
+**Priced** (`MXBM_ABL_TAIL`, `MXBM_ROUND_REPS=R:9`, 40 nonces, results wrong by
+construction so `MXBM_FORCE_TIMING`; the derive-fraction arm runs at
+`MXBM_PERFECT_TAB=0` so the chain comes from the staged key and the walk and emit
+stay whole):
+
+| probe | r1 | r2 |
+|---|---|---|
+| drop the 8-element tail entirely | −0.25 | −1.03 |
+| derive 7/8 of the group — one derive pass of nine | **−0.315** | **−0.393** |
+| skip 1 record load in 8, r3 (bandwidth arm) | — | −0.163 (r3) |
+
+The middle row is the honest one, and it is what prices the derivation itself at
+**~2.8 ms in r1 and ~3.5 ms in r2** (nine times the saving). It also caps the
+prize: skipping every unmatched element is worth one pass of nine, **~0.7 ms
+across r1 and r2**, because 12.8 % fewer elements is exactly one fewer pass.
+
+**Built, correct, and a net loss** (`MXBM_MATCH_FIRST`). The chain moves into the
+staging loop, where the key is already in a register; one thread per slot then
+walks its members and compacts those with a partner into `mlist`; the rebuild runs
+over that. KAT 3/3 byte-identical, drops 0 — and per round: **r1 +0.131, r2
+−0.055, r3 +0.015, r4 +0.051**. Three costs eat the 0.7:
+
+- `mlist` is 640 B of shared, which takes **r1 from 5 resident blocks to 4** — the
+  fifth block is worth [−0.15 ms](#round-1-takes-a-fifth-block-015-ms-via-a-per-round-group-cap) on its own.
+- the compaction pass is a pointer walk per chain slot, and it needs its own barrier.
+- compacted order is not slot order, so the rebuild's `lwork` writes stop being a
+  regular stride — straight into the [2-way bank conflicts](#the-round-2-instruction-census-865--hash-arithmetic-and-one-named-lever) the census already measured there.
+
+**And the bandwidth half does not pay either.** In a DRAM-bound round the same
+idea needs no compaction — skipping a load saves sectors even when the lane
+diverges — but r3 gives only **0.163 ms** for one load in eight, because r3's top
+stall is the MIO queue: memory-INSTRUCTION issue, not bandwidth, and a divergent
+skip issues anyway.
+
+So the family is closed at the source: **the tail is 9 passes for 8.25 passes of
+work, the unmatched elements are 12.8 % of a group, and together they are worth
+~0.7 ms gross and less than that net.** Anything that claims more from this
+direction is claiming more than the passes exist to give.
 
 </details>
 

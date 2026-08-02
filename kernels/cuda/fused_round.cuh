@@ -264,6 +264,20 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #ifndef MXBM_PP_CONST
 #define MXBM_PP_CONST 0
 #endif
+
+#ifndef MXBM_ABL_TAIL
+#define MXBM_ABL_TAIL 0
+#endif
+
+// MXBM_MATCH_FIRST: build the chain from the STAGED key, then derive only the elements
+// the walk will actually read. An element alone in its chain slot is never loaded by the
+// walk -- at 264 staged elements over a 128-entry perfect table that is e^-2.06 = 12.8 %
+// of every group, each currently paying a full 7- or 14-siphash rebuild for nothing.
+// Skipping them in place would buy nothing (the lanes idle inside the same warp), so the
+// survivors are compacted into mlist first and the rebuild runs over that.
+#ifndef MXBM_MATCH_FIRST
+#define MXBM_MATCH_FIRST 0
+#endif
 #if MXBM_PP_CONST
 __constant__ uint64_t c_pp[4];
 #define MXBM_PP_LOAD(dst) uint64_t dst[4] = { c_pp[0], c_pp[1], c_pp[2], c_pp[3] }
@@ -370,6 +384,10 @@ struct RoundShared {
     uint32_t lkey[MXBM_PERFECT_TAB ? 1 : FCAP];
     uint32_t lchain[FCAP];
     uint32_t tab[kTabSize];
+#if MXBM_MATCH_FIRST
+    uint16_t mlist[FCAP];                          // staged slots with a partner
+    uint32_t nmatch;
+#endif
     uint32_t gcount;
     uint32_t cnt8[MXBM_SPILL ? 8 : 1];
     uint8_t  skey[SUBPASS ? kSKey : 1];
@@ -415,6 +433,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     auto& llead  = shm.llead;
     auto& lkey   = shm.lkey;
     auto& lchain = shm.lchain;
+#if MXBM_MATCH_FIRST
+    auto& mlist  = shm.mlist;
+    auto& nmatch = shm.nmatch;
+#endif
     auto& tab    = shm.tab;
     auto& gcount = shm.gcount;
     auto& cnt8   = shm.cnt8;
@@ -495,7 +517,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     while (xp < nparts) {
     const uint32_t sbits = submask_bits + xb;
     const uint32_t mask  = mask_s | (xp << submask_bits);
-    if (lId == 0) gcount = 0;
+    if (lId == 0) { gcount = 0;
+#if MXBM_MATCH_FIRST
+                    nmatch = 0;
+#endif
+    }
     for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
     __syncthreads();
 
@@ -523,6 +549,12 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
         const uint32_t pos = atomicAdd(&gcount, 1u);
         // Keep counting past FCAP: gcount is what decides whether to split.
         if (pos >= FCAP) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
+#if MXBM_MATCH_FIRST
+        // The chain, built here rather than after the rebuild: this loop already holds
+        // the key, and knowing the chain first is what lets the rebuild skip the
+        // elements no walk will read. Same hash and same insert as the loop below.
+        lchain[pos] = atomicExch(&tab[(key >> submask_bits) & (kTabSize - 1u)], pos);
+#endif
         if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
             lleaf[pos*LEAFW + 0] = (uint32_t)(rec0 >> 32);           // derive later
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
@@ -546,6 +578,14 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
             lleaf[pos*LEAFW + 2] = quad_l2(w1);
             lleaf[pos*LEAFW + 3] = quad_l3(w2);
         } else if constexpr (LMODE == LM_EMIT) {
+#if MXBM_ABL_TAIL == 3
+            // Prices the OTHER half of "materialise only what the walk reads": in a
+            // bandwidth-bound round the saving is DRAM sectors, so a predicate is enough
+            // and no compaction is needed. Skips one element in eight -- near the 12.8 %
+            // that is alone in its chain slot -- leaving its work state garbage. Timing
+            // probe: results WRONG, needs MXBM_FORCE_TIMING.
+            if ((p & 7u) == 0u) { lgi[pos] = 0; lleaf[pos*LEAFW] = 0; continue; }
+#endif
             // 128-bit loads. The record stride is an even number of u64, so d*8 is 16 B
             // aligned and cudaMalloc's base is 256 B aligned -- but the compiler cannot
             // prove either, and emitted 9 x LD.64 where 5 x LD.128 do. Round 3 stalls
@@ -642,11 +682,55 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
         // Only reachable if the chosen split still overflows, which the count rules out.
         if (gcount > FCAP && lId == 0) atomicAdd(&drops[1], gcount - FCAP);
     }
+#if MXBM_ABL_TAIL == 1
+    uint32_t total = gcount < FCAP ? gcount : FCAP;
+#else
     const uint32_t total = gcount < FCAP ? gcount : FCAP;
+#endif
+    // MXBM_ABL_TAIL: drop the elements past one block-wide pass. Timing probe only --
+    // it loses ~3 % of every group, so results are WRONG -- and it exists to price the
+    // ragged tail of the expand loop below: the staged group is ~264 against kWG 256,
+    // so 8 lanes run a second derivation while the other 248 wait at the barrier.
+#if MXBM_ABL_TAIL == 1
+    if (total > kWG) total = kWG;
+#endif
+    // MXBM_ABL_TAIL=2: derive only the leading 7/8 of the group, leaving the rest's work
+    // state garbage while the chain, the walk and the emit stay whole. That is the shape
+    // of "derive only the elements the walk will read" -- ~12.8 % of a group is alone in
+    // its 7-bit chain slot at 264 elements over 128 slots -- without the compaction such
+    // a change needs. Timing probe: results WRONG, and it needs MXBM_PERFECT_TAB=0 so the
+    // chain is built from the staged key rather than from the work state it corrupts.
+#if MXBM_ABL_TAIL == 2
+    const uint32_t nDer = (total * 7u) / 8u;
+#endif
+
+#if MXBM_MATCH_FIRST
+    // COMPACT. One thread per chain slot walks its members; a slot holding a single
+    // element contributes nothing to the walk, so its element is never materialised.
+    // 128 slots against kWG lanes, ~2 members each: one short pass, no barrier inside.
+    for (uint32_t h = lId; h < kTabSize; h += kWG) {
+        const uint32_t head = tab[h];
+        if (head == kEmpty || lchain[head] == kEmpty) continue;   // empty, or a singleton
+        uint32_t n = 0, e = head;
+        while (e != kEmpty && n < FCAP) { ++n; e = lchain[e]; }
+        uint32_t w = atomicAdd(&nmatch, n);
+        for (e = head; e != kEmpty && w < FCAP; e = lchain[e]) mlist[w++] = (uint16_t)e;
+    }
+    __syncthreads();
+    const uint32_t nWork = nmatch;
+#endif
 
     // EXPAND + CHAIN. Every lane is active here, which is why the re-derivations live in
     // this loop and not the staging one (worth 8x their SIMD utilisation).
+#if MXBM_MATCH_FIRST
+    for (uint32_t i = lId; i < nWork; i += kWG) {
+      const uint32_t pos = (uint32_t)mlist[i];
+#else
     for (uint32_t pos = lId; pos < total; pos += kWG) {
+#endif
+#if MXBM_ABL_TAIL == 2
+      if (pos < nDer) {
+#endif
         if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
             const uint32_t idx = lleaf[pos*LEAFW + 0];
             MXBM_PP_LOAD(pp);
@@ -678,12 +762,17 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
             rebuild_r3(pp, l, e);
             for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
         }
+#if MXBM_ABL_TAIL == 2
+      }
+#endif
+#if !MXBM_MATCH_FIRST
         // lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode -- and
         // it is filled by this point (the two derive modes fill it just above).
         const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[lwx(pos, 0)] & 0xFFFFFFu)
                                              : lkey[pos];
         const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
         lchain[pos] = atomicExch(&tab[hk], pos);
+#endif
     }
     __syncthreads();
 
