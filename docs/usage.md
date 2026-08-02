@@ -532,6 +532,16 @@ refer to the same physical card. CUDA's own enumeration defaults to fastest-firs
 NVML's is by bus id, so the two disagree on any rig whose cards are not identical;
 sorting by PCI address is the only key all three agree on.
 
+**A mixed rig is one process.** The last column of `--list-devices` is the backend that
+card will actually run on: CUDA where the card supports it (Ampere or newer, with room
+for the full search), else OpenCL, and `not used` with the reason where neither can
+drive it. The three device lists — CUDA's, OpenCL's and NVML's — are joined on PCI bus
+id, so an old card beside a new one mines on the portable path in the same process, the
+same log and the same statistics block. Where that join is ambiguous — an OpenCL driver
+that reports no PCI address, two devices claiming one bus, a name that does not match —
+MXBM says so and declines the match rather than guessing, because a wrong guess would
+aim `--pl` at the wrong card.
+
 **Several GPUs mine at once.** Each selected card gets its own solver, its own worker
 thread and its own **nonce lane**: card *n* of *N* walks nonces *n, n+N, n+2N, …* off the
 pool's prefix, so no two cards ever try the same nonce. That matters because the failure

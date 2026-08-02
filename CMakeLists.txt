@@ -198,6 +198,7 @@ target_link_libraries(mxbm PRIVATE mxbm_nvml)
 target_include_directories(mxbm PRIVATE third_party)   # tune.cpp: nlohmann/json
 # Direct, not transitive: main.cpp asks the geometry question itself (restart notice).
 target_link_libraries(mxbm PRIVATE mxbm_geom)
+target_link_libraries(mxbm PRIVATE mxbm_devjoin)
 target_include_directories(mxbm PRIVATE src)
 target_link_libraries(mxbm PRIVATE mxbm_miner)
 target_link_libraries(mxbm PRIVATE mxbm_ui)
@@ -237,6 +238,18 @@ add_executable(test_rowbucket_geom tests/test_rowbucket_geom.cpp)
 target_include_directories(test_rowbucket_geom PRIVATE tests src)
 target_link_libraries(test_rowbucket_geom PRIVATE mxbm_geom)
 add_test(NAME rowbucket_geom COMMAND test_rowbucket_geom)
+
+# Device identity across CUDA, OpenCL and NVML. Its own library for the same reason
+# mxbm_geom is one: main.cpp needs it in every build, and the join must be testable on
+# a machine with no GPU and no backend headers -- it is the part of the mixed-rig plan
+# that carries the misjoin risk (docs-internal/MIXED_RIG.md).
+add_library(mxbm_devjoin STATIC src/gpu/device_join.cpp)
+target_include_directories(mxbm_devjoin PUBLIC src)
+
+add_executable(test_device_join tests/test_device_join.cpp)
+target_include_directories(test_device_join PRIVATE tests src)
+target_link_libraries(test_device_join PRIVATE mxbm_devjoin)
+add_test(NAME device_join COMMAND test_device_join)
 
 # ---- CUDA GPU solver (optional component) ----
 # Optional in exactly the same way OpenCL is: if nvcc is absent the build proceeds

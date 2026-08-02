@@ -30,6 +30,7 @@
 #include "version.h"
 #include "gpu/nvml.h"
 #include "gpu/overclock.h"
+#include "gpu/device_join.h"      // which backend drives which physical card
 #include "gpu/rowbucket_geom.h"   // the restart notice asks the geometry question itself
 #ifdef MXBM_HAVE_OPENCL
 #include "gpu/gpu_solver.h"
@@ -200,37 +201,82 @@ int main(int argc, char** argv) {
     unsigned device_count = 0;
 #ifdef MXBM_HAVE_CUDA
     const std::vector<gpu::CudaSolver::DeviceInfo> cuda_devices = gpu::CudaSolver::enumerate();
-    device_count = (unsigned)cuda_devices.size();
+#endif
+#ifdef MXBM_HAVE_OPENCL
+    // Info only: no context is created on anything. The PCI address each entry
+    // carries is what lets an OpenCL device be recognised as a card CUDA also sees.
+    const std::vector<gpu::DeviceInfo> cl_devices = gpu::Runtime::enumerate();
 #endif
 #ifdef MXBM_HAVE_METAL
     // Only when CUDA reported nothing: on a machine with both, CUDA's PCI-ordered list
     // is the one --devices and --pl are indexed against, and a second list underneath it
     // would make an index mean two things.
     const std::vector<gpu::MetalSolver::DeviceInfo> metal_devices =
-        device_count == 0 ? gpu::MetalSolver::enumerate()
-                          : std::vector<gpu::MetalSolver::DeviceInfo>{};
+#ifdef MXBM_HAVE_CUDA
+        !cuda_devices.empty() ? std::vector<gpu::MetalSolver::DeviceInfo>{} :
+#endif
+        gpu::MetalSolver::enumerate();
+#endif
+
+    // NVML opens before the backend decision because device IDENTITY is decided
+    // here: the join cross-checks each position against NVML's own view of the same
+    // card. Opening it does nothing on its own -- every WRITE still waits for
+    // `have_nvml` below, which waits for a GPU to actually claim a solver.
+    const bool nvml_up = gpu::nvml_init();
+    std::vector<gpu::NvmlCard> nvml_cards;
+    for (unsigned i = 0, n = nvml_up ? gpu::nvml_device_count() : 0u; i < n; ++i)
+        nvml_cards.push_back({gpu::nvml_device_name(i), gpu::nvml_pci_address(i)});
+
+    // One row per PHYSICAL card: the backend that will drive it, each backend's own
+    // index for it, and why not when the answer is none -- what makes a mixed rig
+    // one process instead of one per backend (docs-internal/MIXED_RIG.md).
+    std::vector<gpu::JoinedCard> cards;
+#if defined(MXBM_HAVE_CUDA) || defined(MXBM_HAVE_OPENCL)
+    {
+        std::vector<gpu::CudaCard> cuda_view;
+        std::vector<gpu::ClCard>   cl_view;
+#ifdef MXBM_HAVE_CUDA
+        for (const auto& d : cuda_devices)
+            cuda_view.push_back({d.name, d.pci, d.index, d.global_mem, d.viable});
+#endif
+#ifdef MXBM_HAVE_OPENCL
+        for (const auto& d : cl_devices)
+            cl_view.push_back({d.name, d.pci, d.index, (unsigned long long)d.global_mem});
+#endif
+        cards = gpu::join_devices(cuda_view, cl_view, nvml_cards, opts.solver);
+    }
+#endif
+#ifdef MXBM_HAVE_METAL
+    // Metal outranks the joined table wherever it has devices: Apple's OpenCL is a
+    // deprecated shim confined to the sort path, ~4.3x slower (see the construction
+    // below), so on a Mac an index has to mean a Metal device.
+    if (!metal_devices.empty()) cards.clear();
+#endif
+    device_count = (unsigned)cards.size();
+#ifdef MXBM_HAVE_METAL
     if (device_count == 0) device_count = (unsigned)metal_devices.size();
 #endif
 
     if (opts.list_devices) {
-#ifdef MXBM_HAVE_CUDA
-        if (cuda_devices.empty()) {
-            ui::console::info("No CUDA devices detected.");
-        } else {
+        // The joined table is exactly what will happen: the backend column is the
+        // one that gets constructed, and an unused card prints why.
+        if (!cards.empty()) {
             ui::console::info("Detected devices (indices are in PCI order, and mean the same "
                               "card in --devices and --pl):");
-            for (size_t i = 0; i < cuda_devices.size(); ++i) {
-                const auto& d = cuda_devices[i];
+            for (size_t i = 0; i < cards.size(); ++i) {
+                const gpu::JoinedCard& c = cards[i];
+                const char* backend = c.backend == gpu::Backend::Cuda   ? "Cuda"
+                                    : c.backend == gpu::Backend::OpenCL ? "OpenCL"
+                                                                        : "not used";
                 char line[256];
-                std::snprintf(line, sizeof line, "  %zu: %-34s %5llu MB  PCI %-6s  Cuda%s",
-                              i, d.name.c_str(),
-                              (unsigned long long)(d.global_mem / (1024ull * 1024ull)),
-                              d.pci.c_str(),
-                              d.viable ? "" : "  [too small for BeamHash III]");
+                std::snprintf(line, sizeof line, "  %zu: %-34s %5llu MB  PCI %-6s  %s",
+                              i, c.name.c_str(),
+                              (unsigned long long)(c.global_mem / (1024ull * 1024ull)),
+                              c.pci.empty() ? "-" : c.pci.c_str(), backend);
                 ui::console::info(line);
+                if (!c.reason.empty()) ui::console::info("       " + c.reason);
             }
         }
-#endif
 #ifdef MXBM_HAVE_METAL
         // Listed whenever CUDA had nothing to say. Saying "no devices can be listed" on
         // a machine that announced a Metal GPU two lines earlier is worse than silence.
@@ -262,17 +308,18 @@ int main(int argc, char** argv) {
         }
     }
     const int device_index = selected_devices.empty() ? 0 : (int)selected_devices.front();
-#ifdef MXBM_HAVE_CUDA
+    // The primary card: everything that is single-device by nature -- the
+    // benchmark, the tune, the device block -- is about this one.
+    const gpu::JoinedCard* primary =
+        (device_index >= 0 && (size_t)device_index < cards.size())
+            ? &cards[(size_t)device_index] : nullptr;
     // Say which card was chosen whenever the choice was the user's, or whenever
     // there was more than one to choose from -- on a single-GPU box with no
     // --devices the line is noise.
-    if ((opts.seen.devices || cuda_devices.size() > 1)
-        && (size_t)device_index < cuda_devices.size()) {
+    if (primary && (opts.seen.devices || cards.size() > 1)) {
         ui::console::info("Mining on device " + std::to_string(device_index) + ": "
-                          + cuda_devices[(size_t)device_index].name
-                          + " (PCI " + cuda_devices[(size_t)device_index].pci + ")");
+                          + primary->name + " (PCI " + primary->pci + ")");
     }
-#endif
 
     // The first selected device's solver. Everything that is single-device by
     // nature -- the benchmark, the device block, the NVML handle -- uses this
@@ -282,6 +329,10 @@ int main(int argc, char** argv) {
     // drive them. Each gets its own Engine and its own nonce lane.
     std::vector<std::unique_ptr<miner::Solver>> extra_solvers;
     std::vector<std::string> extra_labels;
+    // Table positions of the cards that actually got a solver, in engine order.
+    // NOT the selection: a skipped card would shift every telemetry row after it
+    // onto the wrong card's sensors.
+    std::vector<unsigned> solver_positions;
     // Set when a construction attempt was actually made and threw, so the
     // fallback below need not claim "no GPU available" when one was found.
     bool gpu_attempt_failed = false;
@@ -291,43 +342,32 @@ int main(int argc, char** argv) {
     std::string dev_name, dev_driver;
     unsigned long long dev_mem = 0;
 
-#ifdef MXBM_HAVE_CUDA
-    // enumerate() returned PCI order, so the user's index is a position in that
-    // list; the CUDA index to construct on is the one recorded in the entry.
-    const int cuda_index = (device_index >= 0 && (size_t)device_index < cuda_devices.size())
-                         ? cuda_devices[(size_t)device_index].index : device_index;
-#endif
 #ifdef MXBM_HAVE_METAL
     const int metal_index = device_index >= 0 ? device_index : 0;
 #endif
-#ifdef MXBM_HAVE_OPENCL
-    // The OpenCL index is the user's selection used directly: OpenCL enumerates
-    // per platform and exposes no PCI address to sort on, so unlike the CUDA
-    // path there is no translation to make. On a single-vendor rig the two
-    // orderings agree; --list-devices is what to check when they might not.
-    const unsigned cl_index = device_index >= 0 ? (unsigned)device_index : 0u;
-#endif
 
-    // Which backend WILL be attempted -- decided before construction, mirroring the
-    // guards below: the power limit must be applied and observed before any buffer is
-    // sized. NVML still opens only when a GPU backend will actually run.
+    // Which backend WILL drive the primary card -- decided before construction,
+    // because the power limit must be applied and observed before any buffer is
+    // sized. The join already answered it per card; only Metal is added here,
+    // being Apple-only and with no NVIDIA rig to be mixed with.
     bool cuda_will_run = false, metal_will_run = false, opencl_will_run = false;
 #ifdef MXBM_HAVE_CUDA
-    cuda_will_run = (opts.solver == "cuda" || opts.solver == "gpu" || opts.solver == "auto")
-                    && gpu::CudaSolver::available(cuda_index);
+    cuda_will_run = primary && primary->backend == gpu::Backend::Cuda;
 #endif
 #ifdef MXBM_HAVE_METAL
-    metal_will_run = !cuda_will_run
+    metal_will_run = !cuda_will_run && cards.empty()
                   && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
                   && gpu::MetalSolver::available(metal_index);
 #endif
 #ifdef MXBM_HAVE_OPENCL
-    opencl_will_run = !cuda_will_run && !metal_will_run
-                   && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
-                   && gpu::GpuSolver::available(cl_index);
+    // True also when CUDA is the choice and OpenCL only the fallback: this gates
+    // NVML, and a run that falls back must not lose its telemetry with the fall.
+    opencl_will_run = !metal_will_run && primary && primary->cl_index >= 0
+                   && (primary->backend == gpu::Backend::OpenCL
+                       || primary->backend == gpu::Backend::Cuda);
 #endif
     const bool gpu_will_run = cuda_will_run || metal_will_run || opencl_will_run;
-    const bool have_nvml = gpu_will_run && gpu::nvml_init();
+    const bool have_nvml = gpu_will_run && nvml_up;
 
     // Overclock settings BEFORE the solver exists, not after: geometry selection reads
     // the board power limit, so --pl has to land first -- apply, then observe, then
@@ -480,55 +520,90 @@ int main(int argc, char** argv) {
         if (board_pl.valid) startup_pl_w = board_pl.current_w;
     }
 
+#if defined(MXBM_HAVE_CUDA) || defined(MXBM_HAVE_OPENCL)
+    // Every selected card through the SAME rule, in table order: the join's
+    // backend, the other one as a fallback when construction throws, a named skip
+    // when neither can drive it. The first card that yields a solver is the
+    // primary. --benchmark and --tune stop after it -- allocating gigabytes on
+    // cards they will never measure is cost without product.
+    for (size_t k = 0; k < selected_devices.size(); ++k) {
+        if ((benchmark_mode || opts.tune) && k > 0) break;
+        const unsigned pos = selected_devices[k];
+        if (pos >= cards.size()) continue;
+        const gpu::JoinedCard& c = cards[pos];
+        const std::string tag = "Device " + std::to_string(pos) + " (" + c.name + ")";
+        // Skipped with the reason, never constructed into a first-kernel-launch
+        // failure the watchdog reads as a dead GPU and takes the rig down for.
+        if (c.backend == gpu::Backend::None) {
+            // No reason means no GPU backend was ASKED for (--solver ref, metal):
+            // nothing was denied, so there is nothing to report.
+            if (!c.reason.empty())
+                ui::console::error(tag + ": " + c.reason + ". Continuing without it.");
+            continue;
+        }
+        // Mines, but its identity is not fully pinned -- said out loud because the
+        // consequence lands on hardware settings rather than on hashrate.
+        if (c.degraded && !c.reason.empty()) ui::console::error(tag + ": " + c.reason);
+
+        // Each card gets ITS observed limit -- NVML orders by bus id, the same
+        // order `pos` indexes -- because a mixed rig can cap its cards apart.
+        const gpu::PowerLimit cpl = have_nvml ? gpu::nvml_power_limit(pos) : gpu::PowerLimit{};
+        const unsigned cpl_w = cpl.valid ? cpl.current_w : 0u;
+
+        std::unique_ptr<miner::Solver> s;
+        std::string sname, why;
+        unsigned long long smem = 0;
+        const char* driver = nullptr;
 #ifdef MXBM_HAVE_CUDA
-    // CUDA first when both are built: it measures ~1.16x the OpenCL path's rate on the
-    // same card (docs/performance.md). --solver opencl forces the portable path.
-    if (cuda_will_run) {
-        try {
-            auto cs = std::make_unique<gpu::CudaSolver>(cuda_index, startup_pl_w);
-            worker_label = cs->device().name;   // the real name, not a bare "GPU 0"
-            dev_name = cs->device().name;
-            dev_mem = cs->device().global_mem;
-            dev_driver = "Cuda";
-            solver = std::move(cs);
-        } catch (const std::exception& e) {
-            ui::console::error(std::string("CUDA solver initialization failed: ") + e.what());
-            gpu_attempt_failed = true;
-        }
-        // The remaining selected devices -- MINING only: benchmark and tune
-        // measure one card, and allocating gigabytes on cards that will never
-        // run is cost without product. A card that fails to initialise is
-        // reported and skipped rather than taking the rig down with it: on a
-        // multi-GPU box the whole point is that the others keep mining.
-        for (size_t k = 1; solver && !benchmark_mode && !opts.tune
-                           && k < selected_devices.size(); ++k) {
-            const size_t pos = selected_devices[k];
-            // A card the CUDA path cannot drive is skipped with directions, not
-            // constructed into a kernel-launch failure the watchdog would read
-            // as a dead GPU (MIXED_RIG.md phase 1).
-            if (pos < cuda_devices.size() && !cuda_devices[pos].viable) {
-                ui::console::error("Device " + std::to_string(pos) + " ("
-                                   + cuda_devices[pos].name + "): the CUDA path needs "
-                                   "compute capability 8.0 or newer and a geometry that "
-                                   "fits. Run a second instance with --solver opencl "
-                                   "--devices " + std::to_string(pos)
-                                   + ". Continuing without it.");
-                continue;
-            }
-            const int idx = pos < cuda_devices.size() ? cuda_devices[pos].index : (int)pos;
+        // CUDA first wherever the join chose it: it measures ~1.16x the OpenCL
+        // path's rate on the same card (docs/performance.md).
+        if (c.backend == gpu::Backend::Cuda) {
             try {
-                // Each card gets ITS observed limit -- NVML orders by bus id, the same
-                // order `pos` indexes -- because a mixed rig can cap the cards apart.
-                const gpu::PowerLimit epl = have_nvml ? gpu::nvml_power_limit((unsigned)pos)
-                                                      : gpu::PowerLimit{};
-                auto cs = std::make_unique<gpu::CudaSolver>(idx, epl.valid ? epl.current_w : 0u);
-                extra_labels.push_back(cs->device().name);
-                extra_solvers.push_back(std::move(cs));
-            } catch (const std::exception& e) {
-                ui::console::error("Device " + std::to_string(pos) + " could not be initialised ("
-                                   + e.what() + ") - continuing without it");
-            }
+                auto cs = std::make_unique<gpu::CudaSolver>(c.cuda_index, cpl_w);
+                sname = cs->device().name;   // the real name, not a bare "GPU 0"
+                smem = cs->device().global_mem;
+                driver = "Cuda";
+                s = std::move(cs);
+            } catch (const std::exception& e) { why = e.what(); }
         }
+#endif
+#ifdef MXBM_HAVE_OPENCL
+        // Both the choice for cards CUDA cannot drive and the fallback when a CUDA
+        // constructor throws: a compositor holding a gigabyte can leave room for
+        // the portable geometry and not the fast one's. --solver cuda opts out.
+        if (!s && c.cl_index >= 0 && opts.solver != "cuda") {
+            if (!why.empty())
+                ui::console::error(tag + ": CUDA initialization failed (" + why
+                                   + ") - trying the OpenCL path on the same card");
+            try {
+                auto gs = std::make_unique<gpu::GpuSolver>((unsigned)c.cl_index);
+                sname = gs->device().name;
+                smem = gs->device().global_mem;
+                driver = "OpenCL";
+                why.clear();
+                s = std::move(gs);
+            } catch (const std::exception& e) { why = e.what(); }
+        }
+#endif
+        if (!s) {
+            // Reported and skipped rather than taking the rig down with it: on a
+            // multi-GPU box the whole point is that the others keep mining.
+            gpu_attempt_failed = true;
+            ui::console::error(tag + ": could not be initialised (" + why
+                               + ") - continuing without it");
+            continue;
+        }
+        if (!solver) {
+            worker_label = sname;
+            dev_name = sname;
+            dev_mem = smem;
+            dev_driver = driver;
+            solver = std::move(s);
+        } else {
+            extra_labels.push_back(sname);
+            extra_solvers.push_back(std::move(s));
+        }
+        solver_positions.push_back(pos);
     }
 #endif
 #ifdef MXBM_HAVE_METAL
@@ -538,7 +613,8 @@ int main(int argc, char** argv) {
     // confined to the sort path -- the slowest of the three collision finders. On an
     // M3 Max that is ~505 ms/solve against Metal's ~117 ms, a 4.3x difference.
     // --solver opencl still forces the portable path.
-    if (!solver && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
+    if (!solver && cards.empty()
+        && (opts.solver == "metal" || opts.solver == "gpu" || opts.solver == "auto")
         && gpu::MetalSolver::available(metal_index)) {
         try {
             auto ms = std::make_unique<gpu::MetalSolver>(metal_index);
@@ -550,39 +626,6 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             ui::console::error(std::string("Metal solver initialization failed: ") + e.what());
             gpu_attempt_failed = true;
-        }
-    }
-#endif
-#ifdef MXBM_HAVE_OPENCL
-    if (!solver && (opts.solver == "opencl" || opts.solver == "gpu" || opts.solver == "auto")
-        && gpu::GpuSolver::available(cl_index)) {
-        try {
-            auto gs = std::make_unique<gpu::GpuSolver>(cl_index);
-            worker_label = gs->device().name;
-            dev_name = gs->device().name;
-            dev_mem = gs->device().global_mem;
-            dev_driver = "OpenCL";
-            solver = std::move(gs);
-        } catch (const std::exception& e) {
-            ui::console::error(std::string("OpenCL solver initialization failed: ") + e.what());
-            gpu_attempt_failed = true;
-        }
-        // The remaining selected devices -- MINING only, mirroring the CUDA
-        // extras loop (MIXED_RIG.md phase 2). OpenCL indices are the user's
-        // selection used directly; see cl_index above for why there is no
-        // translation step here.
-        for (size_t k = 1; solver && !benchmark_mode && !opts.tune
-                           && k < selected_devices.size(); ++k) {
-            const unsigned pos = selected_devices[k];
-            try {
-                auto gs = std::make_unique<gpu::GpuSolver>(pos);
-                extra_labels.push_back(gs->device().name);
-                extra_solvers.push_back(std::move(gs));
-            } catch (const std::exception& e) {
-                ui::console::error("Device " + std::to_string(pos)
-                                   + " could not be initialised (" + e.what()
-                                   + ") - continuing without it");
-            }
         }
     }
 #endif
@@ -605,7 +648,11 @@ int main(int argc, char** argv) {
         // card; other vendors get no Vendor line rather than a guessed one.
         ui::console::device_block(
             0, dev_name,
-            have_nvml ? gpu::nvml_pci_address() : std::string(),
+            // The PRIMARY card's address, not device 0's: with --devices 1 the
+            // block would otherwise introduce the run with another card's PCI.
+            have_nvml ? gpu::nvml_pci_address(solver_positions.empty()
+                                              ? 0u : solver_positions.front())
+                      : std::string(),
             have_nvml ? "NVIDIA Corporation" : std::string(),
             dev_driver, dev_mem,
             "Selected Algorithm: BeamHash III (" + dev_driver + ")");
@@ -628,9 +675,11 @@ int main(int argc, char** argv) {
     if (have_nvml && solver) {
         // Each row samples its OWN card. The index is the position in the
         // PCI-sorted list --devices selected from, and NVML enumerates by bus
-        // id too, so the two agree without a translation table.
-        std::vector<unsigned> nvml_index;
-        for (unsigned d : selected_devices) nvml_index.push_back(d);
+        // id too, so the two agree without a translation table. It is the list of
+        // cards that got a SOLVER, not the selection: engine N is row N is
+        // solver_positions[N], and a card skipped mid-list must not slide the
+        // rows after it onto their neighbours' sensors.
+        std::vector<unsigned> nvml_index = solver_positions;
         if (nvml_index.empty()) nvml_index.push_back(0);
         // The restart notice: geometry is chosen once at startup (a switch is a
         // multi-GiB realloc), so a cap that later crosses the threshold gets one line,

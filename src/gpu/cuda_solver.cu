@@ -172,8 +172,19 @@ std::vector<CudaSolver::DeviceInfo> CudaSolver::enumerate() {
     // its index 0 is not necessarily bus 1 -- and --pl's per-GPU list is applied
     // through NVML, which orders by bus. Sorting here is what stops "GPU 1" from
     // meaning two different cards in two different flags on the same rig.
-    std::sort(out.begin(), out.end(), [](const DeviceInfo& a, const DeviceInfo& b) {
-        return a.pci < b.pci;
+    //
+    // NUMERICALLY, on the parsed address: the string is "%x:%x", so a string compare
+    // puts bus 0x41 before bus 0x9 -- on any board with buses either side of 0x10 that
+    // disagrees with NVML's own bus order, which is what lands --pl on the wrong card.
+    auto pci_key = [](const DeviceInfo& d) {
+        const size_t c = d.pci.find(':');
+        if (c == std::string::npos) return 0ull;
+        const unsigned long bus = std::strtoul(d.pci.substr(0, c).c_str(), nullptr, 16);
+        const unsigned long dev = std::strtoul(d.pci.substr(c + 1).c_str(), nullptr, 16);
+        return ((unsigned long long)bus << 16) | (dev & 0xffffull);
+    };
+    std::sort(out.begin(), out.end(), [&](const DeviceInfo& a, const DeviceInfo& b) {
+        return pci_key(a) < pci_key(b);
     });
     return out;
 }

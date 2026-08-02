@@ -42,6 +42,31 @@ bool pick_device(cl_platform_id* plat_out, cl_device_id* dev_out, unsigned index
     return false;
 }
 
+// cl_nv_device_attribute_query, spelled out rather than included: its header ships
+// with NVIDIA's SDK and this file must build against any OpenCL 1.2 header set.
+// A platform that does not know these values just fails the query.
+#ifndef CL_DEVICE_PCI_BUS_ID_NV
+  #define CL_DEVICE_PCI_BUS_ID_NV  0x4008
+#endif
+#ifndef CL_DEVICE_PCI_SLOT_ID_NV
+  #define CL_DEVICE_PCI_SLOT_ID_NV 0x4009
+#endif
+
+// "bus:device" in CUDA's and NVML's hex short form, or "" when the device does not
+// answer. The join keys on the BUS alone: NVIDIA documents SLOT_ID without pinning
+// its encoding (the device number on some drivers, device << 3 | function on
+// others), while a bus is unique per card without that assumption.
+std::string pci_of(cl_device_id d) {
+    cl_uint bus = 0, slot = 0;
+    if (clGetDeviceInfo(d, CL_DEVICE_PCI_BUS_ID_NV, sizeof bus, &bus, nullptr) != CL_SUCCESS)
+        return {};
+    if (clGetDeviceInfo(d, CL_DEVICE_PCI_SLOT_ID_NV, sizeof slot, &slot, nullptr) != CL_SUCCESS)
+        slot = 0;
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%x:%x", (unsigned)bus, (unsigned)slot);
+    return buf;
+}
+
 std::string str_info(cl_device_id d, cl_device_info k) {
     size_t n = 0;
     if (clGetDeviceInfo(d, k, 0, nullptr, &n) != CL_SUCCESS || n == 0) return {};
@@ -62,10 +87,41 @@ bool Runtime::any_device_available(unsigned index) {
     return pick_device(&p, &d, index);
 }
 
+std::vector<DeviceInfo> Runtime::enumerate() {
+    std::vector<DeviceInfo> out;
+    cl_uint nplat = 0;
+    if (clGetPlatformIDs(0, nullptr, &nplat) != CL_SUCCESS || nplat == 0) return out;
+    std::vector<cl_platform_id> plats(nplat);
+    if (clGetPlatformIDs(nplat, plats.data(), nullptr) != CL_SUCCESS) return out;
+    // The GPU pass only, in platform order -- the same walk pick_device does
+    // first, so entry N here is the device Runtime(N) selects.
+    for (cl_platform_id p : plats) {
+        cl_uint ndev = 0;
+        if (clGetDeviceIDs(p, CL_DEVICE_TYPE_GPU, 0, nullptr, &ndev) != CL_SUCCESS || ndev == 0)
+            continue;
+        std::vector<cl_device_id> devs(ndev);
+        if (clGetDeviceIDs(p, CL_DEVICE_TYPE_GPU, ndev, devs.data(), nullptr) != CL_SUCCESS)
+            continue;
+        for (cl_device_id d : devs) {
+            DeviceInfo i;
+            i.index = (unsigned)out.size();
+            i.name  = str_info(d, CL_DEVICE_NAME);
+            i.pci   = pci_of(d);
+            clGetDeviceInfo(d, CL_DEVICE_GLOBAL_MEM_SIZE,    sizeof i.global_mem, &i.global_mem, nullptr);
+            clGetDeviceInfo(d, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof i.max_alloc,  &i.max_alloc,  nullptr);
+            clGetDeviceInfo(d, CL_DEVICE_MAX_COMPUTE_UNITS,  sizeof i.compute_units, &i.compute_units, nullptr);
+            out.push_back(std::move(i));
+        }
+    }
+    return out;
+}
+
 Runtime::Runtime(unsigned index) {
     if (!pick_device(&plat_, &dev_, index))
         throw ClError(CL_DEVICE_NOT_FOUND, "no OpenCL device at index "
                       + std::to_string(index));
+    info_.index       = index;
+    info_.pci         = pci_of(dev_);
     info_.name        = str_info(dev_, CL_DEVICE_NAME);
     info_.version     = str_info(dev_, CL_DEVICE_VERSION);
     info_.clc_version = str_info(dev_, CL_DEVICE_OPENCL_C_VERSION);

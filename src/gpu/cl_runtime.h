@@ -29,6 +29,12 @@ struct DeviceInfo {
     cl_uint  compute_units = 0;
     cl_ulong local_mem  = 0;     // CL_DEVICE_LOCAL_MEM_SIZE (bytes of __local per workgroup)
     size_t   max_work_group = 0; // CL_DEVICE_MAX_WORK_GROUP_SIZE (work-items per group)
+    // PCI "bus:device", hex, the short form CUDA and NVML print; empty without
+    // cl_nv_device_attribute_query (every non-NVIDIA platform). OpenCL has no PCI
+    // notion of its own, so this is the only thing that identifies one of its
+    // devices as a card CUDA and NVML also see -- the join key for a mixed rig.
+    std::string pci;
+    unsigned index = 0;          // the flattened index GpuSolver/Runtime take
 };
 
 // Move-only RAII owner for an OpenCL handle type T released by Rel.
@@ -63,6 +69,12 @@ public:
 
     // `index` selects among the devices every platform reports, flattened.
     static bool any_device_available(unsigned index = 0);
+
+    // Every OpenCL GPU in the flattened order `index` counts, without creating a
+    // context on any of them; no ICD gives an empty list, not an error. Non-GPU
+    // devices are left out -- still addressable by index (see pick_device), but
+    // nothing here should mine BeamHash III on a CPU device by accident.
+    static std::vector<DeviceInfo> enumerate();
 
     const DeviceInfo& device() const { return info_; }
 
