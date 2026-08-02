@@ -236,6 +236,9 @@ struct CudaSolver {
         uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};
         bh3::compute_prepow(input, 32, nonce, extra0, pp);
         cudaMemcpyAsync(dpp, pp, 32, cudaMemcpyHostToDevice, st);
+#if MXBM_PP_CONST
+        cudaMemcpyToSymbolAsync(c_pp, pp, 32, 0, cudaMemcpyHostToDevice, st);
+#endif
         if (coNonce) {
             uint64_t cpp[4];
             bh3::compute_prepow(input, 32, coNonce, extra0, cpp);

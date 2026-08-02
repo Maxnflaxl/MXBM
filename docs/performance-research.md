@@ -3573,6 +3573,64 @@ a whole rung — a measured ~1 ms of geometry — to buy a third of one.
 
 </details>
 
+## Measured results, 2026-08-02
+
+### The top half of the pipeline is a siphash machine — and three ways of making it cheaper are already taken
+<details>
+<summary>Details</summary>
+
+*(CUDA, `cuda/pipeline` on the current kernels, `MXBM_ROUND_REPS=R:9`, 40 nonces,
+each replay bracketed by a baseline run so drift is visible. KAT green throughout
+except where an ablation is named — those are deliberately wrong.)*
+
+**The profile has not moved.** Marginal cost per round: r1 **5.12**, r2 **10.17**,
+r3 **9.49**, r4 **5.48**, terminal **0.98** ms — within 0.1 ms of the 2026-07-31
+stage-power table on every row. The 08-01/08-02 work was OpenCL, and the CUDA
+profile says so.
+
+**r1's scattered payload store is FREE; r2's costs 1.41 ms.** `MXBM_ABL_EMIT=R`
+removes only the scattered record write, keeping the atomics, back-refs, combine
+and apply_mix, so the element counts and every other access stay representative:
+
+| round | full | store ablated | the store costs |
+|---|---|---|---|
+| r1 | 5.117 | 5.301 | **0.00** (the ablation measured *slower*, inside drift) |
+| r2 | 10.170 | 8.758 | **1.41** |
+
+**What the two rounds are, then.** Solving `M + D = 5.12` and `M + 2D + 1.41 =
+10.17` — r1 derives 7 siphashes per element, r2 rebuilds 14 — gives **D = 3.64 ms
+per 235 M siphashes** and **M ≈ 1.5 ms of match machinery per round**. The check:
+the entry pass is the same 7 siphashes per element *without* the machinery and
+costs 2.68 ms, the same derivation ~26 % cheaper at 6 blocks/SM instead of 5.
+
+So **r1 and r2 stand in exactly the ratio of their siphash counts** — 235 M
+against 470 M predicts 2.00, measured 1.99 — and ~11 ms of the 33.5 ms solve is
+re-derivation. That is one number behind two standing results at once: why every
+byte-side lever in these two rounds has been null (their bytes are free or nearly
+so), and why *both* directions of the store-instead-of-derive trade lose
+([R2_FULL](#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does), the
+[quad record](#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)).
+The way to speed up the top half is fewer siphashes, and the schedule fixes how
+many: 7 per seed element, 14 to rebuild a pair, every word load-bearing (the
+child's top word reads the parent's, which reads the seed's).
+
+**Three ways of making the siphash itself cheaper — all already taken by the
+compiler.** Each was worth checking precisely because it would otherwise stay
+plausible forever:
+
+| lever | verdict |
+|---|---|
+| `rotl64` → explicit `__funnelshift_l` pair | **Already optimal.** The shift-or form compiles to `SHF.L.W.U32.HI` — 44 of them for the six siphash rounds — so NVPTX recognises the rotate. Writing the funnel shift by hand is *worse*: 176 SASS instructions against 168 |
+| hoisting the nonce-independent siphash prefix out of the 7 seed calls | **Already shared.** `seed_element` is 1016 SASS instructions against ~1136 for seven independent copies: nvcc lifts ~17 per call, which is the whole prefix (`v0+=v1`, `rotl(v1,13)`, `v1^=v0`, `rotl(v0,32)`, `rotl(v1,17)`) |
+| the prePow key in `__constant__` instead of registers (`MXBM_PP_CONST=1`) | **A wash, and the premise was wrong.** The key is read by every siphash of every element, so it looked like 8 pinned registers of the 64 r2 is capped at — but register counts are byte-identical in every instantiation with and without it, so ptxas was already re-materialising rather than pinning. 12 ABBA arms: **−0.023 ms, −0.07 %**, against the 1 %-of-a-solve floor |
+
+`MXBM_PP_CONST` stays in the tree as the closure's instrument, off by default and
+codegen-neutral when off, the same way `MXBM_LWORK_SOA` does.
+
+</details>
+
+---
+
 ## Established limits
 <details>
 <summary>Details</summary>
@@ -3716,6 +3774,14 @@ is not "some rounds are tuned and some are not": **the rounds that compute are s
 the rounds that only stream are fast**, and both re-derivations have been A/B'd in the
 right direction (r1's seed re-derivation 2.5 vs 18.2 ms; r2's pair record 35.0 vs 39.2).
 The work is BeamHash III's own hash, which the PoW definition fixes.
+
+**Quantified 2026-08-02**: the two rounds stand in exactly the ratio of their siphash
+counts (2.00 predicted, 1.99 measured), which prices the derivation at 3.64 ms per
+235 M siphashes and the match machinery at ~1.5 ms per round — and r1's scattered
+payload store at *zero*. See [the siphash
+decomposition](#the-top-half-of-the-pipeline-is-a-siphash-machine--and-three-ways-of-making-it-cheaper-are-already-taken),
+which also closes three ways of making the siphash itself cheaper: the compiler
+already takes all three.
 
 **The 1.71× / 96 sol/s ceiling is real arithmetic but it is not one overlap away.**
 `max(SM-busy, DRAM-busy)` = 20.6 ms agrees with the 21.2 ms DRAM floor above, so the

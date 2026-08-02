@@ -255,6 +255,22 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #define MXBM_LWORK_SOA 0
 #endif
 
+// MXBM_PP_CONST: the siphash key (prePow) reaches the fused rounds through __constant__
+// memory instead of a global pointer dereferenced in the all-lanes loop. MEASURED NULL
+// 2026-08-02 (-0.07 %, 12 ABBA arms), and the premise was wrong with it: the key looked
+// like 8 pinned registers of the 64 r2 is capped at, but register counts came back
+// byte-identical, so ptxas was re-materialising it rather than pinning it. Kept as the
+// closure's instrument -- off by default, codegen-neutral when off.
+#ifndef MXBM_PP_CONST
+#define MXBM_PP_CONST 0
+#endif
+#if MXBM_PP_CONST
+__constant__ uint64_t c_pp[4];
+#define MXBM_PP_LOAD(dst) uint64_t dst[4] = { c_pp[0], c_pp[1], c_pp[2], c_pp[3] }
+#else
+#define MXBM_PP_LOAD(dst) uint64_t dst[4] = { pp4[0], pp4[1], pp4[2], pp4[3] }
+#endif
+
 enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4,
              // A/B pair (MXBM_R2_FULL): round 1 emits a FULL packed record and round 2
              // reads it instead of rebuilding from two seed indices. Trades bytes for
@@ -633,7 +649,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     for (uint32_t pos = lId; pos < total; pos += kWG) {
         if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
             const uint32_t idx = lleaf[pos*LEAFW + 0];
-            uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+            MXBM_PP_LOAD(pp);
             bh3::Elem e;
             if constexpr (MXBM_ABL_DERIVE & 1) abl_spread(idx, 0u, e);
             else {
@@ -643,7 +659,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
             }
             for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
         } else if constexpr (LMODE == LM_RD2) {
-            uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+            MXBM_PP_LOAD(pp);
             bh3::Elem e;
             if constexpr (MXBM_ABL_DERIVE & 2)
                 abl_spread(lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], e);
@@ -655,7 +671,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
             // the staging loop above is sub-mask filtered, so only ~1/2^submask_bits of
             // the lanes are live in it, and the same arithmetic there measured +23.5 ms
             // against +0.4 ms here.
-            uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+            MXBM_PP_LOAD(pp);
             const uint32_t l[4] = { lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1],
                                     lleaf[pos*LEAFW + 2], lleaf[pos*LEAFW + 3] };
             bh3::Elem e;
