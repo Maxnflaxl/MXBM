@@ -154,6 +154,20 @@ int main() {
     // so a typo in GPU 3's slot cannot pass unnoticed on a single-GPU rig.
     expect("240,abc", 0, "!");
 
+    section("a per-card value lands at that card's list position");
+    // --pl auto resolves a wattage per card and hands each one to oc_apply as a
+    // list, where a bare number is GPU 0's entry and every other card opts out.
+    // Round-tripped through oc_parse_list so the two halves cannot drift.
+    check(oc_spec_at(0, 172) == "172", "index 0 needs no placeholders");
+    check(oc_spec_at(1, 172) == "*,172", "index 1 skips GPU 0");
+    check(oc_spec_at(3, 130) == "*,*,*,130", "index 3 skips three");
+    for (unsigned i = 0; i < 4; ++i) {
+        const std::string spec = oc_spec_at(i, 200 + (long)i);
+        expect(spec, i, std::to_string(200 + i).c_str());
+        for (unsigned j = 0; j < 4; ++j)
+            if (j != i) expect(spec, j, "-");   // and no other card is touched
+    }
+
     // --- apply / clamp / restore, against a fake card -------------------
     //
     // These were unreachable until oc_set_power_ops() existed, and mutation

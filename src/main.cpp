@@ -405,7 +405,9 @@ int main(int argc, char** argv) {
             std::string date;
             const unsigned w = key.empty() ? 0u : miner::tune_stored_knee(key, date);
             if (w) {
-                r.pl = std::to_string(w);
+                // At this card's list position: oc_apply reads --pl as a per-GPU
+                // list, so a bare number caps GPU 0 and leaves the rest at stock.
+                r.pl = gpu::oc_spec_at(pos, (long)w);
                 ui::console::info(prefix + "--pl auto: " + std::to_string(w)
                                   + " W, tuned for this card on " + date
                                   + " (re-run --tune after driver or cooling changes)");
@@ -644,15 +646,14 @@ int main(int argc, char** argv) {
     if (have_nvml) stats.set_driver_version(gpu::nvml_driver_version());
 
     if (!dev_name.empty()) {
-        // Vendor is claimed only when NVML answered, itself proof of an NVIDIA
-        // card; other vendors get no Vendor line rather than a guessed one.
+        // The PRIMARY card, not device 0: with --devices 1 the block would
+        // otherwise introduce the run under another card's index and PCI address.
+        const unsigned primary = solver_positions.empty() ? 0u : solver_positions.front();
         ui::console::device_block(
-            0, dev_name,
-            // The PRIMARY card's address, not device 0's: with --devices 1 the
-            // block would otherwise introduce the run with another card's PCI.
-            have_nvml ? gpu::nvml_pci_address(solver_positions.empty()
-                                              ? 0u : solver_positions.front())
-                      : std::string(),
+            (int)primary, dev_name,
+            have_nvml ? gpu::nvml_pci_address(primary) : std::string(),
+            // Vendor is claimed only when NVML answered, itself proof of an NVIDIA
+            // card; other vendors get no Vendor line rather than a guessed one.
             have_nvml ? "NVIDIA Corporation" : std::string(),
             dev_driver, dev_mem,
             "Selected Algorithm: BeamHash III (" + dev_driver + ")");

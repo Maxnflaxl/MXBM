@@ -173,6 +173,13 @@ bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& f
     return true;
 }
 
+std::string oc_spec_at(unsigned index, long value) {
+    std::string s;
+    s.reserve((size_t)index * 2 + 8);
+    for (unsigned i = 0; i < index; ++i) s += "*,";
+    return s + std::to_string(value);
+}
+
 OcResult oc_apply_power_limit(unsigned device, const std::string& spec) {
     OcResult r;
     if (!want(spec, device, "--pl", /*allow_negative=*/false, r)) return r;

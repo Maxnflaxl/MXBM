@@ -65,6 +65,11 @@ struct OcRequest {
 bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& found,
                    std::string& err, bool allow_negative = false);
 
+// The inverse: a list carrying `value` at `index`, skipping every GPU before it
+// ("172" at 2 -> "*,*,172"). For settings resolved PER CARD rather than typed as
+// a list, where a bare number would be GPU 0's entry and leave the rest at stock.
+std::string oc_spec_at(unsigned index, long value);
+
 // Applies every requested knob to DEVICE (bus order; also the index each
 // per-GPU list entry is read at, so "240,*,260" finally lands per card) and
 // returns one result per knob that was actually requested. Never throws; read
