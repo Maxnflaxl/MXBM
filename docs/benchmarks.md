@@ -85,7 +85,7 @@ instrument measured both; the sol/s columns are each miner against itself. Accep
 shares over a fixed interval remain the only arbiter that needs neither counter.
 
 [^4g]: lolMiner selects "BeamHash III **4G** (CUDA)" on this card. MXBM needing 7.46 GiB
-is a known gap — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target).
+is a known gap — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target).
 
 ---
 

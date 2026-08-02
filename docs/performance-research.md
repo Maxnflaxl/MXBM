@@ -1531,7 +1531,7 @@ that is power-capped 99 % of the time the second one is what reaches the headlin
   bytes to reused addresses. Traffic is unchanged, so by this measurement it buys no
   clock at all. It is a **reach** lever — 8 GB cards — and nothing else.
 
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target)
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target)
 names in-place reuse as the route to the 3 GB target and treats memory efficiency and
 energy efficiency as one problem. It is the route to the *footprint* target; the energy
 half has to come from narrower records. Since [measured traffic is within 1 % of
@@ -2010,7 +2010,7 @@ solutions/solve on that path, so the mining route is gated and not just the benc
 **Stated CUDA requirement drops from 8 GB to 6 GB**, and the cards between 6.3 and 7.9 GiB
 free get a *faster* rung than before — quad (16,1) at 38.4 ms where the packed ladder gave
 them (14,3) at 40.0. Full table in
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit).
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-vram-ladder).
 
 </details>
 
@@ -3363,7 +3363,7 @@ the staging loops. Not yet chased through `MXBM_CL_VERBOSE` register deltas; the
 gain is banked but its mechanism is unnamed, so do not build on it.
 
 Reach outcome (arithmetic pinned by `test_rowbucket_geom`, table in
-[HW_REQUIREMENTS](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)):
+[HW_REQUIREMENTS](HW_REQUIREMENTS.md#the-vram-ladder)):
 11–12 GB cards climb to packed (16,1) — they were on quad (15,2) at 45.1 ms or
 (14,3) — 10 GB joins at (16,1), 8 GB at split (15,2), 6 GB at quad (14,3). The
 OpenCL floor moves 11 GB → ~5.7 GiB reported, equal to CUDA's. **No sub-11-GB
@@ -3808,9 +3808,10 @@ What remains is speed and efficiency at and above the band, where the pipeline s
    | (15,2) | 6.88 GiB | 37.8 | 53.8 |
    | (14,3) | 6.50 GiB | 42.8 | 47.5 |
 
-   **What it reaches.** CUDA has no `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, which is the limit
-   that binds OpenCL below 12 GB
-   ([limitation 1](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)),
+   **What it reaches.** CUDA has no `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, which was then the
+   limit that bound OpenCL below 12 GB (lifted 2026-08-01 by [the record-set
+   split](#the-record-set-split-opencl-reaches-cudas-57-gib-floor-and-gets-faster-doing-it);
+   current ladder in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-vram-ladder)),
    so the CUDA ladder is bounded by total VRAM alone:
 
    | card | OpenCL | CUDA before | CUDA now |
@@ -3864,11 +3865,13 @@ What remains is speed and efficiency at and above the band, where the pipeline s
    path), index-only records, or the packed-record work. The first instalment of the
    constants is in and was worth −9.8 %; the other two are untouched. It is
    not a dead path — it is what runs on any device that cannot host a row-bucket
-   geometry, which per
-   [limitation 1](HW_REQUIREMENTS.md#1-below-11-gb-opencl-is-capped-by-its-single-allocation-limit)
-   means 11 GB cards and anything whose OpenCL `max_alloc` is small, and the CUDA backend
-   has no sort path at all. So this is reach and it is also the only path some users will
-   ever run. Known starting points: the [record audit](#the-record-redundancy-audit)
+   geometry at all, and the CUDA backend has no sort path. **Its constituency shrank
+   on 2026-08-01**: the record-set split put every NVIDIA card down to ~5.7 GiB
+   reported on the row-bucket ladder ([the
+   split](#the-record-set-split-opencl-reaches-cudas-57-gib-floor-and-gets-faster-doing-it),
+   [ladder](HW_REQUIREMENTS.md#the-vram-ladder)), where it used to catch 11 GB cards and
+   anything with a small OpenCL `max_alloc`. What is left for it is devices no rung fits —
+   so this is reach, at the far edge. Known starting points: the [record audit](#the-record-redundancy-audit)
    already took it 285 → 264 B/element and left one deliberate 4 B/element (~138 MB) of
    slack in `leaves[2]`; whether the row-bucket path's wins transfer at all is the open
    question, since the two differ in structure and not just in tuning.

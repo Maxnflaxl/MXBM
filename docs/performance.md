@@ -1014,7 +1014,7 @@ into two. Round 2 is now the only line materially above compulsory, and that
 So the byte count can only fall by making records narrower, and one place was
 found where a record was wider than its own contents ([the round-2 alignment
 pad](performance-research.md#the-round-2-alignment-pad)). Everything else needs the structural change in
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#2-memory-efficiency-is-24-off-the-algorithms-design-target):
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target):
 streaming / in-place layer reuse.
 
 ### What the footprint still costs

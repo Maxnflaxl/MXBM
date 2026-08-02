@@ -137,7 +137,7 @@ The compression structure itself is standard: `v3 ^= nonce`, two SipRounds, then
 This makes the seeding phase pure integer ALU work with no memory traffic — which is
 exactly how it profiles in practice. In MXBM's CUDA backend the entry kernel runs at
 **98 % of SM throughput and 16 % of DRAM throughput**; see
-[performance-research.md](performance-research.md).
+[performance-research.md](../performance-research.md).
 
 ---
 
@@ -312,7 +312,7 @@ Derived in `src/beamhash/bh3_verify.cpp:35`:
 The **significant words** column is the practical consequence: because `Lout` shrinks,
 the number of nonzero 64-bit work words falls `[7,7,6,5,1]`. A solver that stores full
 7-word elements every round moves bytes it can prove are zero. MXBM exploits this — see
-[fixed-width compaction](performance-research.md#fixed-width-compaction).
+[fixed-width compaction](../performance-research.md#fixed-width-compaction).
 
 ---
 
@@ -341,7 +341,7 @@ known-answer solutions byte-for-byte.
 
 For how the search itself is organized on a GPU — bucketing, the fused row-bucket
 pipeline, and the measured hardware limits that shape it — see
-[performance.md](performance.md) and [architecture.md](architecture.md).
+[performance.md](../performance.md) and [architecture.md](../architecture.md).
 
 ---
 
