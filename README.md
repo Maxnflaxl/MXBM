@@ -9,10 +9,11 @@ auditable alternative to the closed-source miners in the ecosystem.
 
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
 > Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
-> RTX 4070 Ti SUPER the CUDA backend does **58.9 sol/s** and the portable OpenCL
-> one 48.2. `--solver auto` prefers CUDA, falls back to OpenCL, then to a CPU
-> reference solver. Measured history, hardware limits and the caveats on comparing
-> miners: **[docs/performance.md](docs/performance.md)**.
+> RTX 4070 Ti SUPER the CUDA backend does **59.8 sol/s** and the portable OpenCL
+> one **59.4** — within 1.2 % of each other, measured in the same session.
+> `--solver auto` prefers CUDA, falls back to OpenCL, then to a CPU reference
+> solver. Measured history, hardware limits and the caveats on comparing miners:
+> **[docs/performance.md](docs/performance.md)**.
 >
 > **Where MXBM wins, and where it does not.** Both MXBM and lolMiner can be given a
 > board power limit, and both were swept against each other at identical caps
@@ -23,6 +24,10 @@ auditable alternative to the closed-source miners in the ecosystem.
 > | 180 W | 45.2 sol/s · 0.251 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | lolMiner ahead on both |
 > | 220 W | **54.9 sol/s · 0.250 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
 > | 285 W | **59.1 sol/s** · 0.208 sol/s/W | 53.7 sol/s · **0.226 sol/s/W** | faster vs more efficient |
+>
+> Both columns come from one interleaved session (2026-07-28), which is the only way the
+> comparison means anything; MXBM has gained ~1 % since, from work that does not change
+> its shape.
 >
 > **MXBM has the higher ceiling — 59.1 sol/s against ~54.0, which lolMiner cannot reach
 > at any setting — and it leads on both speed and efficiency between roughly 210 W and
@@ -45,10 +50,13 @@ auditable alternative to the closed-source miners in the ecosystem.
 - **Real-pool stratum client** — TLS-first, wallet-address authentication,
   nonce-prefix partitioning, automatic reconnect with backoff, and failover across
   several pools. Verified live against [HeroMiners](https://beam.herominers.com/).
-- **Multi-GPU** — one solver, worker thread and nonce lane per card, so no two ever
-  try the same nonce; `--devices` and `--list-devices` select by an index that means
-  the same card in every flag. Each card gets its own row in the statistics table and
-  in `/summary`, with the rig's totals underneath.
+- **Multi-GPU, including mixed rigs** — one solver, worker thread and nonce lane per
+  card, so no two ever try the same nonce; `--devices` and `--list-devices` select by an
+  index that means the same card in every flag. Cards that need different backends run
+  in the **same process**: the CUDA, OpenCL and NVML device lists are joined on PCI bus
+  id, so each card runs on its fastest viable backend (CUDA on Ampere and newer, else
+  OpenCL) and one neither can drive is skipped with the reason. Each card gets its own
+  row in the statistics table and in `/summary`, with the rig's totals underneath.
 - **Runs unattended** — a watchdog that spots a card which has stopped completing
   solves and exits with a code a supervisor can restart on (or runs your script), and
   overclock control (`--pl`, `--cclk`, `--mclk`, `--coff`, `--moff`, `--fan`) clamped
@@ -116,10 +124,10 @@ In rough priority order:
 
 | Next | What it delivers |
 |------|------------------|
-| **Efficiency at low power** | lolMiner holds 0.2991 sol/s/W at 175 W where MXBM peaks at 0.2575, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock) — measured: moving 16 % fewer bytes buys [60 MHz at 285 W and 210 MHz at 180 W](docs/performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz). **How to collect it is open** — the one narrowing built so far pays for the bytes in arithmetic and nets zero |
-| **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the CUDA floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — what is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
+| **Efficiency at low power** | lolMiner holds 0.2991 sol/s/W at 175 W where MXBM peaks at 0.2575 on stock memory, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock). **Half of that gap has since been closed by the memory clock**: below ~173 W the 5001 MHz rung is worth 8.5–14.4 %, which moves MXBM's own record to [0.264 sol/s/W — 3.79 J/solution at 160 W](docs/performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record) and roughly halves the 120–160 W deficit. The rest is open: [traffic supplies at most 17 % of the clock deficit](docs/performance.md#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found), so a store-everything eco pipeline is the remaining candidate |
+| **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — on *both* backends since the [record-set split](docs/performance-research.md#the-record-set-split-opencl-reaches-cudas-57-gib-floor-and-gets-faster-doing-it) lifted OpenCL's single-allocation ceiling. What is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
-| **Per-GPU verification** | Multi-GPU is built and tested, but has never run on a machine with more than one card |
+| **Per-GPU verification** | Multi-GPU and mixed-backend rigs are built and unit-tested, but have never run on a machine with more than one card. The device join has 45 assertions and needs no GPU; what needs hardware is per-card power control, the skip path on a real unsupported card, and two backends live in one process |
 
 GPU support targets both NVIDIA and AMD: an OpenCL baseline that runs on both,
 then vendor-tuned backends per vendor.

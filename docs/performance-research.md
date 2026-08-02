@@ -2772,6 +2772,23 @@ priced as not worth a slot. Registers moved exactly as commanded in every
 variant (cuobjdump before/after in the artifacts), so these are real nulls,
 not unapplied flags. Artifacts: `docs-internal/rootruns/compiler-sweep/`.
 
+**Addendum 2026-08-02, the flags the sweep did not cover — and this time the
+answer needed no stopwatch.** `--extra-device-vectorization`, `-Xptxas
+-allow-expensive-optimizations=true` and an explicit `-Xptxas -O3` produce
+**byte-identical SASS**: 39,136 instructions across the module either way, and
+`diff` over the full disassembly reports one changed line, the `ptxasOptions`
+string ptxas records in its own metadata. ptxas already runs at -O3 with
+expensive optimizations enabled, and the vectorizer finds nothing the record
+loads have not already fused. Codegen equality is a stronger closure than a
+timing A/B, because no noise enters it.
+
+The **host** level is not device codegen and was measured: `-DCMAKE_BUILD_TYPE=Release`
+(-O3) against the shipping `RelWithDebInfo` (-O2), 8 interleaved 25 s miner
+benchmarks, **−0.050 ms, −0.15 %** — inside noise and far under the 1 %-of-a-solve
+floor, which is what the kernel-time accounting already predicted: the stages sum
+to ~100 % of the solve, so there is no host time to optimize. The documented build
+type stays.
+
 </details>
 
 ### Per-stage attribution at the eco points: the floor's time is round 2's
