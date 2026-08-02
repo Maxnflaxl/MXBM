@@ -12,6 +12,12 @@ namespace mxbm { namespace ui { namespace console {
 // exits. init(true) ("--nocolor") suppresses the colouring.
 void init(bool nocolor);
 
+// Puts the terminal into the mode where escape codes render, and reports whether
+// stdout can show them at all -- false for a pipe, a file, or a console that
+// cannot be switched. Windows needs the switch: VT processing is per process and
+// off by default outside Windows Terminal, so escapes print as literal text.
+bool enable_terminal_color();
+
 // -- transcript log (--log / --logfile) --------------------------------------
 //
 // Tees everything printed above into a file, uncoloured and ALWAYS timestamped

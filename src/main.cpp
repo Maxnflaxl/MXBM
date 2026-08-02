@@ -145,7 +145,9 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 #endif
 
-    ui::console::init(opts.nocolor);
+    // Colour only where it renders; also switches the Windows console into the
+    // mode that needs.
+    ui::console::init(opts.nocolor || !ui::console::enable_terminal_color());
 
     // Open the transcript BEFORE the banner, so the log starts with the same
     // first line the screen does rather than joining part-way through. A log

@@ -72,6 +72,11 @@ void emit_plain() {
     ui::console::stats_block(ui::format_stats_block(fixture(), "0.4", "02:33:14"));
 }
 
+// capture() redirects stdout, which is the state that must answer no.
+void emit_terminal_probe() {
+    std::printf("%d", ui::console::enable_terminal_color() ? 1 : 0);
+}
+
 std::vector<std::string> split_lines(const std::string& s) {
     std::vector<std::string> v;
     for (size_t i = 0, j; i < s.size(); i = j + 1) {
@@ -105,6 +110,10 @@ int main() {
 
     check(plain.find('\033') == std::string::npos,
           "init(true) suppresses every escape code");
+
+    // What main passes to init(): a redirected run must write a clean file.
+    check(capture(&emit_terminal_probe) == "0",
+          "enable_terminal_color() is false when stdout is not a terminal");
     check(plain == ui::format_stats_block(fixture(), "0.4", "02:33:14") + "\n",
           "the --nocolor block is exactly the formatted table plus a newline");
 

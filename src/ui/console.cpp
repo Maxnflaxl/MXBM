@@ -9,8 +9,14 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
+// Absent from pre-10.0.10586 SDK headers, where SetConsoleMode then rejects it.
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace mxbm { namespace ui { namespace console {
@@ -103,6 +109,19 @@ void print_colored(const char* color, const std::string& text) {
 } // namespace
 
 void init(bool nocolor) { g_nocolor = nocolor; }
+
+bool enable_terminal_color() {
+#ifdef _WIN32
+    const HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode = 0;
+    // The queries fail on a non-console handle, the write on a Windows too old
+    // for the flag; either way the escapes would print literally.
+    return h != INVALID_HANDLE_VALUE && h != nullptr && GetConsoleMode(h, &mode)
+        && SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#else
+    return ::isatty(::fileno(stdout)) == 1;
+#endif
+}
 
 bool open_log(const std::string& path, std::string* resolved_path) {
     std::lock_guard<std::mutex> lock(g_mutex);
