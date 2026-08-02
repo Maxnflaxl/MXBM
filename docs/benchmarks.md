@@ -4,12 +4,10 @@ Measured numbers for MXBM, and for lolMiner on the same card, so the comparison 
 like-for-like. Everything here is reproducible with the scripts in `benchmarks/` — the
 commands are given under each table.
 
-**MXBM has been measured on exactly two GPUs**, and they are not comparable to each
-other — an RTX 4070 Ti SUPER on Linux via CUDA, and an M3 Max via Metal. That is the
-honest state of things, and it is the reason for
-[the second half of this page](#send-us-your-numbers): a solver tuned against one card is
-tuned against one card. If you run MXBM, a two-minute benchmark from you is worth more to
-the project than any amount of speculation from us.
+**MXBM has been measured on four GPUs**: an RTX 4070 Ti SUPER (the card everything is
+developed against), an M3 Max via Metal, and a contributed RTX 4070 SUPER and RTX 3060 Ti.
+See [benchmarked devices](#benchmarked-devices). A solver tuned against one card is tuned
+against one card — [send us yours](#send-us-your-numbers).
 
 For *why* comparing miners is harder than reading two numbers off two screens, see
 [benchmarking.md](benchmarking.md). This page is the results; that page is the method.
@@ -283,20 +281,19 @@ and last, and discard the run if the two brackets disagree.
 
 ## Send us your numbers
 
-**This is the part we actually need.** MXBM is developed against one RTX 4070 Ti SUPER
-and one M3 Max. Everything in the Ada sections above — the geometry choices, the power
-curve, the record layout, the claim that rounds 3 and 4 are bandwidth-bound — is measured
-at one memory bandwidth with one shared-memory budget. Some of it does not transfer, and
-we know that because porting to Apple already found one case where the same code gives the
-opposite answer (round 2's rebuild: 0.4 ms exposed on Ada, 21 ms on Apple). We would rather
-find the rest out from your data than assume.
+Everything in the Ada sections above — the geometry choices, the power curve, the record
+layout, the claim that rounds 3 and 4 are bandwidth-bound — is measured at one memory
+bandwidth with one shared-memory budget, and some of it does not transfer. Two cases are
+already known: round 2's rebuild costs 0.4 ms on Ada and 21 ms on Apple, and the 5001 MHz
+memory rung pays below 173 W on the 4070 Ti SUPER but only below 121 W on the 4070 SUPER.
 
 Particularly wanted:
 
-- **Anything that is not Ada** — Ampere (30-series, A-series), Turing, Blackwell.
+- **Anything that is not Ada** — Turing, Blackwell, A-series. (Ampere: one report so far.)
 - **Smaller cards**: 8–12 GB. MXBM refuses to start below its threshold rather than mine
   nothing, so a refusal is itself a useful report — tell us what it said.
 - **AMD**, via the OpenCL backend. It is completely untested there.
+- **OpenCL on anything but the reference card.** Every contributed run so far chose CUDA.
 - **Anything where MXBM is slower than another miner on your hardware.** That is the most
   useful report of all, and it will not offend anyone.
 
@@ -334,20 +331,30 @@ broken on your GPU, that is a bug report we want, not a disappointment to manage
 
 ### Benchmarked devices
 
-*Both rows below are ours. No community reports yet — yours would be the first.*
+Each row is at the card's **stock** power cap.
 
-| GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Reported by |
+| GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Source |
 |---|---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 60.2 | 33.1 | 284 | 0.212 | reference card (2026-08-02) |
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 59.4 | 33.5 | 284 | 0.209 | reference card, fallback path (2026-08-02, both arms same session) |
-| Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | reference card |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 60.2 | 33.1 | 284 | 0.212 | ours, `--benchmark` |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 59.4 | 33.5 | 284 | 0.209 | ours, `--benchmark`, same session |
+| RTX 4070 SUPER | 12 GiB GDDR6X | 610.62 · Windows | CUDA | 43.9 | 44.8 | 214 | 0.205 | ZumZum, `--tune` † |
+| RTX 3060 Ti | 8 GiB GDDR6 | 610.62 · Windows | CUDA | 22.4 | 88.1 | 195 | 0.115 | ZumZum, `--tune` † |
+| Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
-Both sol/s figures are sustained `--benchmark` runs, not pipeline medians, so they are
-comparable to each other in method if not in hardware class. The M3 Max's pipeline alone
-runs **101.5 ms/solve (18.8 sol/s)**; the sustained figure is lower because a laptop
-throttles, and the p5 of that run is 100.0 ms — see
-[Apple Silicon (Metal)](#apple-silicon-metal).
+† `--tune` sweep points, not `--benchmark`: 60 s, CPU-verified, warmed up and
+drift-gauged. On the 4070 SUPER the miner loop reported ~48 sol/s at the same watts in
+the same session, ~10 % above the sweep, and which instrument is right is
+[open](performance.md#open-the-tune-harness-and-the-miner-loop-disagree). The
+lower number is quoted.
 
-The Apple row has no power column because macOS exposes no public GPU power API. It is
-blank rather than estimated: an invented watt figure would make the efficiency column
-look complete and be wrong.
+The M3 Max's pipeline alone runs **101.5 ms/solve (18.8 sol/s)**; the sustained figure is
+lower because a laptop throttles. It has no power column because macOS exposes no public
+GPU power API — blank rather than estimated.
+
+![Speed and efficiency against the cap, every card measured](tools/cards-curve.svg)
+
+Curves for the three NVIDIA cards, generated from the tables in
+[performance.md](performance.md#third-party-hardware--a-two-card-rig-2026-08-02). **Not a
+controlled comparison** — different machines, operating systems and instruments — so
+cross-card distances are unreliable. What holds is each curve's shape and where its own
+efficiency peak sits: 210 W, 148 W and 130 W, all well under stock.

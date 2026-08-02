@@ -56,38 +56,41 @@ crossover, or the Tier-2 eco pipeline — re-arms it by setting that one constan
 ## `--tune`: measure this card's power curve, then `--pl auto`
 
 The head-to-head sweeps that produced the tables below were bash scripts around
-`nvidia-smi`; `--tune` is that measurement as a first-class mode, built so its numbers
-cannot go wrong the three ways the 2026-07-31 session catalogued:
+`nvidia-smi`; `--tune` is that measurement as a first-class mode. Three properties it
+holds:
 
-- **The right loop.** Every point runs `run_benchmark()` — the exact `Engine` path
-  mining runs, CPU-verified sol/s — not a pipeline replay. A curve measured in any
-  other loop is a curve of a different program.
-- **The current build.** The sweep lives inside the shipping binary; there is no
-  separate bench binary to go stale.
-- **A drift gauge.** After both passes, the first point is measured again. The delta
-  is printed and stored; past ±1.5 % the table is flagged as carrying that
-  uncertainty. This is not paranoia — un-gauged same-day sweeps on this card have
-  disagreed by 2 %/arm from heat-soak alone.
+- **The right loop.** Every point runs `run_benchmark()` — the exact `Engine` path mining
+  runs, CPU-verified sol/s — not a pipeline replay. A curve measured in any other loop is
+  a curve of a different program.
+- **The current build.** The sweep lives inside the shipping binary; there is no separate
+  bench binary to go stale.
+- **A drift gauge.** After both passes the first point is measured again, and past ±1.5 %
+  the table is flagged as carrying that uncertainty. Un-gauged same-day sweeps on this
+  card have disagreed by 2 %/arm from heat-soak alone.
 
-The sweep itself is **four passes** (default: ~25 min total): a coarse pass — 6
-points across the band the *driver* reports, 60 s each, high to low, discarded warmup
-first — locates the knee's neighbourhood; a fine pass at ~10 W steps fills the two
-coarse intervals touching it (the step widens only if the bracket would otherwise
-exceed 8 points — refinement bounds the tail, it never restarts the sweep); a
-**rung pass** re-measures the coarse caps at or below the knee at the card's low
-memory rung; and an **efficiency-refining pass** that brackets the best sol/s-per-watt
-point found so far the same way the fine pass brackets the knee, on whichever memory
-clock that point sits — without it the coarse spacing can hide the true optimum
-between two arms, which is exactly how the reference card's first full run missed
-its 160 W + rung record. The rung candidate comes from the driver's own supported-clock list (the
-largest clock below 70 % of the card's maximum, rejected under 20 % of it — nothing is
-inherited from the reference card's 5001), and every rung arm verifies from telemetry
-that the clock actually *held*: a refused rung prints REFUSED and is dropped, never
-counted as "does not pay" — the 10501 lesson, wired in. The verdict then adds "below
-~X W, add `--mclk <rung>`" with X interpolated from this card's own sign change, and
-`--pl auto` reminds about it when the resolved cap is inside the paying band
-(recommended, never auto-applied). An explicit `--tune-caps` list runs the coarse pass
-only, and a given `--mclk` disables the rung pass: chosen settings stand.
+**Four passes**, ~25 min by default:
+
+1. **Coarse** — 6 points across the band the *driver* reports, 60 s each, high to low,
+   discarded warmup first. Locates the knee's neighbourhood.
+2. **Fine** — ~10 W steps filling the two coarse intervals touching the knee. The step
+   widens only if the bracket would exceed 8 points; refinement bounds the tail, it never
+   restarts the sweep.
+3. **Rung** — re-measures the coarse caps at or below the knee at the card's low memory
+   rung.
+4. **Efficiency-refining** — brackets the best sol/s-per-watt point found so far, on
+   whichever memory clock that point sits. Without it the coarse spacing can hide the true
+   optimum between two arms; that is how the reference card's first full run missed its
+   160 W + rung record.
+
+The rung candidate comes from the driver's own supported-clock list — the largest clock
+below 70 % of the card's maximum, rejected under 20 % of it. Nothing is inherited from the
+reference card's 5001. Every rung arm verifies from telemetry that the clock actually
+*held*: a refused rung prints REFUSED and is dropped, never counted as "does not pay".
+
+The verdict adds "below ~X W, add `--mclk <rung>`", X interpolated from this card's own
+sign change, and `--pl auto` reminds about it when the resolved cap is inside the paying
+band — recommended, never auto-applied. `--tune-caps` runs the coarse pass only, and a
+given `--mclk` disables the rung pass: chosen settings stand.
 
 **Capped below ~170 W: pair the cap with `--mclk 5001`** (measured 2026-07-31, the
 largest low-band lever on record: −8.5 % ms/solve at 160 W growing to −14.4 % at 120,
@@ -105,16 +108,17 @@ because a core-limited card draws under its limit at stock). Both are printed;
 the knee is stored per card (`~/.config/mxbm/tune.json`, keyed by name@PCI) and
 `--pl auto` applies it on any later launch.
 
-Root is needed exactly as for `--pl` — every NVML write is — so the intended flow is:
-`sudo mxbm --tune` **once** (~8 min; the store deliberately lands in the *invoking*
-user's config dir, not root's, and is chowned back), then daily unprivileged runs with
-`--pl auto`... which still needs root to *apply* the limit, so on a no-root-mining rig
-the honest use is: read the recommendation once, then put `sudo nvidia-smi -pl <knee>`
-in the rig's boot sequence. `--tune` refuses a simultaneous `--pl` (it drives the limit
-itself) but allows the other OC knobs — tuning an undervolted card's curve is a
-legitimate ask. Ctrl+C aborts and restores the limit that was on the card, as does
-every completed sweep. Re-run after driver updates, cooling changes, or a season —
-`--pl auto` prints the measurement date so a stale tune is visible.
+Root is needed exactly as for `--pl` — every NVML write is. The intended flow is `sudo
+mxbm --tune` **once** (~8 min; the store lands in the *invoking* user's config dir, not
+root's, and is chowned back), then daily runs with `--pl auto`. That still needs root to
+*apply* the limit, so on a rig that mines unprivileged: read the recommendation once, then
+put `sudo nvidia-smi -pl <knee>` in the boot sequence.
+
+`--tune` refuses a simultaneous `--pl` — it drives the limit itself — but allows the other
+OC knobs, so an undervolted card's curve can be tuned. Ctrl+C aborts and restores the
+limit that was on the card, as does every completed sweep. Re-run after driver updates,
+cooling changes, or a season; `--pl auto` prints the measurement date so a stale tune is
+visible.
 
 **Apply order is fixed**: power limit, core offset, memory offset, locked core clock,
 locked memory clock, fan. The V/F curve is shaped before anything is pinned onto it, and

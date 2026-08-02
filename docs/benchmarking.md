@@ -72,20 +72,18 @@ fallback sort path.
 
 ### 2b. Why the headline has its own harness
 
-An absolute figure is only as good as the conditions it was taken under, and this project
-has already published one that could not be reproduced: the same binaries measured 34.15 ms
-and 35.60 ms hours apart. `benchmarks/headline.sh` exists so that never happens silently
-again. It refuses to start if another process holds VRAM, discards a 240 s warmup and
-reports the residual temperature slope, repeats the run, and records NVML telemetry
-alongside every single run — SM clock, memory clock, watts, temperature, and the
-`clocks_event_reasons` bitmask.
+An absolute figure is only as good as the conditions it was taken under, and the same
+binaries here once measured 34.15 ms and 35.60 ms hours apart. `benchmarks/headline.sh`
+refuses to start if another process holds VRAM, discards a 240 s warmup and reports the
+residual temperature slope, repeats the run, and records NVML telemetry per run — SM
+clock, memory clock, watts, temperature, and the `clocks_event_reasons` bitmask.
 
-That last column is the point. The original measurement recorded a number and nothing
-else, so when it failed to reproduce there was nothing to diff. The controlled run of
-2026-07-28 was tight to **0.3 % across six repeats** with the clock, memory clock and
-power identical to the last digit — which establishes that a single run measures its own
-session well, and that the ~5 % spread across sessions is something else. It is still
-unexplained; see [performance.md](performance.md#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
+The telemetry is what makes a failure diagnosable: the original measurement recorded a
+number and nothing else, so when it failed to reproduce there was nothing to diff. The
+controlled run was tight to **0.3 % across six repeats** with clocks and power identical
+to the last digit, so a single run measures its own session well and the cross-session
+spread is something else — see
+[performance.md](performance.md#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
 
 ```sh
 benchmarks/headline.sh                                  # stock, no root
@@ -123,18 +121,17 @@ measurements, and the +15 W at identical clocks is the busier binary. The pin
 must be re-taken after any kernel-shipping day; the number belongs to a build,
 the *reproducibility* belongs to the rig.
 
-Three rules. **One:** builds are compared at this pin, never on the stock number —
-stock carries the ~2.5 % cross-session band and gates nothing. **Two:** the pin is
-only a pin while the clock column reads 2610/10251; a run that drifted off it is
-discarded, not averaged. **Three:** since 2026-07-31 the energy counter is the
-efficiency basis — record J/solution alongside ms/solve from the next reference run
-onward, so the recipe gates efficiency regressions too, not just speed. A genuine
-**cross-day repeat ran 2026-08-01** (performance.md's reproducibility section):
-under the pin the rig reproduced to the digit across days — six runs, 0.0 %
-spread — and the absolute number moved only with the build. The standing owe is
-now maintenance, not a question: re-pin after each kernel-shipping day, and any
-repeat that moves past ±0.5 % *without* a shipped kernel change reopens the
-V/f-state investigation.
+Three rules:
+
+1. Builds are compared **at this pin, never on the stock number** — stock carries the
+   ~2.5 % cross-session band and gates nothing.
+2. It is only a pin while the clock column reads 2610/10251. A run that drifted off it is
+   discarded, not averaged.
+3. Record **J/solution alongside ms/solve** — the energy counter has been the efficiency
+   basis since 2026-07-31, so the recipe gates efficiency regressions too.
+
+Maintenance: re-pin after each kernel-shipping day. Any repeat that moves past ±0.5 %
+*without* a shipped kernel change reopens the V/f-state investigation.
 
 The full measured history, including every failed experiment, is in
 [performance-research.md](performance-research.md).
@@ -186,8 +183,7 @@ and must not be presented as if it can.
 ## 4b. Comparing two miners at the same board settings
 
 `benchmarks/compare_power.sh` runs MXBM and lolMiner against each other at identical
-settings. Four decisions in it are what make the comparison mean anything, and each is a
-way it could have been wrong instead:
+settings. Four decisions make the comparison mean anything:
 
 - **Settings are applied externally, with `nvidia-smi`, identically to both.** Using each
   miner's own `--pl`/`--cclk` would put their overclock implementations into a
@@ -250,9 +246,9 @@ This still does not make the sol/s columns comparable *between* miners, for the 
 | Within noise of each other | The reported-sol/s gap was a **counting artefact** and the two miners are at parity. |
 | Ours above theirs | We are ahead, and the reported figures understate it. |
 
-The middle outcome is entirely plausible given the 2.29-vs-1.95 finding above, which is
-why this protocol is worth running before drawing conclusions from headline sol/s — in
-either direction, including our own favour.
+The middle outcome is entirely plausible given the 2.29-vs-1.95 spread above. Run this
+protocol before drawing conclusions from headline sol/s in either direction, including our
+own favour.
 
 ---
 
