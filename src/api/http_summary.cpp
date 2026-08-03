@@ -88,8 +88,16 @@ bool parse_request_line(const std::string& line, std::string& method, std::strin
 
 HttpSummary::~HttpSummary() { stop(); }
 
-bool HttpSummary::start(uint16_t port, const miner::Stats& stats, const char* version) {
+bool HttpSummary::start(uint16_t port, const miner::Stats& stats, const char* version,
+                        const char* host) {
     if (started_) return true;   // idempotent
+
+    // Refused rather than substituted: binding an address other than the one
+    // asked for is worse than not binding at all.
+    in_addr parsed{};
+    const char* want = (host && *host) ? host : "0.0.0.0";
+    if (inet_pton(AF_INET, want, &parsed) != 1) return false;
+    const uint32_t bind_addr = parsed.s_addr;
 
     if (!net::startup()) return false;
 
@@ -105,7 +113,7 @@ bool HttpSummary::start(uint16_t port, const miner::Stats& stats, const char* ve
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);   // 0.0.0.0 -- see class comment
+    addr.sin_addr.s_addr = bind_addr;
     addr.sin_port = htons(port);                // port 0 -> kernel assigns an ephemeral port
 
     if (bind(net::from_fd(fd), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) { net::close_fd(fd); return false; }
@@ -223,7 +231,7 @@ void HttpSummary::handle_connection(int conn_fd) const {
 }
 
 // ---------------------------------------------------------------------
-// JSON schema. MXBM's own design -- it borrows the reference miner's /summary path but
+// JSON schema. MXBM's own design -- the path is /summary but
 // not its flat GPU0/GPU1 shape, grouping fields the way the console groups
 // them (session totals, per-device numbers, pool/stratum state).
 //
@@ -245,7 +253,7 @@ void HttpSummary::handle_connection(int conn_fd) const {
 //         "Temp_C": null, "Fan_Pct": null }
 //     ],
 //     "Stratum": { "Current_Pool": "", "Latency_ms": -1, "Reconnects": 0 },
-//     "DevFee": {                        // MXBM-specific; no the reference miner counterpart
+//     "DevFee": {
 //       "Rate": 0.01, "Active": false, "Rounds": 0, "Seconds": 0.0,
 //       "Accepted": 0, "Stale": 0, "Rejected": 0
 //     },

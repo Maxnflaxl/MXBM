@@ -1,5 +1,5 @@
 // GET /summary hand-rolled HTTP API: a minimal HTTP/1.1 server reporting a
-// live miner::Stats snapshot as JSON, MXBM's analog of the reference miner's --apiport.
+// live miner::Stats snapshot as JSON, served by --apiport.
 // The schema is documented on build_body() in http_summary.cpp.
 //
 // Lifecycle mirrors miner::Engine/ui::Ticker (start() spawns one worker
@@ -13,9 +13,9 @@
 // not reliably wake a concurrent accept() on Linux (it does on macOS/BSD), so
 // stop() could otherwise hang in join() until the next inbound connection.
 //
-// Binds 0.0.0.0 by design, matching the reference miner's --apihost default: an
-// UNAUTHENTICATED, LAN-visible read-only endpoint. An operator who wants it
-// local-only can firewall the port.
+// Binds 0.0.0.0 unless --apihost says otherwise: an UNAUTHENTICATED,
+// LAN-visible read-only endpoint. --apihost 127.0.0.1 restricts it to the
+// machine without needing a firewall rule.
 //
 // Every response is `Connection: close` -- one request per connection, no
 // keep-alive, no pipelining, no chunked bodies.
@@ -42,13 +42,16 @@ public:
     HttpSummary(const HttpSummary&) = delete;
     HttpSummary& operator=(const HttpSummary&) = delete;
 
-    // Binds 0.0.0.0:port (port 0 -> kernel picks an ephemeral port; read it
-    // back via bound_port()) and spawns the accept-loop thread. `stats` and
+    // Binds host:port (port 0 -> kernel picks an ephemeral port; read it back
+    // via bound_port()) and spawns the accept-loop thread. `host` is a
+    // dotted-quad IPv4 address; empty or null means 0.0.0.0. `stats` and
     // `version` must outlive the HttpSummary, or at least outlive stop(): the
     // stats are held by pointer and snapshotted fresh on every request. On any
-    // setup failure returns false, leaving the object as if start() had never
-    // been called. No-op (returns true) if already started.
-    bool start(uint16_t port, const miner::Stats& stats, const char* version);
+    // setup failure, including an unparseable host, returns false, leaving the
+    // object as if start() had never been called. No-op (returns true) if
+    // already started.
+    bool start(uint16_t port, const miner::Stats& stats, const char* version,
+               const char* host = "0.0.0.0");
 
     // Signals the accept-loop thread via the self-pipe, joins it, then closes
     // the listen socket and both pipe ends. No-op if not started.

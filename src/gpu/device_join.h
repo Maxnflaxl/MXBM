@@ -29,7 +29,7 @@ struct CudaCard {
 // Runtime::enumerate(), in the flattened order GpuSolver's index counts. `pci` is
 // empty when cl_nv_device_attribute_query is absent (any non-NVIDIA platform).
 struct ClCard {
-    std::string name, pci;
+    std::string name, vendor, pci;
     unsigned index = 0;
     unsigned long long global_mem = 0;
 };
@@ -42,6 +42,9 @@ struct NvmlCard {
 
 struct JoinedCard {
     std::string name, pci;
+    // CL_DEVICE_VENDOR, or "NVIDIA Corporation" for a card only CUDA sees.
+    // What --devices matches a vendor keyword against.
+    std::string vendor;
     unsigned long long global_mem = 0;
     Backend backend = Backend::None;    // what will actually drive it; None = skipped
     int  cuda_index = -1;               // >= 0 when the CUDA path can construct on it

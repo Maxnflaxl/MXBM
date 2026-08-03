@@ -11,47 +11,57 @@ constexpr int kApiPortMin = 0, kApiPortMax = 65535;
 constexpr int kStatsIntervalMin = 1;          // upper bound is INT_MAX
 constexpr int kDigitsMin = 0, kDigitsMax = 6;
 constexpr int kBenchmarkSecondsMin = 1;       // upper bound is INT_MAX
+constexpr int kSilenceMin = 0, kSilenceMax = 3;
 constexpr double kDevFeePctMin = 0.0, kDevFeePctMax = 100.0;
 
 // Host/port split out of a --pool value, plus the user/pass/tls bound to it.
 struct PoolEntry { std::string host; uint16_t port = 0; std::string user, pass; bool tls = true; };
 
-// Parsed CLI options -- a the reference miner-shaped flag surface. MXBM mines exactly one
-// algorithm (BeamHash III), so --algo is a confirmation, not a selector.
+// Parsed CLI options. MXBM mines exactly one algorithm (BeamHash III), so
+// --algo is a confirmation, not a selector.
 struct Options {
     std::vector<PoolEntry> pools;    // >=1 required (from CLI or config)
     bool nocolor = false;
     int  apiport = 0;                // 0 = API off
+    std::string apihost = "0.0.0.0";   // --apihost, dotted-quad IPv4 only
     int  shortstats = 15, longstats = 60;   // seconds, >=1
     // --devices: which GPU(s) to mine on. "ALL" (the default) or a
     // comma-separated list of indices as printed by --list-devices, which are
     // in PCI order so an index means the same card here, in --pl and in NVML.
     std::string devices;
+    // --devicesbypcie: read --devices as PCI addresses instead of indices.
+    bool devices_by_pcie = false;
     // --list-devices: print the device table and exit, mining nothing.
     bool list_devices = false;
+    bool list_algos = false, list_coins = false;
     // --watchdog [off|exit|script]: what to do when a card stops doing work.
-    // A bare --watchdog means "exit", the action the reference miner recommends for
-    // NVIDIA: a hung CUDA context usually cannot be rebuilt from inside the
-    // process that wedged it, so handing the problem to a supervisor is the
-    // only recovery that actually works.
+    // A bare --watchdog means "exit": a hung CUDA context usually cannot be
+    // rebuilt from inside the process that wedged it, so handing the problem to
+    // a supervisor is the only recovery that actually works.
     bool watchdog_requested = false;
     std::string watchdog_action = "exit";
     std::string watchdog_script;     // --watchdogscript PATH, for action=script
     std::string solver = "auto";     // --solver cuda|metal|opencl|gpu|ref|auto (default: prefer gpu, fall back to ref)
 
-    // Console transcript (the reference miner's --log/--logfile). An explicit --logfile
-    // turns logging on; an empty log_path means "logs/mxbm_<timestamp>.log".
+    // Console transcript (--log/--logfile). An explicit --logfile turns logging
+    // on; an empty log_path means "logs/mxbm_<timestamp>.log".
     bool log_enabled = false;
     std::string log_path;
 
     // --timeprint: stamp the short-stats console line with "[HH:MM:SS]".
     bool timeprint = false;
 
+    // --silence 0..3: 0 prints everything, 1 drops job lines, 2 also drops share
+    // lines (accepts become '*' marks on the speed line), 3 leaves only the
+    // statistics block. --compactaccept selects the '*' marks on their own.
+    int  silence = 0;
+    bool compactaccept = false;
+
     // --digits: decimals on the speed figures, 0..6.
     int digits = 2;
 
-    // --pl: board power limit in watts, as the reference miner's per-GPU list ("240",
-    // "240,*,260", "*" to skip). Empty = leave the card alone. This is the
+    // --pl: board power limit in watts, as a per-GPU list ("240", "240,*,260",
+    // "*" to skip). Empty = leave the card alone. This is the
     // highest-value knob on the reference card -- MXBM runs pinned at the
     // limit in every kernel, so the limit picks the operating point. See
     // docs/performance.md "Power and efficiency" and docs/overclocking.md.
@@ -69,8 +79,7 @@ struct Options {
     std::string fan;             // --fan percent
 
     // --no-oc-reset: leave applied settings on the card at exit instead of
-    // putting the previous ones back. Defaults to false (restore), matching
-    // the reference miner's own default of 0.
+    // putting the previous ones back. Defaults to false (restore).
     bool no_oc_reset = false;
 
     // --dev-fee PCT: the fee the user WANTS to pay, as a percentage. Raise-only
@@ -103,8 +112,9 @@ struct Options {
         bool apiport = false, shortstats = false, longstats = false, devices = false;
         bool solver = false, devfee = false;
         bool log = false, logfile = false, timeprint = false, digits = false;
+        bool silence = false, compactaccept = false;
         bool watchdog = false, benchmark = false, benchmark_seconds = false;
-        bool list_devices = false;
+        bool list_devices = false, apihost = false, devices_by_pcie = false;
         bool power_limit = false, no_oc_reset = false;
         bool core_clock = false, mem_clock = false, core_offset = false;
         bool mem_offset = false, fan = false;
@@ -127,6 +137,20 @@ struct Options {
 // They need not be interleaved -- all four are collected independently and
 // bound by occurrence order once the whole command line has been scanned.
 bool parse_args(int argc, char** argv, Options& out, std::string& err);
+
+// One detected device as --devices can name it: its PCI address in the short
+// "bus:device" form, and the driver's vendor string.
+struct DeviceRef { std::string pci, vendor; };
+
+// Resolves --devices against the devices actually detected.
+//
+// Accepts the same index lists as the count-based form below, plus two things
+// that need to know what the cards are: vendor keywords (NVIDIA, AMD, INTEL,
+// APPLE), and, with `by_pcie`, PCI addresses instead of indices. Addresses are
+// accepted in any of the forms the tools print -- "1:0", "01:00", "0000:01:00.0"
+// -- and matched against `devices[i].pci`.
+bool resolve_devices(const std::string& spec, const std::vector<DeviceRef>& devices,
+                     bool by_pcie, std::vector<unsigned>& selected, std::string& err);
 
 // Resolves --devices against the number of devices actually detected.
 //

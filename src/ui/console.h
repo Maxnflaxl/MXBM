@@ -5,12 +5,22 @@
 
 namespace mxbm { namespace ui { namespace console {
 
-// the reference miner-flavored console output. Every function below prints one line (or,
-// for the ticker's stats block, one assembled multi-line string) to stdout and
+// Console output. Every function below prints one line (or, for the ticker's
+// stats block, one assembled multi-line string) to stdout and
 // fflushes immediately: miners are commonly watched through `tee`/log pipes,
 // which would otherwise sit behind stdio's own buffering until the process
 // exits. init(true) ("--nocolor") suppresses the colouring.
 void init(bool nocolor);
+
+// --silence 0..3 (0 = everything, 1 = no job lines, 2 = no job or share lines,
+// 3 = statistics block only) and --compactaccept. Level 2 and above imply
+// compact accepts. Values outside 0..3 clamp.
+void set_verbosity(int silence, bool compact_accept);
+
+// Accepted shares since the previous call, and resets the count. Always 0 while
+// accepts are printed as their own lines. The ticker appends one '*' per mark to
+// the speed line, which is where the accepts go when the lines are suppressed.
+unsigned take_accept_marks();
 
 // Puts the terminal into the mode where escape codes render, and reports whether
 // stdout can show them at all -- false for a pipe, a file, or a console that
@@ -37,7 +47,7 @@ void close_log();
 
 void banner();
 
-// -- startup sequence, in the reference miner's order and wording: hardware, then pool ---
+// -- startup sequence: hardware, then pool ----------------------------------
 
 void setup_miner();
 
@@ -76,10 +86,10 @@ void connected(bool tls);
 void authorized(const std::string& user);
 void start_mining();
 
-// "New job received for blockheight <H> (job <id>) Difficulty: <N>", matching
-// the reference miner's wording for the height so one grep works across both miners' logs,
-// but keeping the job id it drops. A `height` of 0 means the pool sent none, and
-// the line falls back to "New job received: <id> Difficulty: <N>".
+// "New job received for blockheight <H> (job <id>) Difficulty: <N>". The job id
+// is what a share, a cancel and a /summary entry correlate by, so it stays on
+// the line. A `height` of 0 means the pool sent none, and the line falls back to
+// "New job received: <id> Difficulty: <N>".
 //
 // Difficulty is a plain rounded integer (pow::to_display_units), NOT the k/M
 // format_units() notation the share lines use.

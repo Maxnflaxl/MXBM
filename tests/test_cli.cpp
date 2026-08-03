@@ -441,5 +441,137 @@ int main() {
         check(!parse_args(9,(char**)t6,ot6,et6), "near-miss spellings stay errors");
     }
 
+    // -- short flags --
+    {
+        const char* s1[] = {"mxbm","-a","BEAM-III","-p","beam.2miners.com:5252","-u","addr.rig1"};
+        Options os1; std::string es1;
+        check(parse_args(7,(char**)s1,os1,es1), "-a -p -u parse as their long forms");
+        check(os1.seen.algo && os1.pools.size()==1 && os1.pools[0].user=="addr.rig1",
+              "and land in the same fields");
+
+        const char* s2[] = {"mxbm","-h"};
+        Options os2; std::string es2;
+        check(!parse_args(2,(char**)s2,os2,es2) && os2.help_requested, "-h is --help");
+        const char* s3[] = {"mxbm","-v"};
+        Options os3; std::string es3;
+        check(!parse_args(2,(char**)s3,os3,es3) && os3.version_requested, "-v is --version");
+
+        const char* s4[] = {"mxbm","-au","x"};
+        Options os4; std::string es4;
+        check(!parse_args(3,(char**)s4,os4,es4), "bundled short flags are refused");
+        const char* s5[] = {"mxbm","-z"};
+        Options os5; std::string es5;
+        check(!parse_args(2,(char**)s5,os5,es5), "an unknown short flag is an error");
+    }
+
+    // -- --coin --
+    {
+        const char* c1[] = {"mxbm","-c","beam","--pool","p:1","--user","u"};
+        Options oc1; std::string ec1;
+        check(parse_args(7,(char**)c1,oc1,ec1), "--coin beam parses, any case");
+        check(oc1.seen.algo, "and satisfies the algo requirement on its own");
+        const char* c2[] = {"mxbm","--coin","ETH","--pool","p:1","--user","u"};
+        Options oc2; std::string ec2;
+        check(!parse_args(7,(char**)c2,oc2,ec2), "a coin we do not mine is an error");
+    }
+
+    // -- --list-algos / --list-coins --
+    {
+        const char* l1[] = {"mxbm","--list-algos"};
+        Options ol1; std::string el1;
+        check(parse_args(2,(char**)l1,ol1,el1) && ol1.list_algos && !ol1.list_coins,
+              "--list-algos parses without a pool or algo");
+        const char* l2[] = {"mxbm","--list-coins"};
+        Options ol2; std::string el2;
+        check(parse_args(2,(char**)l2,ol2,el2) && ol2.list_coins, "--list-coins parses too");
+    }
+
+    // -- --silence / --compactaccept / --devicesbypcie --
+    {
+        const char* v1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--silence","2","--compactaccept","--devicesbypcie"};
+        Options ov1; std::string ev1;
+        check(parse_args(11,(char**)v1,ov1,ev1), "the verbosity flags parse together");
+        check(ov1.silence==2 && ov1.seen.silence, "--silence 2 stored");
+        check(ov1.compactaccept && ov1.seen.compactaccept, "--compactaccept stored");
+        check(ov1.devices_by_pcie && ov1.seen.devices_by_pcie, "--devicesbypcie stored");
+
+        Options od2; std::string ed2;
+        const char* d2[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u"};
+        check(parse_args(7,(char**)d2,od2,ed2), "parse ok");
+        check(od2.silence==0 && !od2.compactaccept && !od2.devices_by_pcie,
+              "all three default off");
+
+        for (const char* bad : {"4", "-1", "abc", ""}) {
+            const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                                "--silence", bad};
+            Options ob; std::string eb;
+            const std::string msg = std::string("--silence rejects '") + bad + "'";
+            check(!parse_args(9,(char**)av,ob,eb), msg.c_str());
+        }
+    }
+
+    // -- --devices against real identities: PCI addresses and vendor keywords --
+    {
+        const std::vector<DeviceRef> rig = {
+            {"1:0",  "NVIDIA Corporation"},
+            {"41:0", "Advanced Micro Devices, Inc."},
+            {"c1:0", "NVIDIA Corporation"},
+        };
+        std::vector<unsigned> sel; std::string e;
+
+        check(resolve_devices("ALL", rig, false, sel, e) && sel.size()==3, "ALL takes every card");
+        check(resolve_devices("2,0", rig, false, sel, e) && sel.size()==2 && sel[0]==2 && sel[1]==0,
+              "an index list keeps the order typed");
+
+        check(resolve_devices("NVIDIA", rig, false, sel, e) && sel.size()==2 && sel[0]==0 && sel[1]==2,
+              "a vendor keyword selects that vendor's cards");
+        check(resolve_devices("amd", rig, false, sel, e) && sel.size()==1 && sel[0]==1,
+              "'amd' matches 'Advanced Micro Devices, Inc.'");
+        check(!resolve_devices("intel", rig, false, sel, e), "a vendor with no cards is an error");
+
+        check(resolve_devices("41:0", rig, true, sel, e) && sel.size()==1 && sel[0]==1,
+              "--devicesbypcie selects by address");
+        check(resolve_devices("0000:41:00.0", rig, true, sel, e) && sel.size()==1 && sel[0]==1,
+              "the long lspci form names the same card");
+        check(resolve_devices("41:00", rig, true, sel, e) && sel.size()==1 && sel[0]==1,
+              "so does the zero-padded form");
+        check(resolve_devices("C1:0,1:0", rig, true, sel, e) && sel.size()==2 && sel[0]==2 && sel[1]==0,
+              "addresses are case-insensitive hex and keep the order typed");
+        check(!resolve_devices("9:0", rig, true, sel, e), "an address no card has is an error");
+        check(!resolve_devices("notanaddress", rig, true, sel, e), "so is a malformed address");
+
+        // Without identities the vendor and address forms have nothing to match.
+        std::vector<unsigned> s2; std::string e2;
+        check(!resolve_devices("NVIDIA", 2, s2, e2), "vendor keywords need identities to match against");
+        check(resolve_devices("1", 2, s2, e2) && s2.size()==1 && s2[0]==1,
+              "the count-only form still resolves indices");
+    }
+
+    // -- --apihost --
+    {
+        Options od; std::string ed;
+        const char* d1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u"};
+        check(parse_args(7,(char**)d1,od,ed), "parse ok");
+        check(od.apihost == "0.0.0.0" && !od.seen.apihost, "--apihost defaults to every interface");
+
+        const char* h1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--apihost","127.0.0.1"};
+        Options oh1; std::string eh1;
+        check(parse_args(9,(char**)h1,oh1,eh1), "--apihost 127.0.0.1 parses");
+        check(oh1.apihost == "127.0.0.1" && oh1.seen.apihost, "and is stored verbatim");
+
+        const char* bad[][2] = {{"--apihost","300.1.1.1"}, {"--apihost","1.2.3"},
+                                {"--apihost","1.2.3.4.5"}, {"--apihost","localhost"},
+                                {"--apihost","1.2.3."},    {"--apihost",""}};
+        for (const auto& b : bad) {
+            const char* av[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                                b[0], b[1]};
+            Options ob; std::string eb;
+            const std::string msg = std::string("--apihost rejects '") + b[1] + "'";
+            check(!parse_args(9,(char**)av,ob,eb), msg.c_str());
+        }
+    }
+
     return summary("cli");
 }

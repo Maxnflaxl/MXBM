@@ -77,6 +77,23 @@ void emit_terminal_probe() {
     std::printf("%d", ui::console::enable_terminal_color() ? 1 : 0);
 }
 
+// One of each line the verbosity levels gate, at a given setting.
+void emit_at(int silence, bool compact) {
+    ui::console::init(true);
+    ui::console::set_verbosity(silence, compact);
+    ui::console::job("j1", 512, 4242);
+    ui::console::share_found("GPU 0", 1900.0);
+    ui::console::share_result(1, "", 9);
+    ui::console::share_found("GPU 0", 2100.0);
+    ui::console::share_result(1, "", 11);
+    ui::console::share_result(2, "stale share", 12);
+}
+
+void emit_verbose()  { emit_at(0, false); }
+void emit_silence1() { emit_at(1, false); }
+void emit_silence2() { emit_at(2, false); }
+void emit_compact()  { emit_at(0, true); }
+
 std::vector<std::string> split_lines(const std::string& s) {
     std::vector<std::string> v;
     for (size_t i = 0, j; i < s.size(); i = j + 1) {
@@ -295,6 +312,41 @@ int main() {
         check(!ui::console::open_log("/nonexistent-dir-mxbm/deep/er/x.log"),
               "an unopenable path reports failure rather than throwing or aborting");
         ui::console::close_log();
+    }
+
+    // -- --silence and --compactaccept --
+    {
+        const std::string all = capture(&emit_verbose);
+        check(all.find("New job received") != std::string::npos, "level 0 prints job lines");
+        check(all.find("Found a share")    != std::string::npos, "level 0 prints found lines");
+        check(all.find("Share accepted")   != std::string::npos, "level 0 prints accept lines");
+        check(all.find("Share rejected")   != std::string::npos, "level 0 prints reject lines");
+        check(ui::console::take_accept_marks() == 0, "level 0 leaves no marks to carry");
+
+        const std::string s1 = capture(&emit_silence1);
+        check(s1.find("New job received") == std::string::npos, "level 1 drops job lines");
+        check(s1.find("Found a share")    != std::string::npos, "level 1 keeps found lines");
+        check(s1.find("Share accepted")   != std::string::npos, "level 1 keeps accept lines");
+
+        const std::string s2 = capture(&emit_silence2);
+        check(s2.find("New job received") == std::string::npos, "level 2 drops job lines");
+        check(s2.find("Found a share")    == std::string::npos, "level 2 drops found lines");
+        check(s2.find("Share accepted")   == std::string::npos, "level 2 drops accept lines");
+        check(s2.find("Share rejected")   != std::string::npos,
+              "a rejection survives every silence level");
+        check(ui::console::take_accept_marks() == 2,
+              "the accepts level 2 did not print are carried as marks");
+        check(ui::console::take_accept_marks() == 0, "and taking them resets the count");
+
+        const std::string ca = capture(&emit_compact);
+        check(ca.find("Found a share")  == std::string::npos,
+              "--compactaccept alone drops the found line");
+        check(ca.find("Share accepted") == std::string::npos, "and the accept line");
+        check(ca.find("New job received") != std::string::npos,
+              "but leaves job lines alone -- it is not a silence level");
+        check(ui::console::take_accept_marks() == 2, "its accepts become marks too");
+
+        ui::console::set_verbosity(0, false);
     }
 
     return summary("console");

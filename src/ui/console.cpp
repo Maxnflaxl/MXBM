@@ -3,6 +3,7 @@
 #include "ui/format.h"
 #include "version.h"
 
+#include <atomic>
 #include <cstdio>
 #include <ctime>
 #include <mutex>
@@ -24,6 +25,13 @@ namespace mxbm { namespace ui { namespace console {
 namespace {
 
 bool g_nocolor = false;
+
+// --silence 0..3 and --compactaccept. Read by job()/share_found()/share_result()
+// to decide whether a line is printed at all, and by take_accept_marks(), which
+// carries the accepts a silenced console did not print to the speed line.
+int  g_silence = 0;
+bool g_compact_accept = false;
+std::atomic<unsigned> g_accept_marks{0};
 
 // The transcript, when --log is on. Guarded by g_mutex along with the stdout
 // writes themselves: console functions are called from four threads (the
@@ -109,6 +117,13 @@ void print_colored(const char* color, const std::string& text) {
 } // namespace
 
 void init(bool nocolor) { g_nocolor = nocolor; }
+
+void set_verbosity(int silence, bool compact_accept) {
+    g_silence = silence < 0 ? 0 : (silence > 3 ? 3 : silence);
+    g_compact_accept = compact_accept || g_silence >= 2;
+}
+
+unsigned take_accept_marks() { return g_accept_marks.exchange(0); }
 
 bool enable_terminal_color() {
 #ifdef _WIN32
@@ -223,16 +238,14 @@ void start_mining() {
 }
 
 void job(const std::string& id, uint32_t difficulty, uint64_t height) {
+    if (g_silence >= 1) return;
     // Beam display units, not the raw packed uint32, and unabbreviated --
     // unlike format_units()'s k/M share notation.
     char units[32];
     std::snprintf(units, sizeof units, "%.0f", pow::to_display_units(difficulty));
 
-    // "for blockheight N" is the reference miner's wording, and matching it verbatim is the
-    // point: rigs run both, and one grep should find the job lines in either log.
-    // What it does NOT do is drop the job id the way the reference miner's line does -- the
-    // id is what a share, a cancel and a /summary entry are correlated by, so it
-    // stays, parenthesised behind the height.
+    // The job id stays, parenthesised behind the height: it is what a share, a
+    // cancel and a /summary entry are correlated by.
     //
     // A pool that omits "height" leaves it 0 (messages.cpp defaults it), and
     // "blockheight 0" would be a lie about the chain rather than a missing field,
@@ -244,6 +257,7 @@ void job(const std::string& id, uint32_t difficulty, uint64_t height) {
 }
 
 void share_found(const std::string& device, double units, double target_units) {
+    if (g_silence >= 2 || g_compact_accept) return;
     std::string text = device + ": Found a share of difficulty " + format_units(units);
     if (target_units > 0.0) {
         // "(3.9x target of 2048)": the multiple AND the bar it cleared, so the
@@ -258,6 +272,13 @@ void share_found(const std::string& device, double units, double target_units) {
 }
 
 void share_result(int code, const std::string& description, long long ms) {
+    if (code == 1 && g_compact_accept) {
+        g_accept_marks.fetch_add(1);
+        return;
+    }
+    // A rejection survives every silence level: it is the one share line an
+    // operator needs to see, and it is rare enough not to flood anything.
+    if (code == 1 && g_silence >= 2) return;
     std::string suffix = (ms >= 0) ? (" (" + std::to_string(ms) + " ms)") : "";
     if (code == 1) {
         print_colored(kGreen, "Share accepted" + suffix);

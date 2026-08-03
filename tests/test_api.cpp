@@ -243,5 +243,23 @@ int main() {
         check(!connected, "connect() fails after stop()");
     }
 
+    // -- --apihost: a loopback bind still serves loopback --
+    {
+        HttpSummary local;
+        check(local.start(0, stats, "0.2.0-test", "127.0.0.1"),
+              "start() succeeds binding 127.0.0.1");
+        std::string resp = http_get(local.bound_port(), "GET /summary HTTP/1.1\r\nHost: x\r\n\r\n");
+        check(starts_with(resp, "HTTP/1.1 200"), "loopback-bound server answers on loopback");
+        local.stop();
+    }
+
+    // -- an unparseable host is refused, not silently replaced with 0.0.0.0 --
+    {
+        HttpSummary bad;
+        check(!bad.start(0, stats, "0.2.0-test", "not-an-address"),
+              "start() fails on a host that is not dotted-quad IPv4");
+        check(bad.bound_port() == 0, "a refused bind leaves bound_port() zero");
+    }
+
     return summary("api");
 }

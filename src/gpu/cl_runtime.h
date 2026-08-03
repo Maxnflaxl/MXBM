@@ -23,7 +23,7 @@ struct ClError : std::runtime_error {
 };
 
 struct DeviceInfo {
-    std::string name, version, clc_version;
+    std::string name, vendor, version, clc_version;
     cl_ulong global_mem = 0;   // CL_DEVICE_GLOBAL_MEM_SIZE
     cl_ulong max_alloc  = 0;   // CL_DEVICE_MAX_MEM_ALLOC_SIZE
     cl_uint  compute_units = 0;

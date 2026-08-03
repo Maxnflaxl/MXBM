@@ -32,7 +32,7 @@ std::string clock_hhmmss() {
 Ticker::~Ticker() { stop(); }
 
 void Ticker::start(const miner::Stats& stats, int short_s, int long_s,
-                   int digits, bool timeprint, int api_port) {
+                   int digits, bool timeprint, int api_port, int silence) {
     if (started_) return;
     stats_ = &stats;
     short_s_ = short_s;
@@ -40,6 +40,7 @@ void Ticker::start(const miner::Stats& stats, int short_s, int long_s,
     digits_ = digits;
     timeprint_ = timeprint;
     api_port_ = api_port;
+    silence_ = silence;
     started_ = true;
     stop_requested_ = false;
     worker_ = std::thread([this] { try { worker_main(); } catch (...) {} });
@@ -58,8 +59,7 @@ void Ticker::stop() {
 
 void Ticker::worker_main() {
     using clock = std::chrono::steady_clock;
-    // First fire of each line is one interval after start, not at t=0 --
-    // matching the reference miner's shortstats/longstats cadence semantics.
+    // First fire of each line is one interval after start, not at t=0.
     clock::time_point next_short = clock::now() + std::chrono::seconds(short_s_);
     clock::time_point next_long  = clock::now() + std::chrono::seconds(long_s_);
 
@@ -82,9 +82,13 @@ void Ticker::worker_main() {
         // takes Stats's own, separate mutex, and console I/O should never hold
         // up stop().
         if (fire_short) {
-            std::string line = format_speed_line(stats_->snapshot(), digits_);
-            if (timeprint_) line = "[" + clock_hhmmss() + "] " + line;
-            console::info(line);
+            const unsigned marks = console::take_accept_marks();
+            if (silence_ < 3) {
+                std::string line = format_speed_line(stats_->snapshot(), digits_);
+                if (timeprint_) line = "[" + clock_hhmmss() + "] " + line;
+                line.append(marks, '*');
+                console::info(line);
+            }
         }
         if (fire_long) {
             console::stats_block(format_stats_block(

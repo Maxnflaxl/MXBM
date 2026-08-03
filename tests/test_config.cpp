@@ -125,6 +125,26 @@ int main() {
         check(!err.empty(), "missing flat config file error message non-empty");
     }
 
+    {
+        std::string p = write_temp("mxbm_test_config_apihost.cfg",
+            "ALGO = BEAM-III\nPOOL = pool.example.com:1130\nUSER = addr123\n"
+            "APIPORT = 8080\nAPIHOST = 127.0.0.1\n");
+        Options o; std::string err;
+        check(load_flat_config(p, o, err), "flat config with APIHOST loads");
+        check(o.apihost == "127.0.0.1" && o.seen.apihost, "APIHOST lands in apihost + seen.apihost");
+        std::remove(p.c_str());
+    }
+
+    {
+        std::string p = write_temp("mxbm_test_config_apihost_cliwins.cfg",
+            "ALGO = BEAM-III\nPOOL = pool.example.com:1130\nUSER = addr123\nAPIHOST = 10.0.0.5\n");
+        Options o; std::string err;
+        o.apihost = "127.0.0.1"; o.seen.apihost = true;
+        check(load_flat_config(p, o, err), "flat config loads with apihost already seen");
+        check(o.apihost == "127.0.0.1", "a command-line --apihost is not overwritten by the config");
+        std::remove(p.c_str());
+    }
+
     // Unknown keys are ignored rather than rejected, for forward compatibility.
     {
         std::string p = write_temp("mxbm_test_config_unknownkey.cfg",

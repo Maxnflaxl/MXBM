@@ -1,4 +1,4 @@
-// the reference miner-shaped config-file loaders. See config.h for the merge contract.
+// Config-file loaders. See config.h for the merge contract.
 #include "config/config.h"
 
 #include <cctype>
@@ -68,7 +68,7 @@ bool parse_flat_bool(const std::string& s, bool& out) {
     return false;
 }
 
-// the reference miner's examples use bare 0/1 (e.g. "LOG" : 1), so accept both forms.
+// Hand-written configs use bare 0/1 (e.g. "LOG" : 1), so accept both forms.
 bool parse_json_bool(const nlohmann::ordered_json& j, bool& out) {
     if (j.is_boolean()) { out = j.get<bool>(); return true; }
     if (j.is_number_integer()) { out = j.get<long long>() != 0; return true; }
@@ -128,6 +128,7 @@ constexpr IntOpt kIntOpts[] = {
     {"SHORTSTATS",        &cli::Options::shortstats,        &cli::Options::Seen::shortstats,        cli::kStatsIntervalMin, INT_MAX},
     {"LONGSTATS",         &cli::Options::longstats,         &cli::Options::Seen::longstats,         cli::kStatsIntervalMin, INT_MAX},
     {"DIGITS",            &cli::Options::digits,            &cli::Options::Seen::digits,            cli::kDigitsMin, cli::kDigitsMax},
+    {"SILENCE",           &cli::Options::silence,           &cli::Options::Seen::silence,           cli::kSilenceMin, cli::kSilenceMax},
     {"BENCHMARK_SECONDS", &cli::Options::benchmark_seconds, &cli::Options::Seen::benchmark_seconds, cli::kBenchmarkSecondsMin, INT_MAX},
 };
 
@@ -137,9 +138,12 @@ constexpr BoolOpt kBoolOpts[] = {
     {"TIMEPRINT", nullptr,    &cli::Options::timeprint,          &cli::Options::Seen::timeprint},
     {"WATCHDOG",  nullptr,    &cli::Options::watchdog_requested, &cli::Options::Seen::watchdog},
     {"NO_OC_RESET", "NOOCRESET", &cli::Options::no_oc_reset,      &cli::Options::Seen::no_oc_reset},
+    {"DEVICESBYPCIE", nullptr,   &cli::Options::devices_by_pcie,  &cli::Options::Seen::devices_by_pcie},
+    {"COMPACTACCEPT", nullptr,   &cli::Options::compactaccept,    &cli::Options::Seen::compactaccept},
 };
 
 constexpr StrOpt kStrOpts[] = {
+    {"APIHOST",   &cli::Options::apihost,   &cli::Options::Seen::apihost,   nullptr,          nullptr,    false},
     {"DEVICES",   &cli::Options::devices,   &cli::Options::Seen::devices,   nullptr,          nullptr,    true},
     {"LOGFILE",   &cli::Options::log_path,  &cli::Options::Seen::logfile,   nullptr,          nullptr,    false},
     {"SOLVER",    &cli::Options::solver,    &cli::Options::Seen::solver,    kSolverDomain,    nullptr,    false},
@@ -239,7 +243,7 @@ bool apply_json_scalars(const nlohmann::ordered_json& prof, const std::string& p
         if (it->is_string()) {
             value = it->get<std::string>();
         } else if (o.join_array && it->is_array()) {
-            // the reference miner accepts DEVICES as an array; join into --devices' form.
+            // DEVICES may be an array; join into --devices' form.
             // Entries may be numbers as well as strings, because the per-GPU
             // lists this serves are not all textual: "PL": [220, "*", 260] is
             // the natural way to write watts, and quoting them to satisfy the

@@ -105,7 +105,8 @@ std::vector<DeviceInfo> Runtime::enumerate() {
         for (cl_device_id d : devs) {
             DeviceInfo i;
             i.index = (unsigned)out.size();
-            i.name  = str_info(d, CL_DEVICE_NAME);
+            i.name   = str_info(d, CL_DEVICE_NAME);
+            i.vendor = str_info(d, CL_DEVICE_VENDOR);
             i.pci   = pci_of(d);
             clGetDeviceInfo(d, CL_DEVICE_GLOBAL_MEM_SIZE,    sizeof i.global_mem, &i.global_mem, nullptr);
             clGetDeviceInfo(d, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof i.max_alloc,  &i.max_alloc,  nullptr);

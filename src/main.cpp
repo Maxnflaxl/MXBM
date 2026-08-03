@@ -90,6 +90,22 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (opts.list_algos || opts.list_coins) {
+        const double fee_pct = miner::devfee_schedule().rate * 100.0;
+        if (opts.list_algos) {
+            std::fputs("Supported algorithms:\n\n"
+                       "Parameter   Algorithm      Fee %\n", stdout);
+            std::fprintf(stdout, "BEAM-III    BeamHash III   %.1f\n", fee_pct);
+        }
+        if (opts.list_coins) {
+            if (opts.list_algos) std::fputc('\n', stdout);
+            std::fputs("Supported coins:\n\n"
+                       "Parameter   Coin   Algorithm      Fee %\n", stdout);
+            std::fprintf(stdout, "BEAM        Beam   BeamHash III   %.1f\n", fee_pct);
+        }
+        return 0;
+    }
+
     // Config-file merge: fills in only the fields the CLI left unseen, so CLI
     // values always win; --json beats --config when both appear. cli_pools is
     // read first because the merge can flip opts.seen.pools true.
@@ -148,6 +164,7 @@ int main(int argc, char** argv) {
     // Colour only where it renders; also switches the Windows console into the
     // mode that needs.
     ui::console::init(opts.nocolor || !ui::console::enable_terminal_color());
+    ui::console::set_verbosity(opts.silence, opts.compactaccept);
 
     // Open the transcript BEFORE the banner, so the log starts with the same
     // first line the screen does rather than joining part-way through. A log
@@ -243,7 +260,7 @@ int main(int argc, char** argv) {
 #endif
 #ifdef MXBM_HAVE_OPENCL
         for (const auto& d : cl_devices)
-            cl_view.push_back({d.name, d.pci, d.index, (unsigned long long)d.global_mem});
+            cl_view.push_back({d.name, d.vendor, d.pci, d.index, (unsigned long long)d.global_mem});
 #endif
         cards = gpu::join_devices(cuda_view, cl_view, nvml_cards, opts.solver);
     }
@@ -303,7 +320,15 @@ int main(int argc, char** argv) {
 
     {
         std::string derr;
-        if (!cli::resolve_devices(opts.devices, device_count, selected_devices, derr)) {
+        // Identities come from the joined table where there is one; a Metal-only
+        // machine has no PCI or vendor to match, so it selects by index alone.
+        std::vector<cli::DeviceRef> refs;
+        refs.reserve(cards.size());
+        for (const auto& c : cards) refs.push_back({c.pci, c.vendor});
+        const bool ok = refs.size() == device_count
+            ? cli::resolve_devices(opts.devices, refs, opts.devices_by_pcie, selected_devices, derr)
+            : cli::resolve_devices(opts.devices, device_count, selected_devices, derr);
+        if (!ok) {
             ui::console::error("--devices \"" + opts.devices + "\": " + derr
                                + " (try --list-devices)");
             return 1;
@@ -477,10 +502,9 @@ int main(int argc, char** argv) {
                     : std::string("Overclock settings were not applied: no GPU solver is in use, "
                                   "so there is no card for them to apply to"));
             } else {
-                // the reference miner prints this banner before its own OC block and rig
-                // operators grep for it, so the line stays even when every knob
-                // then fails -- "it tried and could not" is the useful log, and
-                // silence is the one outcome that is not.
+                // Printed before the block, and rig operators grep for it, so
+                // the line stays even when every knob then fails -- "it tried
+                // and could not" is the useful log; silence is not.
                 ui::console::info("Applying overclock settings...");
                 // Once per card that will actually run: mining applies to every
                 // selected device (each per-GPU list entry lands at its own
@@ -1117,8 +1141,15 @@ int main(int argc, char** argv) {
     // bound_port() is then 0, which the header treats as "no API".
     api::HttpSummary http_api;
     if (opts.apiport) {
-        if (!http_api.start(static_cast<uint16_t>(opts.apiport), stats, mxbm::version())) {
-            ui::console::error("API server failed to start on port " + std::to_string(opts.apiport));
+        if (!http_api.start(static_cast<uint16_t>(opts.apiport), stats, mxbm::version(),
+                            opts.apihost.c_str())) {
+            ui::console::error("API server failed to start on " + opts.apihost + ":"
+                               + std::to_string(opts.apiport));
+        } else {
+            ui::console::info("API on " + opts.apihost + ":" + std::to_string(http_api.bound_port())
+                              + (opts.apihost == "127.0.0.1"
+                                     ? " (this machine only)"
+                                     : " (every interface, unauthenticated)"));
         }
         // Either way, mining continues below -- the API is a convenience,
         // never a mining precondition.
@@ -1126,7 +1157,7 @@ int main(int argc, char** argv) {
 
     ui::Ticker ticker;
     ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint,
-                 http_api.bound_port());
+                 http_api.bound_port(), opts.silence);
 
     // Each engine spawns its own worker thread; they share one Stats and one
     // Client, both of which are mutex-guarded.

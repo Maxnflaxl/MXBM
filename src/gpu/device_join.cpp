@@ -65,6 +65,7 @@ std::vector<JoinedCard> join_devices(const std::vector<CudaCard>& cuda,
             JoinedCard j;
             j.name = c.name;
             j.pci = c.pci;
+            j.vendor = "NVIDIA Corporation";
             j.global_mem = c.global_mem;
             j.viable = c.viable;
             j.cuda_index = c.index;
@@ -137,6 +138,7 @@ std::vector<JoinedCard> join_devices(const std::vector<CudaCard>& cuda,
         JoinedCard j;
         j.name = c.name;
         j.pci = c.pci;
+        j.vendor = c.vendor;
         j.global_mem = c.global_mem;
         j.cl_index = (int)c.index;
         if (nvml_disagrees(i, c.pci)) {

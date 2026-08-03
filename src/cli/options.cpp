@@ -17,15 +17,20 @@ std::string usage_text() {
         "Usage: mxbm --algo BEAM-III --pool host:port --user addr[.worker] [options]\n"
         "\n"
         "Required:\n"
-        "  --algo BEAM-III        algorithm to mine (only BEAM-III is supported)\n"
-        "  --pool host:port       pool address (repeatable for failover pools)\n"
-        "  --user addr[.worker]   wallet address, optionally with a worker suffix\n"
+        "  -a, --algo BEAM-III    algorithm to mine (only BEAM-III is supported)\n"
+        "  -p, --pool host:port   pool address (repeatable for failover pools)\n"
+        "  -u, --user addr[.worker]\n"
+        "                         wallet address, optionally with a worker suffix\n"
         "                         (repeat to bind one per --pool, or pass once for all)\n"
         "\n"
         "Options:\n"
+        "  -c, --coin BEAM        select by coin instead of by algorithm\n"
         "  --pass x               pool password (optional; binds like --user)\n"
         "  --tls [0|1]            enable/disable TLS to the pool (default: on; binds like --user)\n"
         "  --apiport N            enable the /summary API on port N, 0 disables it (default: 0)\n"
+        "  --apihost ADDR         interface the API binds (default: 0.0.0.0, every interface;\n"
+        "                         127.0.0.1 restricts it to this machine). The API is\n"
+        "                         unauthenticated -- see docs/usage.md\n"
         "  --shortstats N         short-stats interval in seconds, >=1 (default: 15)\n"
         "  --longstats N          long-stats interval in seconds, >=1 (default: 60)\n"
         "  --devices LIST         which GPU to mine on: ALL (default) or a comma-separated\n"
@@ -70,6 +75,11 @@ std::string usage_text() {
         "  --logfile PATH         transcript location; implies --log. Default when --log is\n"
         "                         given alone: logs/mxbm_<date>_<time>.log\n"
         "  --timeprint [0|1]      stamp the short-stats line with [HH:MM:SS] (default: off)\n"
+        "  --silence N            console verbosity: 0 everything (default), 1 no job lines,\n"
+        "                         2 no job or share lines (accepts become * marks on the\n"
+        "                         speed line), 3 the statistics block only. Applies to the\n"
+        "                         --log transcript as well\n"
+        "  --compactaccept        report accepted shares as * marks on the speed line\n"
         "  --digits N             decimals on the speed figures, 0..6 (default: 2)\n"
         "  --pl W                 board power limit in watts, per GPU (\"240\", \"240,*,260\";\n"
         "                         * skips a GPU), or \"auto\" for the value a --tune run\n"
@@ -82,8 +92,10 @@ std::string usage_text() {
         "                         root; the two offsets may be negative. Clamped to the\n"
         "                         band the driver reports, and restored on exit.\n"
         "  --no-oc-reset [0|1]    leave --pl applied at exit instead of restoring (default: off)\n"
-        "  --version              print the version string and exit\n"
-        "  --help                 show this help text\n";
+        "  --list-algos           print the supported algorithms and exit\n"
+        "  --list-coins           print the supported coins and exit\n"
+        "  -v, --version          print the version string and exit\n"
+        "  -h, --help             show this help text\n";
 }
 
 // Strict decimal port parse in 1..65535. Never touches `out` on failure.
@@ -113,6 +125,69 @@ bool parse_int(const std::string& s, long lo, long hi, int& out) {
     return true;
 }
 
+std::string lower_trim(const std::string& s) {
+    std::string out;
+    for (char c : s) out += (char)std::tolower((unsigned char)c);
+    while (!out.empty() && (out.front() == ' ' || out.front() == '\t')) out.erase(0, 1);
+    while (!out.empty() && (out.back()  == ' ' || out.back()  == '\t')) out.pop_back();
+    return out;
+}
+
+// "0000:01:00.0", "01:00" and "1:0" all normalise to "1:0" -- the short hex form
+// NVML prints and the join stores. False on anything that is not two hex fields.
+bool normalize_pci(const std::string& s, std::string& out) {
+    std::string t = lower_trim(s);
+    const size_t dot = t.find('.');
+    if (dot != std::string::npos) t.erase(dot);              // drop the function
+    size_t c1 = t.find(':');
+    if (c1 == std::string::npos) return false;
+    if (t.find(':', c1 + 1) != std::string::npos) t.erase(0, c1 + 1);   // drop the domain
+    c1 = t.find(':');
+    if (c1 == std::string::npos) return false;
+    const std::string bus = t.substr(0, c1), dev = t.substr(c1 + 1);
+    if (bus.empty() || dev.empty() || bus.size() > 8 || dev.size() > 8) return false;
+    for (const std::string* f : {&bus, &dev}) {
+        for (char c : *f) if (!std::isxdigit((unsigned char)c)) return false;
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%lx:%lx", std::strtoul(bus.c_str(), nullptr, 16),
+                  std::strtoul(dev.c_str(), nullptr, 16));
+    out = buf;
+    return true;
+}
+
+bool vendor_keyword(const std::string& tok) {
+    return tok == "nvidia" || tok == "amd" || tok == "intel" || tok == "apple";
+}
+
+// Driver vendor strings are prose ("Advanced Micro Devices, Inc."), so a keyword
+// matches on the spellings that string can take, not on equality.
+bool vendor_matches(const std::string& keyword, const std::string& vendor) {
+    const std::string v = lower_trim(vendor);
+    if (v.empty()) return false;
+    if (keyword == "amd") return v.find("amd") != std::string::npos
+                              || v.find("advanced micro devices") != std::string::npos;
+    return v.find(keyword) != std::string::npos;
+}
+
+// Dotted-quad IPv4, four octets in 0..255. No hostnames, no IPv6, no shorthand:
+// the listener is AF_INET and binds exactly what is typed.
+bool parse_ipv4(const std::string& s) {
+    int octets = 0;
+    size_t pos = 0;
+    while (octets < 4) {
+        const size_t dot = s.find('.', pos);
+        const std::string tok = s.substr(pos, dot == std::string::npos ? std::string::npos
+                                                                       : dot - pos);
+        int v = 0;
+        if (tok.empty() || tok.size() > 3 || !parse_int(tok, 0, 255, v)) return false;
+        ++octets;
+        if (dot == std::string::npos) return octets == 4;
+        pos = dot + 1;
+    }
+    return false;
+}
+
 // The value bound to pool index `i`: the i-th entry of `vals`, else its last
 // (a short list's final value carries forward), else `def` if it was empty.
 template <typename T>
@@ -123,16 +198,13 @@ T bound_value(const std::vector<T>& vals, size_t i, const T& def) {
 
 } // namespace
 
-bool resolve_devices(const std::string& spec, unsigned count,
-                     std::vector<unsigned>& selected, std::string& err) {
+bool resolve_devices(const std::string& spec, const std::vector<DeviceRef>& devices,
+                     bool by_pcie, std::vector<unsigned>& selected, std::string& err) {
     selected.clear();
     err.clear();
 
-    std::string norm;
-    for (char c : spec) norm += (char)std::tolower((unsigned char)c);
-    // Trim, so " ALL " and a config file's stray whitespace behave.
-    while (!norm.empty() && (norm.front() == ' ' || norm.front() == '\t')) norm.erase(0, 1);
-    while (!norm.empty() && (norm.back()  == ' ' || norm.back()  == '\t')) norm.pop_back();
+    const unsigned count = (unsigned)devices.size();
+    const std::string norm = lower_trim(spec);
 
     if (norm.empty() || norm == "all") {
         for (unsigned i = 0; i < count; ++i) selected.push_back(i);
@@ -140,36 +212,71 @@ bool resolve_devices(const std::string& spec, unsigned count,
     }
     if (count == 0) { err = "no devices were detected"; return false; }
 
+    // Duplicates collapse rather than mining the same card twice, which would
+    // halve its rate and look like a hardware fault.
+    auto take = [&selected](unsigned i) {
+        for (unsigned s : selected) if (s == i) return;
+        selected.push_back(i);
+    };
+
     size_t pos = 0;
     for (;;) {
         const size_t comma = norm.find(',', pos);
-        std::string tok = norm.substr(pos, comma == std::string::npos ? std::string::npos
-                                                                     : comma - pos);
-        while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(0, 1);
-        while (!tok.empty() && (tok.back()  == ' ' || tok.back()  == '\t')) tok.pop_back();
+        const std::string tok = lower_trim(norm.substr(
+            pos, comma == std::string::npos ? std::string::npos : comma - pos));
         if (tok.empty()) { err = "empty entry in the device list"; return false; }
-        for (char c : tok) {
-            if (c < '0' || c > '9') {
-                err = "'" + tok + "' is not a device index (or the word ALL)";
+
+        if (by_pcie) {
+            std::string want;
+            if (!normalize_pci(tok, want)) {
+                err = "'" + tok + "' is not a PCI address (expected 1:0, 01:00 or 0000:01:00.0)";
                 return false;
             }
+            bool found = false;
+            for (unsigned i = 0; i < count; ++i) {
+                std::string have;
+                if (!normalize_pci(devices[i].pci, have) || have != want) continue;
+                take(i);
+                found = true;
+            }
+            if (!found) { err = "no detected card is at PCI " + tok; return false; }
+        } else if (vendor_keyword(tok)) {
+            bool found = false;
+            for (unsigned i = 0; i < count; ++i) {
+                if (!vendor_matches(tok, devices[i].vendor)) continue;
+                take(i);
+                found = true;
+            }
+            if (!found) { err = "no detected card is made by " + tok; return false; }
+        } else {
+            for (char c : tok) {
+                if (c < '0' || c > '9') {
+                    err = "'" + tok + "' is not a device index, a vendor (NVIDIA, AMD, "
+                          "INTEL, APPLE) or the word ALL";
+                    return false;
+                }
+            }
+            const long v = std::strtol(tok.c_str(), nullptr, 10);
+            if (v < 0 || (unsigned long)v >= count) {
+                err = "device " + tok + " does not exist; "
+                    + std::to_string(count) + (count == 1 ? " was detected" : " were detected");
+                return false;
+            }
+            take((unsigned)v);
         }
-        const long v = std::strtol(tok.c_str(), nullptr, 10);
-        if (v < 0 || (unsigned long)v >= count) {
-            err = "device " + tok + " does not exist; "
-                + std::to_string(count) + (count == 1 ? " was detected" : " were detected");
-            return false;
-        }
-        // Collapse duplicates rather than mining the same card twice, which
-        // would halve its rate and look like a hardware fault.
-        bool dup = false;
-        for (unsigned s2 : selected) dup = dup || s2 == (unsigned)v;
-        if (!dup) selected.push_back((unsigned)v);
+
         if (comma == std::string::npos) break;
         pos = comma + 1;
     }
     if (selected.empty()) { err = "the device list selected nothing"; return false; }
     return true;
+}
+
+bool resolve_devices(const std::string& spec, unsigned count,
+                     std::vector<unsigned>& selected, std::string& err) {
+    // No identities: a vendor or PCI token then has nothing to match and is
+    // reported as an unknown token rather than silently selecting nothing.
+    return resolve_devices(spec, std::vector<DeviceRef>(count), false, selected, err);
 }
 
 bool parse_args(int argc, char** argv, Options& out, std::string& err) {
@@ -182,6 +289,26 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
+
+        if (arg.size() >= 2 && arg[0] == '-' && arg[1] != '-') {
+            if (arg.size() != 2) {
+                err = "unknown flag: " + arg + " (short flags cannot be combined)\n\n"
+                    + usage_text();
+                return false;
+            }
+            const char* expanded = nullptr;
+            switch (arg[1]) {
+                case 'h': expanded = "--help";    break;
+                case 'v': expanded = "--version"; break;
+                case 'a': expanded = "--algo";    break;
+                case 'p': expanded = "--pool";    break;
+                case 'u': expanded = "--user";    break;
+                case 'c': expanded = "--coin";    break;
+                default: break;
+            }
+            if (!expanded) { err = "unknown flag: " + arg + "\n\n" + usage_text(); return false; }
+            arg = expanded;
+        }
 
         if (arg == "--help") {
             out.help_requested = true;
@@ -199,6 +326,19 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             algo = argv[++i];
             continue;
         }
+        if (arg == "--coin") {
+            if (i + 1 >= argc) { err = "missing value for --coin\n\n" + usage_text(); return false; }
+            std::string coin;
+            for (const char* c = argv[++i]; *c; ++c) coin += (char)std::toupper((unsigned char)*c);
+            if (coin != "BEAM") {
+                err = "unsupported coin (MXBM mines BEAM only)\n\n" + usage_text();
+                return false;
+            }
+            algo = "BEAM-III";
+            continue;
+        }
+        if (arg == "--list-algos")  { out.list_algos = true; continue; }
+        if (arg == "--list-coins")  { out.list_coins = true; continue; }
         if (arg == "--pool") {
             if (i + 1 >= argc) { err = "missing --pool\n\n" + usage_text(); return false; }
             pool_args.push_back(argv[++i]);
@@ -328,6 +468,22 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             else                      { out.fan         = spec; out.seen.fan         = true; }
             continue;
         }
+        if (arg == "--silence") {
+            if (i + 1 >= argc) { err = "missing value for --silence\n\n" + usage_text(); return false; }
+            int v;
+            if (!parse_int(argv[++i], kSilenceMin, kSilenceMax, v)) {
+                err = "invalid --silence (must be 0, 1, 2 or 3)\n\n" + usage_text();
+                return false;
+            }
+            out.silence = v;
+            out.seen.silence = true;
+            continue;
+        }
+        if (arg == "--compactaccept") {
+            out.compactaccept = true;
+            out.seen.compactaccept = true;
+            continue;
+        }
         if (arg == "--log" || arg == "--timeprint" || arg == "--no-oc-reset") {
             // Optional value, handled exactly like --tls above.
             bool value = true;
@@ -391,6 +547,18 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.seen.apiport = true;
             continue;
         }
+        if (arg == "--apihost") {
+            if (i + 1 >= argc) { err = "missing value for --apihost\n\n" + usage_text(); return false; }
+            const std::string host = argv[++i];
+            if (!parse_ipv4(host)) {
+                err = "invalid --apihost (expected an IPv4 address such as 0.0.0.0 or 127.0.0.1)\n\n"
+                    + usage_text();
+                return false;
+            }
+            out.apihost = host;
+            out.seen.apihost = true;
+            continue;
+        }
         if (arg == "--shortstats") {
             if (i + 1 >= argc) { err = "missing value for --shortstats\n\n" + usage_text(); return false; }
             int v;
@@ -416,6 +584,11 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             if (i + 1 >= argc) { err = "missing value for --devices\n\n" + usage_text(); return false; }
             out.devices = argv[++i];
             out.seen.devices = true;
+            continue;
+        }
+        if (arg == "--devicesbypcie") {
+            out.devices_by_pcie = true;
+            out.seen.devices_by_pcie = true;
             continue;
         }
         if (arg == "--benchmark") {
@@ -477,7 +650,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         }
         if (arg == "--json") {
             // Optional value: consumed only when the next token doesn't itself
-            // look like a flag. "user_config.json" is the reference miner's own default.
+            // look like a flag. "user_config.json" is the default path.
             out.use_json_config = true;
             if (i + 1 < argc) {
                 std::string v = argv[i + 1];

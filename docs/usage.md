@@ -18,9 +18,14 @@ clear pool difficulty and is not a mining option.
 
 | Flag | Meaning |
 |------|---------|
-| `--algo BEAM-III` | Algorithm. MXBM mines BeamHash III only. |
-| `--pool host:port` | Pool stratum endpoint. |
-| `--user addr[.worker]` | Your BEAM wallet address, optionally with a worker suffix. |
+| `-a`, `--algo BEAM-III` | Algorithm. MXBM mines BeamHash III only. |
+| `-p`, `--pool host:port` | Pool stratum endpoint. |
+| `-u`, `--user addr[.worker]` | Your BEAM wallet address, optionally with a worker suffix. |
+
+`-c BEAM` (`--coin BEAM`) selects the same thing by currency instead of by
+algorithm, so a command line written for another BeamHash III miner runs
+unchanged. Short flags cannot be combined: write `-a BEAM-III -u addr`, not
+`-au`.
 
 Each of these may come from a configuration file instead — a profile carrying
 `ALGO`, `POOL`/`POOLS` and `USER` runs on its own, with nothing on the command
@@ -37,11 +42,14 @@ immediately; only a *missing* one defers to the config.
 | `--dev-fee PCT` | Raise the developer fee above its built-in rate, as a percentage. Raise-only. | built-in rate |
 | `--nocolor` | Disable ANSI colors in console output. | colors on |
 | `--apiport N` | Serve the dashboard and monitoring API on port N (0 = off). | off |
+| `--apihost ADDR` | Interface the API binds. `0.0.0.0` is every interface; `127.0.0.1` restricts it to this machine. IPv4 only. | 0.0.0.0 |
 | `--shortstats N` | Seconds between average-speed lines. | 15 |
 | `--longstats N` | Seconds between full statistics blocks. | 60 |
 | `--log [0\|1]` | Write a timestamped transcript of the console to a file. | off |
 | `--logfile PATH` | Where the transcript goes. Implies `--log`. | `logs/mxbm_<date>_<time>.log` |
 | `--timeprint [0\|1]` | Stamp the average-speed line with `[HH:MM:SS]`. | off |
+| `--silence N` | Console verbosity, 0–3. See [Quieting the console](#quieting-the-console). | 0 |
+| `--compactaccept` | Report accepted shares as `*` marks on the average-speed line instead of two lines each. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one), or `auto` for the value a `--tune` run stored for this card. Needs root. | card default |
 | `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~25 min, no pool. | |
@@ -51,12 +59,15 @@ immediately; only a *missing* one defers to the config.
 | `--moff MHz` | Shift the memory voltage/frequency curve. May be negative. Needs root. | 0 |
 | `--fan PCT` | Fan target, in percent. Needs root. | driver's own curve |
 | `--no-oc-reset [0\|1]` | Leave applied settings on the card at exit instead of restoring them. | off |
-| `--devices LIST` | Which GPU to mine on: `ALL` or a comma-separated list of indices from `--list-devices`. | ALL |
+| `--devices LIST` | Which GPU to mine on: `ALL`, a vendor (`NVIDIA`, `AMD`, `INTEL`, `APPLE`), or a comma-separated list of indices from `--list-devices`. | ALL |
+| `--devicesbypcie` | Read `--devices` as PCI addresses instead of indices. `1:0`, `01:00` and `0000:01:00.0` all name the same card. | off |
 | `--list-devices` | Print the detected GPUs with their indices, and exit. | |
+| `--list-algos` | Print the supported algorithms, and exit. | |
+| `--list-coins` | Print the supported coins, and exit. | |
 | `--watchdog [ACTION]` | Watch for a GPU that stops working. `exit` (default), `script`, or `off`. | off |
 | `--watchdogscript PATH` | Script to run when the action is `script`. | |
-| `--version` | Print the version and exit. | |
-| `--help` | Print usage and exit. | |
+| `-v`, `--version` | Print the version and exit. | |
+| `-h`, `--help` | Print usage and exit. | |
 
 ### Benchmarking
 
@@ -215,6 +226,9 @@ never set a value the command line would reject.
 | `POOL` / `POOLS` | `--pool` | `host:port` (flat: one pool; JSON: an array) |
 | `USER`, `PASS`, `TLS` | `--user`, `--pass`, `--tls` | bound to the pool |
 | `APIPORT` | `--apiport` | 0–65535 |
+| `APIHOST` | `--apihost` | IPv4 address, e.g. `0.0.0.0` or `127.0.0.1` |
+| `SILENCE` | `--silence` | 0–3 |
+| `COMPACTACCEPT`, `DEVICESBYPCIE` | same | `1`/`0`, `true`/`false`, `on`/`off` |
 | `SHORTSTATS`, `LONGSTATS` | same | seconds, ≥ 1 |
 | `DIGITS` | `--digits` | 0–6 |
 | `LOG`, `TIMEPRINT`, `WATCHDOG`, `NOCOLOR` | same | `1`/`0`, `true`/`false`, `on`/`off` |
@@ -370,8 +384,8 @@ Notes on fields whose behaviour is not obvious from the name:
 
 ### Reaching it from another machine
 
-The server binds all interfaces, so on a firewalled host you only need to open
-the port — scoped to your LAN rather than to everything:
+The server binds all interfaces by default, so on a firewalled host you only need
+to open the port — scoped to your LAN rather than to everything:
 
 ```sh
 sudo ufw allow from 192.168.1.0/24 to any port 8080 proto tcp comment 'MXBM dashboard'
@@ -379,8 +393,12 @@ sudo ufw allow from 192.168.1.0/24 to any port 8080 proto tcp comment 'MXBM dash
 
 **The API is unauthenticated**, and it is a small hand-rolled HTTP server, so
 treat the port as trusted-network-only. It does not expose your wallet address,
-but it does reveal your hardware, hashrate, pool and uptime. If you would rather
-open nothing, tunnel over SSH instead and browse `localhost:8080`:
+but it does reveal your hardware, hashrate, pool and uptime. MXBM prints the
+address it bound at startup, so which of these you are running is never a guess.
+
+`--apihost 127.0.0.1` restricts the listener to the rig itself — no other machine
+can reach it, with or without a firewall rule. That plus an SSH tunnel is the
+setup that exposes nothing:
 
 ```sh
 ssh -N -L 8080:localhost:8080 user@rig
@@ -409,6 +427,33 @@ through `tee` and log shippers. Where no target is known yet, the suffix is
 omitted rather than printing a meaningless ratio.
 
 Press Ctrl+C to stop.
+
+### Quieting the console
+
+A rig with several cards prints a job line per job and two lines per share, which
+is a wall of text on a screen you only glance at. `--silence N` turns that down:
+
+| N | What is printed |
+|---|---|
+| 0 | everything (default) |
+| 1 | no `New job received` lines |
+| 2 | no job lines, and no per-share lines — each accepted share becomes a `*` on the average-speed line |
+| 3 | the statistics block only; even the average-speed line is gone |
+
+```
+Average speed (15s): 56.53 sol/s***
+Average speed (15s): 60.87 sol/s*
+```
+
+`--compactaccept` selects just the `*` marks, leaving job lines alone; level 2
+turns it on by itself. One mark is one accepted share in that interval, so the
+marks between two statistics blocks add up to the block's accepted count.
+**Rejected shares are printed at every level** — they are the one share line
+worth interrupting for, and they are rare enough not to flood anything.
+
+`--silence` applies to the `--log` transcript exactly as it applies to the
+screen: the file records what was displayed, so what you watch live and what you
+read afterwards are the same thing. To keep more in the file, lower the level.
 
 ### Logging to a file
 
@@ -531,6 +576,16 @@ a rig config that quietly mines the wrong card is worse than one that refuses to
 refer to the same physical card. CUDA's own enumeration defaults to fastest-first and
 NVML's is by bus id, so the two disagree on any rig whose cards are not identical;
 sorting by PCI address is the only key all three agree on.
+
+**Two ways to name a card that are not its index.** `--devices NVIDIA` (or `AMD`,
+`INTEL`, `APPLE`) selects every card from that vendor. `--devicesbypcie` reads
+`--devices` as PCI addresses instead — `--devices 1:0,41:0 --devicesbypcie` — in
+whichever form your tooling prints: `1:0`, `01:00` and `0000:01:00.0` all name the
+same card. Addresses are worth the extra typing on a rig you do not physically
+watch: indices renumber when a card drops off the bus, so yesterday's
+`--pl 240,*,200` lands on different cards than it did today, while an address
+still means one slot. An address or vendor that matches nothing is an error, the
+same way a missing index is.
 
 **A mixed rig is one process.** The last column of `--list-devices` is the backend that
 card will actually run on: CUDA where the card supports it (Ampere or newer, with room
