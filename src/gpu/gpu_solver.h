@@ -22,12 +22,16 @@ public:
     std::vector<std::array<uint8_t,104>> solve(const uint8_t input[32], const uint8_t nonce[8]) override;
     void request_abort() override { abort_.store(true, std::memory_order_relaxed); }
     const DeviceInfo& device() const { return rt_.device(); }
+    // What the pipeline was sized against: driver-reported free VRAM less the
+    // reserve, or the total-times-headroom fallback when free was unreadable.
+    uint64_t usable_vram_bytes() const { return usable_; }
     // Observable so a test can assert a solve was actually SERVED by speculation,
     // rather than merely producing the right answer anyway.
     bool speculation_available() const { return pb_.spec_on; }
     bool last_solve_speculated() const { return spec_hit_; }
 private:
     Runtime rt_;
+    uint64_t usable_ = 0;
     Budget  budget_;
     PipelineBuffers pb_;
     std::atomic<bool> abort_{false};

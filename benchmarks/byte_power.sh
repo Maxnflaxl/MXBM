@@ -10,8 +10,8 @@
 #   Footprint was filed under REACH on the strength of this.
 #
 #   "The suspect is DRAM traffic"  -- NOT measured. The head-to-head sweep found
-#   MXBM clocking 60-570 MHz below lolMiner at every equal power cap, and blamed
-#   the 13.0 GB/solve we move against the 4 GB variant lolMiner selects.
+#   MXBM clocking 60-570 MHz below the reference miner at every equal power cap,
+#   and blamed the 13.0 GB/solve we move against the 4 GB variant it selects.
 #
 # Both can be true: bytes are free when the limit is latency and expensive when
 # the limit is watts, because a power-capped card pays for every DRAM access out

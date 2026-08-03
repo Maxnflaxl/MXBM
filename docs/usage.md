@@ -51,6 +51,13 @@ immediately; only a *missing* one defers to the config.
 | `--silence N` | Console verbosity, 0–3. See [Quieting the console](#quieting-the-console). | 0 |
 | `--compactaccept` | Report accepted shares as `*` marks on the average-speed line instead of two lines each. | off |
 | `--digits N` | Decimals on the speed figures, 0–6. | 2 |
+| `--statsformat LIST` | Which columns the statistics block shows, in order. See [Choosing the columns](#choosing-the-columns). | the default set |
+| `--vstats` | One column per GPU, fields as rows. | off |
+| `--hstats [N]` | Wrap the table into groups N characters wide; bare, it asks the terminal. | off |
+| `--keepfree MB` | VRAM to leave unallocated, replacing the built-in reserve. See [VRAM sizing](#vram-sizing). | 256 MB with a display attached, 64 MB headless |
+| `--tstop C` | Pause a GPU when it reaches this temperature. See [Thermal protection](#thermal-protection). | 0 (off) |
+| `--tstart C` | Resume a paused GPU at this temperature. | 0 (stays paused) |
+| `--tmode MODE` | Which sensor those read: `edge`, `junction`, `memory`. | edge |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one), or `auto` for the value a `--tune` run stored for this card. Needs root. | card default |
 | `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~25 min, no pool. | |
 | `--cclk MHz` | Lock the core clock. Needs root. | driver-managed |
@@ -228,6 +235,11 @@ never set a value the command line would reject.
 | `APIPORT` | `--apiport` | 0–65535 |
 | `APIHOST` | `--apihost` | IPv4 address, e.g. `0.0.0.0` or `127.0.0.1` |
 | `SILENCE` | `--silence` | 0–3 |
+| `KEEPFREE` | `--keepfree` | megabytes, 0 or more |
+| `STATSFORMAT` | `--statsformat` | field list (JSON also accepts an array) |
+| `VSTATS`, `HSTATS` | same | `1`/`0`, `true`/`false`, `on`/`off` |
+| `TSTOP`, `TSTART` | `--tstop`, `--tstart` | degrees C, 0 disables |
+| `TMODE` | `--tmode` | `edge`, `junction`, `memory` |
 | `COMPACTACCEPT`, `DEVICESBYPCIE` | same | `1`/`0`, `true`/`false`, `on`/`off` |
 | `SHORTSTATS`, `LONGSTATS` | same | seconds, ≥ 1 |
 | `DIGITS` | `--digits` | 0–6 |
@@ -556,6 +568,122 @@ The value is clamped to the band the driver reports for your card (100–366 W o
 reference one) and the clamp is announced, so a limit your card will not take is never
 silently ignored. The previous limit is restored when MXBM exits, including on Ctrl+C;
 `--no-oc-reset` leaves it applied instead.
+
+### Choosing the columns
+
+`--statsformat` takes a comma-separated list of field names, in the order you
+want them:
+
+```sh
+mxbm ... --statsformat gpuName,speed,power,coreT,state
+```
+
+```
+      Name        Speed  Power  Core   State
+                  sol/s      W  Temp
+RTX 4070 Ti SUPER 12.60    284    65  mining
+---------------------------
+Total             12.60    284
+```
+
+| Field | Column |
+|---|---|
+| `gpuName` | the card, shortened to fit |
+| `speed` | this device's 60-second rate |
+| `poolHr` | the rate the pool credited, from accepted-share difficulty |
+| `iter` | solve attempts per second |
+| `shares` | accepted / stale / rejected |
+| `sharesPerMin` | accepted shares per minute since startup |
+| `bestShare` | the highest difficulty found |
+| `hrPerWatt` | sol/s per watt |
+| `wattPerHr` | watts per sol/s |
+| `power` | draw in watts |
+| `coreClk`, `memClk` | clocks in MHz |
+| `coreT` | core temperature |
+| `fanPct` | fan speed |
+| `util` | GPU utilisation |
+| `state` | `mining` or `paused` (see [Thermal protection](#thermal-protection)) |
+
+The first twelve are the default set, which is what you get without the flag.
+**There are no presets** — a bare word that is not a field name is an error that
+lists the fields, rather than a table you did not ask for.
+
+`--vstats` turns the table on its side, one column per GPU plus a Total, which
+reads better on a narrow terminal or a rig with many cards:
+
+```
+                             GPU 0       Total
+Name:                 RTX 4070 Ti          Rig
+Speed (sol/s):               19.30       19.30
+Efficiency (sol/s/W):        0.068       0.068
+Power (W):                     285         285
+Temp (deg C):                   66
+```
+
+`--hstats N` keeps the rows but wraps the columns into groups N characters wide,
+each group repeating the label column and its own Total row. `--hstats` with no
+number asks the terminal how wide it is.
+
+### Thermal protection
+
+`--tstop C` pauses a card that reaches C degrees; `--tstart C` resumes it once it
+has cooled to C. Either at 0 disables that half, so `--tstop 85` alone pauses a
+hot card and leaves it paused.
+
+```
+Thermal: pausing at 85 C, resuming at 75 C (--tmode edge)
+GPU 0: paused at 85 C (--tstop). It is not hung; mining resumes when it cools.
+GPU 0: resuming at 75 C (--tstart).
+```
+
+The pause is cooperative: a solve already running finishes, nothing is torn down,
+and resuming costs only the wait. The card is checked every 2 seconds — a card
+under load can climb 20 C between slower polls, and every degree of that
+overshoot is above the limit you set.
+
+**The watchdog knows about it.** A paused card stops completing solves, which is
+exactly what `--watchdog` looks for; MXBM excludes paused devices, so `--tstop`
+with the default `--watchdog exit` cannot turn into a restart loop back into the
+same heat. A paused card is also marked `"Paused": true` in `/summary`, so a
+monitoring dashboard shows *why* it reads 0 sol/s.
+
+`--tmode` selects the sensor. **On consumer NVIDIA cards only `edge` is
+readable** — the driver answers "not supported" for memory temperature and the
+whole T.Limit family, and reports no junction sensor at all. Asking for one of
+those is an error at startup rather than a silent fall back to edge, because
+protecting a card by a temperature you did not choose is worse than not
+protecting it.
+
+### VRAM sizing
+
+MXBM sizes its pipeline against what the driver reports **free**, minus a fixed
+reserve, and prints all four numbers at startup:
+
+```
+VRAM: 16376 MB total, 15620 MB free, reserving 256 MB (display attached) -> 15364 MB usable
+```
+
+`free` is already net of the driver's own reserved region and of every other
+process, so the reserve covers only what can appear *after* MXBM allocates:
+another GPU client starting, allocator overhead, context growth. That is a
+constant, not a share of the card — 256 MB when a display is attached (queried,
+not assumed), 64 MB headless.
+
+`--keepfree MB` replaces that reserve outright. `--keepfree 0` takes everything
+the driver reports free; a large value hands memory back to the desktop. It is
+not capped: if you ask for more than the pipeline can work with, MXBM says so and
+refuses to start rather than mining a partial search that finds nothing —
+
+```
+GPU has too little memory for BeamHash III: it can host only 11834786 of the
+required 33554432 seed elements. [...] Need ~8.9 GiB of usable VRAM; this device
+offers 3.1 GiB after the reserve (see --keepfree).
+```
+
+Two caveats. On Windows the display driver can page GPU memory, so over-allocating
+degrades speed instead of failing cleanly — a reason not to set `--keepfree 0` on
+a desktop machine. And the free figure is a snapshot taken at startup: something
+launched afterwards competes for what is left, whatever was reserved.
 
 ### Choosing which GPU to mine on
 

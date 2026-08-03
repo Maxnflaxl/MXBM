@@ -133,7 +133,7 @@ int main() {
 
     // ---- to_display_units (Beam Difficulty::ToFloat port) ----
     // 9<<24: order 9, zero mantissa -> exactly 2^9 = 512 units (HeroMiners'
-    // vardiff floor; the reference miner displays "Difficulty: 512" for the same jobs).
+    // vardiff floor; miners display "Difficulty: 512" for the same jobs).
     check(to_display_units(9u << 24) == 512.0, "units: 9<<24 -> 512");
     check(to_display_units(0u) == 1.0, "units: packed 0 -> 1");
     // Wire-doc example 50331701 = 0x03000035: 16777269 * 2^-21 = 8.0000252...

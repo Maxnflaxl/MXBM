@@ -4,6 +4,7 @@
 #include <thread>
 
 #include "miner/stats.h"
+#include "ui/format.h"
 
 namespace mxbm { namespace ui {
 
@@ -28,7 +29,7 @@ public:
     // header and the transcript log timestamps every line regardless.
     void start(const miner::Stats& stats, int short_s, int long_s,
                int digits = 2, bool timeprint = false, int api_port = 0,
-               int silence = 0);
+               int silence = 0, StatsLayout layout = StatsLayout{});
 
     // Signals the worker to stop and joins it. No-op if not started.
     void stop();
@@ -50,6 +51,7 @@ private:
     bool timeprint_ = false;
     int api_port_ = 0;   // shown on the stats block's identity line; 0 = API off
     int silence_ = 0;    // --silence; at 3 the speed line is not printed at all
+    StatsLayout layout_;
 };
 
 } } // namespace mxbm::ui

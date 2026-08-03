@@ -2,7 +2,7 @@
 # Sweep the board power limit and measure sol/s and J/sol at each point.
 #
 # WHY: at stock the card sits pinned at its 285 W cap in every kernel (verified:
-# clocks_throttle_reasons.sw_power_cap = Active throughout), while lolMiner draws
+# clocks_throttle_reasons.sw_power_cap = Active throughout), while the reference draws
 # ~239 W and is NOT capped. So "MXBM is 11 % less efficient" compares two different
 # operating points. This measures MXBM's own speed/power curve, which is the only way
 # to compare the two miners at equal power.
@@ -30,4 +30,4 @@ for pl in $LIMITS; do
 done
 
 echo
-echo "lolMiner 1.98a on this card, for reference: 53.27 sol/s at 238.7 W = 0.223 sol/s/W"
+echo "reference on this card: 53.27 sol/s at 238.7 W = 0.223 sol/s/W"

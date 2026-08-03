@@ -3,10 +3,9 @@
 
 #include "cli/options.h"
 
-// the reference miner-shaped config-file loaders. Two sibling formats: `--json` selects a
+// Config-file loaders. Two sibling formats: `--json` selects a
 // named profile out of a user_config.json-style { "PROFILE": { ...UPPERCASE
-// keys... } } map; `--config` reads a flat "KEY = VALUE" file (the reference miner's
-// plain-text grammar is undocumented upstream, so this approximates it).
+// keys... } } map; `--config` reads a flat "KEY = VALUE" file.
 //
 // Both loaders only ever fill a cli::Options field whose cli::Options::Seen
 // flag is still false, so CLI-supplied values always win and a loader call is

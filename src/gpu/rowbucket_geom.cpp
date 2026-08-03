@@ -49,7 +49,8 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad) {
 }
 
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
-                           bool allow_quad, unsigned power_limit_w, bool allow_split) {
+                           bool allow_quad, unsigned power_limit_w, bool allow_split,
+                           uint64_t slack_bytes) {
     // The low-power exception to the ladder's order. (17,0) is NOT a rung: it loses
     // 10.9 % at stock, so it can only be reached by policy under a cap -- and the
     // policy is currently DISARMED (kRbLowPowerW == 0: the measured crossover failed
@@ -67,7 +68,7 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
         size_t total = 0, single = 0;
         rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false);
         if ((!max_alloc || binding_single(17u, false, single) <= (size_t)max_alloc)
-            && (!global_mem || total + (size_t)(1ull << 30) <= (size_t)global_mem))
+            && (!global_mem || total + (size_t)slack_bytes <= (size_t)global_mem))
             return { 17u, 0u, false, true };
     }
     int n = 0;
@@ -78,7 +79,7 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
         size_t total = 0, single = 0;
         rowbucket_bytes(capacity, r.bb, total, single, r.quad);
         if (max_alloc && binding_single(r.bb, r.quad, single) > (size_t)max_alloc) continue;
-        if (global_mem && total + (size_t)(1ull << 30) > (size_t)global_mem) continue;
+        if (global_mem && total + (size_t)slack_bytes > (size_t)global_mem) continue;
         return { r.bb, r.sm, r.quad, true };
     }
     return { 14u, 3u, false, false };   // nothing fits; callers fall back to the sort path

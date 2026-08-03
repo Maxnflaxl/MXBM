@@ -32,7 +32,8 @@ std::string clock_hhmmss() {
 Ticker::~Ticker() { stop(); }
 
 void Ticker::start(const miner::Stats& stats, int short_s, int long_s,
-                   int digits, bool timeprint, int api_port, int silence) {
+                   int digits, bool timeprint, int api_port, int silence,
+                   StatsLayout layout) {
     if (started_) return;
     stats_ = &stats;
     short_s_ = short_s;
@@ -41,6 +42,9 @@ void Ticker::start(const miner::Stats& stats, int short_s, int long_s,
     timeprint_ = timeprint;
     api_port_ = api_port;
     silence_ = silence;
+    layout_ = std::move(layout);
+    layout_.digits = digits;
+    layout_.api_port = api_port;
     started_ = true;
     stop_requested_ = false;
     worker_ = std::thread([this] { try { worker_main(); } catch (...) {} });
@@ -92,7 +96,7 @@ void Ticker::worker_main() {
         }
         if (fire_long) {
             console::stats_block(format_stats_block(
-                stats_->snapshot(), mxbm::version(), clock_hhmmss().c_str(), digits_, api_port_));
+                stats_->snapshot(), mxbm::version(), clock_hhmmss().c_str(), layout_));
         }
     }
 }

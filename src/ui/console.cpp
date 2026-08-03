@@ -16,6 +16,7 @@
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 #else
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -124,6 +125,21 @@ void set_verbosity(int silence, bool compact_accept) {
 }
 
 unsigned take_accept_marks() { return g_accept_marks.exchange(0); }
+
+int terminal_width() {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    const HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h == INVALID_HANDLE_VALUE || h == nullptr) return 0;
+    if (!GetConsoleScreenBufferInfo(h, &info)) return 0;
+    const int w = info.srWindow.Right - info.srWindow.Left + 1;
+    return w > 0 ? w : 0;
+#else
+    struct winsize ws {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) return 0;
+    return ws.ws_col;
+#endif
+}
 
 bool enable_terminal_color() {
 #ifdef _WIN32

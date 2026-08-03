@@ -27,9 +27,11 @@
 #include "miner/benchmark.h"
 #include "miner/tune.h"
 #include "miner/watchdog.h"
+#include "miner/thermal.h"
 #include "version.h"
 #include "gpu/nvml.h"
 #include "gpu/overclock.h"
+#include "gpu/budget.h"           // the VRAM reserve the pipeline is sized against
 #include "gpu/device_join.h"      // which backend drives which physical card
 #include "gpu/rowbucket_geom.h"   // the restart notice asks the geometry question itself
 #ifdef MXBM_HAVE_OPENCL
@@ -126,6 +128,22 @@ int main(int argc, char** argv) {
     // path implies logging). Must run before the algo/pool checks below.
     cli::resolve_implied_options(opts);
 
+    // Must precede every solver construction: the reserve is what the pipeline
+    // is sized against.
+    if (opts.keepfree_mb >= 0)
+        gpu::set_keepfree_bytes((uint64_t)opts.keepfree_mb * 1024ull * 1024ull);
+
+    // Refused rather than quietly read from another sensor: protecting a card by
+    // a temperature the operator did not choose is worse than not protecting it.
+    // Only the edge sensor is readable here -- NVML's memory-temperature field and
+    // the whole T.Limit family answer "Not Supported" on consumer boards
+    // (docs/performance.md), and there is no junction reader at all.
+    if ((opts.tstop != 0 || opts.tstart != 0) && opts.tmode != "edge") {
+        std::fputs(("--tmode " + opts.tmode + " is not available on this card: the driver "
+                    "reports no " + opts.tmode + " sensor. Use --tmode edge.\n").c_str(), stderr);
+        return 1;
+    }
+
     const bool benchmark_mode = !opts.benchmark.empty();
     // --tune drives the power limit itself, point by point; a fixed --pl under it
     // would be overwritten by the first sweep step and silently lied about. The
@@ -190,6 +208,10 @@ int main(int argc, char** argv) {
     if ((opts.seen.user || opts.seen.pass || opts.seen.tls) && !cli_pools && !opts.pools.empty()) {
         ui::console::info("Note: command-line --user/--pass/--tls were ignored; using pool credentials from the config file.");
     }
+
+    // Declared before `stats` so it outlives the telemetry callback below, which
+    // reads it: destruction is reverse declaration order.
+    miner::Thermal thermal;
 
     miner::Stats stats;
 
@@ -395,6 +417,17 @@ int main(int argc, char** argv) {
 #endif
     const bool gpu_will_run = cuda_will_run || metal_will_run || opencl_will_run;
     const bool have_nvml = gpu_will_run && nvml_up;
+
+    // Sampled HERE, before any solver allocates: after construction the free
+    // figure is what is left over, which is not what the sizing saw.
+    struct VramSnapshot { bool have = false; uint64_t total = 0, free = 0, reserve = 0, usable = 0;
+                          bool display = false; } vram;
+    if (have_nvml && gpu::nvml_memory_info((unsigned)device_index, vram.free, vram.total)) {
+        vram.have    = true;
+        vram.display = gpu::nvml_display_active((unsigned)device_index);
+        vram.reserve = gpu::reserve_bytes(vram.display);
+        vram.usable  = gpu::usable_vram(vram.free, vram.total, vram.reserve);
+    }
 
     // Overclock settings BEFORE the solver exists, not after: geometry selection reads
     // the board power limit, so --pl has to land first -- apply, then observe, then
@@ -671,6 +704,21 @@ int main(int argc, char** argv) {
     // chosen backend, so an OpenCL run on an NVIDIA card gets them too.
     if (have_nvml) stats.set_driver_version(gpu::nvml_driver_version());
 
+    // What the pipeline was sized against, on the card that will run it. All
+    // four numbers, because tuning a card near the edge needs them and because a
+    // refusal to start is otherwise unattributable.
+    if (vram.have && !dev_name.empty()) {
+        const double mib = 1024.0 * 1024.0;
+        char line[256];
+        std::snprintf(line, sizeof line,
+            "VRAM: %.0f MB total, %.0f MB free, reserving %.0f MB (%s) -> %.0f MB usable",
+            vram.total / mib, vram.free / mib, vram.reserve / mib,
+            gpu::keepfree_given() ? "--keepfree"
+                                  : (vram.display ? "display attached" : "headless"),
+            vram.usable / mib);
+        ui::console::info(line);
+    }
+
     if (!dev_name.empty()) {
         // The PRIMARY card, not device 0: with --devices 1 the block would
         // otherwise introduce the run under another card's index and PCI address.
@@ -717,7 +765,7 @@ int main(int argc, char** argv) {
         auto pl_noticed = std::make_shared<std::atomic<bool>>(false);
         const unsigned long long mem0 = dev_mem;
         const unsigned pl0 = startup_pl_w;
-        stats.set_telemetry_source([nvml_index, watch_pl, pl_noticed, mem0, pl0]
+        stats.set_telemetry_source([nvml_index, watch_pl, pl_noticed, mem0, pl0, &thermal]
                                    (unsigned row, miner::Stats::Device& d) {
             const unsigned idx = row < nvml_index.size() ? nvml_index[row] : row;
             const gpu::Telemetry t = gpu::nvml_sample(idx);
@@ -727,6 +775,7 @@ int main(int argc, char** argv) {
             d.has_temp = t.have_temp;           d.temp_c        = t.temp_c;
             d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
             d.has_util = t.have_util;           d.util_pct      = t.util_pct;
+            d.paused = thermal.paused(row);
             if (row == 0 && watch_pl && !pl_noticed->load(std::memory_order_relaxed)) {
                 const gpu::PowerLimit now = gpu::nvml_power_limit(nvml_index[0]);
                 if (now.valid && now.current_w != pl0) {
@@ -1155,9 +1204,64 @@ int main(int argc, char** argv) {
         // never a mining precondition.
     }
 
+    ui::StatsLayout layout;
+    if (!opts.statsformat.empty()) {
+        std::string ferr;
+        // Already validated at parse time; a config file goes through the same
+        // check here so a bad key cannot reach the formatter.
+        if (!ui::parse_stats_format(opts.statsformat, layout.columns, ferr)) {
+            ui::console::error("--statsformat: " + ferr);
+            return 1;
+        }
+    }
+    layout.vertical = opts.vstats;
+    if (opts.hstats) {
+        // An explicit width wins; a bare --hstats asks the terminal, and a
+        // terminal that will not say leaves the table unwrapped.
+        layout.wrap_width = opts.stats_width > 0 ? opts.stats_width
+                                                 : ui::console::terminal_width();
+    }
     ui::Ticker ticker;
     ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint,
-                 http_api.bound_port(), opts.silence);
+                 http_api.bound_port(), opts.silence, layout);
+
+    // Thermal protection, wired BEFORE the engines start so a card that is
+    // already too hot never takes a job. `solver_positions` maps an engine to the
+    // physical device its temperature comes from.
+    if (opts.tstop != 0 || opts.tstart != 0) {
+        std::vector<miner::Thermal::Limits> limits(
+            engines.size(), miner::Thermal::Limits{(unsigned)opts.tstop, (unsigned)opts.tstart});
+        thermal.configure(std::move(limits));
+        const std::vector<unsigned> positions = solver_positions;
+        thermal.read_temp = [positions](unsigned engine, unsigned& temp) {
+            if (engine >= positions.size()) return false;
+            const gpu::Telemetry t = gpu::nvml_sample(positions[engine]);
+            if (!t.have_temp) return false;
+            temp = t.temp_c;
+            return true;
+        };
+        thermal.on_pause = [](unsigned dev, unsigned temp) {
+            ui::console::error("GPU " + std::to_string(dev) + ": paused at "
+                               + std::to_string(temp) + " C (--tstop). It is not hung; "
+                               "mining resumes when it cools.");
+        };
+        thermal.on_resume = [](unsigned dev, unsigned temp) {
+            ui::console::info("GPU " + std::to_string(dev) + ": resuming at "
+                              + std::to_string(temp) + " C (--tstart).");
+        };
+        for (size_t k = 0; k < engines.size(); ++k) {
+            const unsigned idx = (unsigned)k;
+            engines[k]->paused = [&thermal, idx] { return thermal.paused(idx); };
+        }
+        thermal.start();
+        char note[160];
+        std::snprintf(note, sizeof note,
+                      "Thermal: pausing at %d C, resuming at %s (--tmode %s)",
+                      opts.tstop,
+                      opts.tstart ? (std::to_string(opts.tstart) + " C").c_str() : "no restart temperature",
+                      opts.tmode.c_str());
+        ui::console::info(note);
+    }
 
     // Each engine spawns its own worker thread; they share one Stats and one
     // Client, both of which are mutex-guarded.
@@ -1186,6 +1290,9 @@ int main(int argc, char** argv) {
         // "Mining is expected" means a job has arrived. Before that, and while
         // the pool is down, every device is legitimately idle.
         watchdog.mining = [&stats] { return !stats.snapshot().last_job_id.empty(); };
+        // A thermally paused card stops advancing its counter on purpose; without
+        // this the first --tstop pause would exit(42) into a restart loop.
+        watchdog.device_paused = [&thermal](unsigned dev) { return thermal.paused(dev); };
         const std::string script = opts.watchdog_script;
         watchdog.on_hung = [action, script](unsigned dev) {
             const std::string who = "GPU " + std::to_string(dev);

@@ -44,7 +44,7 @@ Telemetry nvml_sample(unsigned index = 0);
 std::string nvml_driver_version();
 
 // A device's PCI address as "bus:device" ("1:0"), or "" when unavailable --
-// the short form the reference miner prints, not NVML's full "00000000:01:00.0". On a
+// the short form, not NVML's full "00000000:01:00.0". On a
 // multi-GPU rig this is what tells two identical cards apart.
 std::string nvml_pci_address(unsigned index = 0);
 
@@ -81,6 +81,15 @@ PowerLimit nvml_power_limit(unsigned index);
 // list, never from a constant measured on someone else's. Empty when the query
 // is unsupported.
 std::vector<unsigned> nvml_supported_mem_clocks(unsigned index = 0);
+
+// Free and total VRAM as the driver reports them. `free` is already net of the
+// driver's own reserved region and of every other process, which is what makes
+// it the right basis for sizing. False (both untouched) when NVML cannot answer.
+bool nvml_memory_info(unsigned index, uint64_t& free_bytes, uint64_t& total_bytes);
+
+// Whether a display is attached to this card. False when NVML cannot answer,
+// which sizes the card as headless -- the smaller reserve.
+bool nvml_display_active(unsigned index = 0);
 
 // The card's cumulative energy counter in MILLIJOULES, monotonic since driver
 // load (nvmlDeviceGetTotalEnergyConsumption, Volta+). Bracket a window, diff,

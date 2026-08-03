@@ -178,6 +178,10 @@ public:
     // be exercised without sleeping for seconds.
     std::chrono::milliseconds retry_base_delay{1000};
 
+    // True while this device must not mine (thermal pause, miner/thermal.h).
+    // Checked before each solve; a solve already in flight is never interrupted.
+    std::function<bool()> paused;
+
 private:
     void worker_main();
 

@@ -182,7 +182,11 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     { const size_t s = rowbucket_single_split(capacity, g.bb, g.quad);
       if (s < bind) bind = s; }
     if (bind > (size_t)d.max_alloc) return false;
-    if (total + (size_t)(1ull << 30) > (size_t)d.global_mem) return false;
+    // Against the budget's usable figure -- free VRAM less the reserve (gpu/budget.h)
+    // -- not the card's total, which says nothing about what is available today. The
+    // reserve is the whole of the slack, so nothing further is held back here.
+    const uint64_t mem_limit = b.usable ? b.usable : (uint64_t)d.global_mem;
+    if (total > (size_t)mem_limit) return false;
     return true;
 }
 

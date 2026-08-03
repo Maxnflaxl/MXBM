@@ -48,7 +48,7 @@
 // chain kernel's own machinery costs ~0.6 ms (4.89 = derive 2.5 + emit ~1.8 + ~0.6).
 // What actually fills r1's cycle budget is seed derivation and emit arithmetic,
 // which no reorganization of the match can remove. See SOLVER_REORG.md for what
-// this implies about where the reference miner's work-per-clock advantage cannot come from.
+// this implies about where a work-per-clock advantage cannot come from.
 #include "pipeline_kernels.cuh"
 #include "kat_vectors.h"
 #include "beamhash/bh3_blake2b.h"

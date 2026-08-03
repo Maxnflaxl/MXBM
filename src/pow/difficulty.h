@@ -6,7 +6,7 @@ namespace mxbm { namespace pow {
 bool is_target_reached(const uint8_t hash[32], uint32_t packed);
 bool clears_difficulty(const uint8_t soln[104], uint32_t packed);   // SHA256(soln) then target test
 // Human-readable difficulty units, ported from Beam Difficulty::ToFloat():
-// ((1<<24)|mantissa) * 2^(order-24). E.g. packed 9<<24 -> 512 (what the reference miner
+// ((1<<24)|mantissa) * 2^(order-24). E.g. packed 9<<24 -> 512 (what miners
 // and pool UIs display).
 double to_display_units(uint32_t packed);
 // Achieved difficulty of a share hash, in the same display units as

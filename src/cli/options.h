@@ -12,6 +12,10 @@ constexpr int kStatsIntervalMin = 1;          // upper bound is INT_MAX
 constexpr int kDigitsMin = 0, kDigitsMax = 6;
 constexpr int kBenchmarkSecondsMin = 1;       // upper bound is INT_MAX
 constexpr int kSilenceMin = 0, kSilenceMax = 3;
+constexpr int kKeepFreeMbMin = 0, kKeepFreeMbMax = 1024 * 1024;   // 1 TiB, i.e. no real ceiling
+// Degrees C. 0 disables; the upper bound is above any silicon's shutdown point,
+// so the card's own thresholds do the real validating (nvml_temperature_limits).
+constexpr int kTempCMin = 0, kTempCMax = 150;
 constexpr double kDevFeePctMin = 0.0, kDevFeePctMax = 100.0;
 
 // Host/port split out of a --pool value, plus the user/pass/tls bound to it.
@@ -56,6 +60,23 @@ struct Options {
     // statistics block. --compactaccept selects the '*' marks on their own.
     int  silence = 0;
     bool compactaccept = false;
+
+    // --statsformat: comma-separated field names for the statistics block.
+    // Empty = the built-in set. There are no presets; ui/format.h owns the list.
+    std::string statsformat;
+    // --vstats / --hstats [N]: one column per device (vertical), or wrap the
+    // horizontal table into groups N characters wide. 0 = detect the terminal.
+    bool vstats = false, hstats = false;
+    int  stats_width = 0;
+
+    // --keepfree MB: VRAM to leave unallocated. Replaces the built-in reserve
+    // outright when given, 0 included. Negative means "not given".
+    int  keepfree_mb = -1;
+
+    // --tstop C pauses a device at that temperature, --tstart C resumes it. 0
+    // disables either half. --tmode picks the sensor both read.
+    int  tstop = 0, tstart = 0;
+    std::string tmode = "edge";
 
     // --digits: decimals on the speed figures, 0..6.
     int digits = 2;
@@ -112,7 +133,9 @@ struct Options {
         bool apiport = false, shortstats = false, longstats = false, devices = false;
         bool solver = false, devfee = false;
         bool log = false, logfile = false, timeprint = false, digits = false;
-        bool silence = false, compactaccept = false;
+        bool silence = false, compactaccept = false, keepfree = false;
+        bool tstop = false, tstart = false, tmode = false;
+        bool statsformat = false, vstats = false, hstats = false;
         bool watchdog = false, benchmark = false, benchmark_seconds = false;
         bool list_devices = false, apihost = false, devices_by_pcie = false;
         bool power_limit = false, no_oc_reset = false;

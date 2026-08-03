@@ -169,20 +169,20 @@ int main() {
     check(totalPairDrops == 0, "no genuine collision dropped by out_capacity clamp (pairDrops == 0) -- else solutions are lost nondeterministically");
 
     // ---- PERF (deliberately unmissable) --------------------------------
-    // One solve's cost, printed next to the reference miner's reference so "1.27s" reads
+    // One solve's cost, printed next to the reference figure so "1.27s" reads
     // as "~35x too slow", not "test passed". Timing is hardware-dependent, so
     // this is LOGGED, never asserted -- a wall-time gate would flake across
     // GPUs (M3 Max vs 4070 Ti vs a CI software rasterizer). The number beside
     // the reference is the catch; a human reads it.
     {
-        const double kRefSolPerSec  = 53.0;   // the reference miner ~53 sol/s, RTX 4070 Ti SUPER
+        const double kRefSolPerSec  = 53.0;   // reference ~53 sol/s, RTX 4070 Ti SUPER
         const double kSolsPerNonce  = 1.9;    // Wagner <144,5> statistical avg solutions/nonce
         const double kRefSolvePerSec = kRefSolPerSec / kSolsPerNonce;   // ~28 solve/s
         double solvePerSec = wallSecs > 0 ? 1.0 / wallSecs : 0.0;
         std::printf("\n  ==================== PERF ====================\n");
         std::printf("  this GPU : 1 solve in %.3fs  ->  %.2f solve/s  (~%.1f sol/s at ~%.1f sol/solve)\n",
                     wallSecs, solvePerSec, solvePerSec * kSolsPerNonce, kSolsPerNonce);
-        std::printf("  reference: the reference miner ~%.0f sol/s  (~%.0f solve/s)  on a 4070 Ti SUPER\n",
+        std::printf("  reference: ~%.0f sol/s  (~%.0f solve/s)  on a 4070 Ti SUPER\n",
                     kRefSolPerSec, kRefSolvePerSec);
         if (solvePerSec > 0.0)
             std::printf("  verdict  : ~%.0fx slower than reference  (unoptimized kernels = Phase D)\n",

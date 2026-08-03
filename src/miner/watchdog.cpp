@@ -68,8 +68,10 @@ void Watchdog::poll() {
         }
 
         // No progress. The clock only runs while the miner expects work, so a
-        // long idle period does not accumulate toward the stall threshold.
-        if (!active) {
+        // long idle period does not accumulate toward the stall threshold. A
+        // thermally paused device is idle in exactly this sense, and its own
+        // stall clock is held rather than the whole rig's.
+        if (!active || (device_paused && device_paused((unsigned)i))) {
             d.last_progress = now;
             continue;
         }

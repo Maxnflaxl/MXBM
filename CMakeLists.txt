@@ -93,6 +93,7 @@ target_link_libraries(mxbm_miner PUBLIC mxbm_stratum mxbm_pow)
 target_sources(mxbm_miner PRIVATE src/miner/stats.cpp)
 target_sources(mxbm_miner PRIVATE src/miner/devfee.cpp)
 target_sources(mxbm_miner PRIVATE src/miner/watchdog.cpp)
+target_sources(mxbm_miner PRIVATE src/miner/thermal.cpp)
 
 if(MXBM_HAVE_BEAM_ORACLE)
   target_sources(mxbm_miner PRIVATE src/miner/solver_ref.cpp)
@@ -103,6 +104,11 @@ add_executable(test_engine tests/test_engine.cpp)
 target_include_directories(test_engine PRIVATE tests src)
 target_link_libraries(test_engine PRIVATE mxbm_miner)
 add_test(NAME engine COMMAND test_engine)
+
+add_executable(test_thermal tests/test_thermal.cpp)
+target_include_directories(test_thermal PRIVATE tests src)
+target_link_libraries(test_thermal PRIVATE mxbm_miner Threads::Threads)
+add_test(NAME thermal COMMAND test_thermal)
 
 add_executable(test_watchdog tests/test_watchdog.cpp)
 target_include_directories(test_watchdog PRIVATE tests src)
@@ -126,7 +132,7 @@ add_test(NAME devfee COMMAND test_devfee)
 
 add_executable(test_cli tests/test_cli.cpp src/cli/options.cpp)
 target_include_directories(test_cli PRIVATE tests src)
-target_link_libraries(test_cli PRIVATE mxbm_nvml)
+target_link_libraries(test_cli PRIVATE mxbm_nvml mxbm_ui)   # options.cpp validates --statsformat against the column table
 add_test(NAME cli COMMAND test_cli)
 
 # The --tune recommendation arithmetic, header-only on purpose: a GPU-free test can
@@ -144,7 +150,7 @@ target_link_libraries(mxbm_config PUBLIC mxbm_json)
 # sources are tested here against the real merge.
 add_executable(test_config tests/test_config.cpp src/cli/options.cpp)
 target_include_directories(test_config PRIVATE tests src)
-target_link_libraries(test_config PRIVATE mxbm_config mxbm_nvml)
+target_link_libraries(test_config PRIVATE mxbm_config mxbm_nvml mxbm_ui)
 target_compile_definitions(test_config PRIVATE MXBM_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
 add_test(NAME config COMMAND test_config)
 
@@ -232,6 +238,12 @@ add_test(NAME version COMMAND test_version)
 # make this decision and must make it identically, and the CUDA translation unit cannot
 # include round_pipeline.h (OpenCL headers). Depends on nothing.
 add_library(mxbm_geom STATIC src/gpu/rowbucket_geom.cpp)
+
+# How much VRAM the pipeline may size against (free less the reserve). Its own
+# library because BOTH backends need it and mxbm_gpu is OpenCL-gated.
+add_library(mxbm_budget STATIC src/gpu/budget.cpp)
+target_include_directories(mxbm_budget PUBLIC src)
+target_link_libraries(mxbm_budget PUBLIC mxbm_geom)
 target_include_directories(mxbm_geom PUBLIC src)
 
 add_executable(test_rowbucket_geom tests/test_rowbucket_geom.cpp)
@@ -265,7 +277,7 @@ if(CMAKE_CUDA_COMPILER)
   message(STATUS "CUDA found: CUDA solver enabled (arch ${CMAKE_CUDA_ARCHITECTURES})")
   add_library(mxbm_cuda STATIC src/gpu/cuda_solver.cu)
   target_include_directories(mxbm_cuda PUBLIC src PRIVATE kernels/cuda)
-  target_link_libraries(mxbm_cuda PUBLIC mxbm_beamhash mxbm_geom)
+  target_link_libraries(mxbm_cuda PUBLIC mxbm_beamhash mxbm_geom mxbm_budget mxbm_nvml)
   set_target_properties(mxbm_cuda PROPERTIES CUDA_SEPARABLE_COMPILATION OFF)
   # 186 = "pointless comparison of unsigned integer with zero", from template
   # instantiations where a leaf count is 0 and the loop compiles away.
@@ -340,7 +352,8 @@ if(OpenCL_FOUND)
   target_link_libraries(mxbm_gpu PUBLIC OpenCL::OpenCL)
   target_link_libraries(mxbm_gpu PUBLIC mxbm_beamhash)   # gpu_solver.cpp: is_valid_solution/pack_indices/compute_prepow
   target_link_libraries(mxbm_gpu PUBLIC mxbm_geom)       # round_pipeline.cpp: geometry/footprint
-  target_sources(mxbm_gpu PRIVATE src/gpu/budget.cpp)
+  target_link_libraries(mxbm_gpu PUBLIC mxbm_nvml)       # gpu_solver.cpp: free VRAM + display state
+  target_link_libraries(mxbm_gpu PUBLIC mxbm_budget)
   target_sources(mxbm_gpu PRIVATE src/gpu/round_pipeline.cpp)
   target_sources(mxbm_gpu PRIVATE src/gpu/gpu_solver.cpp)
 

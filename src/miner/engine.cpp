@@ -191,6 +191,15 @@ void Engine::worker_main() {
         // GpuSolver, src/gpu/gpu_solver.cpp) makes that next call start
         // clean.
         while (true) {
+            // Thermal pause: hold here rather than solving, re-checking on the
+            // mailbox condition so a stop or a new job still cuts the wait short.
+            if (paused && paused()) {
+                std::unique_lock<std::mutex> lock(mailbox_mutex_);
+                mailbox_cv_.wait_for(lock, std::chrono::milliseconds(250),
+                                     [this] { return stop_requested_ || has_job_; });
+                if (stop_requested_ || has_job_) break;
+                continue;
+            }
             // A GPU solver can throw at run time -- VRAM taken by another
             // process, a driver reset, a device lost. This is a thread entry
             // function, so letting that escape would call std::terminate() and

@@ -511,6 +511,96 @@ int main() {
         }
     }
 
+    // -- --statsformat / --vstats / --hstats --
+    {
+        const char* f1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--statsformat","gpuName,speed,power"};
+        Options of1; std::string ef1;
+        check(parse_args(9,(char**)f1,of1,ef1), "--statsformat parses a field list");
+        check(of1.statsformat == "gpuName,speed,power" && of1.seen.statsformat, "and is stored");
+
+        const char* f2[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--statsformat","extended"};
+        Options of2; std::string ef2;
+        check(!parse_args(9,(char**)f2,of2,ef2), "a preset name is refused at parse time");
+        check(ef2.find("no presets") != std::string::npos, "with an error that explains it");
+
+        const char* v1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u","--vstats"};
+        Options ov1; std::string ev1;
+        check(parse_args(8,(char**)v1,ov1,ev1) && ov1.vstats && ov1.stats_width == 0,
+              "a bare --vstats takes no width");
+
+        const char* h1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u","--hstats","60"};
+        Options oh1; std::string eh1;
+        check(parse_args(9,(char**)h1,oh1,eh1) && oh1.hstats && oh1.stats_width == 60,
+              "--hstats takes an optional width");
+
+        const char* h2[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u","--hstats"};
+        Options oh2; std::string eh2;
+        check(parse_args(8,(char**)h2,oh2,eh2) && oh2.hstats && oh2.stats_width == 0,
+              "and without one asks the terminal (width 0)");
+
+        // A following flag is a flag, not a width.
+        const char* h3[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--hstats","--nocolor"};
+        Options oh3; std::string eh3;
+        check(parse_args(9,(char**)h3,oh3,eh3) && oh3.hstats && oh3.nocolor && oh3.stats_width == 0,
+              "--hstats does not swallow the next flag");
+
+        const char* b[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                           "--vstats","--hstats"};
+        Options ob; std::string eb;
+        check(!parse_args(9,(char**)b,ob,eb), "--vstats and --hstats together are refused");
+    }
+
+    // -- --tstop / --tstart / --tmode --
+    {
+        const char* t1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--tstop","85","--tstart","75","--tmode","edge"};
+        Options ot1; std::string et1;
+        check(parse_args(13,(char**)t1,ot1,et1), "the thermal flags parse together");
+        check(ot1.tstop==85 && ot1.tstart==75 && ot1.tmode=="edge" && ot1.seen.tstop,
+              "and are stored");
+
+        const char* t2[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--tstop","70","--tstart","75"};
+        Options ot2; std::string et2;
+        check(!parse_args(11,(char**)t2,ot2,et2),
+              "a restart temperature at or above the stop point is refused: it could only flap");
+
+        const char* t3[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--tmode","hotspot"};
+        Options ot3; std::string et3;
+        check(!parse_args(9,(char**)t3,ot3,et3), "an unknown sensor name is an error");
+
+        const char* t4[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--tstop","999"};
+        Options ot4; std::string et4;
+        check(!parse_args(9,(char**)t4,ot4,et4), "a temperature no silicon reaches is an error");
+    }
+
+    // -- --keepfree --
+    {
+        const char* k1[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--keepfree","512"};
+        Options ok1; std::string ek1;
+        check(parse_args(9,(char**)k1,ok1,ek1) && ok1.keepfree_mb == 512 && ok1.seen.keepfree,
+              "--keepfree takes megabytes");
+        const char* k2[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--keepfree","0"};
+        Options ok2; std::string ek2;
+        check(parse_args(9,(char**)k2,ok2,ek2) && ok2.keepfree_mb == 0 && ok2.seen.keepfree,
+              "0 is a value, not an absence: it means take everything free");
+        Options ok3; std::string ek3;
+        const char* k3[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u"};
+        check(parse_args(7,(char**)k3,ok3,ek3) && ok3.keepfree_mb < 0 && !ok3.seen.keepfree,
+              "and not given is negative, so the built-in reserve applies");
+        const char* k4[] = {"mxbm","--algo","BEAM-III","--pool","p:1","--user","u",
+                            "--keepfree","-5"};
+        Options ok4; std::string ek4;
+        check(!parse_args(9,(char**)k4,ok4,ek4), "a negative reserve is an error");
+    }
+
     // -- --devices against real identities: PCI addresses and vendor keywords --
     {
         const std::vector<DeviceRef> rig = {

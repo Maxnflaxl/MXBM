@@ -120,6 +120,7 @@ struct DblOpt {
     double lo, hi;
 };
 
+constexpr const char* kTmodeDomain[] = {"edge", "junction", "memory", nullptr};
 constexpr const char* kSolverDomain[] = {"cuda", "opencl", "gpu", "ref", "auto", nullptr};
 constexpr const char* kBenchmarkDomain[] = {"BEAM-III", "BEAMHASH3", "BEAMHASHIII", "BEAM", nullptr};
 
@@ -129,6 +130,9 @@ constexpr IntOpt kIntOpts[] = {
     {"LONGSTATS",         &cli::Options::longstats,         &cli::Options::Seen::longstats,         cli::kStatsIntervalMin, INT_MAX},
     {"DIGITS",            &cli::Options::digits,            &cli::Options::Seen::digits,            cli::kDigitsMin, cli::kDigitsMax},
     {"SILENCE",           &cli::Options::silence,           &cli::Options::Seen::silence,           cli::kSilenceMin, cli::kSilenceMax},
+    {"KEEPFREE",          &cli::Options::keepfree_mb,       &cli::Options::Seen::keepfree,          cli::kKeepFreeMbMin, cli::kKeepFreeMbMax},
+    {"TSTOP",             &cli::Options::tstop,             &cli::Options::Seen::tstop,             cli::kTempCMin, cli::kTempCMax},
+    {"TSTART",            &cli::Options::tstart,            &cli::Options::Seen::tstart,            cli::kTempCMin, cli::kTempCMax},
     {"BENCHMARK_SECONDS", &cli::Options::benchmark_seconds, &cli::Options::Seen::benchmark_seconds, cli::kBenchmarkSecondsMin, INT_MAX},
 };
 
@@ -140,11 +144,15 @@ constexpr BoolOpt kBoolOpts[] = {
     {"NO_OC_RESET", "NOOCRESET", &cli::Options::no_oc_reset,      &cli::Options::Seen::no_oc_reset},
     {"DEVICESBYPCIE", nullptr,   &cli::Options::devices_by_pcie,  &cli::Options::Seen::devices_by_pcie},
     {"COMPACTACCEPT", nullptr,   &cli::Options::compactaccept,    &cli::Options::Seen::compactaccept},
+    {"VSTATS",    nullptr,       &cli::Options::vstats,           &cli::Options::Seen::vstats},
+    {"HSTATS",    nullptr,       &cli::Options::hstats,           &cli::Options::Seen::hstats},
 };
 
 constexpr StrOpt kStrOpts[] = {
     {"APIHOST",   &cli::Options::apihost,   &cli::Options::Seen::apihost,   nullptr,          nullptr,    false},
     {"DEVICES",   &cli::Options::devices,   &cli::Options::Seen::devices,   nullptr,          nullptr,    true},
+    {"TMODE",     &cli::Options::tmode,     &cli::Options::Seen::tmode,     kTmodeDomain,     nullptr,    false},
+    {"STATSFORMAT", &cli::Options::statsformat, &cli::Options::Seen::statsformat, nullptr,   nullptr,    true},
     {"LOGFILE",   &cli::Options::log_path,  &cli::Options::Seen::logfile,   nullptr,          nullptr,    false},
     {"SOLVER",    &cli::Options::solver,    &cli::Options::Seen::solver,    kSolverDomain,    nullptr,    false},
     {"BENCHMARK", &cli::Options::benchmark, &cli::Options::Seen::benchmark, kBenchmarkDomain, "BEAM-III", false},

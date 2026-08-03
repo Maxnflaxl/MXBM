@@ -11,7 +11,7 @@ namespace mxbm { namespace stratum {
 
 // Stratum client: connect -> login -> nonceprefix capture -> job dispatch,
 // with automatic reconnect-on-drop. run() is a blocking read loop that never
-// returns (the reference miner-style: process exit is Ctrl+C, not a return path).
+// returns (process exit is Ctrl+C, not a return path).
 //
 // Threading (Phase A): login() and submit() both write to the transport via
 // send_line(); write_mutex_ serializes those writes against each other so

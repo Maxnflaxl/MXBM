@@ -35,7 +35,7 @@ using namespace mxbm::gpu;
 // together == {golden[0..2]} byte-for-byte (distinct-match; GPU atomics make
 // solve()'s internal ordering nondeterministic). `pass` labels the check
 // messages so a failure names which solve() broke.
-// One solve's end-to-end throughput next to the reference miner's reference -- the
+// One solve's end-to-end throughput next to the reference figure -- the
 // headline that makes "too slow" obvious from an integration-test run. Logged,
 // never asserted (wall-time flakes across GPUs); per-phase drill-down lives in
 // test_gpu_rounds.cpp, which drives run_pipeline directly.
@@ -43,7 +43,7 @@ static void perf_line(const char* pass, double secs) {
     const double kRefSolPerSec = 53.0, kSolsPerNonce = 1.9;
     const double kRefSolvePerSec = kRefSolPerSec / kSolsPerNonce;   // ~28 solve/s
     double sps = secs > 0.0 ? 1.0 / secs : 0.0;
-    std::printf("  [PERF] %s: %.2f solve/s (~%.1f sol/s) | ref the reference miner ~%.0f sol/s (~%.0f solve/s) | ~%.0fx slower\n",
+    std::printf("  [PERF] %s: %.2f solve/s (~%.1f sol/s) | ref ~%.0f sol/s (~%.0f solve/s) | ~%.0fx slower\n",
                 pass, sps, sps * kSolsPerNonce, kRefSolPerSec, kRefSolvePerSec,
                 sps > 0.0 ? kRefSolvePerSec / sps : 0.0);
 }

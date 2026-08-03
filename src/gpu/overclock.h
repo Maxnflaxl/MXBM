@@ -3,21 +3,20 @@
 //
 // Why this exists at all: MXBM runs pinned at the card's power limit in EVERY
 // kernel (measured -- docs/performance.md), so the limit does not merely bound
-// the miner, it selects its operating point. The head-to-head sweep against
-// the reference miner then supplied the second reason: at a 180 W cap MXBM sustains
-// 570 MHz less core clock than the reference miner does, so what the card is allowed to
-// clock at is not a detail, it is most of the efficiency gap.
+// the miner, it selects its operating point. Sustained core clock under a cap
+// is the second reason: at a 180 W cap MXBM holds 570 MHz less than the card
+// can, so what it is allowed to clock at is most of the efficiency gap.
 //
-// Design decisions -- privilege model, the reference miner-compatible flag names,
-// warn-and-continue, restore-on-exit -- are in docs/overclocking.md.
+// Design decisions -- privilege model, flag names, warn-and-continue,
+// restore-on-exit -- are in docs/overclocking.md.
 //
 //   --pl W       board power limit
 //   --cclk MHz   lock the core clock          --coff MHz   shift its V/F curve
 //   --mclk MHz   lock the memory clock        --moff MHz   shift its V/F curve
 //   --fan PCT    fan target
 //
-// Every one takes the reference miner's per-GPU list syntax ("2100", "2100,*,2050"; '*'
-// skips a GPU).
+// Every one takes the per-GPU list syntax ("2100", "2100,*,2050"; '*' skips
+// a GPU).
 #include <string>
 #include <vector>
 #include "gpu/nvml.h"
@@ -56,7 +55,7 @@ struct OcRequest {
     std::string pl, cclk, mclk, coff, moff, fan;
 };
 
-// Parses the reference miner's per-GPU list syntax into the entry for `index`: "240",
+// Parses the per-GPU list syntax into the entry for `index`: "240",
 // "240,*,260", or "*" to skip a GPU. Returns false with `err` set on a
 // malformed list; `found` false means this GPU was explicitly skipped.
 //
@@ -94,8 +93,8 @@ void oc_restore();
 // write has actually landed; exposed for tests.
 void oc_install_restore_hooks();
 
-// --no-oc-reset: leave the settings on the card at exit. Matches the reference miner,
-// whose --no-oc-reset also defaults to 0 (i.e. restore).
+// --no-oc-reset: leave the settings on the card at exit. Defaults to 0
+// (i.e. restore).
 void oc_set_restore_enabled(bool enabled);
 
 // True while any setting is still on the card waiting to be put back. Lets a

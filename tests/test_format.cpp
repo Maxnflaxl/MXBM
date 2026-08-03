@@ -98,11 +98,21 @@ Connected to: pool.example.com:1130 (12ms latency)
                   sol/s  sol/s   it/s    A/S/R  Share  sol/s/W      W   MHz    MHz  Temp  Pct
 CPU 0 reference    0.01   0.00    0.3    1/0/0   1.2k       --     --    --     --    --   --
 ---------------------------
-Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
+Total              0.01   0.00    0.3    1/0/0   1.2k       --     --
 -----------------------------------------------)GOLDEN";
 
         std::string got = format_stats_block(s, "0.2.31 [abc1234]", "19:47:26");
-        check_golden_block(got, golden, "format_stats_block matches the the reference miner-style golden exactly");
+        check_golden_block(got, golden, "format_stats_block matches the golden exactly");
+
+        // The Total row's figures sit under the device row's, to the character.
+        // They did not before the column model: the row was printf'd with a
+        // label field one wider than the device rows', so every Total value was
+        // one column right of the header it belonged to.
+        const size_t dev = got.find("CPU 0 reference");
+        const size_t tot = got.find("Total ");
+        check(dev != std::string::npos && tot != std::string::npos, "both rows present");
+        check(got.find("0.01", dev) - dev == got.find("0.01", tot) - tot,
+              "the Total row aligns with the device rows");
     }
 
     // -- the Name column must not shift the other columns --
@@ -301,6 +311,87 @@ Total               0.01   0.00    0.3    1/0/0   1.2k       --     --
         const std::string total_line = out.substr(tot, out.find('\n', tot) - tot);
         check(total_line.find("250") == std::string::npos,
               "with one device's power unknown, the Total shows no wattage at all");
+    }
+
+    // -- --statsformat: the column selection --
+    {
+        std::vector<std::string> fields;
+        std::string err;
+        check(ui::parse_stats_format("gpuName,speed,power", fields, err) && fields.size() == 3,
+              "a field list parses in the order given");
+        check(fields[0] == "gpuName" && fields[2] == "power", "and keeps that order");
+        check(ui::parse_stats_format("SPEED, CoreT ", fields, err) && fields.size() == 2 &&
+              fields[0] == "speed" && fields[1] == "coreT",
+              "names are case-insensitive and tolerate spaces, but normalise to one spelling");
+
+        // No presets: the other miner's default VALUE is as unknown as any word.
+        check(!ui::parse_stats_format("extended", fields, err), "'extended' is not a field");
+        check(err.find("no presets") != std::string::npos, "and the error says why");
+        check(err.find("gpuName") != std::string::npos, "and names the fields that do exist");
+        check(!ui::parse_stats_format("speed,,power", fields, err), "an empty field is an error");
+        check(!ui::parse_stats_format("", fields, err), "so is an empty list");
+
+        miner::Stats::Snapshot s{};
+        s.sol60 = 12.5;
+        s.device_label = "NVIDIA GeForce RTX 4070 Ti SUPER";
+        s.has_power = true; s.power_w = 284.0;
+        s.has_temp = true;  s.temp_c = 65;
+        ui::StatsLayout layout;
+        check(ui::parse_stats_format("gpuName,speed,power,coreT", layout.columns, err), "parse ok");
+        const std::string out = ui::format_stats_block(s, "0.1", "00:00:00", layout);
+        check(out.find("Speed  Power  Core") != std::string::npos,
+              "the header carries exactly the chosen columns, in order");
+        check(out.find("Iter.") == std::string::npos && out.find("Shares") == std::string::npos,
+              "and nothing else");
+        check(out.find("12.50    284    65") != std::string::npos,
+              "the row carries the same columns");
+    }
+
+    // -- --vstats: one column per device, fields as rows --
+    {
+        miner::Stats::Snapshot s{};
+        s.sol60 = 54.1;
+        s.pool_sol_session = 60.0;
+        s.device_label = "NVIDIA GeForce RTX 4070 Ti SUPER";
+        s.has_power = true; s.power_w = 250.0;
+        s.has_temp = true;  s.temp_c = 61;
+        ui::StatsLayout layout;
+        layout.vertical = true;
+        const std::string out = ui::format_stats_block(s, "0.1", "00:00:00", layout);
+        check(out.find("Speed (sol/s):") != std::string::npos, "rows are labelled in full");
+        check(out.find("GPU 0") != std::string::npos && out.find("Total") != std::string::npos,
+              "a column per device, plus the Total");
+        check(out.find("Rig") != std::string::npos, "whose Name cell reads Rig");
+        // Clocks/temp/fan do not sum, so the Total column stays empty on them --
+        // the same rule the horizontal Total row follows.
+        const size_t t = out.find("Temp (deg C):");
+        const std::string temp_line = out.substr(t, out.find('\n', t) - t);
+        check(temp_line.find("61") != std::string::npos, "the device cell has the reading");
+        size_t count = 0, from = 0;
+        while ((from = temp_line.find("61", from)) != std::string::npos) { ++count; ++from; }
+        check(count == 1, "and it appears once: no Total temperature");
+    }
+
+    // -- --hstats N: wrap the columns into groups --
+    {
+        miner::Stats::Snapshot s{};
+        s.sol60 = 18.17;
+        s.device_label = "NVIDIA GeForce RTX 4070 Ti SUPER";
+        s.has_power = true; s.power_w = 284.0;
+        ui::StatsLayout layout;
+        layout.wrap_width = 60;
+        const std::string out = ui::format_stats_block(s, "0.1", "00:00:00", layout);
+        size_t totals = 0, from = 0;
+        while ((from = out.find("\nTotal", from)) != std::string::npos) { ++totals; ++from; }
+        check(totals >= 2, "each group carries its own Total row");
+        check(out.find("      Name") != std::string::npos, "the first group keeps the Name column");
+        check(out.find("GPU 0 ") != std::string::npos || out.find("GPU 0\n") != std::string::npos,
+              "later groups label their rows GPU N instead");
+        bool all_short = true;
+        for (const std::string& line : split_lines(out)) {
+            if (line.size() > 80) all_short = false;
+        }
+        check(all_short, "no wrapped line runs past the width plus its label column");
     }
 
     return summary("format");

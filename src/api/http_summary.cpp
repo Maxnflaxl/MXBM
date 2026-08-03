@@ -346,6 +346,7 @@ std::string HttpSummary::build_body() const {
             worker["Mem_Clock_MHz"]  = d.has_mem_clock ? json(d.mem_clock_mhz): json(nullptr);
             worker["Temp_C"]         = d.has_temp      ? json(d.temp_c)       : json(nullptr);
             worker["Fan_Pct"]        = d.has_fan       ? json(d.fan_pct)      : json(nullptr);
+            worker["Paused"]         = d.paused;
             j["Workers"].push_back(worker);
         }
     }

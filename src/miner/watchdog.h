@@ -16,8 +16,8 @@
 //
 // WHAT IT DOES NOT DO: it never restarts a device. Recovering a hung GPU means
 // tearing down and rebuilding a CUDA context that a wedged kernel still owns,
-// which usually cannot be done from inside the same process -- which is exactly
-// why the reference miner's own answer is to exit and let a supervisor restart the miner.
+// which usually cannot be done from inside the same process. Exiting and
+// letting a supervisor restart the miner is the recovery that works.
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -26,7 +26,7 @@
 
 namespace mxbm { namespace miner {
 
-// What to do when a device is found hung. the reference miner's own three, same names.
+// What to do when a device is found hung.
 enum class WatchdogAction {
     Off,      // report it and keep mining on the remaining cards
     Exit,     // exit(42), the conventional "please restart me" code
@@ -56,10 +56,16 @@ public:
     // Called once per device that goes from working to hung. Not called again
     // for the same device unless it recovers first.
     using HungFn = std::function<void(unsigned device)>;
+    // True while `device` is deliberately not mining (miner/thermal.h). Such a
+    // device stops advancing its attempt counter, which is indistinguishable
+    // from a hang from here -- without this, --tstop plus the default
+    // --watchdog exit is a restart loop into the same heat.
+    using PausedFn = std::function<bool(unsigned device)>;
 
     CountsFn counts;
     MiningFn mining;
     HungFn   on_hung;
+    PausedFn device_paused;
 
     // Test seam, same pattern as Stats::now_fn: every time read inside goes
     // through it. Defaults to steady_clock::now.

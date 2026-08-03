@@ -2,6 +2,8 @@
 // standalone bench (cuda/pipeline.cu), so there is one copy of each.
 #include "gpu/cuda_solver.h"
 #include "gpu/rowbucket_geom.h"
+#include "gpu/budget.h"
+#include "gpu/nvml.h"
 #include "pipeline_kernels.cuh"
 #include "beamhash/bh3_blake2b.h"
 #include "beamhash/bh3_verify.h"
@@ -63,13 +65,15 @@ static_assert(kQuadStride == fb_round_stride(2, true) &&
 // max_alloc = 0: CUDA has no per-allocation limit (see rowbucket_geom.h).
 // power_limit_w = 0 (the availability/enumeration callers): viability must not depend
 // on the cap -- (17,0) is a preference among geometries that fit, never a requirement.
-RbGeometry pick_geometry(uint64_t global_mem, unsigned power_limit_w = 0) {
+RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
+                         uint64_t slack = (uint64_t)1 << 30) {
     // allow_quad: costs +14 % time and buys no watts at any cap (measured), so the
     // ladder only reaches for it when a card cannot host a packed rung -- which is
     // exactly what takes the CUDA path below 6.5 GiB. (Both backends carry the quad
     // kernels since 2026-07-28; each caller states its capability itself.)
-    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, global_mem,
-                                   /*allow_quad=*/true, power_limit_w);
+    RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, usable_mem,
+                                   /*allow_quad=*/true, power_limit_w,
+                                   /*allow_split=*/false, slack);
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
                                                  g.viable = true; }
     if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
@@ -212,11 +216,18 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     if (!p_->left || !p_->right || !p_->dpp)
         throw std::runtime_error("CUDA allocation failed (device out of memory)");
 
-    // Then walk the ladder for real: rb_geometry_for() sizes against TOTAL VRAM, but a
-    // desktop compositor can be sitting on a gigabyte of it, and whether a footprint
-    // fits *today* is only knowable by asking the allocator. An explicit MXBM_BB /
-    // MXBM_SM is the user's choice and is not stepped down under them.
-    const RbGeometry g = pick_geometry(p_->info.global_mem, power_limit_w);
+    // Then walk the ladder for real, against what the driver says is FREE less the
+    // reserve rather than against total VRAM: a desktop compositor sitting on a
+    // gigabyte is invisible in totalGlobalMem. Whether a footprint fits *today* is
+    // still only knowable by asking the allocator, which the retry below does. An
+    // explicit MXBM_BB / MXBM_SM is the user's choice and is not stepped down.
+    size_t cuda_free = 0, cuda_total = 0;
+    const bool have_free = cudaMemGetInfo(&cuda_free, &cuda_total) == cudaSuccess;
+    const uint64_t usable = usable_vram(have_free ? (uint64_t)cuda_free : 0,
+                                        p_->info.global_mem,
+                                        reserve_bytes(nvml_display_active((unsigned)index)));
+    // slack 0: the reserve above is the whole of what is held back.
+    const RbGeometry g = pick_geometry(usable, power_limit_w, /*slack=*/0);
     if (!g.viable)
         throw std::runtime_error("CUDA: no row-bucket geometry fits this device");
     // MXBM_PERFECT_TAB drops the key comparison in the chain walk, which is only sound

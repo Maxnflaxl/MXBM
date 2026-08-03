@@ -28,6 +28,10 @@ unsigned take_accept_marks();
 // off by default outside Windows Terminal, so escapes print as literal text.
 bool enable_terminal_color();
 
+// The terminal's width in characters, or 0 when stdout is not a terminal or the
+// query fails. What a bare --hstats asks before falling back to the full table.
+int terminal_width();
+
 // -- transcript log (--log / --logfile) --------------------------------------
 //
 // Tees everything printed above into a file, uncoloured and ALWAYS timestamped

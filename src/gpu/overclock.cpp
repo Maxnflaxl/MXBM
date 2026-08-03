@@ -51,7 +51,7 @@ ClockOps g_clk = {
 // of this that is: mining mode blocks in client.run() forever, so a flag for
 // the main loop to notice would never be read. The alternative -- leaving a
 // card capped, locked or with its fans pinned after Ctrl+C -- is the failure
-// this exists to prevent, and it is the same trade the reference miner makes.
+// this exists to prevent.
 void oc_signal_handler(int sig) {
     oc_restore();
     std::signal(sig, SIG_DFL);
@@ -137,7 +137,7 @@ bool oc_parse_list(const std::string& spec, unsigned index, long& value, bool& f
         const size_t comma = spec.find(',', pos);
         std::string tok = spec.substr(pos, comma == std::string::npos ? std::string::npos
                                                                      : comma - pos);
-        // Trim: "240, 260" is the natural thing to type and the reference miner accepts it.
+        // Trim: "240, 260" is the natural thing to type.
         while (!tok.empty() && (tok.front() == ' ' || tok.front() == '\t')) tok.erase(0, 1);
         while (!tok.empty() && (tok.back()  == ' ' || tok.back()  == '\t')) tok.pop_back();
 

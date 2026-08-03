@@ -35,6 +35,31 @@ inline bool budget_can_find_solutions(uint32_t elems_per_round) {
     return elems_per_round >= (1u << kTargetElemsLog2);
 }
 
+// --- how much VRAM the pipeline may size against -------------------------
+//
+// The driver's FREE figure, less a fixed reserve. Free already excludes both the
+// driver's own reserved region and every other process, so nothing here has to
+// guess at either; the reserve covers only what can appear AFTER we allocate --
+// another consumer starting, allocator overhead beyond the bytes requested, and
+// our own context growth. It is therefore a constant, not a share of the card:
+// the things it pays for do not scale with VRAM size.
+constexpr uint64_t kReserveDisplayBytes  = 256ull << 20;   // a display is attached
+constexpr uint64_t kReserveHeadlessBytes = 64ull  << 20;
+constexpr double   kUnknownFreeHeadroom  = 0.85;           // when free is unreadable
+
+// The reserve in force: --keepfree when the operator gave one (any value, 0
+// included), else the constant above for this card. Not clamped -- an operator
+// who asks for everything free gets it.
+void     set_keepfree_bytes(uint64_t bytes);   // process-wide, set once from main
+void     clear_keepfree();                     // tests, and "not given"
+bool     keepfree_given();
+uint64_t reserve_bytes(bool display_attached);
+
+// `free_bytes` 0 means the driver would not say, and the old total-times-headroom
+// rule applies instead. Never returns more than `total_bytes`, and returns 0
+// rather than underflowing when the reserve exceeds what is free.
+uint64_t usable_vram(uint64_t free_bytes, uint64_t total_bytes, uint64_t reserve);
+
 struct Budget {
     uint64_t global_mem = 0;
     uint64_t max_alloc  = 0;
@@ -63,7 +88,7 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom =
 // The full-2^25-layer budget for the row-bucket path, where the GEOMETRY LADDER
 // (rowbucket_viable), not the flat divisor above, is the authority. Callers must
 // ask rowbucket_viable() whether it stands -- using it unchecked would allocate
-// an unfittable pipeline.
-Budget budget_full_rowbucket(uint64_t global_mem, uint64_t max_alloc);
+// an unfittable pipeline. `usable_mem` is already net of the reserve.
+Budget budget_full_rowbucket(uint64_t usable_mem, uint64_t max_alloc);
 
 }} // namespace mxbm::gpu

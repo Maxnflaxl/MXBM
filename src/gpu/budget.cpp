@@ -4,6 +4,26 @@ namespace mxbm { namespace gpu {
 
 static uint64_t min_u64(uint64_t a, uint64_t b) { return a < b ? a : b; }
 
+namespace {
+uint64_t g_keepfree = 0;
+bool     g_keepfree_given = false;
+}
+
+void set_keepfree_bytes(uint64_t bytes) { g_keepfree = bytes; g_keepfree_given = true; }
+void clear_keepfree() { g_keepfree = 0; g_keepfree_given = false; }
+bool keepfree_given() { return g_keepfree_given; }
+
+uint64_t reserve_bytes(bool display_attached) {
+    if (g_keepfree_given) return g_keepfree;
+    return display_attached ? kReserveDisplayBytes : kReserveHeadlessBytes;
+}
+
+uint64_t usable_vram(uint64_t free_bytes, uint64_t total_bytes, uint64_t reserve) {
+    if (free_bytes == 0) return (uint64_t)((double)total_bytes * kUnknownFreeHeadroom);
+    const uint64_t capped = min_u64(free_bytes, total_bytes ? total_bytes : free_bytes);
+    return capped > reserve ? capped - reserve : 0;
+}
+
 Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom,
                       uint32_t bytes_per_element) {
     Budget b;
@@ -55,11 +75,11 @@ Budget compute_budget(uint64_t global_mem, uint64_t max_alloc, double headroom,
     return b;
 }
 
-Budget budget_full_rowbucket(uint64_t global_mem, uint64_t max_alloc) {
+Budget budget_full_rowbucket(uint64_t usable_mem, uint64_t max_alloc) {
     Budget b;
-    b.global_mem = global_mem;
+    b.global_mem = usable_mem;
     b.max_alloc  = max_alloc;
-    b.usable     = (uint64_t)((double)global_mem * 0.85);
+    b.usable     = usable_mem;
     b.bytes_per_element = kBytesPerElementRowbucket;
     b.target_elems = 1u << kTargetElemsLog2;
     b.elems_per_round = b.target_elems;

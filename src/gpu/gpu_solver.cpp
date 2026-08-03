@@ -1,12 +1,32 @@
 #include "gpu/gpu_solver.h"
 #include "beamhash/bh3_blake2b.h"
 #include "beamhash/bh3_verify.h"
+#include "gpu/nvml.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 namespace mxbm { namespace gpu {
+
+namespace {
+
+// Free VRAM for the card this OpenCL device is, matched through NVML on the PCI
+// address -- OpenCL's own index is not NVML's on a mixed rig. Returns 0 when the
+// address is unknown or NVML has nothing to say, which sizes off the total.
+uint64_t free_vram_for(const std::string& pci, bool& display_attached) {
+    display_attached = false;
+    if (pci.empty()) return 0;
+    for (unsigned i = 0, n = nvml_device_count(); i < n; ++i) {
+        if (nvml_pci_address(i) != pci) continue;
+        uint64_t f = 0, t = 0;
+        display_attached = nvml_display_active(i);
+        return nvml_memory_info(i, f, t) ? f : 0;
+    }
+    return 0;
+}
+
+} // namespace
 
 GpuSolver::GpuSolver(unsigned index) : rt_(index) {
     // rt_ is already constructed (device selected, context/queue created --
@@ -20,18 +40,19 @@ GpuSolver::GpuSolver(unsigned index) : rt_(index) {
     // path -- and a reduced layer mines nothing (budget_can_find_solutions). Try the
     // optimistic budget first; if the device cannot host the row-bucket footprint at
     // that capacity, fall back to the sort-path budget, which is what will run.
-    budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc,
-                             0.85, kBytesPerElementRowbucket);
+    bool display = false;
+    const uint64_t free_b = free_vram_for(rt_.device().pci, display);
+    usable_ = usable_vram(free_b, rt_.device().global_mem, reserve_bytes(display));
+    budget_ = compute_budget(usable_, rt_.device().max_alloc, 1.0, kBytesPerElementRowbucket);
     // The flat divisor is the full-fat (16,1) figure; a card it refuses may still
     // host the FULL 2^25 layer on a coarser/quad rung with split record sets. The
     // ladder, not the divisor, is the row-bucket authority -- ask it before refusing.
     if (!budget_can_find_solutions(budget_.elems_per_round)) {
-        Budget full = budget_full_rowbucket(rt_.device().global_mem, rt_.device().max_alloc);
+        Budget full = budget_full_rowbucket(usable_, rt_.device().max_alloc);
         if (rowbucket_viable(rt_, full)) budget_ = full;
     }
     if (!rowbucket_viable(rt_, budget_))
-        budget_ = compute_budget(rt_.device().global_mem, rt_.device().max_alloc,
-                                 0.85, kBytesPerElementSort);
+        budget_ = compute_budget(usable_, rt_.device().max_alloc, 1.0, kBytesPerElementSort);
 
     // REFUSE a partial seed layer rather than mine nothing. A BeamHash III solution
     // is 32 indices from the full [0, 2^25) space, so a device that can only host
@@ -46,11 +67,12 @@ GpuSolver::GpuSolver(unsigned index) : rt_(index) {
             "GPU has too little memory for BeamHash III: it can host only %u of the "
             "required %u seed elements. A partial seed layer cannot find solutions "
             "(probability ~(%.2f)^32). Need ~%.1f GiB of usable VRAM; this device "
-            "reports %.1f GiB. Set MXBM_ALLOW_PARTIAL_SEARCH=1 to override for testing.",
+            "offers %.1f GiB after the reserve (see --keepfree). Set "
+            "MXBM_ALLOW_PARTIAL_SEARCH=1 to override for testing.",
             budget_.elems_per_round, 1u << kTargetElemsLog2,
             (double)budget_.elems_per_round / (double)(1u << kTargetElemsLog2),
-            (double)((uint64_t)(1u << kTargetElemsLog2) * kBytesPerElement) / 1073741824.0 / 0.85,
-            (double)rt_.device().global_mem / 1073741824.0);
+            (double)((uint64_t)(1u << kTargetElemsLog2) * kBytesPerElement) / 1073741824.0,
+            (double)usable_ / 1073741824.0);
         throw ClError(CL_OUT_OF_RESOURCES, msg);
     }
 
@@ -67,7 +89,7 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
     // Opt-in per-solve profiling: run with MXBM_PROFILE=1 to print a one-line
     // GPU-time breakdown (seed | per-round mix/scatter/match | survivor |
     // recover | verify) every solve, plus the derived solve/s next to
-    // the reference miner's reference. Off by default (read once) so production mining
+    // the reference figure. Off by default (read once) so production mining
     // stays quiet.
     static const bool profile = (std::getenv("MXBM_PROFILE") != nullptr);
     auto tSolve = std::chrono::steady_clock::now();
@@ -158,7 +180,7 @@ std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], 
         // spec: did this solve's entry pass come free from the previous solve's round 4.
         // "off" = buffers did not fit, or MXBM_NO_SPEC; a steady run of "miss" means the
         // nonce stride is not being predicted.
-        std::printf("[prof] total=%.1fms  %.2f solve/s (~%.1f sol/s | the reference miner ref ~53) | spec=%s seed=%.1f",
+        std::printf("[prof] total=%.1fms  %.2f solve/s (~%.1f sol/s | ref ~53) | spec=%s seed=%.1f",
                     total, sps, sps * 1.9,
                     !pb_.spec_on ? "off" : spec.hit ? "hit" : "miss", res.t_seed_ms);
         for (int r = 0; r < 5; ++r) {

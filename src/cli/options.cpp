@@ -1,5 +1,6 @@
 #include "cli/options.h"
 #include "gpu/overclock.h"
+#include "ui/format.h"   // the statistics columns --statsformat may name
 
 #include <cctype>
 #include <cerrno>
@@ -80,6 +81,22 @@ std::string usage_text() {
         "                         speed line), 3 the statistics block only. Applies to the\n"
         "                         --log transcript as well\n"
         "  --compactaccept        report accepted shares as * marks on the speed line\n"
+        "  --statsformat LIST     which columns the statistics block shows, in order\n"
+        "                         (gpuName,speed,poolHr,iter,shares,bestShare,hrPerWatt,\n"
+        "                         power,coreClk,memClk,coreT,fanPct,sharesPerMin,wattPerHr,\n"
+        "                         util,state). No presets: the default is what you get\n"
+        "                         without the flag\n"
+        "  --vstats               one column per GPU, fields as rows\n"
+        "  --hstats [N]           wrap the table into groups N characters wide; a bare\n"
+        "                         --hstats asks the terminal how wide it is\n"
+        "  --tstop C              pause a GPU at this temperature; 0 disables (default)\n"
+        "  --tstart C             resume it at this temperature; 0 leaves it paused\n"
+        "  --tmode MODE           which sensor those read: edge (default), junction or\n"
+        "                         memory. A sensor the card does not report is an error,\n"
+        "                         not a silent fallback to edge\n"
+        "  --keepfree MB          VRAM to leave unallocated, replacing the built-in reserve\n"
+        "                         (256 MB with a display attached, 64 MB headless). 0 takes\n"
+        "                         everything the driver reports free\n"
         "  --digits N             decimals on the speed figures, 0..6 (default: 2)\n"
         "  --pl W                 board power limit in watts, per GPU (\"240\", \"240,*,260\";\n"
         "                         * skips a GPU), or \"auto\" for the value a --tune run\n"
@@ -479,6 +496,66 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             out.seen.silence = true;
             continue;
         }
+        if (arg == "--keepfree") {
+            if (i + 1 >= argc) { err = "missing value for --keepfree\n\n" + usage_text(); return false; }
+            int v;
+            if (!parse_int(argv[++i], kKeepFreeMbMin, kKeepFreeMbMax, v)) {
+                err = "invalid --keepfree (megabytes, 0 or more)\n\n" + usage_text();
+                return false;
+            }
+            out.keepfree_mb = v;
+            out.seen.keepfree = true;
+            continue;
+        }
+        if (arg == "--tstop" || arg == "--tstart") {
+            if (i + 1 >= argc) { err = "missing value for " + arg + "\n\n" + usage_text(); return false; }
+            int v;
+            if (!parse_int(argv[++i], kTempCMin, kTempCMax, v)) {
+                err = "invalid " + arg + " (degrees C, 0 disables)\n\n" + usage_text();
+                return false;
+            }
+            if (arg == "--tstop") { out.tstop = v;  out.seen.tstop = true; }
+            else                  { out.tstart = v; out.seen.tstart = true; }
+            continue;
+        }
+        if (arg == "--tmode") {
+            if (i + 1 >= argc) { err = "missing value for --tmode\n\n" + usage_text(); return false; }
+            const std::string m = lower_trim(argv[++i]);
+            if (m != "edge" && m != "junction" && m != "memory") {
+                err = "invalid --tmode (edge, junction or memory)\n\n" + usage_text();
+                return false;
+            }
+            out.tmode = m;
+            out.seen.tmode = true;
+            continue;
+        }
+        if (arg == "--statsformat") {
+            if (i + 1 >= argc) { err = "missing value for --statsformat\n\n" + usage_text(); return false; }
+            out.statsformat = argv[++i];
+            out.seen.statsformat = true;
+            continue;
+        }
+        if (arg == "--vstats" || arg == "--hstats") {
+            const bool vertical = (arg == "--vstats");
+            // The width is optional: "--hstats 60" fixes it, a bare "--hstats"
+            // asks the terminal. A following flag is not a width.
+            if (i + 1 < argc) {
+                const std::string next = argv[i + 1];
+                if (!next.empty() && next.rfind("-", 0) != 0) {
+                    int v;
+                    if (!parse_int(next, 20, 1000, v)) {
+                        err = "invalid width for " + arg + " (characters, 20..1000)\n\n"
+                            + usage_text();
+                        return false;
+                    }
+                    out.stats_width = v;
+                    ++i;
+                }
+            }
+            if (vertical) { out.vstats = true; out.seen.vstats = true; }
+            else          { out.hstats = true; out.seen.hstats = true; }
+            continue;
+        }
         if (arg == "--compactaccept") {
             out.compactaccept = true;
             out.seen.compactaccept = true;
@@ -680,6 +757,25 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
 
     // A MISMATCHED --algo is rejected right here -- no later source can make
     // "ETHASH" valid. A MISSING one is not, for the reason below.
+    if (out.vstats && out.hstats) {
+        err = "--vstats and --hstats are two layouts; pick one\n\n" + usage_text();
+        return false;
+    }
+    if (!out.statsformat.empty()) {
+        std::vector<std::string> fields;
+        std::string ferr;
+        if (!ui::parse_stats_format(out.statsformat, fields, ferr)) {
+            err = "invalid --statsformat: " + ferr + "\n\n" + usage_text();
+            return false;
+        }
+    }
+    // A stop that is not above the restart point can only flap: the device would
+    // resume into the same reading that paused it.
+    if (out.tstop != 0 && out.tstart != 0 && out.tstart >= out.tstop) {
+        err = "--tstart must be below --tstop (it is the temperature to resume at)\n\n"
+            + usage_text();
+        return false;
+    }
     if (!algo.empty() && algo != "BEAM-III") {
         err = "unsupported algo\n\n" + usage_text();
         return false;

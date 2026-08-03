@@ -49,6 +49,12 @@ nvmlReturn_t (*p_name)(nvmlDevice_t, char*, unsigned) = nullptr;
 nvmlReturn_t (*p_pci)(nvmlDevice_t, void*) = nullptr;
 // Cumulative energy since driver load, in millijoules.
 nvmlReturn_t (*p_energy)(nvmlDevice_t, unsigned long long*) = nullptr;
+// nvmlMemory_t {total, free, used}, all unsigned long long. Only the first three
+// fields are read, so the v2 struct (which prepends a version field) is bound
+// separately rather than aliased onto this one.
+nvmlReturn_t (*p_meminfo)(nvmlDevice_t, unsigned long long*) = nullptr;
+// NVML_FEATURE_DISABLED/ENABLED out-param.
+nvmlReturn_t (*p_display)(nvmlDevice_t, int*) = nullptr;
 // Supported memory clocks: count is in/out (capacity in, entries written out).
 nvmlReturn_t (*p_memclocks)(nvmlDevice_t, unsigned*, unsigned*) = nullptr;
 // Power limit: values are milliwatts throughout NVML's interface.
@@ -130,6 +136,8 @@ bool nvml_init() {
     bind(p_pci,      "nvmlDeviceGetPciInfo_v3");
     if (!p_pci) bind(p_pci, "nvmlDeviceGetPciInfo_v2");
     bind(p_energy,         "nvmlDeviceGetTotalEnergyConsumption");
+    bind(p_meminfo,        "nvmlDeviceGetMemoryInfo");
+    bind(p_display,        "nvmlDeviceGetDisplayActive");
     bind(p_memclocks,      "nvmlDeviceGetSupportedMemoryClocks");
     bind(p_pl_get,         "nvmlDeviceGetPowerManagementLimit");
     bind(p_pl_default,     "nvmlDeviceGetPowerManagementDefaultLimit");
@@ -290,6 +298,25 @@ bool nvml_total_energy_mj(unsigned long long& mj, unsigned index) {
     if (p_energy(d, &v) != NVML_SUCCESS) return false;
     mj = v;
     return true;
+}
+
+bool nvml_memory_info(unsigned index, uint64_t& free_bytes, uint64_t& total_bytes) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_meminfo || !d) return false;
+    // nvmlMemory_t is {total, free, used}; NVML writes all three.
+    unsigned long long m[3] = {0, 0, 0};
+    if (p_meminfo(d, m) != NVML_SUCCESS) return false;
+    total_bytes = m[0];
+    free_bytes  = m[1];
+    return true;
+}
+
+bool nvml_display_active(unsigned index) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_display || !d) return false;
+    int active = 0;
+    if (p_display(d, &active) != NVML_SUCCESS) return false;
+    return active != 0;
 }
 
 NvmlWrite nvml_set_power_limit(unsigned index, unsigned watts) {

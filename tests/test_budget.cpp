@@ -161,5 +161,43 @@ int main() {
     check(bm.num_buckets == 1048576u, "M3Max uses 2^20 = 1048576 buckets (same as 16GB: elems=2^25)");
     check(bm.capacity > bm.elems_per_round, "M3Max reserves collision headroom (capacity > 2^25 seed count)");
 
+    // -- the sizing basis: free VRAM less a fixed reserve --
+    section("vram reserve");
+    const uint64_t MiB = 1024ull*1024;
+    {
+        clear_keepfree();
+        check(reserve_bytes(true)  == kReserveDisplayBytes,  "a display attached reserves 256 MB");
+        check(reserve_bytes(false) == kReserveHeadlessBytes, "headless reserves 64 MB");
+
+        // 16 GiB card, 15.6 GiB free, desktop up.
+        const uint64_t total = 16376ull*MiB, freeb = 15620ull*MiB;
+        check(usable_vram(freeb, total, reserve_bytes(true)) == freeb - 256*MiB,
+              "usable is free minus the reserve, never a share of the total");
+
+        // Free is what the driver already netted of other processes, so a busy
+        // card yields less without any extra arithmetic here.
+        check(usable_vram(4ull*GiB, total, 64*MiB) == 4ull*GiB - 64*MiB,
+              "a card with other tenants sizes off what is actually free");
+
+        check(usable_vram(0, total, 64*MiB) == (uint64_t)((double)total * kUnknownFreeHeadroom),
+              "an unreadable free figure falls back to total times the headroom");
+        check(usable_vram(100*MiB, total, 256*MiB) == 0,
+              "a reserve larger than free yields nothing rather than underflowing");
+        check(usable_vram(total + GiB, total, 0) == total,
+              "usable never exceeds the card");
+    }
+    {
+        // --keepfree replaces the reserve outright, 0 included.
+        set_keepfree_bytes(0);
+        check(keepfree_given(), "--keepfree is recorded as given");
+        check(reserve_bytes(true) == 0 && reserve_bytes(false) == 0,
+              "--keepfree 0 takes everything free, display or not");
+        set_keepfree_bytes(4ull*GiB);
+        check(reserve_bytes(true) == 4ull*GiB, "--keepfree is not capped or clamped");
+        clear_keepfree();
+        check(!keepfree_given() && reserve_bytes(true) == kReserveDisplayBytes,
+              "clearing it restores the built-in reserve");
+    }
+
     return summary("budget");
 }

@@ -127,6 +127,10 @@ public:
         bool has_temp = false;      unsigned temp_c = 0;
         bool has_fan = false;       unsigned fan_pct = 0;
         bool has_util = false;      unsigned util_pct = 0;
+        // Held out of mining on purpose (--tstop, miner/thermal.h). A card at
+        // 0 sol/s with no explanation reads as dead, which is the confusion
+        // --tstop exists to prevent.
+        bool paused = false;
     };
 
     struct SeriesSet {

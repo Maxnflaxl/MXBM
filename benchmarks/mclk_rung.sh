@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS. Every figure ever published for this project was measured with the
 # memory clock at 10251 MHz -- the six controlled runs in headline.sh, all 34 rows of the
-# lolMiner comparison, every power sweep. But the card advertises a higher rung:
+# reference comparison, every power sweep. But the card advertises a higher rung:
 #
 #   nvidia-smi -q -d SUPPORTED_CLOCKS  ->  10501 / 10251 / 5001 / 810 / 405 MHz
 #

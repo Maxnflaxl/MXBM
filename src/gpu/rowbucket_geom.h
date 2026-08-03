@@ -124,9 +124,15 @@ constexpr unsigned kRbLowPowerW = 0;
 //               DISARMED (kRbLowPowerW == 0; see its comment for why), so every
 //               value is inert. Only the CUDA backend passes a real value.
 struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
+//   slack_bytes : held back from `global_mem` on top of the footprint. The 1 GiB
+//               default is for callers passing TOTAL VRAM, which says nothing
+//               about what is free; a caller that already sized against the
+//               driver's free figure passes 0, since the reserve is applied
+//               there (gpu/budget.h).
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad = false, unsigned power_limit_w = 0,
-                           bool allow_split = false);
+                           bool allow_split = false,
+                           uint64_t slack_bytes = (uint64_t)1 << 30);
 
 // Largest single allocation when each record set may split into two bucket-halves:
 // half the larger set, or the never-split back-ref rows if bigger. The arithmetic
