@@ -71,6 +71,16 @@ constexpr uint32_t kRbCapacity = (1u << 25) + (1u << 25) / 32;    // 34,603,008
 // cap changed mid-run gets a restart notice, never a re-select.
 constexpr unsigned kRbLowPowerW = 0;
 
+// Below this board power limit, speculative entry co-scheduling is off. The co-blocks
+// win rides on round 4 having idle issue capacity: true while r4 is DRAM-bound, false
+// once a cap makes every round issue-bound. Measured 2026-08-04, miner loop, ABBA at
+// the rung operating points: nospec is -1.8 % at both 120 W and 100 W, while spec
+// keeps its win at stock and at the 285 W rung point. 140-160 W is unmeasured, so the
+// threshold covers only the measured band; a mid-band measurement moves it, not the
+// mechanism. 0 disarms, like kRbLowPowerW above. CUDA only -- the OpenCL port's floor
+// behaviour is unmeasured and keeps its default.
+constexpr unsigned kSpecMinPowerW = 130;
+
 // The row-bucket geometry decision, with the device reduced to the two numbers it
 // actually turns on. Pure, so docs/HW_REQUIREMENTS.md's "which cards get the fast path"
 // table can be pinned by a test instead of worked out by hand.

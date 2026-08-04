@@ -282,7 +282,15 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
 
     // Speculative-entry buffers are best-effort: a card without the extra 0.39 GiB (or
     // a user setting MXBM_NO_SPEC=1) simply runs the entry pass standalone, as before.
-    if (!std::getenv("MXBM_NO_SPEC")) {
+    // Under a low cap the co-blocks displace r4 work the card can no longer spare --
+    // every round is issue-bound there -- so the observed power limit gates it too
+    // (kSpecMinPowerW; measured -1.8 % at 120 and 100 W).
+    const bool specLowPower =
+        kSpecMinPowerW != 0 && power_limit_w != 0 && power_limit_w < kSpecMinPowerW;
+    if (specLowPower)
+        std::fprintf(stderr, "CUDA: board power limit %u W is below %u W: speculative "
+                     "entry off (it costs ~2%% there)\n", power_limit_w, kSpecMinPowerW);
+    if (!std::getenv("MXBM_NO_SPEC") && !specLowPower) {
         p_->specElem   = dalloc<uint64_t>(p_->nslots);
         p_->specCounts = dalloc<uint32_t>(p_->nb);
         p_->specPp     = dalloc<uint64_t>(4);
