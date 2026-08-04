@@ -130,7 +130,8 @@ def num(cell):
     skips heading rows and em-dashes without a separate check.
     """
     c = cell.replace("*", "").replace("~", "").strip()
-    c = re.sub(r"\s*(W|MHz|ms|GB/s|GiB|%)$", "", c)
+    # GB/s before GB so a rate never loses its "/s" and reads as a size.
+    c = re.sub(r"\s*(W|MHz|ms|GB/s|GiB|GB|%)$", "", c)
     m = re.match(r"^-?\d+(?:\.\d+)?$", c)
     return float(c) if m else None
 

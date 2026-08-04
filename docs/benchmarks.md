@@ -157,6 +157,12 @@ limit. The previous limit is restored on exit, including on Ctrl+C. See
 Per solve, from `benchmarks/stage_power.sh` (which replays one stage many times inside a
 real solve and solves for its own time and power) and from Nsight Compute:
 
+![Board power across one solve, by stage](tools/stages.svg)
+
+The chart is the table below, drawn as a timeline: width is time, height is power, so
+each block's **area** is the energy that stage costs. Generated from the table by
+`python3 docs/tools/plot_stages.py`, so the two cannot drift.
+
 | stage | ms | % of solve | power | DRAM traffic | bound by |
 |---|---|---|---|---|---|
 | `entry_scatter` | 2.68 | 7.7 % | 284.0 W | 0.26 GB | compute (BLAKE2b) |

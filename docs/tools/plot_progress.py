@@ -31,11 +31,30 @@ distance means equal RATIO, which is what the table's own delta-percent column
 tracks. A linear-axis twin is written as well, because a ratio chart and an
 absolute chart answer different questions.
 
-ON THE TWO Y AXES. sol/s and ms/solve are the SAME measurement inverted, and
-this is the one case where a second axis is not the usual lie: no correlation is
-being implied between two quantities, because there is only one quantity. It is
-still redundant ink -- see the note in TODO.md about dropping the ms axis, which
-is a change to what the surrounding prose claims and so is not made here.
+ON THE TWO Y AXES -- settled 2026-08-04, and they stay.
+
+sol/s and ms/solve are the SAME measurement inverted, and this is the one case
+where a second axis is not the usual lie. The reason the rule exists is that two
+DIFFERENT measures on two scales imply an alignment the data does not contain --
+crossings that are artifacts of whatever ranges the author picked. There is no
+such implication available here, because there is only one quantity.
+
+What the second series costs differs by scale, measured by normalising both pixel
+paths and comparing the sol/s path against the ms path reflected:
+
+    log axes      residual mean 0.006, max 0.012   -> near-identical shapes
+    linear axes   residual mean 0.41,  max 0.70    -> genuinely different shapes
+
+So on the log chart the ms line is close to the sol/s line flipped, and on the
+linear chart the reciprocal's convexity makes the two carry visibly different
+shapes -- which is the surrounding prose's actual claim, that almost all of the
+ms was won early while almost all of the sol/s came late.
+
+What is NOT possible is relabelling one axis with the other's units as a single
+converted tick strip: sol/s x ms is ~1900 over the OpenCL rows and ~1980 over the
+CUDA ones, the two halves reporting different solutions/solve, so one ruler would
+misstate half the chart by 4 %. Two real series, each measured, is the honest
+version.
 """
 import os
 import re
@@ -53,6 +72,7 @@ OUT_LIN = os.path.join(HERE, "progress-linear.svg")
 TARGET_SOL = 53.0          # lolMiner, stock, user-measured
 W, H = 1000, 460
 L, R, T, B = 62, 62, 58, 92   # margins: left/right axes, title, date bands + labels
+DATE_HALF = 30                # half the rendered width of "2026-07-23" at 10 px
 
 SOL, MS = cl.SERIES[0], cl.SERIES[1]   # blue, orange -- validated as a pair
 REF = cl.MUTED                         # the reference miner is context, not a series
@@ -122,7 +142,7 @@ def render(rows, switch_at, log=True):
         c.text(lx + dx + 26, 44, name, 10, cl.INK_2)
 
     # -- date bands ------------------------------------------------------
-    i, shade = 0, False
+    i, shade, prev_right = 0, False, None
     while i < n:
         j = i
         while j + 1 < n and rows[j + 1]["date"] == rows[i]["date"]:
@@ -132,7 +152,15 @@ def render(rows, switch_at, log=True):
         x0, x1 = max(x0, L), min(x1, W - R)
         if shade:
             c.rect(x0, T, x1 - x0, H - B - T, "#f4f6f8")
-        c.text((x0 + x1) / 2, H - B + 46, rows[i]["date"], 10, cl.MUTED, "middle")
+        # A one-step band is ~30 px wide and its label is ~58, so consecutive
+        # short bands overlap into an unreadable smear ("2026-07-2x2026-07-31").
+        # Staggered onto a second row rather than dropped: unlike an axis tick
+        # there is no mark left behind to locate the band, so a dropped date
+        # label loses the band entirely.
+        mid = (x0 + x1) / 2
+        row2 = prev_right is not None and mid - DATE_HALF < prev_right
+        c.text(mid, H - B + (60 if row2 else 46), rows[i]["date"], 10, cl.MUTED, "middle")
+        prev_right = None if row2 else mid + DATE_HALF
         shade = not shade
         i = j + 1
 
@@ -190,7 +218,8 @@ def render(rows, switch_at, log=True):
         c.polyline([(x(i), scale(v)) for i, v in enumerate(vals)], colour)
         for i, v in enumerate(vals):
             c.marker(x(i), scale(v), colour, 2.8, cl.SURFACE,
-                     "%s\n%s" % (rows[i]["date"], rows[i]["label"]))
+                     "%s\n%s\n%.1f ms · %.1f sol/s"
+                     % (rows[i]["date"], rows[i]["label"], rows[i]["ms"], rows[i]["sol"]))
 
     # endpoint callouts: the two numbers a reader actually wants
     c.text(x(n - 1) - 10, ys(sols[-1]) - 11, "%.1f sol/s" % sols[-1], 11, cl.INK,

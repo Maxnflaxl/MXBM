@@ -40,6 +40,14 @@ the only way to see the early changes next to a 30× range. **Linear** starts bo
 zero, so equal height means equal *absolute* change — which shows that almost all of the
 ms was won early while almost all of the sol/s came late.
 
+Both charts carry two y axes, which is normally a lie and here is not: sol/s and ms/solve
+are one quantity inverted, so no correlation is being implied between two things. On the
+log chart the two lines are near-mirror images; on the linear chart the reciprocal's
+convexity makes them genuinely different shapes, which is exactly what the sentence above
+is pointing at. Relabelling one axis in the other's units instead is *not* available —
+`sol/s × ms` is ~1900 over the OpenCL rows and ~1980 over the CUDA ones, so a single
+converted ruler would misstate half the chart by 4 %.
+
 The x axis is optimization step, not calendar time: only three dates exist and 16 rows
 fall on one of them, so dates are drawn as bands. The dashed divider is the change of
 measurement described above, not just of backend.

@@ -16,7 +16,7 @@
 <text x="786.4" y="414" font-size="10" fill="#898781" text-anchor="middle">2026-07-25</text>
 <rect x="853.8" y="58" width="33.7" height="310" fill="#f4f6f8"/>
 <text x="870.6" y="414" font-size="10" fill="#898781" text-anchor="middle">2026-07-26</text>
-<text x="912.7" y="414" font-size="10" fill="#898781" text-anchor="middle">2026-07-31</text>
+<text x="912.7" y="428" font-size="10" fill="#898781" text-anchor="middle">2026-07-31</text>
 <line x1="62" y1="368" x2="938" y2="368" stroke="#e1e0d9" stroke-width="1"/>
 <text x="56" y="371" font-size="10" fill="#898781" text-anchor="end">0</text>
 <line x1="62" y1="274.8" x2="938" y2="274.8" stroke="#e1e0d9" stroke-width="1"/>
@@ -53,167 +53,221 @@
 <polyline points="62,86.2 95.7,303.9 129.4,307.6 163.1,310.4 196.8,328.3 230.5,330.7 264.2,331.5 297.8,332.3 331.5,334.5 365.2,336.9 398.9,340.4 432.6,342.4 466.3,344.7 500,345.7 533.7,352.9 567.4,353.5 601.1,353.9 634.8,355.3 668.5,356.5 702.2,357.2 735.8,356.8 769.5,357.7 803.2,358.6 836.9,358.6 870.6,358.8 904.3,359.0 938,359.1" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="62" cy="86.2" r="4.8" fill="#fcfcfb"/>
 <circle cx="62" cy="86.2" r="2.8" fill="#eb6834"><title>2026-07-23
-First working GPU solver (first share found)</title></circle>
+First working GPU solver (first share found)
+1050.0 ms · 1.8 sol/s</title></circle>
 <circle cx="95.7" cy="303.9" r="4.8" fill="#fcfcfb"/>
 <circle cx="95.7" cy="303.9" r="2.8" fill="#eb6834"><title>2026-07-23
-Sort-based collision finder (P1–P3)</title></circle>
+Sort-based collision finder (P1–P3)
+239.0 ms · 8.0 sol/s</title></circle>
 <circle cx="129.4" cy="307.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="129.4" cy="307.6" r="2.8" fill="#eb6834"><title>2026-07-23
-Tiled 4-bit × 6-pass radix sort (P4)</title></circle>
+Tiled 4-bit × 6-pass radix sort (P4)
+225.0 ms · 8.4 sol/s</title></circle>
 <circle cx="163.1" cy="310.4" r="4.8" fill="#fcfcfb"/>
 <circle cx="163.1" cy="310.4" r="2.8" fill="#eb6834"><title>2026-07-24
-Fixed-width AoS compaction `[7,7,6,5,1]`</title></circle>
+Fixed-width AoS compaction `[7,7,6,5,1]`
+214.5 ms · 8.9 sol/s</title></circle>
 <circle cx="196.8" cy="328.3" r="4.8" fill="#fcfcfb"/>
 <circle cx="196.8" cy="328.3" r="2.8" fill="#eb6834"><title>2026-07-24
-Fused row-bucket pipeline (STEP A–C)</title></circle>
+Fused row-bucket pipeline (STEP A–C)
+148.0 ms · 12.8 sol/s</title></circle>
 <circle cx="230.5" cy="330.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="230.5" cy="330.7" r="2.8" fill="#eb6834"><title>2026-07-24
-L5-thin: drop round-5 leaf payload</title></circle>
+L5-thin: drop round-5 leaf payload
+139.1 ms · 13.7 sol/s</title></circle>
 <circle cx="264.2" cy="331.5" r="4.8" fill="#fcfcfb"/>
 <circle cx="264.2" cy="331.5" r="2.8" fill="#eb6834"><title>2026-07-24
-Per-round work compaction on row-bucket</title></circle>
+Per-round work compaction on row-bucket
+136.0 ms · 14.0 sol/s</title></circle>
 <circle cx="297.8" cy="332.3" r="4.8" fill="#fcfcfb"/>
 <circle cx="297.8" cy="332.3" r="2.8" fill="#eb6834"><title>2026-07-24
-Async enqueue (de-bubble)</title></circle>
+Async enqueue (de-bubble)
+133.0 ms · 14.3 sol/s</title></circle>
 <circle cx="331.5" cy="334.5" r="4.8" fill="#fcfcfb"/>
 <circle cx="331.5" cy="334.5" r="2.8" fill="#eb6834"><title>2026-07-24
-Compact `leftContrib` (fold 8 leaves → 1 u64)</title></circle>
+Compact `leftContrib` (fold 8 leaves → 1 u64)
+124.8 ms · 15.2 sol/s</title></circle>
 <circle cx="365.2" cy="336.9" r="4.8" fill="#fcfcfb"/>
 <circle cx="365.2" cy="336.9" r="2.8" fill="#eb6834"><title>2026-07-24
-Packed element record (1 block, not 4 arrays)</title></circle>
+Packed element record (1 block, not 4 arrays)
+115.7 ms · 16.4 sol/s</title></circle>
 <circle cx="398.9" cy="340.4" r="4.8" fill="#fcfcfb"/>
 <circle cx="398.9" cy="340.4" r="2.8" fill="#eb6834"><title>2026-07-24
-Re-derive round-1 seeds from indices</title></circle>
+Re-derive round-1 seeds from indices
+102.7 ms · 18.5 sol/s</title></circle>
 <circle cx="432.6" cy="342.4" r="4.8" fill="#fcfcfb"/>
 <circle cx="432.6" cy="342.4" r="2.8" fill="#eb6834"><title>2026-07-24
-Defer round-1's seed expand to a non-divergent loop</title></circle>
+Defer round-1's seed expand to a non-divergent loop
+95.3 ms · 19.9 sol/s</title></circle>
 <circle cx="466.3" cy="344.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="466.3" cy="344.7" r="2.8" fill="#eb6834"><title>2026-07-24
-Round 2 re-derives from a 16 B pair record</title></circle>
+Round 2 re-derives from a 16 B pair record
+86.8 ms · 21.9 sol/s</title></circle>
 <circle cx="500" cy="345.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="500" cy="345.7" r="2.8" fill="#eb6834"><title>2026-07-24
-Round 3 re-derives from a 24 B quad record (later reverted)</title></circle>
+Round 3 re-derives from a 24 B quad record (later reverted)
+83.2 ms · 22.8 sol/s</title></circle>
 <circle cx="533.7" cy="352.9" r="4.8" fill="#fcfcfb"/>
 <circle cx="533.7" cy="352.9" r="2.8" fill="#eb6834"><title>2026-07-24
-Bake per-round constants into the fused kernels</title></circle>
+Bake per-round constants into the fused kernels
+56.2 ms · 33.8 sol/s</title></circle>
 <circle cx="567.4" cy="353.5" r="4.8" fill="#fcfcfb"/>
 <circle cx="567.4" cy="353.5" r="2.8" fill="#eb6834"><title>2026-07-24
-Retire the round-3 quad record + per-set stride sizing</title></circle>
+Retire the round-3 quad record + per-set stride sizing
+54.0 ms · 35.2 sol/s</title></circle>
 <circle cx="601.1" cy="353.9" r="4.8" fill="#fcfcfb"/>
 <circle cx="601.1" cy="353.9" r="2.8" fill="#eb6834"><title>2026-07-24
-Drop the redundant `lead` from the round-3 record</title></circle>
+Drop the redundant `lead` from the round-3 record
+52.7 ms · 36.1 sol/s</title></circle>
 <circle cx="634.8" cy="355.3" r="4.8" fill="#fcfcfb"/>
 <circle cx="634.8" cy="355.3" r="2.8" fill="#eb6834"><title>2026-07-24
-Round 5 stores 1 work word, not 5</title></circle>
+Round 5 stores 1 work word, not 5
+47.5 ms · 40.0 sol/s</title></circle>
 <circle cx="668.5" cy="356.5" r="4.8" fill="#fcfcfb"/>
 <circle cx="668.5" cy="356.5" r="2.8" fill="#eb6834"><title>2026-07-24
-Retune row-bucket geometry to (15, 2)</title></circle>
+Retune row-bucket geometry to (15, 2)
+42.7 ms · 44.5 sol/s</title></circle>
 <circle cx="702.2" cy="357.2" r="4.8" fill="#fcfcfb"/>
 <circle cx="702.2" cy="357.2" r="2.8" fill="#eb6834"><title>2026-07-24
-√-scaled bucket capacity → geometry (16, 1)</title></circle>
+√-scaled bucket capacity → geometry (16, 1)
+40.4 ms · 47.0 sol/s</title></circle>
 <circle cx="735.8" cy="356.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="735.8" cy="356.8" r="2.8" fill="#eb6834"><title>2026-07-25
-CUDA port, algorithm unchanged</title></circle>
+CUDA port, algorithm unchanged
+41.6 ms · 47.6 sol/s</title></circle>
 <circle cx="769.5" cy="357.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="769.5" cy="357.7" r="2.8" fill="#eb6834"><title>2026-07-25
-128-bit access on the round-2/3 records</title></circle>
+128-bit access on the round-2/3 records
+38.4 ms · 51.6 sol/s</title></circle>
 <circle cx="803.2" cy="358.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="803.2" cy="358.6" r="2.8" fill="#eb6834"><title>2026-07-25
-128-bit access on the remaining records</title></circle>
+128-bit access on the remaining records
+35.2 ms · 56.1 sol/s</title></circle>
 <circle cx="836.9" cy="358.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="836.9" cy="358.6" r="2.8" fill="#eb6834"><title>2026-07-25
-Un-pad round 2's record — 9th word to its own plane</title></circle>
+Un-pad round 2's record — 9th word to its own plane
+35.0 ms · 56.4 sol/s</title></circle>
 <circle cx="870.6" cy="358.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="870.6" cy="358.8" r="2.8" fill="#eb6834"><title>2026-07-26
-Perfect chain table + group spill → `kFCap` 320</title></circle>
+Perfect chain table + group spill → `kFCap` 320
+34.1 ms · 58.0 sol/s</title></circle>
 <circle cx="904.3" cy="359.0" r="4.8" fill="#fcfcfb"/>
 <circle cx="904.3" cy="359.0" r="2.8" fill="#eb6834"><title>2026-07-31
-Speculative entry co-scheduling — r4's launch hosts the next nonce's entry as interleaved co-blocks</title></circle>
+Speculative entry co-scheduling — r4's launch hosts the next nonce's entry as interleaved co-blocks
+33.4 ms · 59.5 sol/s</title></circle>
 <circle cx="938" cy="359.1" r="4.8" fill="#fcfcfb"/>
 <circle cx="938" cy="359.1" r="2.8" fill="#eb6834"><title>2026-07-31
-Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table</title></circle>
+Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table
+33.2 ms · 59.7 sol/s</title></circle>
 <polyline points="62,359.6 95.7,331.0 129.4,328.7 163.1,326.7 196.8,308.4 230.5,304.2 264.2,302.8 297.8,301.4 331.5,297.2 365.2,291.6 398.9,281.8 432.6,275.3 466.3,266.0 500,261.8 533.7,210.6 567.4,204.0 601.1,199.8 634.8,181.7 668.5,160.7 702.2,149.1 735.8,146.3 769.5,127.6 803.2,106.7 836.9,105.3 870.6,97.8 904.3,90.8 938,89.9" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="62" cy="359.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="62" cy="359.6" r="2.8" fill="#2a78d6"><title>2026-07-23
-First working GPU solver (first share found)</title></circle>
+First working GPU solver (first share found)
+1050.0 ms · 1.8 sol/s</title></circle>
 <circle cx="95.7" cy="331.0" r="4.8" fill="#fcfcfb"/>
 <circle cx="95.7" cy="331.0" r="2.8" fill="#2a78d6"><title>2026-07-23
-Sort-based collision finder (P1–P3)</title></circle>
+Sort-based collision finder (P1–P3)
+239.0 ms · 8.0 sol/s</title></circle>
 <circle cx="129.4" cy="328.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="129.4" cy="328.7" r="2.8" fill="#2a78d6"><title>2026-07-23
-Tiled 4-bit × 6-pass radix sort (P4)</title></circle>
+Tiled 4-bit × 6-pass radix sort (P4)
+225.0 ms · 8.4 sol/s</title></circle>
 <circle cx="163.1" cy="326.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="163.1" cy="326.7" r="2.8" fill="#2a78d6"><title>2026-07-24
-Fixed-width AoS compaction `[7,7,6,5,1]`</title></circle>
+Fixed-width AoS compaction `[7,7,6,5,1]`
+214.5 ms · 8.9 sol/s</title></circle>
 <circle cx="196.8" cy="308.4" r="4.8" fill="#fcfcfb"/>
 <circle cx="196.8" cy="308.4" r="2.8" fill="#2a78d6"><title>2026-07-24
-Fused row-bucket pipeline (STEP A–C)</title></circle>
+Fused row-bucket pipeline (STEP A–C)
+148.0 ms · 12.8 sol/s</title></circle>
 <circle cx="230.5" cy="304.2" r="4.8" fill="#fcfcfb"/>
 <circle cx="230.5" cy="304.2" r="2.8" fill="#2a78d6"><title>2026-07-24
-L5-thin: drop round-5 leaf payload</title></circle>
+L5-thin: drop round-5 leaf payload
+139.1 ms · 13.7 sol/s</title></circle>
 <circle cx="264.2" cy="302.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="264.2" cy="302.8" r="2.8" fill="#2a78d6"><title>2026-07-24
-Per-round work compaction on row-bucket</title></circle>
+Per-round work compaction on row-bucket
+136.0 ms · 14.0 sol/s</title></circle>
 <circle cx="297.8" cy="301.4" r="4.8" fill="#fcfcfb"/>
 <circle cx="297.8" cy="301.4" r="2.8" fill="#2a78d6"><title>2026-07-24
-Async enqueue (de-bubble)</title></circle>
+Async enqueue (de-bubble)
+133.0 ms · 14.3 sol/s</title></circle>
 <circle cx="331.5" cy="297.2" r="4.8" fill="#fcfcfb"/>
 <circle cx="331.5" cy="297.2" r="2.8" fill="#2a78d6"><title>2026-07-24
-Compact `leftContrib` (fold 8 leaves → 1 u64)</title></circle>
+Compact `leftContrib` (fold 8 leaves → 1 u64)
+124.8 ms · 15.2 sol/s</title></circle>
 <circle cx="365.2" cy="291.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="365.2" cy="291.6" r="2.8" fill="#2a78d6"><title>2026-07-24
-Packed element record (1 block, not 4 arrays)</title></circle>
+Packed element record (1 block, not 4 arrays)
+115.7 ms · 16.4 sol/s</title></circle>
 <circle cx="398.9" cy="281.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="398.9" cy="281.8" r="2.8" fill="#2a78d6"><title>2026-07-24
-Re-derive round-1 seeds from indices</title></circle>
+Re-derive round-1 seeds from indices
+102.7 ms · 18.5 sol/s</title></circle>
 <circle cx="432.6" cy="275.3" r="4.8" fill="#fcfcfb"/>
 <circle cx="432.6" cy="275.3" r="2.8" fill="#2a78d6"><title>2026-07-24
-Defer round-1's seed expand to a non-divergent loop</title></circle>
+Defer round-1's seed expand to a non-divergent loop
+95.3 ms · 19.9 sol/s</title></circle>
 <circle cx="466.3" cy="266.0" r="4.8" fill="#fcfcfb"/>
 <circle cx="466.3" cy="266.0" r="2.8" fill="#2a78d6"><title>2026-07-24
-Round 2 re-derives from a 16 B pair record</title></circle>
+Round 2 re-derives from a 16 B pair record
+86.8 ms · 21.9 sol/s</title></circle>
 <circle cx="500" cy="261.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="500" cy="261.8" r="2.8" fill="#2a78d6"><title>2026-07-24
-Round 3 re-derives from a 24 B quad record (later reverted)</title></circle>
+Round 3 re-derives from a 24 B quad record (later reverted)
+83.2 ms · 22.8 sol/s</title></circle>
 <circle cx="533.7" cy="210.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="533.7" cy="210.6" r="2.8" fill="#2a78d6"><title>2026-07-24
-Bake per-round constants into the fused kernels</title></circle>
+Bake per-round constants into the fused kernels
+56.2 ms · 33.8 sol/s</title></circle>
 <circle cx="567.4" cy="204.0" r="4.8" fill="#fcfcfb"/>
 <circle cx="567.4" cy="204.0" r="2.8" fill="#2a78d6"><title>2026-07-24
-Retire the round-3 quad record + per-set stride sizing</title></circle>
+Retire the round-3 quad record + per-set stride sizing
+54.0 ms · 35.2 sol/s</title></circle>
 <circle cx="601.1" cy="199.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="601.1" cy="199.8" r="2.8" fill="#2a78d6"><title>2026-07-24
-Drop the redundant `lead` from the round-3 record</title></circle>
+Drop the redundant `lead` from the round-3 record
+52.7 ms · 36.1 sol/s</title></circle>
 <circle cx="634.8" cy="181.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="634.8" cy="181.7" r="2.8" fill="#2a78d6"><title>2026-07-24
-Round 5 stores 1 work word, not 5</title></circle>
+Round 5 stores 1 work word, not 5
+47.5 ms · 40.0 sol/s</title></circle>
 <circle cx="668.5" cy="160.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="668.5" cy="160.7" r="2.8" fill="#2a78d6"><title>2026-07-24
-Retune row-bucket geometry to (15, 2)</title></circle>
+Retune row-bucket geometry to (15, 2)
+42.7 ms · 44.5 sol/s</title></circle>
 <circle cx="702.2" cy="149.1" r="4.8" fill="#fcfcfb"/>
 <circle cx="702.2" cy="149.1" r="2.8" fill="#2a78d6"><title>2026-07-24
-√-scaled bucket capacity → geometry (16, 1)</title></circle>
+√-scaled bucket capacity → geometry (16, 1)
+40.4 ms · 47.0 sol/s</title></circle>
 <circle cx="735.8" cy="146.3" r="4.8" fill="#fcfcfb"/>
 <circle cx="735.8" cy="146.3" r="2.8" fill="#2a78d6"><title>2026-07-25
-CUDA port, algorithm unchanged</title></circle>
+CUDA port, algorithm unchanged
+41.6 ms · 47.6 sol/s</title></circle>
 <circle cx="769.5" cy="127.6" r="4.8" fill="#fcfcfb"/>
 <circle cx="769.5" cy="127.6" r="2.8" fill="#2a78d6"><title>2026-07-25
-128-bit access on the round-2/3 records</title></circle>
+128-bit access on the round-2/3 records
+38.4 ms · 51.6 sol/s</title></circle>
 <circle cx="803.2" cy="106.7" r="4.8" fill="#fcfcfb"/>
 <circle cx="803.2" cy="106.7" r="2.8" fill="#2a78d6"><title>2026-07-25
-128-bit access on the remaining records</title></circle>
+128-bit access on the remaining records
+35.2 ms · 56.1 sol/s</title></circle>
 <circle cx="836.9" cy="105.3" r="4.8" fill="#fcfcfb"/>
 <circle cx="836.9" cy="105.3" r="2.8" fill="#2a78d6"><title>2026-07-25
-Un-pad round 2's record — 9th word to its own plane</title></circle>
+Un-pad round 2's record — 9th word to its own plane
+35.0 ms · 56.4 sol/s</title></circle>
 <circle cx="870.6" cy="97.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="870.6" cy="97.8" r="2.8" fill="#2a78d6"><title>2026-07-26
-Perfect chain table + group spill → `kFCap` 320</title></circle>
+Perfect chain table + group spill → `kFCap` 320
+34.1 ms · 58.0 sol/s</title></circle>
 <circle cx="904.3" cy="90.8" r="4.8" fill="#fcfcfb"/>
 <circle cx="904.3" cy="90.8" r="2.8" fill="#2a78d6"><title>2026-07-31
-Speculative entry co-scheduling — r4's launch hosts the next nonce's entry as interleaved co-blocks</title></circle>
+Speculative entry co-scheduling — r4's launch hosts the next nonce's entry as interleaved co-blocks
+33.4 ms · 59.5 sol/s</title></circle>
 <circle cx="938" cy="89.9" r="4.8" fill="#fcfcfb"/>
 <circle cx="938" cy="89.9" r="2.8" fill="#2a78d6"><title>2026-07-31
-Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table</title></circle>
+Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table
+33.2 ms · 59.7 sol/s</title></circle>
 <text x="928" y="78.9" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="end">59.7 sol/s</text>
 <text x="928" y="351.1" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="end">33.2 ms</text>
 <text x="69" y="363.6" font-size="10" fill="#52514e">1.8 sol/s</text>

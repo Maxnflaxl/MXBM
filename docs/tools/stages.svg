@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="470" viewBox="0 0 1000 470" font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+<rect width="1000" height="470" fill="#fcfcfb"/>
+<text x="62" y="30" font-size="15" font-weight="bold" fill="#0b0b0b">Where one BeamHash III solve spends its time and energy</text>
+<text x="62" y="48" font-size="11" fill="#52514e">Board power through a single 35.4 ms solve. Segment width is time, height is power — so segment AREA is energy.</text>
+<rect x="62" y="62" width="20" height="10" fill="#2a78d6"/>
+<text x="88" y="71" font-size="10" fill="#52514e">compute (arithmetic-bound)</text>
+<rect x="301.2" y="62" width="20" height="10" fill="#eb6834"/>
+<text x="327.2" y="71" font-size="10" fill="#52514e">latency (latency-bound)</text>
+<rect x="518.8" y="62" width="20" height="10" fill="#1baf7a"/>
+<text x="544.8" y="71" font-size="10" fill="#52514e">DRAM (bandwidth-bound)</text>
+<line x1="62" y1="296" x2="972" y2="296" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56" y="299" font-size="10" fill="#898781" text-anchor="end">0</text>
+<line x1="62" y1="233.5" x2="972" y2="233.5" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56" y="236.5" font-size="10" fill="#898781" text-anchor="end">100</text>
+<line x1="62" y1="171" x2="972" y2="171" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56" y="174" font-size="10" fill="#898781" text-anchor="end">200</text>
+<line x1="62" y1="108.5" x2="972" y2="108.5" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56" y="111.5" font-size="10" fill="#898781" text-anchor="end">300</text>
+<text x="14" y="196" font-size="11" fill="#52514e" text-anchor="middle" transform="rotate(-90 14 196)">board power (W)</text>
+<rect x="63" y="118.5" width="66.9" height="177.5" fill="#2a78d6"><title>entry_scatter
+2.68 ms (7.7 % of the solve)
+284.0 W · 0.26 GB DRAM
+bound by compute (BLAKE2b)</title></rect>
+<rect x="131.9" y="118.2" width="146.9" height="177.8" fill="#eb6834"><title>round 1
+5.79 ms (16.5 % of the solve)
+284.5 W · 1.07 GB DRAM
+bound by latency</title></rect>
+<rect x="280.8" y="118.7" width="272.6" height="177.3" fill="#eb6834"><title>round 2
+10.68 ms (30.5 % of the solve)
+283.6 W · 3.35 GB DRAM
+bound by latency</title></rect>
+<rect x="555.4" y="126.7" width="243.3" height="169.3" fill="#1baf7a"><title>round 3
+9.54 ms (27.2 % of the solve)
+270.9 W · 4.83 GB DRAM
+bound by DRAM</title></rect>
+<rect x="800.7" y="119.2" width="143.3" height="176.8" fill="#1baf7a"><title>round 4
+5.65 ms (16.1 % of the solve)
+282.9 W · 2.95 GB DRAM
+bound by DRAM</title></rect>
+<rect x="946.0" y="118.4" width="25.0" height="177.6" fill="#1baf7a"><title>terminal
+1.05 ms (3.0 % of the solve)
+284.1 W · 0.54 GB DRAM
+bound by DRAM</title></rect>
+<line x1="62" y1="117.9" x2="972" y2="117.9" stroke="#52514e" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="970" y="111.9" font-size="10" fill="#52514e" text-anchor="end">board limit 285 W</text>
+<line x1="62" y1="296" x2="972" y2="296" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="62" y1="96" x2="62" y2="296" stroke="#c3c2b7" stroke-width="1"/>
+<line x1="96.5" y1="298" x2="96.5" y2="308" stroke="#c3c2b7" stroke-width="1"/>
+<text x="4" y="316" font-size="10" fill="#52514e" text-anchor="start">entry_scatter · 2.68 ms · 7.7 %</text>
+<line x1="205.4" y1="298" x2="205.4" y2="326" stroke="#c3c2b7" stroke-width="1"/>
+<text x="205.4" y="334" font-size="10" fill="#52514e" text-anchor="middle">round 1 · 5.79 ms · 16.5 %</text>
+<line x1="417.1" y1="298" x2="417.1" y2="308" stroke="#c3c2b7" stroke-width="1"/>
+<text x="417.1" y="316" font-size="10" fill="#52514e" text-anchor="middle">round 2 · 10.68 ms · 30.5 %</text>
+<line x1="677.1" y1="298" x2="677.1" y2="308" stroke="#c3c2b7" stroke-width="1"/>
+<text x="677.1" y="316" font-size="10" fill="#52514e" text-anchor="middle">round 3 · 9.54 ms · 27.2 %</text>
+<line x1="872.4" y1="298" x2="872.4" y2="308" stroke="#c3c2b7" stroke-width="1"/>
+<text x="872.4" y="316" font-size="10" fill="#52514e" text-anchor="middle">round 4 · 5.65 ms · 16.1 %</text>
+<line x1="958.5" y1="298" x2="958.5" y2="326" stroke="#c3c2b7" stroke-width="1"/>
+<text x="996" y="334" font-size="10" fill="#52514e" text-anchor="end">terminal · 1.05 ms · 3.0 %</text>
+<line x1="279.8" y1="356" x2="799.7" y2="356" stroke="#898781" stroke-width="1"/>
+<line x1="279.8" y1="356" x2="279.8" y2="351" stroke="#898781" stroke-width="1"/>
+<line x1="799.7" y1="356" x2="799.7" y2="351" stroke="#898781" stroke-width="1"/>
+<text x="539.8" y="370" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="middle">round 2 + round 3 = 58 % of the solve</text>
+<text x="62" y="440" font-size="10" fill="#52514e">Every stage draws the board limit — there is no single kernel to fix for power. The one dip is round 3 at 270.9 W, the most bandwidth-bound stage (4.83 GB).</text>
+<text x="62" y="456" font-size="10" fill="#898781">Per-stage figures from benchmarks/stage_power.sh, which replays one stage many times inside a real solve; they sum to 35.4 ms against a 35.0 ms measured total, a 1.1 % attribution residual.</text>
+</svg>
