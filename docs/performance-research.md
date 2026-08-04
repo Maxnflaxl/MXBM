@@ -3851,6 +3851,229 @@ other than time.
 
 ---
 
+## Measured results, 2026-08-04
+
+### Undervolting buys nothing under a power cap — the cap outranks both knobs
+<details>
+<summary>Details</summary>
+
+*(`docs-internal/rootruns/coff_sweep.sh` and `uv_sweep.sh`, on the shipping miner loop.
+The lever the ledger had carried as "the one unmeasured axis this card exposes",
+untestable until the monitor moved to the motherboard iGPU and the compute GPU stopped
+holding a graphics context.)*
+
+**The V/F offset alone.** ABBA per (cap, offset), miner-loop arms, gated on
+`rejected == 0`:
+
+| cap | +0 → +100 | Δ | SM clock |
+|---|---|---|---|
+| 120 W | 68.05 → 68.05 ms | +0.00 % | **1155 → 1155** |
+| 160 W | 47.80 → 47.80 | +0.00 % | 2152 → 2152 |
+| 285 W | 33.00 → **32.60** | **−1.21 %** | 2648 → **2730** |
+
+Under a cap the achieved clock does not move, so neither can the time. At stock it
+does. 160 W resolves nothing either way — its two base arms drifted 1.05 %, wider than
+any effect on the row.
+
+**The full idiom, `--cclk` plus `--coff`.** Locking the clock above what the cap
+delivers is the half that should work — the offset supplies that clock at a lower
+voltage, and the cap fits it. It does not: **every target was void**, the requested
+clock never approached at any offset.
+
+| cap | asked | achieved, all arms | with no lock |
+|---|---|---|---|
+| 120 W | 1320 / 1440 / 1560 | 1140–1170 | 1200 |
+| 160 W | 2340 / 2550 / 2775 | 2085–2205 | 2130 |
+
+**The mechanism: the lock reaches the hardware and the power governor outranks it.**
+The hung arms are the evidence — their stats line reads `CCLK 2550` at 36 W with 0.00
+sol/s, so the register took the locked value while idle, and only under load is it
+overridden. The offset reaches the silicon too: it destabilises the card at +300. It
+is applied, it can hang the card, and it still buys zero clock under a cap.
+
+Stability inverts between the two sweeps, which is worth keeping straight. With a free
+clock, +300 hangs at 120 W; with the clock pinned it does not — that hang was a boost
+excursion during ramp, not steady-state instability. At 160 W, +300 hangs either way.
+
+**So the lead closes for the low band.** The stock −1.21 % is left as an open item, not
+a result: one ABBA pair, and +100 sits one rung under a hang, which a 45 s arm cannot
+qualify for a miner that runs for days.
+
+*Reopening: a driver that credits the offset in the governor's power model, or a card
+whose cap does not override a locked clock.*
+
+</details>
+
+### A byte's cost under a cap is set by SHAPE, and shape survives the cap — R2_FULL is withdrawn as evidence against the eco pipeline
+<details>
+<summary>Details</summary>
+
+*(`cuda/emit_shape_probe shape` via `docs-internal/rootruns/byte_shape_caps.sh`,
+2026-08-04. The
+eco-pipeline question turned on one uncontrolled variable: the evidence against a
+store-everything design is `MXBM_R2_FULL`, whose extra bytes are SCATTERED 72 B stores
+bolted onto the pair machinery, while a streaming design's traffic is half coalesced.
+If shape drove that loss, the evidence does not transfer. Sustained ~2.5 s loops per
+shape so the governor's steady state is inside the timed window — best-of-N minimums
+under a cap select the least-throttled rep — stock memory clock, energy from the
+counter. Full table: `docs-internal/rootruns/byte-shape/`.)*
+
+| cap | seq GB/s @ SM | 64 B scatter GB/s @ SM | J/GB seq | J/GB 64 B |
+|---|---|---|---|---|
+| 285 W | 639.5 @ 2775 | 132.9 @ 2775 | 0.26 | 1.09 |
+| 160 W | 639.4 @ 2730 | 132.9 @ 2775 | 0.26 | 1.11 |
+| 120 W | **633.6 @ 1005** | 127.2 @ 2670 | 0.20 | 1.02 |
+| 100 W | 435.3 @ 465 | **118.2 @ 2505** | 0.24 | **0.93** |
+
+Three findings:
+
+- **DRAM work survives a core cap.** Sequential holds 633 GB/s at 120 W on a **1005 MHz
+  core**, and 435 at the 100 W floor on 465 MHz; scattered wide records lose only 12 %
+  floor-vs-stock. The cap's currency is core cycles, not bytes — the lolMiner mechanism,
+  now confirmed from a third direction on our own instrument.
+- **The clock column is a work-per-cycle readout.** Dense stores cost so much power per
+  cycle that the governor crushes seq to 465 MHz inside 100 W, while the stall-heavy
+  scatter keeps 2505 MHz in the same budget. Same watts, opposite clocks.
+- **J/GB is shape-dominated, not cap-dominated**: a scattered byte costs ~4.3× a
+  sequential one at every cap, and the floor makes bytes *cheaper* per GB, not dearer.
+
+**What this closes: R2_FULL no longer prices the eco design's byte bill.** Its loss at
+every cap cannot have been the shape of its bytes — scattered bytes are nearly
+cap-immune — so it priced "stored records on top of the pair machinery", not "a
+streaming design's traffic". That was the one measured objection to the Tier-2 eco
+pipeline; it is withdrawn.
+
+**What this does NOT change: the prize.** The rung sweeps already bound it from the
+existence-proof side: **~+11–16 % in the 120–160 W band and ~+32 % at the 100 W floor**
+(each design at its best memory clock per cap — a store design cannot follow
+re-derivation down the rung, which is what shrank the mid-band from the naive +20–30 %).
+The probe makes the design feasible in mechanism, not larger in prize: still weeks of
+work, strongest at the deep floor.
+
+*Caveat: this probe's scattered absolutes are pessimistic — pure write bursts with no
+reads to share the bus; lolMiner's real interleaved kernels sustain 393–556 GB/s on the
+same class of traffic. The ratios and their trend across caps are the measurement.*
+
+</details>
+
+### The eco kill-probe: a streaming round holds 343 GB/s at 120 W — the design survives its cheapest kill-test
+<details>
+<summary>Details</summary>
+
+*(`cuda/emit_shape_probe shape round`, 2026-08-04, same harness and discipline. One
+round of a store-everything pipeline stripped to its traffic: coalesced 64 B layer
+read, key from word 0, atomic slot, scattered 64 B write into bb=16 buckets — no
+derive, no rebuild, no shared memory. The gate was pre-registered before the run:
+17.7 GB/solve must beat MXBM+rung at the same cap, so ≥259 GB/s combined at 120 W and
+≥190 at 100 W break even; ≥350 was set as "alive with margin".)*
+
+| cap | combined GB/s | SM | 17.7 GB floor | MXBM+rung today |
+|---|---|---|---|---|
+| 285 W | 512.2 | 2775 | — | *(calibration: lolMiner's measured 471–512 class, reproduced)* |
+| 120 W | **343.2** | **1740** | 51.6 ms | 68.3 ms |
+| 100 W | **250.0** | 1200 | 70.8 ms | 92.9 ms |
+
+**1.3× break-even at both capped points** — the traffic floor sits ~24 % below today's
+MXBM+rung, and that margin is the budget for everything a real pipeline adds (terminal
+pass, launch gaps, the residual arithmetic). The mechanism is the design thesis in one
+contrast: this instruction-light kernel keeps **1740 MHz inside 120 W** where MXBM's
+real rounds hold ~1155 — fewer instructions per byte, so the same watts buy more of
+everything.
+
+Two caveats. The probe is one round, not five chained with a seed pass — it bounds the
+traffic, not the pipeline. And its W / J-per-GB columns are biased high for this mode
+(the energy bracket spans the whole process including a 2.1 GB host copy, divided by
+the timed wall only); the rate and clock columns are clean and are the result.
+
+**Standing: superseded the same day by the full-pipeline mock below, which measures
+the whole solve instead of extrapolating from one round.**
+
+</details>
+
+### The floor program: spec entry off below 130 W ships; the rebuild is worth 11 ms there and cannot be harvested in place
+<details>
+<summary>Details</summary>
+
+*(2026-08-04, `docs-internal/rootruns/floor_gaps.sh`, `floor_derive.sh`,
+`floor_r2full_carve.sh`, `floor_r2full_ncu.sh`. A pass over the low-band closures
+looking for untested assumptions; three A/Bs and a profile, all at 120/100 W + rung.)*
+
+**Shipped: speculative entry is off below `kSpecMinPowerW` (130 W).** Its co-blocks
+ride on r4 having idle issue capacity — true while r4 is DRAM-bound, false once a cap
+makes every round issue-bound. Measured in the miner loop, ABBA: **nospec −1.76 % at
+120 W, −1.87 % at 100 W**, spec keeping its win at stock and at the 285 W rung point.
+The gate reuses the observed-limit plumbing next to `kRbLowPowerW`; 140–160 W is
+unmeasured and keeps the default. CUDA only.
+
+**Closed: `kWG 288`** (removes the 9-passes-for-8.25 expand tail) is a wash under caps
+(+0.0/+0.3/+0.4 %) and +0.24 % at stock, re-measured on current kernels.
+
+**The rebuild's floor price, and why it stays.** `MXBM_ABL_DERIVE=2` by replay
+amplification — the spread corrupts r2's output keys, so whole-solve A/Bs are invalid
+(83 M drops on the first attempt) and the corruption must cancel inside each binary's
+own (t9−t1)/8: **r2's rebuild costs 8.52 ms/solve at 120 W and 11.15 at 100 W**
+(12.5 % of the solve). The ALU pipe is the critical path at the floor (800 MHz census:
+r1 76 %, r2 70 %), so the prize is real — and R2_FULL, which deletes exactly this
+rebuild, still loses. The carve locates its overhead (r1's storing side +8.6 ms, r2's
+read side eating 6.7 of the 11.2) and the profile names it: **the hash arithmetic is
+the kernel's latency sponge.** r2 minus its rebuild drops to 974 M instructions
+(−70 %) and 12 % issue-active, warps parked in long-scoreboard (2.6 → 24.9) and
+barrier (4.6 → 20.6) stalls; r1 with the fat emit loses its fifth block and backs up
+the store queue (mio 12×). More occupancy is the textbook sponge and is closed from
+both resources. Best-case cleanup (side-plane record, FCAP 288, register trim) nets
+~+1–2 ms — below the bar.
+
+**"Re-derivation is the right trade" now carries its mechanism**: the arithmetic
+doubles as latency hiding, and this organization has no other sponge to offer.
+Harvesting the 11 ms needs an organization whose sponge is occupancy — the parked eco
+pipeline — which is why it cannot be grafted in piecemeal.
+
+</details>
+
+### The full-pipeline eco mock: −29 % at the 100 W floor, −13 % at 120 W — alive at the deep floor only
+<details>
+<summary>Details</summary>
+
+*(`cuda/emit_shape_probe shape pipe`, 2026-08-04. The whole store-everything pipeline
+as a traffic-faithful mock: a REAL 235 M-siphash seed pass — the one derive the design
+keeps, and compute is the expensive currency at a cap — then four chained streaming
+rounds and a thin terminal read, ping-ponging real bucket layers, six launches and the
+counter resets included. 17.45 GB/solve on the competitor's measured schedule. Stock
+calibration: 37.4–37.9 ms against the real thing's 35.8 on the same schedule, within
+6 %. Gates pre-registered per arm before each run.)*
+
+| cap | mock, stock memory | mock + 5001 rung | MXBM + rung today | best vs MXBM |
+|---|---|---|---|---|
+| 285 W | 37.4 ms | 59.0 ms *(the rung roofline — lock-held sanity arm)* | — | — |
+| 120 W | 60.4 | 59.6 | 68.3 | **−12.7 %** — thin (gate < 55) |
+| 100 W | 82.1 | **66.1** | 92.9 | **−28.9 %** — alive (gate < 70) |
+
+Three findings:
+
+- **The one-round margin halves once the pipeline is whole.** The kill-probe's −24 %
+  became −11.6 % on stock memory: the seed's real arithmetic bills at the starved
+  clock, and the thin legs run below the fat rounds' efficiency. Extrapolating a
+  pipeline from its best kernel overstates it — measured, not assumed.
+- **The rung crossover transfers to a store design, and sits between 120 and 100 W** —
+  the competitor's own ~126 W, reproduced. The 120 W rung arm shows the balance
+  exactly: the interface refund lifts the clock 1620 → 2520 MHz and the rate does not
+  move, because it lands on the rung's bandwidth ceiling. At 100 W the refund wins
+  (−19.5 % over stock memory).
+- **These floors are ceilings for a real implementation.** The mock has no match
+  arithmetic — no compare/pair work beyond a key update — so a real design eats into
+  the −13 % / −29 % from above.
+
+**Verdict for Tier 2, now measured end-to-end on this rig:** the eco pipeline is
+**alive only at the deep floor** (~−29 % at 100 W, before match arithmetic), **thin in
+the 120 W band** (−13 % before match arithmetic, against a weeks-sized build), and
+dead at 140 W and above where the rung plateau falls behind re-derivation. The
+decision input is complete; what remains is only whether the ≤~110 W rig class is
+worth weeks of work.
+
+</details>
+
+---
+
 ## Established limits
 <details>
 <summary>Details</summary>

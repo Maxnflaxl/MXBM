@@ -11,6 +11,7 @@
 # Standalone nvcc-built probes under cuda/ (see cuda/README.md for the build lines).
 # Listed by name because they have no extension and sit beside their sources.
 /cuda/pipeline
+/cuda/pipeline-*
 /cuda/emit_shape_probe
 /cuda/test_primitives
 /benchmarks/nvml_energy
