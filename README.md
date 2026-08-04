@@ -10,14 +10,11 @@ auditable alternative to the closed-source miners in the ecosystem.
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
 > Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
 > RTX 4070 Ti SUPER the CUDA backend does **59.8 sol/s** and the portable OpenCL
-> one **59.4** — within 1.2 % of each other, measured in the same session.
-> `--solver auto` prefers CUDA, falls back to OpenCL, then to a CPU reference
-> solver. Measured history, hardware limits and the caveats on comparing miners:
-> **[docs/performance.md](docs/performance.md)**.
+> one **59.4**, measured in the same session.
 >
-> **Where MXBM wins, and where it does not.** Both MXBM and lolMiner can be given a
-> board power limit, and both were swept against each other at identical caps
-> ([the numbers](docs/performance.md#both-miners-under-the-same-cap)):
+> **Where MXBM wins, and where it does not.** Both miners were swept against each other
+> at identical board power limits, interleaved in one session — the only way the
+> comparison means anything ([the numbers](docs/performance.md#both-miners-under-the-same-cap)):
 >
 > | board cap | MXBM | lolMiner 1.98a | |
 > |---|---|---|---|
@@ -25,20 +22,14 @@ auditable alternative to the closed-source miners in the ecosystem.
 > | 220 W | **54.9 sol/s · 0.250 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
 > | 285 W | **59.1 sol/s** · 0.208 sol/s/W | 53.7 sol/s · **0.226 sol/s/W** | faster vs more efficient |
 >
-> Both columns come from one interleaved session (2026-07-28), which is the only way the
-> comparison means anything; MXBM has gained ~1 % since, from work that does not change
-> its shape.
->
 > **MXBM has the higher ceiling — 59.1 sol/s against ~54.0, which lolMiner cannot reach
 > at any setting — and it leads on both speed and efficiency between roughly 210 W and
-> 256 W.** Outside that window lolMiner is the better choice, and at the efficient end it
-> is clearly so: it gives up only 2.4 % of its speed for 24 % less power, so its best
-> efficiency beats MXBM's best by 16 %. Closing that is
+> 256 W.** Outside that window lolMiner is the better choice, and clearly so at the
+> efficient end, where its best efficiency beats MXBM's by 16 %. Closing that is
 > [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
 >
-> If you run MXBM, **`--pl 220` is the setting to use** — its own efficiency peaks near
-> 200 W and its best speed-per-watt against the alternative is around 220. Needs root;
-> restored on exit. See [usage.md](docs/usage.md#power-limit).
+> **`--pl 220` is the setting to use.** Needs root; restored on exit. See
+> [usage.md](docs/usage.md#power-limit).
 
 ---
 
@@ -84,8 +75,7 @@ auditable alternative to the closed-source miners in the ecosystem.
 ## Developer fee
 
 MXBM takes a **1.0% developer fee** — one 36-second round per 60 minutes of
-mining, about 14.4 minutes a day. That is the same rate the closed-source
-BeamHash III miners charge.
+mining, about 14.4 minutes a day.
 
 It is announced at startup and at each round, reported on its own row of the
 statistics table and in `/summary`, and kept in a separate ledger so it never
@@ -94,12 +84,30 @@ log in under your own worker name plus the rate (`rig1_1`), so they are
 identifiable as yours. `--dev-fee PCT` raises the rate if you want to support
 the project with more; it cannot lower it.
 
-The fee is what funds MXBM's development: the solver work, the hardware it is
-measured on, and keeping it working as pools and drivers move. It is the same
-rate the closed-source miners charge, so an open miner costs you no more.
+The fee is what funds MXBM's development. It is the same rate the closed-source miners charge, so an open miner costs you no more.
 
 Full terms, including exactly what is and is not counted, are in
 **[docs/devfee.md](docs/devfee.md)**.
+
+## Donations
+
+The developer fee funds MXBM by default. If you would like to give more, there
+are three ways:
+
+- **Point a rig at the developer's address.** It is an ordinary Beam address on
+  [HeroMiners](https://beam.herominers.com/), so any miner can mine to it:
+
+  ```sh
+  ./build/mxbm --algo BEAM-III \
+               --pool beam.herominers.com:1130 \
+               --user 12cafbe121b5f063d2c63152058575479a2826a41fd4176296dae2e8ad3fc9ffc60.<worker-name>
+  ```
+
+- **Send Beam directly** to that same address, or to the BANS name
+  **`maxnflaxl.beam`**.
+
+- **Raise the fee** with `--dev-fee PCT`, if you would rather it came out of
+  normal mining than out of a separate run.
 
 ## Quick start
 
@@ -166,13 +174,10 @@ holds the harnesses: `power_bench.sh` (sol/s and J/sol), `stage_power.sh`
 (per-kernel time and power attribution), `power_sweep.sh` (the speed/power
 curve; needs root) and `collect_report.sh` (a paste-ready report).
 
-**Almost every figure here comes from one GPU.** The exceptions are an M3 Max and
-a [contributed two-card rig](docs/performance.md#third-party-hardware--a-two-card-rig-2026-08-02)
-(RTX 3060 Ti + 4070 SUPER), which immediately showed that the memory-clock rung's
-crossover is a property of the card and moved 50 W on different silicon. If you
-run MXBM on anything else, `benchmarks/collect_report.sh` produces a report in one
-command and there is an issue template waiting for it — results from hardware we
-do not have are the single most useful contribution to the project right now.
+Running MXBM on a card that is not yet
+[listed](docs/benchmarks.md#benchmarked-devices)? `benchmarks/collect_report.sh`
+produces a paste-ready report in one command, and there is an issue template waiting
+for it.
 
 Comparing miners is harder than it looks: reported `sol/s` is implementation-defined,
 and MXBM measures a 17 % spread between "solutions found" and "solutions that verify"

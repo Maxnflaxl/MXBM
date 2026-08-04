@@ -1,14 +1,12 @@
 # Overclocking — design decisions
 
-Status: **all knobs implemented — `--pl` 2026-07-25, `--cclk`/`--mclk`/`--coff`/`--moff`/`--fan`
-2026-07-28.** Everything below is the design they follow. The "To determine" section is
-what remains *measured-unknown*.
+Everything below is the design the six knobs follow. The "To determine" section is what
+remains *measured-unknown*.
 
-`--pl` was taken first because it is the only knob whose value is
-[measured](performance.md#both-miners-under-the-same-cap) rather than assumed: the card
-runs pinned at its limit in every kernel, so the limit picks the operating point outright.
-The clock offsets remain hypotheses — see "Whether the community's recommended OC is right
-*for MXBM*".
+`--pl` is the knob whose value is [measured](performance.md#both-miners-under-the-same-cap)
+rather than assumed: the card runs pinned at its limit in every kernel, so the limit picks
+the operating point outright. The clock offsets remain hypotheses — see "Whether the
+community's recommended OC is right *for MXBM*".
 
 The head-to-head sweep also gave `--pl` a second job it was not designed for: it is the
 instrument that found MXBM losing **570 MHz of core clock to lolMiner at a 180 W cap**,
@@ -29,10 +27,10 @@ device enumeration and **before the solver is constructed** (2026-07-31; previou
 so a benchmark measures the same operating point mining will use — and so anything that
 selects on the observed limit reads the value `--pl` just set.
 
-## The power-limit geometry policy — built, verified, and currently disarmed
+## The power-limit geometry policy is currently disarmed
 
-The machinery for selecting the solver's bucket geometry from the board power limit
-exists and is verified end to end: the order is **apply, then observe, then size** —
+The machinery for selecting the solver's bucket geometry from the board power limit runs
+**apply, then observe, then size** —
 `--pl` lands before the solver is constructed and the selection reads the limit off the
 card afterwards, so a cap applied outside MXBM (`nvidia-smi -pl` before launch — the
 only route on a rig that doesn't run MXBM as root) counts exactly the same as one
@@ -158,26 +156,18 @@ Observed under MXBM load (from the stats table): core 2670 MHz, memory 10251 MHz
 had (a true no-op), returns `NVML_ERROR_NO_PERMISSION` (rc=4). Reads are unprivileged;
 writes are not.
 
-## Verified: `--pl` end to end, under sudo
+## The `--pl` floor is 100 W, and undervolting past it costs efficiency
 
-Run 2026-07-25 on the reference card. Each case is one the implementation could plausibly
-get wrong, and the card was read back with `nvidia-smi` afterwards:
+The driver's own band on the reference card is 100–366 W. A value outside it is applied at
+the clamp and reported at the value that actually reached the card, never at the one
+requested. At the 100 W floor throughput collapses to **16.3 sol/s — 0.163 sol/s/W**, far
+below the 0.253 peak at 200 W. That is a 48-solve sample and not quotable as a curve
+point, but it is the same story the sweep tells: there is a floor, and going under it buys
+nothing.
 
-| case | console | result |
-|---|---|---|
-| `--pl 220` | `Power limit: 220 W (was 285 W, device allows 100-366 W)` | 53.8 sol/s at 220 W — matches the sweep's 53.8 exactly |
-| `--pl 50` | `50 W requested, applied 100 W (device allows 100-366 W)` | clamped to the driver's floor and said so; 16.3 sol/s |
-| `--pl 220`, then Ctrl+C | — | card read back at **285 W**: restore fires on signal |
-| unprivileged `--pl 240` | `not applied: insufficient permission - re-run under sudo` | mined on at 285 W; card untouched |
-
-The live statistics block reports the applied limit and its efficiency directly
-(`Power 220`, `Eff. 0.243 sol/s/W`), so the setting is visible while mining rather than
-only at startup.
-
-At the clamped floor of 100 W throughput collapses to 16.3 sol/s — 0.163 sol/s/W, far
-below the 0.253 peak at 200 W. That is only a 48-solve sample and not quotable as a curve
-point, but it is the same story the sweep tells: there is a floor, and undervolting past
-it costs efficiency rather than buying it.
+The live statistics block reports the applied limit and its efficiency (`Power 220`,
+`Eff. 0.243 sol/s/W`), so the operating point is readable while mining rather than only at
+startup.
 
 ## The memory offset is in transfer-rate MHz, so `--moff` is 2× the clock
 
@@ -358,15 +348,13 @@ looks correct. Find the offset where sol/s peaks and back off from it.
 `lolMiner --benchmark BEAM-III` runs the algorithm with **no pool and no wallet** and
 prints `Average speed (15s): N sol/s`, in minutes.
 
-**It does not settle MXBM vs lolMiner, and must not be used for that.** An earlier
-revision of this document claimed it replaced the share-rate protocol in
-`docs-internal/MINER_COMP.md`. That was wrong, and wrong for the exact reason that
-protocol was written: reported sol/s is *implementation-defined*. MXBM counts solutions
-that pass CPU verification (1.98/solve) and not raw survivors (2.29/solve) — a 17 %
-difference — and we do not know which of the two lolMiner reports. Comparing its
-self-reported benchmark number against our self-reported number is precisely the
-untrustworthy comparison. Accepted pool shares remain the only arbiter, because the pool
-verifies independently of either miner's counters.
+**It does not settle MXBM vs lolMiner, and must not be used for that.** Reported sol/s is
+*implementation-defined*: MXBM counts solutions that pass CPU verification (1.98/solve)
+and not raw survivors (2.29/solve) — a 17 % difference — and we do not know which of the
+two lolMiner reports. Comparing its self-reported benchmark number against our
+self-reported number is precisely the untrustworthy comparison. Accepted pool shares
+remain the only arbiter, because the pool verifies independently of either miner's
+counters; the protocol is in [benchmarking.md](benchmarking.md).
 
 Where the benchmark *is* useful is **A/B-ing OC settings within lolMiner**, the same way
 `bench_rounds` A/Bs settings within MXBM. A metric only has to be self-consistent to

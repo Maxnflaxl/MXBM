@@ -114,8 +114,7 @@ figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
     backend gap is NOT this row minus that one** — comparing headline figures measured on
     different days is exactly what the band above forbids. It comes from a same-session
     pair on 2026-08-02: CUDA 33.1 ms / 60.2 sol/s, OpenCL 33.5 ms / 59.4 sol/s, both
-    120 s, minutes apart. Cross-day, the same two numbers read as parity, which is how
-    this page briefly claimed it.
+    120 s, minutes apart. Cross-day, the same two numbers read as parity.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
@@ -656,7 +655,7 @@ ncu](performance-research.md#lolminer-measured-under-ncu-the-state-storing-desig
 Our own knobs recover little. Geometry (17,0) deletes the rescan, crosses over at ~190 W
 and buys 1 % in the 140–180 W band and 2.6 % at the floor — but it failed same-day
 reproduction and auto-selection was built, verified and
-[disarmed](overclocking.md#the-power-limit-geometry-policy--built-verified-and-currently-disarmed).
+[disarmed](overclocking.md#the-power-limit-geometry-policy-is-currently-disarmed).
 The byte-heavy `MXBM_R2_FULL` **loses at every cap**: re-derivation is the right trade at
 all power levels. Tables: [the eco
 sweep](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does).
@@ -919,10 +918,9 @@ So quote 117 ms as the pipeline figure and ~15 sol/s as the sustained one, and e
 the gap between them to widen with ambient temperature and run length rather than being
 fixable in software.
 
-> An earlier revision of this section reported 155.2 ms/solve and attributed a ~38 ms
-> gap to work outside the pipeline. That measurement was taken while builds and tests
-> were competing for the same GPU; on an idle machine it does not reproduce. Benchmark
-> figures here are only valid from an otherwise-idle machine.
+> **Benchmark figures here are only valid from an otherwise-idle machine.** A 155.2 ms
+> reading, with a ~38 ms gap that looked like work outside the pipeline, turned out to be
+> builds and tests competing for the same GPU. It does not reproduce on an idle one.
 
 Threadgroup memory, the resource the fused rounds are bound by (32 768 B ceiling,
 measured):
@@ -1002,11 +1000,11 @@ SEEDF is the **default on Apple**. `MXBM_METAL_REBUILD=1` selects the CUDA-shipp
 configuration; both kernel pairs live in the same metallib and the host picks at runtime,
 so the A/B needs no rebuild.
 
-> An earlier revision of this section predicted this change would net only ~4 ms and
-> declined to attempt it. That arithmetic assumed ~251 GB/s effective bandwidth, inferred
-> by dividing round 3's traffic by its wall time — but round 3 is not purely
-> bandwidth-bound, so the real figure is far higher and the extra traffic much cheaper
-> than predicted. Measure the thing; do not divide two numbers and call it a bandwidth.
+> **Measure the thing; do not divide two numbers and call it a bandwidth.** This change
+> was predicted to net only ~4 ms, and declined on that basis. The arithmetic assumed
+> ~251 GB/s effective bandwidth, inferred by dividing round 3's traffic by its wall time —
+> but round 3 is not purely bandwidth-bound, so the real figure is far higher and the
+> extra traffic much cheaper than predicted.
 
 ### Three nulls, so they are not re-proposed
 

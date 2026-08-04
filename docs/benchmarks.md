@@ -6,8 +6,7 @@ commands are given under each table.
 
 **MXBM has been measured on four GPUs**: an RTX 4070 Ti SUPER (the card everything is
 developed against), an M3 Max via Metal, and a contributed RTX 4070 SUPER and RTX 3060 Ti.
-See [benchmarked devices](#benchmarked-devices). A solver tuned against one card is tuned
-against one card — [send us yours](#send-us-your-numbers).
+See [benchmarked devices](#benchmarked-devices), and [send us yours](#send-us-your-numbers).
 
 For *why* comparing miners is harder than reading two numbers off two screens, see
 [benchmarking.md](benchmarking.md). This page is the results; that page is the method.
@@ -54,8 +53,8 @@ runs pinned at the card's 285 W board limit in every kernel (verified: the drive
 one). lolMiner draws 239 W and is *not* capped — it leaves 46 W unused. Comparing sol/s/W
 at stock therefore rewards whichever miner fails to fill the card.
 
-At **equal power** the ranking reverses — but only inside a window, and by less than an
-earlier revision of this page claimed. Both miners capped to 220 W:
+At **equal power** the ranking reverses, but only inside a window. Both miners capped
+to 220 W:
 
 | | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
@@ -67,15 +66,12 @@ MXBM is ahead on both between roughly **210 W and 256 W**. Below that lolMiner i
 on both — at 180 W by about 16 % — and above it lolMiner is more efficient while MXBM is
 faster.
 
-**An earlier revision of this page warned that this comparison might not hold, and it was
-right.** It said: *"lolMiner was measured only at its own uncapped draw, so this is
-MXBM's curve against lolMiner's single point. Capping lolMiner would very likely improve
-its efficiency too, and nobody has measured its curve."* That has now been measured, and
-capping lolMiner improves its efficiency a great deal — enough to take the low end of the
-range outright and to cut the 220 W margin from ~10 % to 1.9 %. The numbers above are the
-corrected ones.
+**Both curves are measured.** lolMiner was swept across the same caps as MXBM rather than
+sampled once at its own uncapped draw, which is what makes the window above a comparison
+of two curves instead of a curve against a point. Capping lolMiner improves its efficiency
+substantially, and that is already priced into the numbers above.
 
-**What this still does not show.** The two miners' `sol/s` are separate counters whose
+**What this does not show.** The two miners' `sol/s` are separate counters whose
 relationship is [an open question](benchmarking.md#1-the-problem-with-comparing-reported-sols)
 — MXBM reports CPU-verified solutions and lolMiner's basis is undocumented, a distinction
 worth ~17 % inside our own pipeline. The watts are trustworthy across miners because one
