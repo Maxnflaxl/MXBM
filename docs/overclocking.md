@@ -2,9 +2,7 @@
 
 Status: **all knobs implemented — `--pl` 2026-07-25, `--cclk`/`--mclk`/`--coff`/`--moff`/`--fan`
 2026-07-28.** Everything below is the design they follow. The "To determine" section is
-what remains *measured-unknown*, and the memory-offset unit in particular is still open:
-the code reports the offset in the units the user typed and logs the resulting clock, so
-the ambiguity is visible rather than hidden, but it is not resolved.
+what remains *measured-unknown*.
 
 `--pl` was taken first because it is the only knob whose value is
 [measured](performance.md#both-miners-under-the-same-cap) rather than assumed: the card
@@ -181,6 +179,23 @@ below the 0.253 peak at 200 W. That is only a 48-solve sample and not quotable a
 point, but it is the same story the sweep tells: there is a floor, and undervolting past
 it costs efficiency rather than buying it.
 
+## The memory offset is in transfer-rate MHz, so `--moff` is 2× the clock
+
+Measured 2026-08-04 under load, on the reference card. `--moff 200` moved the memory
+clock from **10251 to 10351 MHz** — +100 MHz of clock for +200 of offset, and all 40
+sampled seconds read 10351 with no wandering.
+
+NVML's `nvmlDeviceSetMemClkVfOffset` therefore follows `nvidia-settings`'
+`GPUMemoryTransferRateOffset` convention: **MHz of transfer rate, which is twice the
+memory clock.** The community's `--moff 2000` is a request for +1000 MHz of actual clock
+(10251 → 11251), not +2000.
+
+MXBM reports the offset in the units the user typed and the statistics block reports the
+resulting clock, so the doubling is visible while mining rather than something a reader
+has to know. The unit is *not* silently halved on input: `--moff` means what it means to
+every other tool that sets this knob, and changing that would make a value copied from a
+community guide do something different here.
+
 ## Verified: what lolMiner actually does
 
 Checked against the installed lolMiner 1.98a binary, not from documentation.
@@ -287,17 +302,6 @@ range genuinely is register width rather than a recommendation.
 
 ## To determine — must be measured, do not assume
 
-### The memory offset unit
-
-`nvidia-settings` exposes memory offsets as `GPUMemoryTransferRateOffset`, in MHz of
-**transfer rate**, which is 2× the memory clock. It is **not confirmed** that NVML's
-`nvmlDeviceSetMemClkVfOffset` uses the same convention. So `--moff 2000` may mean
-+2000 MHz or +1000 MHz of actual clock.
-
-**Test:** apply a known offset, then read `nvmlDeviceGetClockInfo(NVML_CLOCK_MEM)` and
-compare against the 10251 MHz baseline (10501 max). One measurement settles it. Report
-the offset in the units the user typed, but log the resulting clock so it is unambiguous.
-
 ### Whether the community's recommended OC is right *for MXBM*
 
 hashrate.no lists `--coff 300 --cclk 2205 --moff 2000 --pl 300` for this card.
@@ -309,8 +313,10 @@ would otherwise deliver 1905 MHz.
 **But those numbers are tuned for lolMiner's kernels, not ours**, and one of them looks
 actively wrong for us:
 
-- `--moff 2000` — highest expected value. MXBM is memory-bandwidth-bound; this is the
-  lever on the bound resource.
+- `--moff 2000` — highest expected value. MXBM is memory-bandwidth-bound, so this is the
+  lever on the bound resource. Now that the unit is settled it is **+1000 MHz of clock**,
+  10251 → 11251, which is well past the 10501 the driver reports as the maximum — so the
+  interesting question is where it stops paying, not whether it applies.
 - `--pl 300` — mild raise over the 285 W default (max 366). Cheap, low risk. Worth
   testing *downward* too: the `Eff. sol/s/W` column makes efficiency measurable, and a
   memory-bound kernel often loses little from a lower limit.
@@ -318,7 +324,9 @@ actively wrong for us:
   so this is a ~465 MHz reduction. That is free for a fully memory-bound miner, but ncu
   measured entry/r1/r2 at *low* DRAM %peak — parts of our pipeline are not
   bandwidth-saturated, so core clock plausibly costs us throughput where it costs
-  lolMiner nothing. Treat as a hypothesis to test, not a setting to adopt.
+  lolMiner nothing. One point on that curve, measured 2026-08-04: locking at **2600** cost
+  2.6 % of throughput for 7.7 % less power — 59.2 sol/s at 262 W against 60.8 at 284. A
+  70 MHz cut billing that much is reason to measure the 465 MHz one, not adopt it.
 
 **Apply one knob at a time**, against the established methodology: median over 300
 distinct nonces, ±4.1 % (1σ). A combined change cannot be attributed.

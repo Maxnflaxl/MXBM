@@ -275,6 +275,18 @@ int main() {
         check(rs[0].status == OcStatus::Applied && rs[0].applied == 150, "core offset applied");
         check(rs[1].status == OcStatus::Applied && rs[1].applied == -200,
               "a NEGATIVE memory offset is a downclock, not a parse error");
+        // A memory offset is in transfer-rate MHz, so the clock moves half of it
+        // (measured on hardware 2026-08-04: +200 took 10251 to 10351). The value
+        // is passed through UNHALVED so a setting copied from any other tool or
+        // guide behaves the same here -- which makes this console clause the only
+        // place the factor is stated. Lose it and the doubling goes invisible.
+        // Matched on the whole clause, not on "-100": the same line carries the
+        // device range ("-1000..+1000"), and "-100" is a substring of that, so
+        // the loose check would pass even with the clause deleted.
+        check(rs[1].message.find("the clock moves -100") != std::string::npos,
+              "the memory-offset line names the resulting clock delta, half the offset");
+        check(rs[0].message.find("transfer rate") == std::string::npos,
+              "the CORE offset is 1:1 and must not claim a transfer-rate factor");
         check(g_clk_log == "coff=150;moff=-200;", "both offsets reached the device in order");
         oc_restore();
         check(g_clk_log == "coff=150;moff=-200;moff=0;coff=0;",

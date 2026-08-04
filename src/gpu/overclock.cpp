@@ -238,10 +238,14 @@ namespace {
 // --coff / --moff. The offset shifts the whole V/F curve, so the card keeps
 // managing itself and the setting shows up as instability rather than as a
 // refusal if it is too aggressive.
+// `transfer_rate` says this domain's offset is expressed in MHz of TRANSFER
+// RATE rather than of clock -- true for memory (DDR, so twice the clock) and
+// false for the core. It only affects what the console line says; see the
+// Applied branch below for why the value itself is passed through untouched.
 OcResult apply_offset(const std::string& spec, unsigned device, const char* knob,
                       ClockOffset (*read)(unsigned), NvmlWrite (*write)(unsigned, int),
                       std::atomic<bool>& applied_flag, std::atomic<int>& prev_slot,
-                      const char* domain) {
+                      const char* domain, bool transfer_rate = false) {
     OcResult r;
     if (!want(spec, device, knob, /*allow_negative=*/true, r)) return r;
 
@@ -267,21 +271,36 @@ OcResult apply_offset(const std::string& spec, unsigned device, const char* knob
     applied_flag.store(true);
     oc_install_restore_hooks();
 
+    // The memory offset is in MHz of TRANSFER RATE, which is twice the clock
+    // this same run reports in its statistics block -- measured 2026-08-04,
+    // +200 moved the clock 10251 -> 10351.
+    //
+    // The value is NOT halved on the way in. Every tool that sets this knob --
+    // nvidia-settings, the other miners, every community guide -- uses the
+    // transfer-rate number, so halving it would make a setting copied from any
+    // of them quietly do half of what it does everywhere else. Instead the
+    // doubling is named on the line the user reads, so they do not have to
+    // already know it. The core offset has no such factor.
+    //
+    // It is appended to the CLAMPED message too, and that is the case that
+    // needs it most: --moff 8000 clamps to +6000, and "+6000" is the one number
+    // a reader is least likely to translate on their own.
+    char note[80] = "";
+    if (transfer_rate)
+        std::snprintf(note, sizeof note,
+                      "; transfer rate, so the clock moves %+ld", target / 2);
+
     char buf[256];
     if (clamped) {
         r.status = OcStatus::Clamped;
         std::snprintf(buf, sizeof buf,
-            "%s clock offset: %+ld MHz requested, applied %+ld MHz (device allows %+d..%+d)",
-            domain, r.requested, target, o.min_mhz, o.max_mhz);
+            "%s clock offset: %+ld MHz requested, applied %+ld MHz (device allows %+d..%+d)%s",
+            domain, r.requested, target, o.min_mhz, o.max_mhz, note);
     } else {
         r.status = OcStatus::Applied;
-        // The RESULTING clock is not printed here because it has not settled
-        // yet -- the statistics block reports it once mining starts, which is
-        // also what settles the open question in docs/overclocking.md about
-        // whether the memory offset is in clock or transfer-rate MHz.
         std::snprintf(buf, sizeof buf,
-            "%s clock offset: %+ld MHz (was %+d, device allows %+d..%+d)",
-            domain, target, o.current_mhz, o.min_mhz, o.max_mhz);
+            "%s clock offset: %+ld MHz (was %+d, device allows %+d..%+d)%s",
+            domain, target, o.current_mhz, o.min_mhz, o.max_mhz, note);
     }
     r.message = buf;
     return r;
@@ -414,7 +433,8 @@ std::vector<OcResult> oc_apply(unsigned device, const OcRequest& req) {
     keep(apply_offset(req.coff, device, "--coff", g_clk.core_offset_read, g_clk.core_offset_write,
                       g_coff_applied[device], g_prev_coff[device], "Core"));
     keep(apply_offset(req.moff, device, "--moff", g_clk.mem_offset_read, g_clk.mem_offset_write,
-                      g_moff_applied[device], g_prev_moff[device], "Memory"));
+                      g_moff_applied[device], g_prev_moff[device], "Memory",
+                      /*transfer_rate=*/true));
     keep(apply_lock(req.cclk, device, "--cclk", g_clk.max_core_mhz, g_clk.lock_core,
                     g_core_locked[device], "Core"));
     keep(apply_lock(req.mclk, device, "--mclk", g_clk.max_mem_mhz, g_clk.lock_mem,
