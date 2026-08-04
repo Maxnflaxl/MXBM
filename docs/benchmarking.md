@@ -104,22 +104,35 @@ sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh
 ```
 
 Reference values on the reference card (RTX 4070 Ti SUPER, driver 610.43.03,
-measured 2026-08-01 on the build at `5285c2b`, six 120 s runs):
+measured 2026-08-04 on the build at `fa7adbb`, six 120 s runs, **compute GPU
+headless**):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **33.50** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
+| ms/solve median | **33.30** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
 | SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
-| board draw | ~277 W (≈ 4.66 J/solution at 59.4 sol/s, sampled-power basis) | context, not a gate |
+| board draw | **271.1 W** (spread 0.6 %) | context, not a gate |
 | `clocks_event_reasons` | **none** | any throttle flag voids the run |
+| display on the compute GPU | **no** — monitor on the motherboard iGPU | a compositor on this card costs **0.20 ms and ~6 W** (measured) |
 
-Prior pin, for lineage: **34.30 ms / ~262 W**, measured 2026-07-28 (two runs
-89 minutes apart, to the digit). The 2026-08-01 repeat moved −2.3 % because two
-kernel changes shipped 2026-07-31 (`4605c62` entry co-scheduling, `dfdbb84`
-r2 LD.128 + terminal perfect table) — the shift matches their ship-time
-measurements, and the +15 W at identical clocks is the busier binary. The pin
-must be re-taken after any kernel-shipping day; the number belongs to a build,
-the *reproducibility* belongs to the rig.
+The last row is a condition of the pin, not decoration — it is worth 0.6 % of the
+number, more than the ±0.5 % gate.
+
+Lineage, most recent first — the number belongs to a build *and* a rig, the
+*reproducibility* belongs to the rig alone:
+
+| pin | ms/solve | draw | what moved |
+|---|---|---|---|
+| 2026-08-04 `fa7adbb` | **33.30** | 271.1 W | the monitor moved to the iGPU — **attributed to the rig**: the 08-01 build (`553cac7`) rebuilt and re-run headless the same day reads 33.30 to the digit at 270.4 W, so the compositor was the whole 0.20 ms and the intervening commits are time-neutral |
+| 2026-08-01 `553cac7` | 33.50 | ~277 W | two kernel changes shipped 07-31 (`5817245` entry co-scheduling, `716432f` r2 LD.128 + terminal perfect table); −2.3 % matches their ship-time measurements, and +15 W at identical clocks is the busier binary |
+| 2026-07-28 | 34.30 | ~262 W | first pin; two runs 89 minutes apart, to the digit |
+
+The draw column carries the cross-check both times: a busier binary *raises* draw
+at identical clocks (08-01, +15 W), a quieter rig *lowers* it (08-04, −6 W — the
+compositor's).
+
+Re-take the pin after any kernel-shipping day **or any change to what else the
+card is doing**.
 
 Three rules:
 

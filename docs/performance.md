@@ -195,9 +195,11 @@ same-binary cross-session delta observed since 2026-07-26, across nine-plus stoc
 sessions. One 2026-07-26 event at +5.5 % remains on record, unexplained and never
 recurred. Deltas are unaffected: every A/B here was interleaved.
 
-Under a locked clock the rig reproduces **to the digit across days** (33.50 ms, six runs,
-0.0 % spread), so use `LGC=2600 LMC=10251 benchmarks/headline.sh` to regression-test
-builds and the stock figure to describe what a user gets.
+Under a locked clock the rig reproduces **to the digit across days** (0.0 % spread over
+six runs, on each of three pins), so use `LGC=2600 LMC=10251 benchmarks/headline.sh` to
+regression-test builds and the stock figure to describe what a user gets. The pin stands
+at **33.30 ms** since 2026-08-04, taken with the compute GPU headless — a condition of
+the number, since a compositor on the card costs a measured 0.20 ms and ~6 W.
 
 *Reopening: any same-binary session median landing more than ~2.5 % from its peers
 restores the 5 % band.*
@@ -275,8 +277,17 @@ headroom unused, no longer buying clock with watts at all. The original anomaly 
 card's whole power range, a far more hostile interval, and ms/solve did not move.
 
 The cross-day repeat this owed was paid on 2026-08-01: 33.50 ms, six runs, 0.0 % spread
-— see [the sweep reproduction section](#the-sweep-reproduces-across-sessions). The
-reference is re-pinned at 33.50 for the current build.
+— see [the sweep reproduction section](#the-sweep-reproduces-across-sessions).
+
+**Re-pinned at 33.30 on 2026-08-04, with the compute GPU headless — and the move is
+attributed: it is the rig, not the build.** Six runs, 0.0 % spread, 2610/10251, no
+throttle flags, 271.1 W. The monitor moved to the motherboard iGPU that day, so the
+compositor no longer holds a graphics context on the card; rebuilding the 08-01 pin's
+own commit (`553cac7`) and running it headless the same day reads **33.30 to the
+digit at 270.4 W** — so the compositor was costing **0.20 ms and ~6 W**, and the
+intervening commits are time-neutral. The geometry is unchanged across the move —
+still `(16,1)`, the miner reporting `reserving 64 MB (headless)`. Full lineage:
+[benchmarking.md](benchmarking.md#the-named-reference-lgc-2600).
 
 ### The memory junction temperature is not observable on this card — dead end
 
@@ -580,8 +591,13 @@ digit, all six), SM/mem pinned at 2610/10251, 68 °C, power spread 0.6 %. It mov
 34.30 to **33.50 (−2.3 %)**, and the lineage accounts for it exactly: two kernel changes
 shipped 2026-07-31 totalling 0.80 ms, and the draw rose 262 → 277 W at identical clocks —
 the signature of a busier binary, not a different rig-day. **Under the pin the rig
-reproduces to the digit across days; the number moves only when the build does.**
-Re-pinned at 33.50; repeat after any kernel-shipping day.
+reproduces to the digit across days; the number moves only when something about the
+machine does** — the build, or the card's other tenants. The 2026-08-04 re-take is
+the second kind: −0.6 % on the day the monitor left the compute GPU, attributed by
+rebuilding the 08-01 commit and re-running it headless (33.30 to the digit — the
+compositor was the whole 0.20 ms and ~6 W). The pin stands at **33.30** and carries
+"headless" as a stated condition; repeat it after any kernel-shipping day or any
+change to what else the card is doing.
 
 ### Why we lose the low end: watts buy us less clock
 
@@ -663,7 +679,7 @@ ncu](performance-research.md#lolminer-measured-under-ncu-the-state-storing-desig
 Our own knobs recover little. Geometry (17,0) deletes the rescan, crosses over at ~190 W
 and buys 1 % in the 140–180 W band and 2.6 % at the floor — but it failed same-day
 reproduction and auto-selection was built, verified and
-[disarmed](overclocking.md#the-power-limit-geometry-policy-is-currently-disarmed).
+[disarmed](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does).
 The byte-heavy `MXBM_R2_FULL` **loses at every cap**: re-derivation is the right trade at
 all power levels. Tables: [the eco
 sweep](performance-research.md#the-eco-sweep-170-crosses-over-below-190-w-r2_full-never-does).
