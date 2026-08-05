@@ -21,6 +21,16 @@ constexpr double kDevFeePctMin = 0.0, kDevFeePctMax = 100.0;
 // Host/port split out of a --pool value, plus the user/pass/tls bound to it.
 struct PoolEntry { std::string host; uint16_t port = 0; std::string user, pass; bool tls = true; };
 
+// True for "localhost", 127.0.0.0/8 and ::1 (bracketed or not). A loopback pool is
+// a local process -- a node's own stratum server, a proxy, a p2pool daemon -- with
+// no certificate to present and no wallet address to authenticate as, so TLS
+// defaults off there and --user becomes optional.
+bool is_loopback_host(const std::string& host);
+
+// What a loopback pool sends when --user is omitted: the credential there is a
+// local API key, often not enforced at all.
+constexpr const char* kLoopbackDefaultUser = "x";
+
 // Parsed CLI options. MXBM mines exactly one algorithm (BeamHash III), so
 // --algo is a confirmation, not a selector.
 struct Options {

@@ -22,12 +22,14 @@ std::string usage_text() {
         "  -p, --pool host:port   pool address (repeatable for failover pools)\n"
         "  -u, --user addr[.worker]\n"
         "                         wallet address, optionally with a worker suffix\n"
-        "                         (repeat to bind one per --pool, or pass once for all)\n"
+        "                         (repeat to bind one per --pool, or pass once for all).\n"
+        "                         Optional for a loopback pool, which has no address\n"
         "\n"
         "Options:\n"
         "  -c, --coin BEAM        select by coin instead of by algorithm\n"
         "  --pass x               pool password (optional; binds like --user)\n"
-        "  --tls [0|1]            enable/disable TLS to the pool (default: on; binds like --user)\n"
+        "  --tls [0|1]            enable/disable TLS to the pool (default: on for a remote\n"
+        "                         pool, off for a loopback one; binds like --user)\n"
         "  --apiport N            enable the /summary API on port N, 0 disables it (default: 0)\n"
         "  --apihost ADDR         interface the API binds (default: 0.0.0.0, every interface;\n"
         "                         127.0.0.1 restricts it to this machine). The API is\n"
@@ -217,6 +219,27 @@ T bound_value(const std::vector<T>& vals, size_t i, const T& def) {
 }
 
 } // namespace
+
+bool is_loopback_host(const std::string& host) {
+    if (host.empty()) return false;
+
+    // IPv6 literals reach here bracketed: the host/port split is on the last colon.
+    std::string h = host;
+    if (h.size() >= 2 && h.front() == '[' && h.back() == ']') h = h.substr(1, h.size() - 2);
+    if (h == "::1") return true;
+
+    if (lower_trim(h) == "localhost") return true;
+
+    // The whole 127.0.0.0/8 block: several local daemons are often separated by
+    // address rather than by port.
+    if (h.compare(0, 4, "127.") != 0) return false;
+    int dots = 0;
+    for (char c : h) {
+        if (c == '.') { ++dots; continue; }
+        if (c < '0' || c > '9') return false;
+    }
+    return dots == 3;
+}
 
 bool resolve_devices(const std::string& spec, const std::vector<DeviceRef>& devices,
                      bool by_pcie, std::vector<unsigned>& selected, std::string& err) {
@@ -808,11 +831,17 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         pe.port = port;
         pe.user = bound_value(user_args, i, std::string());
         pe.pass = bound_value(pass_args, i, std::string());
-        pe.tls  = bound_value(tls_args, i, true);
+
+        const bool local = is_loopback_host(pe.host);
+        pe.tls = bound_value(tls_args, i, !local);
 
         if (pe.user.empty()) {
-            err = "missing --user\n\n" + usage_text();
-            return false;
+            // A remote pool without an address mines to nobody.
+            if (!local) {
+                err = "missing --user\n\n" + usage_text();
+                return false;
+            }
+            pe.user = kLoopbackDefaultUser;
         }
 
         out.pools.push_back(std::move(pe));

@@ -20,7 +20,7 @@ clear pool difficulty and is not a mining option.
 |------|---------|
 | `-a`, `--algo BEAM-III` | Algorithm. MXBM mines BeamHash III only. |
 | `-p`, `--pool host:port` | Pool stratum endpoint. |
-| `-u`, `--user addr[.worker]` | Your BEAM wallet address, optionally with a worker suffix. |
+| `-u`, `--user addr[.worker]` | Your BEAM wallet address, optionally with a worker suffix. Optional for a loopback pool — see below. |
 
 `-c BEAM` (`--coin BEAM`) selects the same thing by currency instead of by
 algorithm, so a command line written for another BeamHash III miner runs
@@ -162,6 +162,27 @@ redials** it moves to the next in the list, wrapping at the end, and says so on 
 console. Rotation is deliberately slow: a pool that drops a connection is usually back
 within seconds, and moving on the first failure would hand the rig to the backup over a
 blip — then leave it there, because nothing pulls it home.
+
+### Local pools (loopback)
+
+A pool on the loopback interface — `localhost`, `127.0.0.0/8`, `::1` — is a process on
+the same machine: a node's own stratum server, a proxy, a decentralised-pool daemon. Two
+defaults change there, because neither requirement means anything locally:
+
+- **TLS is off.** A loopback listener has no certificate to present.
+- **`--user` is optional.** There is no wallet address to authenticate as; the
+  credential is a local API key, often not enforced at all. With none given MXBM sends
+  `x`.
+
+So a local daemon needs one flag:
+
+```sh
+mxbm --algo BEAM-III --pool 127.0.0.1:3416
+```
+
+An explicit `--tls` or `--user` still wins, and neither relaxation applies to a remote
+pool: a remote `--pool` without `--user` remains an error, since mining to a pool with
+no address of yours mines for nobody.
 
 Each pool keeps its own credentials. They are different accounts, and re-logging into
 pool B with pool A's wallet would mine for the wrong address.

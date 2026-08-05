@@ -320,12 +320,18 @@ bool apply_json_pools(const nlohmann::ordered_json& prof, const std::string& pro
             return false;
         }
 
+        const bool local = cli::is_loopback_host(pe.host);
+
         auto userIt = entry.find("USER");
         if (userIt == entry.end() || !userIt->is_string() || userIt->get<std::string>().empty()) {
-            err = "a POOLS entry is missing USER in profile '" + profile_name + "'";
-            return false;
+            if (!local) {
+                err = "a POOLS entry is missing USER in profile '" + profile_name + "'";
+                return false;
+            }
+            pe.user = cli::kLoopbackDefaultUser;
+        } else {
+            pe.user = userIt->get<std::string>();
         }
-        pe.user = userIt->get<std::string>();
 
         auto passIt = entry.find("PASS");
         if (passIt != entry.end()) {
@@ -336,7 +342,7 @@ bool apply_json_pools(const nlohmann::ordered_json& prof, const std::string& pro
             pe.pass = passIt->get<std::string>();
         }
 
-        pe.tls = profile_tls_set ? profile_tls_val : true;
+        pe.tls = profile_tls_set ? profile_tls_val : !local;
         auto etls = entry.find("TLS");
         if (etls != entry.end() && !parse_json_bool(*etls, pe.tls)) {
             err = "invalid TLS in a POOLS entry in profile '" + profile_name + "'";
@@ -491,13 +497,18 @@ bool load_flat_config(const std::string& path, cli::Options& opts, std::string& 
             err = "invalid POOL host:port in config file: " + path;
             return false;
         }
+        const bool local = cli::is_loopback_host(pe.host);   // same defaults as the CLI
+
         pe.user = has_user ? user_it->second : std::string();
         if (pe.user.empty()) {
-            err = "POOL given without USER in config file: " + path;
-            return false;
+            if (!local) {
+                err = "POOL given without USER in config file: " + path;
+                return false;
+            }
+            pe.user = cli::kLoopbackDefaultUser;
         }
         pe.pass = has_pass ? pass_it->second : std::string();
-        pe.tls = true;
+        pe.tls = !local;
         if (has_tls) {
             bool v;
             if (!parse_flat_bool(tls_it->second, v)) {

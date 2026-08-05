@@ -663,5 +663,69 @@ int main() {
         }
     }
 
+    // TLS and --user both relax on loopback, and nowhere else.
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","127.0.0.1:3416"};
+        Options o; std::string err;
+        check(parse_args(5,(char**)av,o,err), "a loopback pool parses without --user");
+        check(o.pools.size()==1 && o.pools[0].host=="127.0.0.1" && o.pools[0].port==3416,
+              "host and port split");
+        check(o.pools[0].tls==false, "TLS defaults off on loopback");
+        check(o.pools[0].user==std::string(kLoopbackDefaultUser), "a default credential is sent");
+        check(!o.seen.user && !o.seen.tls, "neither flag was seen");
+    }
+
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","localhost:3416","--user","key.rig1"};
+        Options o; std::string err;
+        check(parse_args(7,(char**)av,o,err), "localhost parses");
+        check(o.pools[0].tls==false && o.pools[0].user=="key.rig1",
+              "an explicit --user is kept, TLS still off");
+    }
+
+    {
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","[::1]:3416"};
+        Options o; std::string err;
+        check(parse_args(5,(char**)av,o,err), "an IPv6 loopback literal parses");
+        check(o.pools[0].tls==false, "TLS off for ::1");
+    }
+
+    {
+        // An explicit --tls still wins in both directions.
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","127.0.0.1:3416","--user","x","--tls","1"};
+        Options o; std::string err;
+        check(parse_args(9,(char**)av,o,err), "loopback with --tls 1 parses");
+        check(o.pools[0].tls==true, "an explicit --tls 1 turns it on for loopback too");
+    }
+
+    {
+        // The relaxation must not leak to remote pools: a wallet address there is
+        // the difference between mining for yourself and mining for nobody.
+        const char* av[] = {"mxbm","--algo","BEAM-III","--pool","beam.2miners.com:5252"};
+        Options o; std::string err;
+        check(!parse_args(5,(char**)av,o,err), "a remote pool without --user is still an error");
+
+        const char* av2[] = {"mxbm","--algo","BEAM-III","--pool","127.0.0.2:3416",
+                             "--pool","beam.2miners.com:5252","--user","addr"};
+        Options o2; std::string err2;
+        check(parse_args(9,(char**)av2,o2,err2), "loopback + remote parses with one --user");
+        check(o2.pools[0].tls==false && o2.pools[1].tls==true,
+              "each pool takes the default its own host implies");
+        check(o2.pools[0].user=="addr" && o2.pools[1].user=="addr",
+              "a single --user still covers both");
+    }
+
+    {
+        // Hosts that merely start with something loopback-shaped are not loopback.
+        const char* notlocal[] = {"127.example.com:1130", "1270.0.0.1:1130",
+                                  "localhost.evil.com:1130", "127.0.0:1130"};
+        for (const char* spec : notlocal) {
+            const char* av[] = {"mxbm","--algo","BEAM-III","--pool",spec};
+            Options o; std::string err;
+            const std::string msg = std::string("'") + spec + "' is not treated as loopback";
+            check(!parse_args(5,(char**)av,o,err), msg.c_str());
+        }
+    }
+
     return summary("cli");
 }

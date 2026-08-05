@@ -317,5 +317,44 @@ int main() {
         check(o.seen.algo, "a benchmark algorithm stands in for --algo, whatever supplied it");
     }
 
+    // The loopback relaxations hold in a config file too.
+    {
+        const std::string p = write_temp("mxbm_loopback.conf",
+            "ALGO = BEAM-III\nPOOL = 127.0.0.1:3416\n");
+        Options o; std::string err;
+        check(load_flat_config(p, o, err), "a loopback POOL loads without USER");
+        check(o.pools.size() == 1 && !o.pools[0].tls, "TLS defaults off on loopback");
+        check(o.pools[0].user == std::string(kLoopbackDefaultUser), "default credential");
+        std::remove(p.c_str());
+    }
+    {
+        const std::string p = write_temp("mxbm_loopback_tls.conf",
+            "ALGO = BEAM-III\nPOOL = 127.0.0.1:3416\nTLS = 1\n");
+        Options o; std::string err;
+        check(load_flat_config(p, o, err), "loopback POOL with TLS = 1 loads");
+        check(o.pools[0].tls, "an explicit TLS still wins");
+        std::remove(p.c_str());
+    }
+    {
+        const std::string p = write_temp("mxbm_remote_nouser.conf",
+            "ALGO = BEAM-III\nPOOL = beam.2miners.com:5252\n");
+        Options o; std::string err;
+        check(!load_flat_config(p, o, err), "a remote POOL without USER is still an error");
+        std::remove(p.c_str());
+    }
+    {
+        const std::string p = write_temp("mxbm_loopback.json",
+            "{\"RIG1\": {\"ALGO\": \"BEAM-III\","
+            " \"POOLS\": [{\"POOL\": \"127.0.0.1:3416\"},"
+            "             {\"POOL\": \"remote.example.com:5252\", \"USER\": \"addr\"}]}}");
+        Options o; std::string err;
+        check(load_json_config(p, "RIG1", o, err), "a JSON profile with a loopback entry loads");
+        check(o.pools.size() == 2, "two pools");
+        check(!o.pools[0].tls && o.pools[0].user == std::string(kLoopbackDefaultUser),
+              "the loopback entry gets both defaults");
+        check(o.pools[1].tls && o.pools[1].user == "addr", "the remote entry is unchanged");
+        std::remove(p.c_str());
+    }
+
     return summary("config");
 }
