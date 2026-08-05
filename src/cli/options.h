@@ -135,6 +135,11 @@ struct Options {
     bool use_json_config = false;    // --json
     bool version_requested = false, help_requested = false;
 
+    // Set when a loopback pool was given no --user and got the default. Announced
+    // at startup: if that endpoint is really a forward to a remote pool, every
+    // share would be credited to a name that is not the operator's.
+    bool substituted_user = false;
+
     // Which fields the CLI itself populated. The config loaders only fill in
     // fields still false here, so CLI-supplied values always win. Set per flag,
     // not per pool: seen.user is true as soon as any --user appears.

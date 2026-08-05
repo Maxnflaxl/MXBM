@@ -323,7 +323,11 @@ bool apply_json_pools(const nlohmann::ordered_json& prof, const std::string& pro
         const bool local = cli::is_loopback_host(pe.host);
 
         auto userIt = entry.find("USER");
-        if (userIt == entry.end() || !userIt->is_string() || userIt->get<std::string>().empty()) {
+        if (userIt != entry.end() && !userIt->is_string()) {
+            err = "invalid USER in a POOLS entry in profile '" + profile_name + "'";
+            return false;
+        }
+        if (userIt == entry.end() || userIt->get<std::string>().empty()) {
             if (!local) {
                 err = "a POOLS entry is missing USER in profile '" + profile_name + "'";
                 return false;

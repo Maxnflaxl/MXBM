@@ -220,12 +220,8 @@ T bound_value(const std::vector<T>& vals, size_t i, const T& def) {
 
 } // namespace
 
-bool is_loopback_host(const std::string& host) {
-    if (host.empty()) return false;
-
-    // IPv6 literals reach here bracketed: the host/port split is on the last colon.
-    std::string h = host;
-    if (h.size() >= 2 && h.front() == '[' && h.back() == ']') h = h.substr(1, h.size() - 2);
+bool is_loopback_host(const std::string& h) {
+    if (h.empty()) return false;
     if (h == "::1") return true;
 
     if (lower_trim(h) == "localhost") return true;
@@ -829,6 +825,11 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
         PoolEntry pe;
         pe.host = pool_args[i].substr(0, colon);
         pe.port = port;
+
+        // An IPv6 literal arrives bracketed because the split is on the last colon.
+        // The brackets are URI syntax; getaddrinfo wants the address alone.
+        if (pe.host.size() >= 2 && pe.host.front() == '[' && pe.host.back() == ']')
+            pe.host = pe.host.substr(1, pe.host.size() - 2);
         pe.user = bound_value(user_args, i, std::string());
         pe.pass = bound_value(pass_args, i, std::string());
 
@@ -842,6 +843,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
                 return false;
             }
             pe.user = kLoopbackDefaultUser;
+            out.substituted_user = true;
         }
 
         out.pools.push_back(std::move(pe));

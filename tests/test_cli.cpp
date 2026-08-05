@@ -672,6 +672,7 @@ int main() {
               "host and port split");
         check(o.pools[0].tls==false, "TLS defaults off on loopback");
         check(o.pools[0].user==std::string(kLoopbackDefaultUser), "a default credential is sent");
+        check(o.substituted_user, "and the substitution is flagged for announcement");
         check(!o.seen.user && !o.seen.tls, "neither flag was seen");
     }
 
@@ -688,6 +689,9 @@ int main() {
         Options o; std::string err;
         check(parse_args(5,(char**)av,o,err), "an IPv6 loopback literal parses");
         check(o.pools[0].tls==false, "TLS off for ::1");
+        // The brackets are URI syntax; getaddrinfo wants the address alone, so they
+        // must be stripped from the host itself and not just for the loopback test.
+        check(o.pools[0].host=="::1", "brackets stripped from the stored host");
     }
 
     {

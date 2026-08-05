@@ -356,5 +356,17 @@ int main() {
         std::remove(p.c_str());
     }
 
+    {
+        // A malformed USER is a different failure from an absent one and must not
+        // fall through to the loopback default.
+        const std::string p = write_temp("mxbm_badusr.json",
+            "{\"RIG1\": {\"ALGO\": \"BEAM-III\","
+            " \"POOLS\": [{\"POOL\": \"127.0.0.1:3416\", \"USER\": 12345}]}}");
+        Options o; std::string err;
+        check(!load_json_config(p, "RIG1", o, err), "a non-string USER is rejected");
+        check(!err.empty(), "with a reason");
+        std::remove(p.c_str());
+    }
+
     return summary("config");
 }

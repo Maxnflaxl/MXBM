@@ -825,6 +825,14 @@ int main(int argc, char** argv) {
     // retrying below. login() runs unconditionally so the api_key credential
     // is stored even then, giving that loop something to re-login with.
     if (!benchmark_mode && !opts.tune) {
+        if (opts.substituted_user)
+            ui::console::error("No --user given for " + opts.pools[0].host +
+                               "; sending \"" + opts.pools[0].user +
+                               "\". Correct only for a local daemon -- if this endpoint "
+                               "forwards to a real pool, your shares credit nobody.");
+        if (!opts.pools[0].tls && cli::is_loopback_host(opts.pools[0].host))
+            ui::console::info("TLS off (loopback pool); pass --tls 1 if it terminates TLS");
+
         ui::console::connecting_to_pool();
         auto connect_t0 = std::chrono::steady_clock::now();
         // Failover list, in the order the pools were given. Each carries its own

@@ -37,7 +37,7 @@ immediately; only a *missing* one defers to the config.
 | Flag | Meaning | Default |
 |------|---------|---------|
 | `--pass x` | Pool password, if the pool requires one. | none |
-| `--tls [0\|1]` | Enable/disable TLS to the pool. | on |
+| `--tls [0\|1]` | Enable/disable TLS to the pool. | on; off for a loopback pool |
 | `--solver cuda\|opencl\|gpu\|ref\|auto` | Solver backend. `gpu` = any GPU (CUDA preferred), `cuda`/`opencl` pin one, `ref` = CPU reference. | auto |
 | `--dev-fee PCT` | Raise the developer fee above its built-in rate, as a percentage. Raise-only. | built-in rate |
 | `--nocolor` | Disable ANSI colors in console output. | colors on |
