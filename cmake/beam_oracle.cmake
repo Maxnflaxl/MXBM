@@ -8,6 +8,8 @@ target_include_directories(mxbm_blake2b PUBLIC third_party/blake2b)
 set(BEAM_SOURCE_DIR "" CACHE PATH "Beam source root (auto-probed when empty)")
 set(_beam_candidates
     "${BEAM_SOURCE_DIR}"
+    "$ENV{HOME}/Developer/Github/BeamMW/beam"
+    "$ENV{HOME}/Developer/Github/maxnflaxl/p2pool/third_party/beam"
     "$ENV{HOME}/Developer/Github/Beam/beam")
 set(_bh3 "")
 foreach(_cand IN LISTS _beam_candidates)
