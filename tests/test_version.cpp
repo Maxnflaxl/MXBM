@@ -4,10 +4,12 @@
 #include <cctype>
 using namespace mxbm;
 // Shape only — never exact values (count/hash change every commit):
-// digits '.' digits '.' digits " [" 7 lowercase-hex or the literal "nogit" "]"
+// 'v' digits '.' digits '.' digits " [" 7 lowercase-hex or the literal "nogit" "]"
 static bool shape_ok(const char* v) {
     int part = 0, digits = 0;
     const char* p = v;
+    if (*p != 'v') return false;
+    ++p;
     for (; *p && *p != ' '; ++p) {
         if (*p == '.') { if (!digits) return false; ++part; digits = 0; }
         else if (isdigit((unsigned char)*p)) ++digits;
@@ -23,7 +25,7 @@ static bool shape_ok(const char* v) {
 }
 int main() {
     check(version() != nullptr && *version(), "version non-empty");
-    check(shape_ok(version()), "version shape N.N.N [hex7|nogit]");
+    check(shape_ok(version()), "version shape vN.N.N [hex7|nogit]");
     // Pins that the runtime string really comes from project(VERSION ...) in
     // CMakeLists.txt rather than a stale hardcoded stamp. The expected prefix
     // is fed in by CMake (MXBM_EXPECT_PREFIX), so a version bump cannot fail

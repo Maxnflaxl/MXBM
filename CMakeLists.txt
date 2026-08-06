@@ -231,7 +231,7 @@ add_executable(test_version tests/test_version.cpp)
 target_include_directories(test_version PRIVATE tests src)
 target_link_libraries(test_version PRIVATE mxbm_version)
 target_compile_definitions(test_version PRIVATE
-    MXBM_EXPECT_PREFIX="${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.")
+    MXBM_EXPECT_PREFIX="v${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.")
 add_test(NAME version COMMAND test_version)
 
 # Row-bucket geometry and footprint arithmetic. Its own library because BOTH backends
