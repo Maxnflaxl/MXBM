@@ -116,7 +116,11 @@ headless**):
 | display on the compute GPU | **no** — monitor on the motherboard iGPU | a compositor on this card costs **0.20 ms and ~6 W** (measured) |
 
 The last row is a condition of the pin, not decoration — it is worth 0.6 % of the
-number, more than the ±0.5 % gate.
+number, more than the ±0.5 % gate. It is also not a standing rig property: the
+compositor pin (`~/.config/uwsm/env`) follows the HDMI cable at every login, so
+moving the cable silently moves the desktop onto the compute GPU. Verify it per
+session — the miner prints `reserving 64 MB (headless)` when the condition holds
+and `reserving 256 MB (display attached)` when it does not.
 
 Lineage, most recent first — the number belongs to a build *and* a rig, the
 *reproducibility* belongs to the rig alone:
