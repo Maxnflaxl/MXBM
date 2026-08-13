@@ -76,6 +76,24 @@ __global__ void occ_reduce(const uint32_t* __restrict__ counts, uint32_t nb,
 }
 static bool occ_on() { static const bool v = getenv("MXBM_OCC") != nullptr; return v; }
 
+// ---- MXBM_POP=dir: dump every round's unclamped counts[] as raw u32[nb] files --------
+// The same counters MXBM_OCC reduces, kept whole: per-bucket occupancy histograms are
+// what price a spill-arena geometry (dense cap + overflow pool), and the per-round SUM
+// is the true population entering the next round. Synchronous copies -- population
+// runs are measurement runs, never timing runs.
+static const char* pop_dir() { static const char* v = getenv("MXBM_POP"); return v; }
+static int g_popSolve = -1;   // becomes 0 at the KAT solve, 1..n through the loop
+static void pop_dump(const char* tag, const uint32_t* dcounts, uint32_t nb, cudaStream_t st) {
+    if (!pop_dir()) return;
+    static std::vector<uint32_t> h;
+    h.resize(nb);
+    cudaStreamSynchronize(st);
+    cudaMemcpy(h.data(), dcounts, (size_t)nb*4, cudaMemcpyDeviceToHost);
+    char path[512];
+    snprintf(path, sizeof path, "%s/pop_s%d_%s.bin", pop_dir(), g_popSolve, tag);
+    if (FILE* f = fopen(path, "wb")) { fwrite(h.data(), 4, nb, f); fclose(f); }
+}
+
 // ---- solver: persistent buffers, one solve() per (input, nonce) ---------------------
 // Mirrors src/gpu/gpu_solver.cpp so the timing is like-for-like: buffers are allocated
 // ONCE and reused, and solve() returns only CPU-VERIFIED solutions. Comparing a
@@ -102,6 +120,12 @@ struct CudaSolver {
     // it currently shares. Given its own buffer it can run on a second stream against
     // the previous nonce's r3/r4, which leave 71-79 % of the SM idle.
     // Double-buffered: entry(i+1) writes one slot while r1(i) still reads the other.
+#if MXBM_ARENA
+    uint32_t *ahead2[2] = {nullptr,nullptr}, *anext2[2] = {nullptr,nullptr};
+    uint32_t *atag2[2] = {nullptr,nullptr},  *actr2[2] = {nullptr,nullptr};
+    uint32_t *aheadE = nullptr, *anextE = nullptr, *atagE = nullptr, *actrE = nullptr;
+    uint32_t *spillTot = nullptr;
+#endif
     uint32_t *occmax = nullptr;                  // [0]=entry, [1..4]=rounds 1..4
     uint64_t *entryOut[2] = {nullptr,nullptr};
     uint32_t *entryCounts[2] = {nullptr,nullptr};
@@ -111,13 +135,19 @@ struct CudaSolver {
     cudaEvent_t r1Done[2]    = {nullptr,nullptr};   // r1 finished READING slot (WAR guard)
     bool r1Ever[2] = {false,false};
 
+    // MXBM_CAPSD: the per-bucket cap's sigma multiplier (default 8, the shipping
+    // formula). The arena A/B runs the dense cap (2) against it; the pool absorbs
+    // the tail the 8 covers.
+    static constexpr uint32_t ACAP = MXBM_ARENA ? kArenaCap : 0u;
     bool init() {
         if (const char* e = getenv("MXBM_BB")) bb = (uint32_t)atoi(e);
         sm = 17u - bb;
         if (const char* e = getenv("MXBM_SM")) sm = (uint32_t)atoi(e);
         nb = 1u << bb;
         const uint32_t mean = capacity / nb;
-        cap    = mean + (uint32_t)(8.0*std::sqrt((double)mean)) + 32u;
+        double capsd = 8.0;
+        if (const char* e = getenv("MXBM_CAPSD")) capsd = atof(e);
+        cap    = mean + (uint32_t)(capsd*std::sqrt((double)mean)) + 32u;
         nslots = (size_t)nb * cap;
         // set 0: 8-u64 records + the 9th-word plane behind them (see kSetStride in
         // src/gpu/cuda_solver.cu). MXBM_R2_FULL keeps the old padded 10-u64 record.
@@ -125,11 +155,25 @@ struct CudaSolver {
         // of it (r4's is 2), so the set's stride is round 2's record and nothing else.
         // This is where the ~2.1 GiB of the footprint cut actually happens.
         const uint32_t setStride[2] = {
-            MXBM_R2_FULL ? 10u : (MXBM_R3_QUAD ? 3u : 9u),
+            MXBM_R2_FULL ? 10u : (MXBM_R3_QUAD ? 3u : (MXBM_IMPBITS ? 8u : 9u)),
             MXBM_R2_FULL ? 10u : 8u };
-        elem[0] = dalloc<uint64_t>(nslots*setStride[0]);
-        elem[1] = dalloc<uint64_t>(nslots*setStride[1]);
+#if MXBM_IMPBITS
+        if (bb != 16u) { printf("FAIL: MXBM_IMPBITS is hardwired to bb=16\n"); return false; }
+#endif
+        elem[0] = dalloc<uint64_t>((nslots + ACAP)*setStride[0]);
+        elem[1] = dalloc<uint64_t>((nslots + ACAP)*setStride[1]);
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
+#if MXBM_ARENA
+        for (int k = 0; k < 2; ++k) {
+            ahead2[k] = dalloc<uint32_t>(nb);
+            anext2[k] = dalloc<uint32_t>(ACAP);
+            atag2[k]  = dalloc<uint32_t>(ACAP);
+            actr2[k]  = dalloc<uint32_t>(1);
+        }
+        aheadE = dalloc<uint32_t>(nb); anextE = dalloc<uint32_t>(ACAP);
+        atagE  = dalloc<uint32_t>(ACAP); actrE = dalloc<uint32_t>(1);
+        spillTot = dalloc<uint32_t>(1); cudaMemset(spillTot, 0, 4);
+#endif
         gictr = dalloc<uint32_t>(1); drops = dalloc<uint32_t>(4);
         left  = dalloc<uint32_t>((size_t)5*capacity);
         right = dalloc<uint32_t>((size_t)5*capacity);
@@ -138,7 +182,7 @@ struct CudaSolver {
         dpp = dalloc<uint64_t>(4);
         occmax = dalloc<uint32_t>(5); cudaMemset(occmax, 0, 20);
         for (int k = 0; k < 2; ++k) {
-            entryOut[k]    = dalloc<uint64_t>(nslots);
+            entryOut[k]    = dalloc<uint64_t>(nslots + ACAP);
             entryCounts[k] = dalloc<uint32_t>(nb);
             dpp2[k]        = dalloc<uint64_t>(4);
             cudaEventCreateWithFlags(&entryDone[k], cudaEventDisableTiming);
@@ -164,6 +208,7 @@ struct CudaSolver {
     // slot's last reader was r1 of an earlier solve, and overwriting it before that read
     // retires is a write-after-read hazard the streams do not order for us.
     void launch_entry(const uint8_t input[32], const uint8_t nonce[8], int slot, cudaStream_t st) {
+        ++g_popSolve;             // MXBM_POP tags; meaningful in sequential mode only
         uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};
         bh3::compute_prepow(input, 32, nonce, extra0, pp);
         if (r1Ever[slot]) cudaStreamWaitEvent(st, r1Done[slot], 0);
@@ -178,10 +223,20 @@ struct CudaSolver {
         // the only thing that changes is how long entry occupies the stream.
         for (int r = 0; r < reps; ++r) {
             cudaMemsetAsync(entryCounts[slot], 0, (size_t)nb*4, st);
+#if MXBM_ARENA
+            cudaMemsetAsync(aheadE, 0xFF, (size_t)nb*4, st);
+            cudaMemsetAsync(actrE, 0, 4, st);
+            entry_scatter<<<(elems+255)/256,256,0,st>>>(dpp2[slot], 0, elems, bb, cap,
+                                                        entryCounts[slot], entryOut[slot], drops,
+                                                        actrE, atagE);
+            arena_link<<<(kArenaCap+255)/256,256,0,st>>>(actrE, atagE, aheadE, anextE, spillTot);
+#else
             entry_scatter<<<(elems+255)/256,256,0,st>>>(dpp2[slot], 0, elems, bb, cap,
                                                         entryCounts[slot], entryOut[slot], drops);
+#endif
         }
         if (occ_on()) occ_reduce<<<(nb+255)/256,256,0,st>>>(entryCounts[slot], nb, occmax);
+        pop_dump("entry", entryCounts[slot], nb, st);
         cudaEventRecord(entryDone[slot], st);
     }
 
@@ -250,6 +305,20 @@ struct CudaSolver {
         cudaMemsetAsync(drops, 0, 16, st); cudaMemsetAsync(survCount, 0, 4, st);
         cudaStreamWaitEvent(st, entryDone[slot], 0);
         int inSet = 0;
+#if MXBM_ARENA
+        // In-side chains come from the INPUT set (entry's for round 1); the out-side
+        // pool is reset per rep, exactly like counts, and linked after the launch.
+        #define ARN_RESET(o) cudaMemsetAsync(ahead2[o], 0xFF, (size_t)nb*4, st); \
+                             cudaMemsetAsync(actr2[o], 0, 4, st);
+        #define ARN_IO(R,o) , ((R)==1 ? aheadE : ahead2[inSet]), \
+                              ((R)==1 ? anextE : anext2[inSet]), actr2[o], atag2[o]
+        #define ARN_LINK(o) arena_link<<<(kArenaCap+255)/256,256,0,st>>>( \
+                                actr2[o], atag2[o], ahead2[o], anext2[o], spillTot);
+#else
+        #define ARN_RESET(o)
+        #define ARN_IO(R,o)
+        #define ARN_LINK(o)
+#endif
         // R==1 reads entry's dedicated stride-1 buffer instead of elem[0]; every later
         // round ping-pongs exactly as before, so the only change is r1's input pointer.
         #define ROUND(R, ...)                                                            \
@@ -260,11 +329,12 @@ struct CudaSolver {
               for (int rp = 0; rp < reps; ++rp) {                                         \
                 cudaMemsetAsync(counts[o], 0, (size_t)nb*4, st);                         \
                 cudaMemsetAsync(gictr, 0, 4, st);                                        \
+                ARN_RESET(o)                                                             \
                 if (MXBM_SUBPASS)                                                        \
                   fused_round<__VA_ARGS__,false,true>\
                     <<<nb, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,   \
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
-                        left, right, gictr, drops, dpp);                                 \
+                        left, right, gictr, drops, dpp ARN_IO(R,o));                      \
                 else if (coNonce && co_hosts(R) && cob_s()) {                            \
                   uint32_t cb_ = 0, cc_ = 0; co_slice((R), elems, cb_, cc_);             \
                   if (cob_dummy()) cc_ = 0;                                              \
@@ -272,22 +342,25 @@ struct CudaSolver {
                     <<<(nb << sm) + (nb << sm)/(cob_s()-1u), kWG, 0, st>>>(               \
                         bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,                    \
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
-                        left, right, gictr, drops, dpp,                                  \
+                        left, right, gictr, drops, dpp ARN_IO(R,o),                      \
                         dpp2[coSlot], cc_, cap, entryCounts[coSlot], entryOut[coSlot],   \
                         cob_s(), cb_); }                                                 \
                 else if (coNonce && (R) == co_round())                                   \
                   fused_round<__VA_ARGS__,true>\
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
-                        left, right, gictr, drops, dpp,                                  \
+                        left, right, gictr, drops, dpp ARN_IO(R,o),                      \
                         dpp2[coSlot], elems, cap, entryCounts[coSlot], entryOut[coSlot]); \
                 else                                                                     \
                   fused_round<__VA_ARGS__>                                                 \
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
                         (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
-                        left, right, gictr, drops, dpp); }                                \
+                        left, right, gictr, drops, dpp ARN_IO(R,o)); }                    \
+              ARN_LINK(o)                                                                \
               if (occ_on())                                                             \
                 occ_reduce<<<(nb+255)/256,256,0,st>>>(counts[o], nb, occmax + (R));      \
+              if (pop_dir()) { char t_[8]; snprintf(t_, sizeof t_, "r%d", (R));          \
+                               pop_dump(t_, counts[o], nb, st); }                        \
               if ((R)==1) { cudaEventRecord(r1Done[slot], st); r1Ever[slot] = true;       \
                             after_r1(); }                                                \
               inSet = o; }
@@ -305,11 +378,18 @@ struct CudaSolver {
         ROUND_X(4, MXBM_R4_ARGS)
         #undef ROUND
         #undef ROUND_X
+        #undef ARN_RESET
+        #undef ARN_IO
+        #undef ARN_LINK
         for (int rp = 0, treps = (rep_round() == 5) ? rep_count() : 1; rp < treps; ++rp) {
             cudaMemsetAsync(survCount, 0, 4, st);
             terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
                                               elem[inSet], left, right, survSlots, survCount,
-                                              survCap, drops);
+                                              survCap, drops
+#if MXBM_ARENA
+                                            , ahead2[inSet], anext2[inSet]
+#endif
+                                              );
         }
 
         cudaError_t le = cudaGetLastError();
@@ -494,7 +574,7 @@ int main(int argc, char** argv) {
     // 3+8 under R3_QUAD -- which is the whole of that variant's footprint claim, so it
     // is printed rather than asserted from a comment.
     printf("footprint: %.2f GiB\n",
-           ((double)s.nslots*(MXBM_R2_FULL ? 20 : (MXBM_R3_QUAD ? 11 : 17))*8
+           ((double)(s.nslots + CudaSolver::ACAP)*(MXBM_R2_FULL ? 20 : (MXBM_R3_QUAD ? 11 : (MXBM_IMPBITS ? 16 : 17)))*8
             + (double)5*s.capacity*4*2)/(double)(1u<<30));
 
     // Why a second stream cannot overlap these kernels: concurrent execution needs the
@@ -687,6 +767,13 @@ int main(int argc, char** argv) {
                (double)(e1 - e0) / wall);
     printf("solutions : %.2f verified/solve  =>  %.1f sol/s\n", spersolve, spersolve*1000.0/per);
     printf("drops     : %u  %s\n", worstDrop, worstDrop ? "*** NONZERO -- RESULT INVALID ***" : "(clean)");
+#if MXBM_ARENA
+    {   // Positive control: a pool that never fills measured nothing.
+        uint32_t hspill = 0; cudaMemcpy(&hspill, s.spillTot, 4, cudaMemcpyDeviceToHost);
+        printf("arena     : %u spills across the run%s\n", hspill,
+               hspill ? "" : "  *** ZERO -- dense cap never exceeded ***");
+    }
+#endif
     printf("survivors : %.2f mean, %u max of %u cap %s\n", (double)sumSurv / n, maxSurv, 1024u,
            maxSurv >= 1024u ? "*** CLAMPED -- SOLUTIONS LOST SILENTLY ***" : "(headroom)");
 

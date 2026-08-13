@@ -36,12 +36,14 @@ constexpr uint32_t kSurvCap = 1024;
 constexpr uint32_t kSetStride[2] = { 9u, 8u };
 constexpr uint32_t kR2RecStride  = 8u;   // round 2's record; the 9th word is the plane
 
+constexpr uint32_t kPairStride = 2u;     // r1 -> r2 pair record, 16 B
+
 // Each round's template arguments, named once. They were written out separately at the
 // launch and at the carveout call, and had drifted: the carveout was applied to LM_RD2
 // with OUTSTR 10 and LM_EMIT with INSTR 10, instantiations that no longer run, so the
 // kernels that DO run never received the preference.
-#define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
-#define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,kR2RecStride,kFCap
+#define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,kPairStride,MXBM_R1_FCAP
+#define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, kPairStride,kR2RecStride,kFCap
 #define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap
 #define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u,kFCap
 // The quad-record pair. Only rounds 2 and 3 differ, and only in their strides and round
@@ -49,7 +51,7 @@ constexpr uint32_t kR2RecStride  = 8u;   // round 2's record; the 9th word is th
 // width and cap is identical. Both pairs are instantiated and the choice is made at
 // RUNTIME from the geometry, because which one a card wants depends on its VRAM.
 constexpr uint32_t kQuadStride = 3u;
-#define MXBM_R2Q_ARGS 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, 2u,kQuadStride,kFCap
+#define MXBM_R2Q_ARGS 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuadStride,kFCap
 #define MXBM_R3Q_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap
 static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_stride(1),
               "CUDA record widths must match the shared footprint arithmetic");
@@ -85,6 +87,10 @@ RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
 struct CudaSolver::Impl {
     uint32_t bb = 16, sm = 1, nb = 1u << 16;
     bool quad = false;                  // 24 B round-2 record; see rowbucket_geom.h
+    bool impb = false;                  // 64 B round-2 record with address-implied key
+                                        // bits packed out and the side plane deleted;
+                                        // bucket_bits == 16 only (the pack shifts are
+                                        // hardwired). Figures: docs/performance-research.md.
     uint32_t cap = 0; size_t nslots = 0;
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
@@ -105,6 +111,7 @@ struct CudaSolver::Impl {
     uint64_t *specElem = nullptr, *specPp = nullptr;
     uint32_t *specCounts = nullptr;
     bool specOn = false;                // buffers allocated and MXBM_NO_SPEC unset
+    bool matchFirst = false;            // skip the childless rebuilds; floor-only, see below
     bool specValid = false;             // specElem holds entry(specNonce) of specInput
     bool haveLast = false;
     bool haveDelta = false;             // persistent: the stride survives job changes,
@@ -208,8 +215,11 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     p_->info = device_info(index);
     // Geometry-independent first, so the step-down below is not retrying these.
     p_->gictr = dalloc<uint32_t>(1); p_->drops = dalloc<uint32_t>(4);
-    p_->left  = dalloc<uint32_t>((size_t)5*kCapacity);
-    p_->right = dalloc<uint32_t>((size_t)5*kCapacity);
+    // Rows 1-4 are gi-indexed and need full capacity; row 5 is written only by the
+    // terminal round, at survivor indices bounded by kSurvCap. recover() reads level 5
+    // at those same slots, so only the allocation changes, not any index.
+    p_->left  = dalloc<uint32_t>((size_t)4*kCapacity + kSurvCap);
+    p_->right = dalloc<uint32_t>((size_t)4*kCapacity + kSurvCap);
     p_->survSlots = dalloc<uint32_t>(kSurvCap); p_->survCount = dalloc<uint32_t>(1);
     p_->dleaves = dalloc<uint32_t>((size_t)kSurvCap*32);
     p_->dpp = dalloc<uint64_t>(4);
@@ -244,7 +254,7 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     // because a user comparing against a stock run will see different memory and speed.
     if (!forced && g.bb == 17u)
         std::fprintf(stderr, "CUDA: board power limit %u W is below %u W: selecting the "
-                     "low-power (17,0) geometry (8.35 GiB)\n", power_limit_w, kRbLowPowerW);
+                     "low-power (17,0) geometry\n", power_limit_w, kRbLowPowerW);
     bool ok = p_->alloc_geometry(g.bb, g.sm, g.quad);
     // Keep stepping down the SAME ladder rb_geometry_for walked, rather than
     // decrementing bb: the rungs interleave the two record formats, so a bb-only retry
@@ -290,6 +300,18 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     if (specLowPower)
         std::fprintf(stderr, "CUDA: board power limit %u W is below %u W: speculative "
                      "entry off (it costs ~2%% there)\n", power_limit_w, kSpecMinPowerW);
+    // Same threshold, opposite sign: the elements alone in their chain slot pay a
+    // rebuild no walk reads, and skipping them costs the shared memory that holds r1's
+    // fifth block. That trade loses at stock and wins once the rebuild bills at full
+    // issue rate. Both variants are instantiated; MXBM_MATCH_FIRST=1 forces it on.
+    p_->matchFirst = specLowPower || (MXBM_MATCH_FIRST != 0);
+    // The implicit-bits record wins time at every operating point and is free to
+    // carry, so it is on wherever its geometry precondition holds. The set is still
+    // allocated at the 9-u64 stride: the footprint reclaim ships with the
+    // small-card ladder work, not here.
+    p_->impb = !p_->quad && p_->bb == 16u && !std::getenv("MXBM_NO_IMPB");
+    if (specLowPower)
+        std::fprintf(stderr, "CUDA: ... and match-first rebuild skipping on\n");
     if (!std::getenv("MXBM_NO_SPEC") && !specLowPower) {
         p_->specElem   = dalloc<uint64_t>(p_->nslots);
         p_->specCounts = dalloc<uint32_t>(p_->nb);
@@ -361,23 +383,31 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // Variadic so a round can carry the optional trailing template arguments
     // (COTENANT, SUBPASS, FCAP) without every other round having to name them.
     // Round 1 reads the entry buffer, wherever this solve put it.
-    #define ROUND(R, ...)                                                            \
+    #define ROUND(R, IMPB, ...)                                                      \
         { const int o = inSet ^ 1;                                                   \
           const uint32_t* inC = ((R)==1) ? r1Counts : I.counts[inSet];               \
           const uint64_t* inE = ((R)==1) ? r1Elem   : I.elem[inSet];                 \
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
-          fused_round<__VA_ARGS__>                                                   \
-            <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
-                inC, inE, I.counts[o], I.elem[o],                                    \
-                I.left, I.right, I.gictr, I.drops, I.dpp);                            \
+          if (I.matchFirst)                                                          \
+            fused_round<__VA_ARGS__, false, false, false, true, IMPB>                \
+              <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
+                  inC, inE, I.counts[o], I.elem[o],                                  \
+                  I.left, I.right, I.gictr, I.drops, I.dpp);                          \
+          else                                                                       \
+            fused_round<__VA_ARGS__, false, false, false, false, IMPB>               \
+              <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
+                  inC, inE, I.counts[o], I.elem[o],                                  \
+                  I.left, I.right, I.gictr, I.drops, I.dpp);                          \
           inSet = o; }
     // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
     #define ROUND_X(...) ROUND(__VA_ARGS__)
-    ROUND_X(1, MXBM_R1_ARGS)
+    ROUND_X(1, false, MXBM_R1_ARGS)
     // Rounds 2 and 3 come in a matched pair -- r2's OUTSTR is r3's INSTR -- so they
-    // switch together or the second reads a record the first never wrote.
-    if (I.quad) { ROUND_X(2, MXBM_R2Q_ARGS) ROUND_X(3, MXBM_R3Q_ARGS) }
-    else        { ROUND_X(2, MXBM_R2_ARGS)  ROUND_X(3, MXBM_R3_ARGS)  }
+    // switch together or the second reads a record the first never wrote. The
+    // implicit-bits pair is the same strides with the pack folded into the stores.
+    if (I.quad)      { ROUND_X(2, false, MXBM_R2Q_ARGS) ROUND_X(3, false, MXBM_R3Q_ARGS) }
+    else if (I.impb) { ROUND_X(2, true,  MXBM_R2_ARGS)  ROUND_X(3, true,  MXBM_R3_ARGS)  }
+    else             { ROUND_X(2, false, MXBM_R2_ARGS)  ROUND_X(3, false, MXBM_R3_ARGS)  }
     #undef ROUND_X
     #undef ROUND
     // Round 4, outside the macro so the co-blocks variant is instantiated for this
@@ -392,6 +422,13 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
                 3u*kCapacity, I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
                 I.left, I.right, I.gictr, I.drops, I.dpp,
                 I.specPp, kElems, I.cap, I.specCounts, I.specElem, 3u);
+      } else if (I.matchFirst) {
+          // No co-blocks arm: speculation and match-first never coexist -- spec is off
+          // below kSpecMinPowerW and match-first is on below the same threshold.
+          fused_round<MXBM_R4_ARGS, false, false, false, true>
+            <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, 3u*kCapacity,
+                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.left, I.right, I.gictr, I.drops, I.dpp);
       } else {
           fused_round<MXBM_R4_ARGS>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, 3u*kCapacity,

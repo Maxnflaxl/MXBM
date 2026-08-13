@@ -195,7 +195,7 @@ struct Kernel {
     // is a distinct kernel with the same six round numbers, so the identity needs the
     // bool. Rows written with six values zero-initialise it, which matches the plain
     // kernels.
-    int         id[7];
+    int         id[9];
     const char* token;
     int         blockSize;
     int         reg;
@@ -219,21 +219,39 @@ const Kernel kContract[] = {
     { "entry_scatter",         false, {0,0,0,0,0,0}, "13entry_scatterE",  256,  40,     0,  0, 6,
       "ON A CLIFF: 40 registers is EXACTLY the limit for 6 blocks/SM. Measured at 6 "
       "blocks/SM standalone (docs/performance-research.md:951); the pass costs 2.77 ms" },
-    { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2}, nullptr,             256,  48, 19000,  0, 5,
-      "ON TWO CLIFFS: 48 registers of 48 AND 19000 B of 19456. r1's fifth block is "
+    { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2}, nullptr,             256,  48, 19008,  0, 5,
+      "ON TWO CLIFFS: 48 registers of 48 AND 19008 B of 19456. r1's fifth block is "
       "worth 0.15 ms (docs/performance-research.md:1719)" },
-    { "r2 (packed record)",     true, {7,7,2,4,2,8}, nullptr,             256,  64, 23608,  0, 4,
+    { "r2 (packed record)",     true, {7,7,2,4,2,8}, nullptr,             256,  64, 23616,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM. r1 and r2 "
       "crossing 3 -> 4 together was worth 1.13 ms (docs/performance-research.md:1609)" },
-    { "r2 (quad record)",       true, {7,7,2,4,2,3}, nullptr,             256,  64, 23608,  0, 4,
+    { "r2 (quad record)",       true, {7,7,2,4,2,3}, nullptr,             256,  64, 23616,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM" },
-    { "r3 (packed record)",     true, {7,6,4,1,8,8}, nullptr,             256,  56, 26168,  0, 3,
+    { "r3 (packed record)",     true, {7,6,4,1,8,8}, nullptr,             256,  56, 26176,  0, 3,
       "shared-bound at 3 blocks; r3 does not want a fourth "
       "(docs/performance-research.md:1731-1745)" },
-    { "r3 (quad record)",       true, {7,6,4,7,3,8}, nullptr,             256,  80, 26168,  0, 3,
+    { "r3 (quad record)",       true, {7,6,4,7,3,8}, nullptr,             256,  80, 26176,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
-    { "r4 (LM_USE)",            true, {6,1,2,2,8,2}, nullptr,             256,  46, 22320,  0, 4, "" },
-    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,2,1}, nullptr,           256,  64, 22320,  0, 4,
+    { "r4 (LM_USE)",            true, {6,1,2,2,8,2}, nullptr,             256,  46, 22328,  0, 4, "" },
+    // The match-first variants: same rounds, chain built at staging so the rebuild can
+    // skip the elements no walk reads. mlist costs ~640 B of shared per round, which is
+    // what takes r1 off its fifth block -- the reason the variant is selected only in
+    // the low-power band. See docs/performance-research.md.
+    { "r1 match-first",         true, {7,7,1,3,1,2,0,1}, nullptr,         256,  64, 19584,  0, 4,
+      "the fifth block is GONE (5 -> 4): mlist's 640 B crosses r1's 19456 B line, and "
+      "registers go 48 -> 64 with it" },
+    { "r2 match-first",         true, {7,7,2,4,2,8,0,1}, nullptr,         256,  64, 24248,  0, 4, "" },
+    { "r2 implicit-bits",       true, {7,7,2,4,2,8,0,0,1}, nullptr,       256,  64, 23616,  0, 4,
+      "the packed stores fold the repack; resources identical to the base record, "
+      "still exactly on the 64-register cliff" },
+    { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,1}, nullptr,       256,  64, 24248,  0, 4, "" },
+    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,1}, nullptr,       256,  56, 26176,  0, 3, "" },
+    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,1}, nullptr,       256,  56, 26808,  0, 3, "" },
+    { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1}, nullptr,         256,  64, 24248,  0, 4, "" },
+    { "r3 match-first",         true, {7,6,4,1,8,8,0,1}, nullptr,         256,  56, 26808,  0, 3, "" },
+    { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1}, nullptr,         256,  80, 26808,  0, 3, "" },
+    { "r4 match-first",         true, {6,1,2,2,8,2,0,1}, nullptr,         256,  46, 22968,  0, 4, "" },
+    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,2,1}, nullptr,           256,  64, 22328,  0, 4,
       "ON A CLIFF: hosting the speculative entry pass costs 18 registers (46 -> 64), "
       "landing EXACTLY on the 4-blocks/SM limit. One more and the whole launch -- the "
       "round AND the co-scheduled entry -- drops to 3 blocks" },
@@ -363,11 +381,13 @@ std::vector<Measured> parse_res_usage(const std::string& out, bool& sawArch) {
             const Kernel& c = kContract[i];
             bool hit;
             if (c.templated)
-                hit = k.targs.size() >= 15 &&
+                hit = k.targs.size() >= 17 &&
                       k.targs[0] == c.id[0] && k.targs[1] == c.id[1] &&
                       k.targs[2] == c.id[2] && k.targs[3] == c.id[3] &&
                       k.targs[9] == c.id[4] && k.targs[10] == c.id[5] &&
-                      k.targs[14] == c.id[6];      // COBLOCKS variant is its own row
+                      k.targs[14] == c.id[6] &&    // COBLOCKS variant is its own row
+                      k.targs[15] == c.id[7] &&    // so is the match-first variant
+                      k.targs[16] == c.id[8];      // and the implicit-bits record
             else
                 hit = k.targs.empty() && k.mangled.find(c.token) != std::string::npos;
             if (hit) { k.match = i; break; }

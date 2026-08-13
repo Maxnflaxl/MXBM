@@ -96,6 +96,32 @@ constexpr uint32_t kFCap    = (uint32_t)MXBM_FCAP;
 #define MXBM_SPILL 1
 #endif
 
+// MXBM_ARENA: dense per-bucket caps backed by ONE global overflow pool per element
+// set. A bucket that overflows its cap appends to the pool instead of dropping, and
+// each consumer block stages its bucket's few pool entries from a per-bucket chain
+// (arena_link builds it between rounds). The pool replaces the per-bucket tail
+// reserve, which is the largest slack term in the row-bucket footprint; the pool
+// itself is megabytes. Off by default; the shipping build is unchanged.
+#ifndef MXBM_ARENA
+#define MXBM_ARENA 0
+#endif
+constexpr uint32_t kArenaCap = 65536;  // pool slots per set; pool indices fit uint16_t
+constexpr uint32_t kAMax     = 64;     // staged pool entries per bucket (shared list)
+
+// MXBM_IMPBITS: stop storing the 16 key bits the bucket ADDRESS already encodes.
+// The r2->r3 record's 400 work bits drop to 384 = 6 u64; the record becomes 8 u64
+// inline ([w0'..w5', p0, p1]) and the side plane is deleted, which also removes one
+// load and one store instruction per element. The kept low 8 key bits carry the
+// sub-mask, the split bits and the 7 tab-hash bits, so matching is unchanged.
+// Hardwired to bucket_bits == 16 (the launcher must enforce it) and to the
+// perfect-tab compare (bits 23..8 of a packed rec0 are work bits, so a full-key
+// compare would reject true partners).
+#ifndef MXBM_IMPBITS
+#define MXBM_IMPBITS 0
+#endif
+// (Guarded per instantiation in fused_round_body: IMPB needs the perfect-tab
+// compare and cannot ride the cp.async raw copy.)
+
 // MXBM_NARROW6: round 3 stages its 7th work word in 2 bytes instead of 8.
 //
 // r3's input is r2's output, which combine() masked to LOUT = 400 bits -- so word 6
@@ -332,7 +358,12 @@ constexpr int kAblMix = MXBM_ABL_MIX == 1 ? LM_SEED : MXBM_ABL_MIX == 2 ? LM_RD2
 __device__ __forceinline__
 void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_bits,
                 uint32_t bucket_cap, uint32_t* __restrict__ counts,
-                uint64_t* __restrict__ belem, uint32_t* __restrict__ drops) {
+                uint64_t* __restrict__ belem, uint32_t* __restrict__ drops
+#if MXBM_ARENA
+              , uint32_t* __restrict__ actr = nullptr
+              , uint32_t* __restrict__ atag = nullptr
+#endif
+                ) {
     uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
     bh3::Elem e; bh3::seed_element(pp, idx, e);
     uint32_t t1[1] = { idx };
@@ -340,8 +371,19 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
     const uint32_t key = (uint32_t)(e.w[0] & 0xFFFFFFu);
     const uint32_t b = key >> (24u - bucket_bits);
     const uint32_t pos = atomicAdd(&counts[b], 1u);
-    if (pos < bucket_cap) belem[(size_t)b*bucket_cap + pos] = ((uint64_t)idx << 32) | key;
+    size_t slot = (size_t)b*bucket_cap + pos;
+#if MXBM_ARENA
+    if (pos >= bucket_cap) {
+        const uint32_t a = actr ? atomicAdd(actr, 1u) : kArenaCap;
+        if (a >= kArenaCap) { atomicAdd(&drops[1], 1u); return; }
+        atag[a] = b;
+        slot = ((size_t)1u << bucket_bits)*bucket_cap + a;
+    }
+    belem[slot] = ((uint64_t)idx << 32) | key;
+#else
+    if (pos < bucket_cap) belem[slot] = ((uint64_t)idx << 32) | key;
     else atomicAdd(&drops[1], 1u);
+#endif
 }
 
 // COTENANT: host the NEXT nonce's entry pass inside this round's blocks.
@@ -377,7 +419,8 @@ struct RoundArgs {
 // rounds' layouts in a union and pay max() of the two rather than their sum. The member
 // order and sizes are exactly the arrays fused_round declared individually before this
 // existed; test_cuda_resources pins the totals against cuobjdump.
-template<int INW, int LEAFW, int LMODE, uint32_t FCAP, bool SUBPASS>
+template<int INW, int LEAFW, int LMODE, uint32_t FCAP, bool SUBPASS,
+         bool MFIRST = (MXBM_MATCH_FIRST != 0)>
 struct RoundShared {
     static constexpr bool kNeedLead = (LMODE == LM_USE);
     static constexpr bool kNarrow6 =
@@ -392,13 +435,15 @@ struct RoundShared {
     uint32_t lkey[MXBM_PERFECT_TAB ? 1 : FCAP];
     uint32_t lchain[FCAP];
     uint32_t tab[kTabSize];
-#if MXBM_MATCH_FIRST
-    uint16_t mlist[FCAP];                          // staged slots with a partner
+    uint16_t mlist[MFIRST ? FCAP : 1];             // staged slots with a partner
     uint32_t nmatch;
-#endif
     uint32_t gcount;
     uint32_t cnt8[MXBM_SPILL ? 8 : 1];
     uint8_t  skey[SUBPASS ? kSKey : 1];
+#if MXBM_ARENA
+    uint16_t aidx[kAMax];              // this bucket's pool entries, chain-walked once
+    uint32_t acnt;
+#endif
 };
 
 // The round body, extracted so a kernel can run DIFFERENT rounds in different blocks of
@@ -407,9 +452,10 @@ struct RoundShared {
 // Shared memory comes in as a RoundShared& so the caller controls where it lives.
 template<int INW, int OUTW, int LEAFW, int LMODE,
          uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
-         uint32_t INSTR, uint32_t OUTSTR, uint32_t FCAP, bool SUBPASS = false>
+         uint32_t INSTR, uint32_t OUTSTR, uint32_t FCAP, bool SUBPASS = false,
+         bool MFIRST = (MXBM_MATCH_FIRST != 0), bool IMPB = (MXBM_IMPBITS != 0)>
 __device__ __forceinline__
-void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32_t bid,
+void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm, uint32_t bid,
                  uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
                  const uint32_t* __restrict__ in_counts,
@@ -420,7 +466,19 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
                  uint32_t* __restrict__ all_right,
                  uint32_t* __restrict__ gi_counter,
                  uint32_t* __restrict__ drops,
-                 const uint64_t* __restrict__ pp4) {
+                 const uint64_t* __restrict__ pp4
+#if MXBM_ARENA
+               , const uint32_t* __restrict__ in_ahead = nullptr
+               , const uint32_t* __restrict__ in_anext = nullptr
+               , uint32_t* __restrict__ out_actr = nullptr
+               , uint32_t* __restrict__ out_atag = nullptr
+#endif
+                 ) {
+    static_assert(!IMPB || MXBM_PERFECT_TAB,
+                  "IMPB: bits 23..8 of a packed rec0 are work bits, so a full-key "
+                  "compare would reject true partners");
+    static_assert(!IMPB || !MXBM_CPASYNC,
+                  "IMPB repacks the record; the cp.async raw copy cannot carry it");
     // `lead` is leaf 0 of the element's own prefix, so for every mode that stages real
     // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
     // exception: its leaf payload is the packed leftContrib, not leaves.
@@ -441,10 +499,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     auto& llead  = shm.llead;
     auto& lkey   = shm.lkey;
     auto& lchain = shm.lchain;
-#if MXBM_MATCH_FIRST
-    auto& mlist  = shm.mlist;
-    auto& nmatch = shm.nmatch;
-#endif
+    [[maybe_unused]] auto& mlist  = shm.mlist;
+    [[maybe_unused]] auto& nmatch = shm.nmatch;
     auto& tab    = shm.tab;
     auto& gcount = shm.gcount;
     auto& cnt8   = shm.cnt8;
@@ -490,8 +546,13 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     // the records, so the record stride is 8 (always 16 B aligned) and the odd word is
     // one coalesced u64 per element. Same instruction count, 72 B/element instead of 80.
     // The plane offset is derived from the geometry rather than passed: nb = 1<<bb.
-    const size_t side_in  = ((size_t)1u << bucket_bits) * in_bucket_cap  * INSTR;
-    const size_t side_out = ((size_t)1u << bucket_bits) * out_bucket_cap * OUTSTR;
+    // With the arena, each set's layout is [bucket records][pool records][plane]:
+    // pool slot a lives at record index nbcap + a, so ONE slot index addresses both
+    // regions and every store below is unchanged; only the plane offset moves.
+    const size_t nbcap_in  = ((size_t)1u << bucket_bits) * in_bucket_cap;
+    const size_t nbcap_out = ((size_t)1u << bucket_bits) * out_bucket_cap;
+    [[maybe_unused]] const size_t side_in  = (nbcap_in  + (MXBM_ARENA ? kArenaCap : 0u)) * INSTR;
+    [[maybe_unused]] const size_t side_out = (nbcap_out + (MXBM_ARENA ? kArenaCap : 0u)) * OUTSTR;
     // The 9-word record needs INW work words + 2 meta, so a stride of INW+1 means the
     // last one is in the plane and anything wider means it is still inline. Reader and
     // writer must agree, and only the stride tells them apart -- MXBM_R2_FULL's LM_RAW
@@ -518,6 +579,26 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
         __syncthreads();
     }
 
+#if MXBM_ARENA
+    // This bucket's pool entries, chain-walked ONCE into shared. ~95 % of buckets
+    // have an empty chain at the dense cap, so the walk is one global load; a chain
+    // past kAMax loses elements, which drops[1] makes loud rather than silent.
+    auto& aidx = shm.aidx;
+    if (lId == 0) {
+        uint32_t n_ = 0;
+        if (in_ahead)
+            for (uint32_t a_ = in_ahead[bucket]; a_ != 0xFFFFFFFFu; a_ = in_anext[a_]) {
+                if (n_ >= kAMax) { atomicAdd(&drops[1], 1u); break; }
+                aidx[n_++] = (uint16_t)a_;
+            }
+        shm.acnt = n_;
+    }
+    __syncthreads();
+    const uint32_t acnt = shm.acnt;
+#else
+    constexpr uint32_t acnt = 0u;
+#endif
+
   for (uint32_t sweep = 0; sweep < nsweep; ++sweep) {
     const uint32_t mask_s = SUBPASS ? sweep : mask0;
     uint32_t xb = 0, xp = 0, nparts = 1;     // split level, current part, part count
@@ -525,27 +606,31 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     while (xp < nparts) {
     const uint32_t sbits = submask_bits + xb;
     const uint32_t mask  = mask_s | (xp << submask_bits);
-    if (lId == 0) { gcount = 0;
-#if MXBM_MATCH_FIRST
-                    nmatch = 0;
-#endif
-    }
+    if (lId == 0) { gcount = 0; if constexpr (MFIRST) nmatch = 0; }
     for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
     __syncthreads();
 
     // STAGE. Sub-mask filtered, so only ~1/2^submask_bits of the lanes survive: keep this
     // loop cheap and defer anything expensive to the all-lanes loop below.
-    for (uint32_t p = lId; p < cnt; p += kWG) {
+    for (uint32_t p = lId; p < cnt + acnt; p += kWG) {
+#if MXBM_ARENA
+        const bool ar_ = p >= cnt;
+#else
+        constexpr bool ar_ = false;
+#endif
         // The filter now costs a shared byte, not a global word. The full record is still
         // read exactly once across the whole sweep, by whichever sweep claims it.
         if constexpr (SUBPASS)
-            if ((skey[p] & ((1u << sbits) - 1u)) != mask) continue;
-        const size_t d = (base + p) * INSTR;
+            if (!ar_ && (skey[p] & ((1u << sbits) - 1u)) != mask) continue;
+        size_t idx_ = base + p;
+#if MXBM_ARENA
+        if (ar_) idx_ = nbcap_in + aidx[p - cnt];
+#endif
+        const size_t d = idx_ * INSTR;
         uint64_t rec0;
         [[maybe_unused]] uint64_t rec1 = 0;
         if constexpr (LMODE == LM_RD2 && MXBM_PAIR128) {
             // Both words of the pair record in one LD.128 -- see MXBM_PAIR128 above.
-            static_assert(INSTR % 2 == 0, "vectorised pair load needs an even stride");
             const ulonglong2 q = *reinterpret_cast<const ulonglong2*>(in_belem + d);
             rec0 = q.x; rec1 = q.y;
         } else {
@@ -554,15 +639,20 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
         const uint32_t key = (uint32_t)(rec0 & 0xFFFFFFu);
         if constexpr (!SUBPASS)
             if ((key & ((1u << sbits) - 1u)) != mask) continue;
+#if MXBM_ARENA
+        // Pool entries bypass the skey prepass, so under SUBPASS they filter here.
+        if constexpr (SUBPASS)
+            if (ar_ && (key & ((1u << sbits) - 1u)) != mask) continue;
+#endif
         const uint32_t pos = atomicAdd(&gcount, 1u);
         // Keep counting past FCAP: gcount is what decides whether to split.
         if (pos >= FCAP) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
-#if MXBM_MATCH_FIRST
-        // The chain, built here rather than after the rebuild: this loop already holds
-        // the key, and knowing the chain first is what lets the rebuild skip the
-        // elements no walk will read. Same hash and same insert as the loop below.
-        lchain[pos] = atomicExch(&tab[(key >> submask_bits) & (kTabSize - 1u)], pos);
-#endif
+        if constexpr (MFIRST) {
+            // The chain, built here rather than after the rebuild: this loop already
+            // holds the key, and knowing the chain first is what lets the rebuild skip
+            // the elements no walk will read. Same hash and insert as the loop below.
+            lchain[pos] = atomicExch(&tab[(key >> submask_bits) & (kTabSize - 1u)], pos);
+        }
         if constexpr (LMODE == LM_SEED || LMODE == LM_SEEDF) {
             lleaf[pos*LEAFW + 0] = (uint32_t)(rec0 >> 32);           // derive later
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
@@ -610,15 +700,30 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
             for (int w = 0; w < INW; ++w)
                 __pipeline_memcpy_async(&lwork[lwx(pos, w)], &in_belem[d + w], 8);
             __pipeline_commit();
-            const uint64_t p0 = in_belem[d + INW], p1 = r3_word8(in_belem, d, side_in + base + p);
+            const uint64_t p0 = in_belem[d + INW], p1 = r3_word8(in_belem, d, side_in + idx_);
 #else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
-            stw(pos,0,q0.x); stw(pos,1,q0.y);
-            stw(pos,2,q1.x); stw(pos,3,q1.y);
-            stw(pos,4,q2.x); stw(pos,5,q2.y);
-            stw(pos,6,q3.x);
-            const uint64_t p0 = q3.y, p1 = r3_word8(in_belem, d, side_in + base + p);
+            uint64_t p0, p1;
+            if constexpr (IMPB) {
+                // Unpack the 384-bit record, reinserting the 16 address bits from
+                // the block's own bucket index. Inverse of the LM_RD2 emit's pack.
+                stw(pos,0,(q0.x & 0xFFull) | ((uint64_t)bucket << 8)
+                          | (((q0.x >> 8) & 0xFFFFFFFFFFull) << 24));
+                stw(pos,1,(q0.x >> 48) | (q0.y << 16));
+                stw(pos,2,(q0.y >> 48) | (q1.x << 16));
+                stw(pos,3,(q1.x >> 48) | (q1.y << 16));
+                stw(pos,4,(q1.y >> 48) | (q2.x << 16));
+                stw(pos,5,(q2.x >> 48) | (q2.y << 16));
+                stw(pos,6,(q2.y >> 48) & 0xFFFFull);
+                p0 = q3.x; p1 = q3.y;
+            } else {
+                stw(pos,0,q0.x); stw(pos,1,q0.y);
+                stw(pos,2,q1.x); stw(pos,3,q1.y);
+                stw(pos,4,q2.x); stw(pos,5,q2.y);
+                stw(pos,6,q3.x);
+                p0 = q3.y; p1 = r3_word8(in_belem, d, side_in + idx_);
+            }
 #endif
             const uint32_t l0 = r3_l0(p0);
             lgi[pos] = r3_gi(p1);
@@ -712,30 +817,27 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
     const uint32_t nDer = (total * 7u) / 8u;
 #endif
 
-#if MXBM_MATCH_FIRST
-    // COMPACT. One thread per chain slot walks its members; a slot holding a single
-    // element contributes nothing to the walk, so its element is never materialised.
-    // 128 slots against kWG lanes, ~2 members each: one short pass, no barrier inside.
-    for (uint32_t h = lId; h < kTabSize; h += kWG) {
-        const uint32_t head = tab[h];
-        if (head == kEmpty || lchain[head] == kEmpty) continue;   // empty, or a singleton
-        uint32_t n = 0, e = head;
-        while (e != kEmpty && n < FCAP) { ++n; e = lchain[e]; }
-        uint32_t w = atomicAdd(&nmatch, n);
-        for (e = head; e != kEmpty && w < FCAP; e = lchain[e]) mlist[w++] = (uint16_t)e;
+    uint32_t nWork = total;
+    if constexpr (MFIRST) {
+        // COMPACT. One thread per chain slot walks its members; a slot holding a single
+        // element contributes nothing to the walk, so its element is never materialised.
+        // 128 slots against kWG lanes, ~2 members each: one short pass, no barrier inside.
+        for (uint32_t h = lId; h < kTabSize; h += kWG) {
+            const uint32_t head = tab[h];
+            if (head == kEmpty || lchain[head] == kEmpty) continue; // empty, or singleton
+            uint32_t n = 0, e = head;
+            while (e != kEmpty && n < FCAP) { ++n; e = lchain[e]; }
+            uint32_t w = atomicAdd(&nmatch, n);
+            for (e = head; e != kEmpty && w < FCAP; e = lchain[e]) mlist[w++] = (uint16_t)e;
+        }
+        __syncthreads();
+        nWork = nmatch;
     }
-    __syncthreads();
-    const uint32_t nWork = nmatch;
-#endif
 
     // EXPAND + CHAIN. Every lane is active here, which is why the re-derivations live in
     // this loop and not the staging one (worth 8x their SIMD utilisation).
-#if MXBM_MATCH_FIRST
-    for (uint32_t i = lId; i < nWork; i += kWG) {
-      const uint32_t pos = (uint32_t)mlist[i];
-#else
-    for (uint32_t pos = lId; pos < total; pos += kWG) {
-#endif
+    for (uint32_t i_ = lId; i_ < nWork; i_ += kWG) {
+      const uint32_t pos = MFIRST ? (uint32_t)mlist[i_] : i_;
 #if MXBM_ABL_TAIL == 2
       if (pos < nDer) {
 #endif
@@ -773,14 +875,14 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
 #if MXBM_ABL_TAIL == 2
       }
 #endif
-#if !MXBM_MATCH_FIRST
-        // lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode -- and
-        // it is filled by this point (the two derive modes fill it just above).
-        const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[lwx(pos, 0)] & 0xFFFFFFu)
-                                             : lkey[pos];
-        const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
-        lchain[pos] = atomicExch(&tab[hk], pos);
-#endif
+        if constexpr (!MFIRST) {
+            // lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode --
+            // and it is filled by this point (the two derive modes fill it just above).
+            const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[lwx(pos, 0)] & 0xFFFFFFu)
+                                                 : lkey[pos];
+            const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
+            lchain[pos] = atomicExch(&tab[hk], pos);
+        }
     }
     __syncthreads();
 
@@ -828,9 +930,18 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
                 const uint32_t ckey = (uint32_t)(c.w[0] & 0xFFFFFFu);
                 const uint32_t cb   = ckey >> (24u - bucket_bits);
                 const uint32_t cpos = atomicAdd(&out_counts[cb], 1u);
+                size_t oslot = (size_t)cb * out_bucket_cap + cpos;
+#if MXBM_ARENA
+                if (cpos >= out_bucket_cap) {
+                    const uint32_t a_ = out_actr ? atomicAdd(out_actr, 1u) : kArenaCap;
+                    if (a_ < kArenaCap) { out_atag[a_] = cb; oslot = nbcap_out + a_; }
+                    else oslot = ~(size_t)0;
+                }
+                if (oslot != ~(size_t)0) {
+#else
                 if (cpos < out_bucket_cap) {
+#endif
                     const uint32_t cgi = gi_alloc(gi_counter);
-                    const size_t oslot = (size_t)cb * out_bucket_cap + cpos;
                     const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == kAblEmit) {
                         // NARROW the payload to 16 B rather than skipping it. Skipping
@@ -871,16 +982,35 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS>& shm, uint32
                         // aligned. 4 x ST.128 + 1 x ST.64 instead of 9 x ST.64.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
-                        st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));
-                        st_em(v + 1, make_ulonglong2(c.w[2], c.w[3]));
-                        st_em(v + 2, make_ulonglong2(c.w[4], c.w[5]));
-                        st_em(v + 3, make_ulonglong2(c.w[6], r3_p0(ctree[0], ctree[1], ctree[2])));
-                        // LM_RAW is the MXBM_R2_FULL experiment, which keeps the padded
-                        // 10-u64 record and so has no side plane allocated behind it.
-                        if constexpr (LMODE == LM_RD2)
-                            st_em(out_belem + side_out + oslot, r3_p1(ctree[2], ctree[3], cgi));
-                        else
-                            st_em(out_belem + od + OUTW + 1, r3_p1(ctree[2], ctree[3], cgi));
+                        if constexpr (IMPB && LMODE == LM_RD2) {
+                            // Pack out bits 23..8 of w0 (they ARE cb at bucket_bits
+                            // 16): w0' = low8 | bits63..24 at 8 | w1 low16 at 48;
+                            // then wi' = wi>>16 | w(i+1)<<48. p1 rides inline where
+                            // the dropped word was, so the side plane has no writer.
+                            static_assert(OUTW == 7 || !IMPB, "pack is 400-bit");
+                            st_em(v + 0, make_ulonglong2(
+                                (c.w[0] & 0xFFull) | ((c.w[0] >> 24) << 8) | (c.w[1] << 48),
+                                (c.w[1] >> 16) | (c.w[2] << 48)));
+                            st_em(v + 1, make_ulonglong2(
+                                (c.w[2] >> 16) | (c.w[3] << 48),
+                                (c.w[3] >> 16) | (c.w[4] << 48)));
+                            st_em(v + 2, make_ulonglong2(
+                                (c.w[4] >> 16) | (c.w[5] << 48),
+                                (c.w[5] >> 16) | (c.w[6] << 48)));
+                            st_em(v + 3, make_ulonglong2(r3_p0(ctree[0], ctree[1], ctree[2]),
+                                                         r3_p1(ctree[2], ctree[3], cgi)));
+                        } else {
+                            st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));
+                            st_em(v + 1, make_ulonglong2(c.w[2], c.w[3]));
+                            st_em(v + 2, make_ulonglong2(c.w[4], c.w[5]));
+                            st_em(v + 3, make_ulonglong2(c.w[6], r3_p0(ctree[0], ctree[1], ctree[2])));
+                            // LM_RAW is the MXBM_R2_FULL experiment, which keeps the
+                            // padded 10-u64 record and so has no side plane behind it.
+                            if constexpr (LMODE == LM_RD2)
+                                st_em(out_belem + side_out + oslot, r3_p1(ctree[2], ctree[3], cgi));
+                            else
+                                st_em(out_belem + od + OUTW + 1, r3_p1(ctree[2], ctree[3], cgi));
+                        }
                     } else if constexpr (LMODE == LM_SEEDF) {
                         // Full packed record: 7 work + meta + 1 leaf u64 (sOut = 2).
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
@@ -943,6 +1073,13 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          // the default. Probed and NULL: r1/r2 are shared-memory-capped at 5/4 blocks
          // before the freed registers can matter (5 x 23.6 KB > 100 KB for r2), so
          // occupancy there is closed from BOTH resources. Kept as an instrument.
+         // Skip the rebuild for elements alone in their chain slot: a loss at stock,
+         // a win once a cap makes the rebuild bill at full issue rate, so both
+         // variants are instantiated and CudaSolver picks. Placed BEFORE MINBLOCKS so
+         // naming it at a launch site keeps MINBLOCKS's per-round default -- a
+         // spelled-out 0 would silently drop an MXBM_MB_* probe budget.
+         bool MFIRST = (MXBM_MATCH_FIRST != 0),
+         bool IMPB = (MXBM_IMPBITS != 0),
          int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
                         : LMODE == LM_RD2  ? MXBM_MB_RD2
                         : LMODE == LM_EMIT ? MXBM_MB_EMIT : 0)>
@@ -958,6 +1095,12 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t* __restrict__ gi_counter,
                  uint32_t* __restrict__ drops,
                  const uint64_t* __restrict__ pp4,
+#if MXBM_ARENA
+                 const uint32_t* __restrict__ in_ahead = nullptr,
+                 const uint32_t* __restrict__ in_anext = nullptr,
+                 uint32_t* __restrict__ out_actr = nullptr,
+                 uint32_t* __restrict__ out_atag = nullptr,
+#endif
                  // co-tenant entry pass for the NEXT nonce; ignored unless COTENANT
                  const uint64_t* __restrict__ co_pp4 = nullptr,
                  uint32_t co_count = 0, uint32_t co_bucket_cap = 0,
@@ -998,12 +1141,16 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         bid -= bid / co_stride;                             // rank among round blocks
     }
 
-    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS> shm;
+    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST> shm;
     fused_round_body<INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD,
-                     INSTR, OUTSTR, FCAP, SUBPASS>(
+                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB>(
         shm, bid, bucket_bits, submask_bits, in_bucket_cap, out_bucket_cap, out_off,
         in_counts, in_belem, out_counts, out_belem, all_left, all_right, gi_counter,
-        drops, pp4);
+        drops, pp4
+#if MXBM_ARENA
+      , in_ahead, in_anext, out_actr, out_atag
+#endif
+        );
 
     // Co-tenant: the next nonce's entry pass, in THIS launch. Grid-strided rather than
     // one-element-per-thread, so it stays correct if the geometry or kWG ever makes
