@@ -109,19 +109,11 @@ The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-13, commit
 intermittent (~20 % of samples) — the draw now reaches the board limit; any other
 flag voids a run. Pool validation: **62.32 ± 1.99 sol/s** over 80 minutes.
 
-[^drift]: **Carries a ~2.5 % cross-session band** (narrowed 2026-07-31 from the ~5 %
-    it opened at). Within one session the measurement is tight — six repeats spread
-    0.3 % — and every session since 2026-07-26 has landed within ~2.5 % of its peers;
-    the single 35.6 ms outlier that set the original band never recurred and stays on
-    record. See [how far these figures
-    reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions).
-    Every A/B on this page was interleaved, so the deltas are unaffected; only the scale
-    moves. OpenCL is a single 120 s miner benchmark (3,551 solves, 2026-08-02), measured
-    opportunistically rather than under the controlled-conditions protocol. **The 1.012×
-    backend gap is NOT this row minus that one** — comparing headline figures measured on
-    different days is exactly what the band above forbids. It comes from a same-session
-    pair on 2026-08-02: CUDA 33.1 ms / 60.2 sol/s, OpenCL 33.5 ms / 59.4 sol/s, both
-    120 s, minutes apart. Cross-day, the same two numbers read as parity.
+[^drift]: Absolute figures carry a ~2.5 % cross-session band ([how far they
+    reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions));
+    every A/B on this page was interleaved, so deltas are unaffected. The OpenCL row
+    is a single opportunistic 120 s run; its 1.012× gap is a same-session pair
+    (2026-08-02), not this row against that one.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
