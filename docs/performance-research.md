@@ -24,7 +24,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
-| [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36 |
+| [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36 |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -1424,8 +1424,9 @@ So the remaining 6–9 ms per round is the staging read, the chain walk and the 
 count* of the scatter — none of which is byte-count-driven, and none of which any
 single-kernel lever has moved. That is the same conclusion the overlap work reached from
 the other direction. It pointed at co-residency, which has since been closed for
-same-mix tenants at every operating point (see the co-residency section below); the
-surviving route to the same time is the switching-height redesign.
+same-mix tenants at every operating point (see the co-residency section below), and
+at the switching-height redesign, which was built and killed 2026-08-13 (see the
+h=1 section below). No surviving route to this time is known.
 
 </details>
 
@@ -4244,6 +4245,10 @@ build" the disarm text names as the re-arm condition: setting `kRbLowPowerW` to
 </details>
 
 ### The switching-height re-pricing: a store-everything design with a re-derived round 1 wins the whole 100–150 W band
+
+*Superseded 2026-08-13 by [the h=1 build-out](#the-h1-pipeline-built-and-killed-the-caps-currency-is-l2-sectors-not-dram-bytes):
+the bounds below did not survive the real build.*
+
 <details>
 <summary>Details</summary>
 
@@ -4276,6 +4281,56 @@ figure is pessimistic-side (the probe's match is a first cut). Band-by-band
 head-to-head numbers and the build recommendation live in
 `docs-internal/PERF_LEADS.md`; remaining design unknowns before a build: the
 back-ref/recovery scheme, spill policy, and the seed-to-round-1 handoff.
+
+</details>
+
+### The h=1 pipeline, built and killed: the cap's currency is L2 sectors, not DRAM bytes
+<details>
+<summary>Details</summary>
+
+The h=1 design (previous section) was built to its own kill gates: a real round 1
+(one block per bucket, derive-once into shared, exact low-byte classes, real
+`combine` + `apply_mix`, full packed children + back-ref row 0), byte-for-byte
+correct against the shipping pipeline — order-independent multiset fingerprints of
+each round's output match exactly, KAT 3/3, drops 0 — and then measured
+whole-pipeline against the same-tree h=2 probe, ABBA at each point.
+
+**Verdict: killed.** With its best variant, h=1 is **+0.9 % at 120 W + rung,
++1.6 % at 140 W, +1.8 % at 100 W** against bounds of −26/−13/−11 %. Zero of the
+bound survives. Three measured reasons the bound model was wrong:
+
+1. **The mock priced traffic in DRAM bytes; under a cap the scarce currency is L2
+   sectors × core clock.** h=1's round 1 materialises 72 B records where h=2
+   writes 16 B pairs — +56 B/child of *scattered stores*, and the profiler shows
+   the round pinned on L2 (70 %) with DRAM at 40 % and SM at 37 %. L2 runs in the
+   core-clock domain, so exactly when the cap pulls the clock down, those sectors
+   stretch: the round's marginal cost is 16.4 ms at 120 W + rung against 11.0 for
+   the h=2 round 1.
+2. **Bytes-for-hashes trades ~1:1 at the rung on the current baseline.** Round 2
+   with no rebuild saves −4.2 ms/pass at 120 W; round 1's materialisation costs
+   +5.4. The information moved one round earlier, and the round that writes it
+   pays what the round that reads it saves — the ledger's compute-for-memory rule
+   seen from the other side. Rounds 3–4 were already streaming in the shipping
+   design, so there was nothing left downstream for h=1 to save.
+3. **The baseline moved between the bound and the build** — the implicit-bits
+   record (−3.2 %) shipped into the h=2 comparison the same week.
+
+Two levers were priced on the way, one a keeper: **packing gi's high bits into the
+record's spare payload bits deletes the side-plane word** — one scattered
+read-modify-write sector per child gone on emit, one gather gone in the next
+round's staging — worth **−2.4 ms whole-solve** on the h=1 arm (the shipping
+packed record cannot take it: its plane carries 62 bits against 48 spare,
+checked). And the keys-only-shared match shape (stage 14 B/element, gather full
+records from L2 at pair time) **loses to full-record shared staging at every
+point** (+5.5 % on the round's marginal at 120 W + rung) despite 1.5× the resident
+threads: three scattered 8 B staging loads cost more sectors than one contiguous
+staged read, before the gathers re-bill the records through L2. A wider-workgroup
+variant (1536 threads/SM at 40 registers, zero spills) changed nothing — an
+L2-bandwidth-bound round does not want more warps.
+
+The arc cost two sessions of the ~three weeks budgeted; the staged kill gates did
+their job. Probe code, diffs and per-point logs:
+`docs-internal/campaign/2026-08-12-lowpower/` (M1, M2).
 
 </details>
 
