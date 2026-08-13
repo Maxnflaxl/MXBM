@@ -104,15 +104,15 @@ sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh
 ```
 
 Reference values on the reference card (RTX 4070 Ti SUPER, driver 610.43.03,
-measured 2026-08-04 on the build at `fa7adbb`, six 120 s runs, **compute GPU
+measured 2026-08-13 on the build at `5c93f0f`, six 120 s runs, **compute GPU
 headless**):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **33.30** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
+| ms/solve median | **32.00** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
 | SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
-| board draw | **271.1 W** (spread 0.6 %) | context, not a gate |
-| `clocks_event_reasons` | **none** | any throttle flag voids the run |
+| board draw | **281.4 W** (spread 0.2 %) | context, not a gate — the binary now sits within 4 W of the board limit |
+| `clocks_event_reasons` | `sw_power_cap` intermittent (~20 % of samples) is the stock steady state since the draw reached the limit | any **other** flag voids the run |
 | display on the compute GPU | **no** — monitor on the motherboard iGPU | a compositor on this card costs **0.20 ms and ~6 W** (measured) |
 
 The last row is a condition of the pin, not decoration — it is worth 0.6 % of the
@@ -127,7 +127,8 @@ Lineage, most recent first — the number belongs to a build *and* a rig, the
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
-| 2026-08-04 `fa7adbb` | **33.30** | 271.1 W | the monitor moved to the iGPU — **attributed to the rig**: the 08-01 build (`553cac7`) rebuilt and re-run headless the same day reads 33.30 to the digit at 270.4 W, so the compositor was the whole 0.20 ms and the intervening commits are time-neutral |
+| 2026-08-13 `5c93f0f` | **32.00** | 281.4 W | the implicit-bits record (−3.2 % in-miner A/B, [the campaign results](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena)); the draw rose to the board limit and `sw_power_cap` turned intermittently active — recorded as the new stock condition |
+| 2026-08-04 `fa7adbb` | 33.30 | 271.1 W | the monitor moved to the iGPU — **attributed to the rig**: the 08-01 build (`553cac7`) rebuilt and re-run headless the same day reads 33.30 to the digit at 270.4 W, so the compositor was the whole 0.20 ms and the intervening commits are time-neutral |
 | 2026-08-01 `553cac7` | 33.50 | ~277 W | two kernel changes shipped 07-31 (`5817245` entry co-scheduling, `716432f` r2 LD.128 + terminal perfect table); −2.3 % matches their ship-time measurements, and +15 W at identical clocks is the busier binary |
 | 2026-07-28 | 34.30 | ~262 W | first pin; two runs 89 minutes apart, to the digit |
 
