@@ -13,7 +13,8 @@
 <line x1="655.0" y1="104" x2="655.0" y2="300" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
 <line x1="655.0" y1="352" x2="655.0" y2="486" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
 <line x1="655.0" y1="538" x2="655.0" y2="624" stroke="#2a78d6" stroke-width="1" stroke-dasharray="3 3"/>
-<text x="552.9" y="292" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="middle">MXBM ahead on BOTH, 210-277 W</text>
+<rect x="490.9" y="276" width="124" height="16" fill="#fcfcfb"/>
+<text x="552.9" y="288" font-size="11" font-weight="bold" fill="#0b0b0b" text-anchor="middle">Ahead on 210-277 W</text>
 <line x1="74" y1="285.2" x2="966" y2="285.2" stroke="#e1e0d9" stroke-width="1"/>
 <text x="66" y="288.2" font-size="10" fill="#898781" text-anchor="end">20</text>
 <line x1="74" y1="245.2" x2="966" y2="245.2" stroke="#e1e0d9" stroke-width="1"/>
@@ -332,7 +333,7 @@
 <text x="962" y="533.3" font-size="10" fill="#52514e" text-anchor="end">MXBM stops responding here: 330/366 W all draw ~311 W</text>
 <text x="962" y="589.5" font-size="10" fill="#52514e" text-anchor="end">lolMiner stops responding to the cap here: 240/255/285 W all draw ~238 W</text>
 <text x="341.6" y="349.8" font-size="10" fill="#52514e" text-anchor="middle">lolMiner's best 0.2991</text>
-<text x="480.0" y="424.1" font-size="10" fill="#52514e" text-anchor="middle">MXBM's best 0.2592</text>
+<text x="480.0" y="393.1" font-size="10" fill="#52514e" text-anchor="middle">MXBM's best 0.2592</text>
 <line x1="88" y1="117" x2="110" y2="117" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="99" cy="117" r="6" fill="#fcfcfb"/>
 <circle cx="99" cy="117" r="4" fill="#2a78d6"></circle>

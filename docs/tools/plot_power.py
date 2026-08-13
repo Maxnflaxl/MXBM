@@ -187,10 +187,12 @@ def render(rows, above=()):
         for x in (b_lo, b_hi):
             for p in (pa, pb, pc):
                 c.line(xs(x), p.y0, xs(x), p.y1, MX, 1, "3 3")
-        # Bottom of the panel: the curves now run through the band's upper half.
-        c.text((xs(b_lo) + xs(b_hi)) / 2, pa.y1 - 8,
-               "MXBM ahead on BOTH, %.0f-%.0f W" % (b_lo, b_hi), 11, cl.INK,
-               "middle", weight="bold")
+        # Bottom of the panel, on a surface-colored backing so no gridline or
+        # frame rule strikes through the text.
+        label = "Ahead on %.0f-%.0f W" % (b_lo, b_hi)
+        lx = (xs(b_lo) + xs(b_hi)) / 2
+        c.rect(lx - 62, pa.y1 - 24, 124, 16, cl.SURFACE)
+        c.text(lx, pa.y1 - 12, label, 11, cl.INK, "middle", weight="bold")
 
     # -- panels A and B: the two measures ----------------------------------
     for p, idx, rng, fmt, nt, name, akey in (
@@ -266,7 +268,9 @@ def render(rows, above=()):
     c.text(xs(best["cap"]), ys_b(best["lol"][2]) - 13,
            "lolMiner's best %.4f" % best["lol"][2], 10, cl.INK_2, "middle")
     bmx = max(rows, key=lambda r: r["mx"][2])
-    c.text(xs(bmx["cap"]), ys_b(bmx["mx"][2]) + 18,
+    # Above the point, like lolMiner's: the curve now descends through the space
+    # below the peak, and locally the peak clears the other series.
+    c.text(xs(bmx["cap"]), ys_b(bmx["mx"][2]) - 13,
            "MXBM's best %.4f" % bmx["mx"][2], 10, cl.INK_2, "middle")
 
     # -- legend and footer --------------------------------------------------
