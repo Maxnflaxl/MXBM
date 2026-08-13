@@ -187,7 +187,8 @@ def render(rows, above=()):
         for x in (b_lo, b_hi):
             for p in (pa, pb, pc):
                 c.line(xs(x), p.y0, xs(x), p.y1, MX, 1, "3 3")
-        c.text((xs(b_lo) + xs(b_hi)) / 2, A_TOP + 17,
+        # Bottom of the panel: the curves now run through the band's upper half.
+        c.text((xs(b_lo) + xs(b_hi)) / 2, pa.y1 - 8,
                "MXBM ahead on BOTH, %.0f-%.0f W" % (b_lo, b_hi), 11, cl.INK,
                "middle", weight="bold")
 

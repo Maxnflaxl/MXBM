@@ -95,25 +95,19 @@ points rather than being given a fabricated one.
 | 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0 ± 0.4** | −0.9 | −2.6 % | [Group cap](performance-research.md#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](performance-research.md#bytes-are-nearly-free-per-element-work-is-not) |
 | 2026-07-31 | **Speculative entry co-scheduling** — r4's launch hosts the next nonce's entry as interleaved co-blocks | 33.85 | 33.4 | **59.5** | −0.45 | −1.3 % | [Co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), [ships](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms) | [pipe2 1:1, split host, r2/r3 hosts](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms), [register-forced occupancy](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
 | 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7 ± 0.8** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07; the ± is the 60 s-window σ of the live session below)* | — |
-| 2026-08-13 | **Implicit-bits record** — the packed r2 record stops storing the key bits its bucket address encodes; the side plane loses its writer and reader | 33.2 | 32.0 | **62.7** | −1.2 | −3.6 % | [address-redundant bits](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) | — |
+| 2026-08-13 | **Implicit-bits record** — the packed r2 record stops storing the key bits its bucket address encodes; the side plane loses its writer and reader | 33.2 | 32.0 | **62.7 ± 0.9** | −1.2 | −3.6 % | [address-redundant bits](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) *(± is the 60 s-window σ of the 80-minute live-pool session)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 59.4 | 33.5 | fallback / `--solver opencl` — 2026-08-02, after [speculative entry](performance-research.md#speculative-entry-ported-to-opencl-the-entry-pass-hides-inside-round-4-035-ms) (−0.35 ms) on top of [the 128-bit family port](performance-research.md#the-128-bit-family-ported-to-opencl-side-plane--vector-access--pair128-54-ms) (−5.4 ms); against same-session CUDA (33.1 ms) the gap is **1.012×** |
-| **CUDA** | **62.7** | **32.0** | **shipping** — default when a CUDA device is present |
+| **OpenCL** | 59.4 | 33.5 | fallback / `--solver opencl` — 2026-08-02, [lineage](performance-research.md#speculative-entry-ported-to-opencl-the-entry-pass-hides-inside-round-4-035-ms); 1.012× of same-session CUDA |
+| **CUDA** | **62.7**[^drift] | **32.0**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row is **6 × 120 s, ~22,500 solves** (`benchmarks/headline.sh`, 2026-08-13,
-commit `5c93f0f`), 0.0 % spread across the six runs, measured under stated conditions:
-stock 285 W, headless, thermal equilibrium after a discarded 240 s warmup,
-2610 MHz / 10251 MHz / 281.4 W / 67 °C throughout. One condition is new at this pin:
-`sw_power_cap` is intermittently active (~20 % of samples) — the binary now draws to
-within 4 W of the board limit, so the power cap at stock is the card's steady state
-rather than a foreign throttle; any *other* flag still voids a run. Live-pool
-validation the same day: 80 minutes against a real pool read **62.32 ± 1.99 sol/s**
-over 317 fifteen-second windows (median 62.33) — the pool rate matches the bench
-within its own sigma. The previous controlled
-figure (2026-07-28, same conditions, pre-speculation) was 33.8 ms / 58.9 sol/s.
+The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-13, commit
+`5c93f0f`), 0.0 % spread, stock 285 W, headless, 240 s warmup discarded,
+2610 MHz / 10251 MHz / 281.4 W / 67 °C. New standing condition: `sw_power_cap`
+intermittent (~20 % of samples) — the draw now reaches the board limit; any other
+flag voids a run. Pool validation: **62.32 ± 1.99 sol/s** over 80 minutes.
 
 [^drift]: **Carries a ~2.5 % cross-session band** (narrowed 2026-07-31 from the ~5 %
     it opened at). Within one session the measurement is tight — six repeats spread

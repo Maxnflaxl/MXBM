@@ -34,22 +34,22 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 
 | | MXBM (CUDA) | lolMiner 1.98a | |
 |---|---|---|---|
-| Throughput | **56.2 sol/s** | 53.27 sol/s | **+5.5 %** |
-| Board power | 284.0 W | 238.7 W | +19 % |
-| Efficiency | 0.198 sol/s/W | **0.223 sol/s/W** | −11 % |
-| Core clock | 2700 MHz | 2745 MHz | |
+| Throughput | **62.3 sol/s** | 53.27 sol/s | **+17 %** |
+| Board power | 281.4 W | 238.7 W | +18 % |
+| Efficiency | 0.221 sol/s/W | **0.223 sol/s/W** | −1 % |
+| Core clock | 2610 MHz | 2745 MHz | |
 | Memory clock | 10251 MHz | 10251 MHz | |
-| Temperature | 65 °C | 60 °C | |
-| VRAM for a full search | 7.46 GiB | ~4 GiB[^4g] | |
+| Temperature | 67 °C | 60 °C | |
+| VRAM for a full search | 7.20 GiB | ~4 GiB[^4g] | |
 
-Both figures are 15 s-window medians from the head-to-head session. MXBM's own
-long-run benchmark on the current build measures **58.9 sol/s at 33.8 ms/solve**
-over 8,866 solves (p5–p95 33.6–34.7), so the margin above is if anything understated —
-the head-to-head predates the 2026-07-26 group-cap change, which was worth −0.9 ms.
+MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
+**62.32 ± 1.99 sol/s** (15 s windows), and the controlled benchmark the same day
+reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). lolMiner's
+column is the 2026-07 head-to-head session; its binary is unchanged.
 
 **Read that efficiency row carefully — it compares two different operating points.** MXBM
 runs pinned at the card's 285 W board limit in every kernel (verified: the driver reports
-`sw_power_cap` active continuously, at 63 °C, so it is a power ceiling and not a thermal
+`sw_power_cap` active, at 67 °C, so it is a power ceiling and not a thermal
 one). lolMiner draws 239 W and is *not* capped — it leaves 46 W unused. Comparing sol/s/W
 at stock therefore rewards whichever miner fails to fill the card.
 
@@ -58,13 +58,13 @@ to 220 W:
 
 | | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
-| Throughput | **54.9 sol/s** | 54.4 sol/s | **+0.9 %** |
-| Board power | 219.5 W | 219.4 W | — |
-| Efficiency | **0.250 sol/s/W** | 0.248 sol/s/W | **+0.9 %** |
+| Throughput | **56.9 sol/s** | 54.4 sol/s | **+4.6 %** |
+| Board power | 219.6 W | 219.4 W | — |
+| Efficiency | **0.259 sol/s/W** | 0.248 sol/s/W | **+4.6 %** |
 
-MXBM is ahead on both between roughly **210 W and 256 W**. Below that lolMiner is ahead
-on both — at 180 W by about 16 % — and above it lolMiner is more efficient while MXBM is
-faster.
+MXBM is ahead on both between roughly **210 W and 277 W** (210 itself is a tie at the
+cross-session band). Below that lolMiner is ahead on both — at 180 W by about 19 % —
+and above 277 W lolMiner is more efficient while MXBM is faster.
 
 **Both curves are measured.** lolMiner was swept across the same caps as MXBM rather than
 sampled once at its own uncapped draw, which is what makes the window above a comparison
@@ -78,7 +78,7 @@ worth ~17 % inside our own pipeline. The watts are trustworthy across miners bec
 instrument measured both; the sol/s columns are each miner against itself. Accepted pool
 shares over a fixed interval remain the only arbiter that needs neither counter.
 
-[^4g]: lolMiner selects "BeamHash III **4G** (CUDA)" on this card. MXBM needing 7.46 GiB
+[^4g]: lolMiner selects "BeamHash III **4G** (CUDA)" on this card. MXBM needing 7.20 GiB
 is a known gap — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target).
 
 ---
@@ -105,15 +105,17 @@ a great deal. Swept against each other at identical caps:
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
 **Where each one wins.** Below ~210 W lolMiner is ahead on speed *and* efficiency, by
-about 16 % at 180 W. Between ~210 W and ~256 W MXBM is ahead on both, by about 1 % at
-220 W and 5–6 % at 240 W. Above ~256 W MXBM is faster and lolMiner is more efficient.
+about 19 % at 180 W. Between ~210 W and ~277 W MXBM is ahead on both, by 4.6 % at
+220 W and 12 % at 240 W. Above ~277 W MXBM is faster and lolMiner is more efficient.
 lolMiner barely responds to a cap at all — it gives up 2.4 % of its speed for 24 % less
 power, and above ~237 W the cap does nothing — so its best efficiency (0.2991 sol/s/W at
-175 W) beats MXBM's best anywhere (0.2575 at 210 W). What MXBM has is the ceiling:
-59.05 sol/s against ~54.0, which lolMiner cannot reach at any setting.
+175 W) still beats MXBM's best anywhere (0.2592 at 220 W). What MXBM has is the ceiling:
+62.8 sol/s against ~54.0, which lolMiner cannot reach at any setting.
 
-The sweep was run twice, two days apart, and **reproduces within ~1 %** at every cap —
-so these crossings are a property of the two miners, not of the day they were measured.
+The July sweep was run twice, two days apart, and **reproduced within ~1 %** at every
+cap, so the crossings are a property of the two miners, not of the day. The MXBM
+column was re-measured 2026-08-13 on the current build — the window widened because
+the build got faster, not because the rig moved.
 It now runs down to the card's **100 W floor**, which settles the question of whether
 lolMiner had a better efficiency point hiding below the old 120 W left edge: it does not.
 Both curves fall away monotonically below their peak.
@@ -127,7 +129,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 58.9).
+(both on the build of 2026-07-25; the current one is 62.7).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
 observed.
@@ -176,7 +178,7 @@ each block's **area** is the energy that stage costs. Generated from the table b
 Every stage draws the board limit, which is why there is no single kernel to "fix" for
 power. Total DRAM traffic is within **1 %** of the compulsory minimum for the record
 widths — there is no waste to reclaim, only records to narrow, which is the same problem
-as the 7.46 GiB footprint. Full analysis in
+as the 7.20 GiB footprint. Full analysis in
 [performance.md](performance.md#power-and-efficiency).
 
 ---
