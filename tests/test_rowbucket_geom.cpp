@@ -24,7 +24,8 @@ int main() {
         // memory, because the mean + 8 sd + 32 reservation is paid once per bucket and
         // sd/mean shrinks as the mean grows.
         struct { uint32_t bb; double total, single; } want[] = {
-            { 17, 8.35, 3.74 }, { 16, 7.46, 3.27 }, { 15, 6.88, 2.96 }, { 14, 6.50, 2.76 },
+            // Back-ref row 5 is survivor-cap-sized, not capacity-sized.
+            { 17, 8.09, 3.74 }, { 16, 7.20, 3.27 }, { 15, 6.62, 2.96 }, { 14, 6.24, 2.76 },
         };
         double prev = 1e9;
         for (const auto& w : want) {
@@ -46,7 +47,7 @@ int main() {
         // sets and the largest single allocation becomes set 1. These are the numbers
         // cuda/pipeline prints under -DMXBM_R3_QUAD=1, to two decimals.
         struct { uint32_t bb; double total, single; } want[] = {
-            { 16, 5.28, 2.90 }, { 15, 4.91, 2.63 }, { 14, 4.66, 2.45 },
+            { 16, 5.02, 2.90 }, { 15, 4.65, 2.63 }, { 14, 4.40, 2.45 },
         };
         for (const auto& w : want) {
             size_t total = 0, single = 0;
@@ -96,8 +97,8 @@ int main() {
         }
         // The floor, either side of it. Below this the fast path is genuinely gone --
         // and so, on the CUDA side, is mining: there is no CUDA sort path.
-        check(!rb_geometry_for(cap, 0, gib(7.4)).viable, "7.4 GiB: no geometry fits");
-        check( rb_geometry_for(cap, 0, gib(7.6)).viable, "7.6 GiB: (14,3) fits -- the floor");
+        check(!rb_geometry_for(cap, 0, gib(7.1)).viable, "7.1 GiB: no geometry fits");
+        check( rb_geometry_for(cap, 0, gib(7.35)).viable, "7.35 GiB: (14,3) fits -- the floor");
     }
 
     section("the quad record is a second axis, and it lowers the floor");
@@ -115,8 +116,8 @@ int main() {
             {  8.00, 15, false, true,  "8 GB: packed (15,2) -- quad is slower and not needed" },
             {  7.60, 16, true,  true,  "7.6 GiB: quad (16,1) BEATS packed (14,3), 38.4 ms vs 40.0" },
             {  7.00, 16, true,  true,  "7.0 GiB: packed refuses entirely; quad (16,1) runs" },
-            {  6.20, 15, true,  true,  "6.2 GiB: quad (15,2)" },
-            {  5.70, 14, true,  true,  "5.7 GiB: quad (14,3) -- the 6 GB card class" },
+            {  6.20, 16, true,  true,  "6.2 GiB: quad (16,1) -- a rung up since row 5 shrank" },
+            {  5.70, 15, true,  true,  "5.7 GiB: quad (15,2) -- the 6 GB card class, a rung up" },
             {  5.00, 14, false, false, "5.0 GiB: below the new floor, nothing fits" },
         };
         for (const auto& w : want) {
@@ -189,7 +190,7 @@ int main() {
             { "11 GB", 10.60, 16, false, true,  "11 GB: (16,1) via split -- was quad (15,2)" },
             { "8 GB",   8.00, 15, false, true,  "8 GB: packed (15,2), same rung CUDA picks -- was REFUSED" },
             { "6 GB",   6.00, 15, true,  true,  "6 GB: quad (15,2) -- was refused" },
-            { "5.7 GB", 5.70, 14, true,  true,  "5.7 GiB: quad (14,3) -- the floor, now shared with CUDA" },
+            { "5.7 GB", 5.70, 15, true,  true,  "5.7 GiB: quad (15,2) -- a rung up since row 5 shrank" },
             { "5 GB",   5.00,  0, false, false, "5.0 GiB: below the floor either way" },
         };
         for (const auto& w : want) {
@@ -207,29 +208,32 @@ int main() {
               "11 GB: the split alone is what buys the finer rung");
     }
 
-    section("the power-cap policy is DISARMED: every wattage hint is inert");
+    section("the power-cap policy is ARMED below 130 W");
     {
-        // The eco sweep measured a ~190 W crossover for (17,0) and the selection
-        // shipped wired to it (2026-07-31) -- then the prize failed reproduction the
-        // same day: a wash in the miner loop at 160 W and 100 W, and on a cooled card
-        // the sweep's own binary read (17,0) +1.8 % WORSE at the floor while base
-        // reproduced to 0.2 ms (the eco-sweep addenda in performance-research.md).
-        // kRbLowPowerW == 0 disarms the policy; these pin the disarmed state. The
-        // plumbing stays live and re-arming is a one-constant change, at which point
-        // this section flips back to pinning the armed behavior.
-        check(kRbLowPowerW == 0, "no power band currently earns a geometry switch");
-        for (unsigned w : {0u, 100u, 160u, 189u, 285u}) {
+        // The band is kSpecMinPowerW's: (17,0) and speculative entry both act on round
+        // 4's block population, so only their composition was measured and only the
+        // composition ships. An earlier arming at a wider band was disarmed when its
+        // prize did not reproduce; see docs/performance-research.md for both.
+        check(kRbLowPowerW == 130, "the (17,0) band is armed at the spec-entry threshold");
+        for (unsigned w : {0u, 130u, 160u, 189u, 285u}) {
             const RbGeometry g = rb_geometry_for(cap, 0, gib(15.59), true, w);
             check(g.viable && g.bb == 16 && !g.quad,
-                  "a wattage hint changes nothing: (16,1) on the 16 GB card at any value");
+                  "at or above the band (and with no hint), the ladder answers unchanged");
         }
-        check(rb_geometry_for(cap, 0, gib(8.00), true, 160).bb == 15,
-              "capped 8 GB card: the ladder answers, exactly as with no hint");
+        for (unsigned w : {100u, 120u, 129u}) {
+            const RbGeometry g = rb_geometry_for(cap, 0, gib(15.59), true, w);
+            check(g.viable && g.bb == 17 && !g.quad,
+                  "below the band, a 16 GB card takes (17,0)");
+        }
+        // (17,0) needs 8.09 GiB; a card that cannot host it falls back to the ladder
+        // rather than refusing -- the policy is an exception, not a requirement.
+        check(rb_geometry_for(cap, 0, gib(8.00), true, 100).bb == 15,
+              "capped 8 GB card: (17,0) does not fit, so the ladder answers as before");
         // main.cpp's restart notice compares selections at the startup and current
-        // limits; with the policy disarmed they can never differ, so it stays silent.
+        // limits; armed, a cap crossing the band is exactly what makes them differ.
         check(rb_geometry_for(kRbCapacity, 0, gib(15.59), true, 285).bb
-           == rb_geometry_for(kRbCapacity, 0, gib(15.59), true, 100).bb,
-              "disarmed: no pair of limits differs -> the restart notice never fires");
+           != rb_geometry_for(kRbCapacity, 0, gib(15.59), true, 100).bb,
+              "armed: crossing the band changes the selection -> the notice can fire");
         check(kRbCapacity == cap, "the exposed capacity is the shipping capacity");
     }
 

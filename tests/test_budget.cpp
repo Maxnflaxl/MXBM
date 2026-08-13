@@ -139,8 +139,8 @@ int main() {
             const RbGeometry g8 = rb_geometry_for(cap, 0, (uint64_t)(8.0 * (double)GiB));
             check(g8.viable && g8.bb == 15,
                   "8 GiB total steps down to (15,2) on total size alone, not max_alloc");
-            check(!rb_geometry_for(cap, 0, (uint64_t)(7.4 * (double)GiB)).viable,
-                  "7.4 GiB is below even (14,3)'s 6.50 GiB + 1 GiB headroom");
+            check(!rb_geometry_for(cap, 0, (uint64_t)(7.1 * (double)GiB)).viable,
+                  "7.1 GiB is below even (14,3)'s 6.24 GiB + 1 GiB headroom");
             check(rb_geometry_for(cap, 0, (uint64_t)(7.6 * (double)GiB)).viable,
                   "7.6 GiB clears (14,3) -- the true floor for the fast path");
         }
@@ -149,7 +149,7 @@ int main() {
         size_t total = 0, single = 0;
         rowbucket_bytes(cap, 16, total, single);
         check(single > 3.2*GiB && single < 3.35*GiB, "geometry (16,1) largest alloc ~3.27 GiB");
-        check(total  > 7.4*GiB && total  < 7.55*GiB, "geometry (16,1) total ~7.46 GiB");
+        check(total  > 7.15*GiB && total  < 7.30*GiB, "geometry (16,1) total ~7.20 GiB");
         rowbucket_bytes(cap, 14, total, single);
         check(single > 2.7*GiB && single < 2.85*GiB, "geometry (14,3) largest alloc ~2.76 GiB");
     }

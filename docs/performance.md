@@ -149,7 +149,7 @@ Poisson one (~71,000 solutions → ±0.2 sol/s).
 The CUDA backend is **~6 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as
 beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **8.36 →
-7.46 GiB** (268 → 239 B/element).
+7.20 GiB** (268 → 231 B/element; the last 0.26 GiB is the survivor-sized back-ref row, 2026-08-12).
 
 <details>
 <summary>The earlier 2.5-hour session, and why a peak must never be quoted</summary>
@@ -887,7 +887,7 @@ lolMiner spends **4.48 J per solution**; MXBM spends **4.94** at stock and
 only undercuts it by capping — 4.08 at 220 W, 3.95 at the ~200 W peak. Winning by
 11 % on energy while giving up 12 % of throughput to get there is a real lead but
 a bought one, and where the rest of it went is not mysterious: 13.0 GB of
-compulsory traffic per solve. **Traffic, specifically — not the 7.46 GiB
+compulsory traffic per solve. **Traffic, specifically — not the 7.20 GiB
 footprint it sits in.** Those were treated here as one problem and they are two:
 [the byte-power measurement](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz)
 prices the bytes *moved* at 60 MHz of sustained clock per 16 % of traffic, while

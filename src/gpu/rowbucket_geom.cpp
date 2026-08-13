@@ -18,8 +18,12 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
     // largest single allocation becomes set 1. Taking max() rather than assuming set 0
     // is what keeps the OpenCL single-allocation ceiling honest for both formats.
     single = nslots * (s0 > s1 ? s0 : s1) * 8;
+    // Back-refs: rows 1-4 are gi-indexed (capacity each); row 5 is written only at
+    // terminal-survivor indices, so it is sized by the 1024 survivor cap, not by
+    // capacity. Must match the allocations in cuda_solver.cu / round_pipeline.cpp.
+    const size_t backrefs = ((size_t)4*capacity + 1024) * 4 * 2;
     total = nslots * (s0 + s1) * 8                                // both record sets
-          + 2*(size_t)nb*4 + (size_t)5*capacity*4*2 + 64;         // +counts/left/right/counters
+          + 2*(size_t)nb*4 + backrefs + 64;                       // +counts/refs/counters
 }
 
 // Ordered by MEASURED time, fastest first -- NOT by footprint, which disagrees:
@@ -44,7 +48,7 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad) {
     size_t total = 0, single = 0;
     rowbucket_bytes(capacity, bb, total, single, quad);
     const size_t half = single / 2;                     // nb is even on every rung
-    const size_t backrefs = (size_t)5 * capacity * 4;   // left/right rows never split
+    const size_t backrefs = ((size_t)4 * capacity + 1024) * 4;  // left/right rows never split
     return half > backrefs ? half : backrefs;
 }
 

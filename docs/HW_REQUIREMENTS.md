@@ -17,7 +17,7 @@ report; BeamHash III yields ~1.9 solutions per solve.
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
 | **VRAM — either backend** | **6 GB** — needs > 5.7 GiB *reported*. 10 GB and up get the fastest geometry; below that [the ladder](#the-vram-ladder) steps down, 7–33 % slower |
-| **VRAM — what a full search occupies** | **7.46 GiB** at the fastest geometry, down to **4.66 GiB** at the coarsest (either backend, with the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)) |
+| **VRAM — what a full search occupies** | **7.20 GiB** at the fastest geometry, down to **4.40 GiB** at the coarsest (either backend, with the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)) |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -49,8 +49,8 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
-| Row-bucket (default) | **7.46 GiB** | 239 B | 3.27 GiB |
-| Row-bucket, quad record (both backends) | **5.28 GiB** | 169 B | 2.90 GiB |
+| Row-bucket (default) | **7.20 GiB** | 231 B | 3.27 GiB |
+| Row-bucket, quad record (both backends) | **5.02 GiB** | 161 B | 2.90 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
 The largest single allocation is listed because OpenCL caps it: NVIDIA reports
@@ -76,15 +76,15 @@ absolutes:
 
 | rung | footprint | ms/solve | reached when |
 |---|---|---|---|
-| packed (16,1) | 7.46 GiB | **33.7** | ≥ 8.5 GiB free |
-| packed (15,2) | 6.88 GiB | 36.0 | ≥ 7.9 |
-| **quad (16,1)** | **5.28 GiB** | 38.4 | ≥ 6.3 |
-| packed (14,3) | 6.50 GiB | 40.0 | only when a single-allocation ceiling binds |
-| **quad (15,2)** | **4.91 GiB** | 40.7 | ≥ 5.9 |
-| **quad (14,3)** | **4.66 GiB** | 44.8 | ≥ 5.7 — the floor |
+| packed (16,1) | 7.20 GiB | **33.7** | ≥ 8.2 GiB free |
+| packed (15,2) | 6.62 GiB | 36.0 | ≥ 7.7 |
+| **quad (16,1)** | **5.02 GiB** | 38.4 | ≥ 6.1 |
+| packed (14,3) | 6.24 GiB | 40.0 | only when a single-allocation ceiling binds |
+| **quad (15,2)** | **4.65 GiB** | 40.7 | ≥ 5.7 |
+| **quad (14,3)** | **4.40 GiB** | 44.8 | ≥ 5.4 — the floor |
 
 The row that matters is the third. **quad (16,1) is both smaller and faster than packed
-(14,3)** — 5.28 GiB at 38.4 ms against 6.50 at 40.0 — because a coarser geometry pays in
+(14,3)** — 5.02 GiB at 38.4 ms against 6.24 at 40.0 — because a coarser geometry pays in
 scatter locality what the quad record pays in re-derivation arithmetic, and the arithmetic
 is cheaper. A ladder sorted by footprint would hand those cards the slower rung. packed
 (14,3) is kept below it only because its *single* allocation is smaller (2.76 GiB against
@@ -199,7 +199,7 @@ Beam's own mining documentation states:
 > — <https://beam.mw/docs/mining>
 
 That is the **algorithm's design target**, not a third-party miner's quirk: BeamHash III
-was designed by Wilke Trei, who also writes lolMiner. MXBM currently needs **7.46 GiB**,
+was designed by Wilke Trei, who also writes lolMiner. MXBM currently needs **7.20 GiB**,
 roughly **2.4× more** than the algorithm is meant to require.
 
 At 2^25 elements, a 3 GB budget implies **≈ 96 B/element in total** — less than the

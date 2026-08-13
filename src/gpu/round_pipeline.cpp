@@ -226,8 +226,12 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
     }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
     if (!quad) p.fb_side = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
-    // Consolidated back-ref rows for recover (5 rounds x capacity, indexed by gi).
-    const size_t backrefBytes = (size_t)5 * p.capacity * 4;
+    // Consolidated back-ref rows for recover. Rows 1-4 are gi-indexed and need full
+    // capacity; row 5 is written only by the terminal round at SURVIVOR indices
+    // (round5_fused_lds stores at out_off + si, si < the 1024 survivor cap), so a
+    // capacity-sized row 5 reserved ~264 MB for <= 8 KB of use. The sort path's rows
+    // stay 5 x capacity: its round-5 match writes per-child at gi.
+    const size_t backrefBytes = ((size_t)4 * p.capacity + 1024) * 4;
     p.left  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
     p.right = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
     p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);

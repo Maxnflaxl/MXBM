@@ -60,25 +60,21 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // the geometry question below with the same number the solvers used.
 constexpr uint32_t kRbCapacity = (1u << 25) + (1u << 25) / 32;    // 34,603,008
 
-// The power band that would earn the (17,0) rung. ZERO: no band currently does.
-// The eco sweep measured a ~190 W crossover and the selection shipped wired to it
-// (2026-07-31) -- then the prize failed same-day reproduction in both the miner loop
-// and the sweep's own binary (eco-sweep addenda, docs/performance-research.md), so
-// the policy is disarmed. Everything around it stays live -- the observed-limit hint
-// through the CUDA ctor, the restart notice, MXBM_BB -- and re-arming is setting this
-// constant to a band that reproduces. Selection, when armed, happens ONCE, from the
-// limit observed after --pl landed: a geometry switch is a multi-GiB realloc, so a
-// cap changed mid-run gets a restart notice, never a re-select.
-constexpr unsigned kRbLowPowerW = 0;
+// Below this board power limit the (17,0) rung is selected: its sub-mask rescan is
+// removed, which a capped card values in issued instructions more than it pays in
+// scatter locality. The band is kSpecMinPowerW's, because the two policies interact
+// through round 4's block population and only their composition was measured.
+// Selection happens ONCE, from the limit observed after --pl landed: a geometry
+// switch is a multi-GiB realloc, so a cap changed mid-run gets a restart notice.
+// 0 disarms. Figures: docs/performance-research.md.
+constexpr unsigned kRbLowPowerW = 130;
 
 // Below this board power limit, speculative entry co-scheduling is off. The co-blocks
 // win rides on round 4 having idle issue capacity: true while r4 is DRAM-bound, false
-// once a cap makes every round issue-bound. Measured 2026-08-04, miner loop, ABBA at
-// the rung operating points: nospec is -1.8 % at both 120 W and 100 W, while spec
-// keeps its win at stock and at the 285 W rung point. 140-160 W is unmeasured, so the
-// threshold covers only the measured band; a mid-band measurement moves it, not the
-// mechanism. 0 disarms, like kRbLowPowerW above. CUDA only -- the OpenCL port's floor
-// behaviour is unmeasured and keeps its default.
+// once a cap makes every round issue-bound. The threshold covers only the measured
+// band; a mid-band measurement moves it, not the mechanism. 0 disarms, like
+// kRbLowPowerW above. CUDA only -- the OpenCL port's floor behaviour is unmeasured
+// and keeps its default. Figures: docs/performance-research.md.
 constexpr unsigned kSpecMinPowerW = 130;
 
 // The row-bucket geometry decision, with the device reduced to the two numbers it
