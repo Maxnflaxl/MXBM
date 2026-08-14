@@ -53,6 +53,24 @@ __device__ __forceinline__ uint32_t quad_l2(uint64_t w1) { return (uint32_t)(w1 
 __device__ __forceinline__ uint32_t quad_l3(uint64_t w2) { return (uint32_t)(w2)       & kIdxMask; }
 __device__ __forceinline__ uint32_t quad_gi(uint64_t w2) { return (uint32_t)(w2 >> 25); }
 
+// r2 -> r3, QUAD RECORD WITHOUT gi: 16 B instead of 24, for the octo rungs only. There,
+// nothing reads a round-2 element's gi -- the reference rows it would index are not
+// allocated, and the only other consumer is round 3's left/right tiebreak, which takes
+// the slot instead. Dropping it leaves key 24 + 4 x 25 = 124 bits, which fits 2 u64.
+//   w0 = key | l0<<24 | l1<<49        w1 = l1>>15 | l2<<10 | l3<<35
+__device__ __forceinline__ uint64_t quad16_w0(uint32_t key, const uint32_t l[4]) {
+    return (uint64_t)key | ((uint64_t)l[0] << 24) | ((uint64_t)l[1] << 49);
+}
+__device__ __forceinline__ uint64_t quad16_w1(const uint32_t l[4]) {
+    return ((uint64_t)l[1] >> 15) | ((uint64_t)l[2] << 10) | ((uint64_t)l[3] << 35);
+}
+__device__ __forceinline__ void quad16_leaves(uint64_t w0, uint64_t w1, uint32_t l[4]) {
+    l[0] = (uint32_t)(w0 >> 24) & kIdxMask;
+    l[1] = (uint32_t)(((w0 >> 49) | (w1 << 15)) & kIdxMask);
+    l[2] = (uint32_t)(w1 >> 10) & kIdxMask;
+    l[3] = (uint32_t)(w1 >> 35) & kIdxMask;
+}
+
 // r3 -> r4, OCTO RECORD: 32 B instead of 64. The same argument one round further down --
 // a round-3 output element is a combine of two round-3 inputs, each determined by four
 // seed indices, so EIGHT indices determine it and those eight ARE its leaves (sBuild = 8).

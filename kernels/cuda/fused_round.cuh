@@ -684,6 +684,17 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             lgi[pos] = pair_gi(rec1);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;   // leaf 0 IS the lead
+        } else if constexpr (LMODE == LM_RD3 && INSTR == 2) {
+            // 16 B quad record, one LD.128. No gi in it: on an octo rung the only thing
+            // that would read one is this round's own tiebreak, and the slot orders the
+            // staged elements just as well -- see quad16 in bh3_records.cuh.
+            const ulonglong2 q = *reinterpret_cast<const ulonglong2*>(in_belem + d);
+            uint32_t l4[4];
+            quad16_leaves(q.x, q.y, l4);
+            lgi[pos] = (uint32_t)idx_;
+            if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
+            #pragma unroll
+            for (int t = 0; t < 4; ++t) lleaf[pos*LEAFW + t] = l4[t];   // leaf 0 IS the lead
         } else if constexpr (LMODE == LM_RD3) {
             // 24 B quad record: three scalar loads, against LM_EMIT's five LD.128 below.
             // Not vectorised, and deliberately not padded to make it so -- a 4th u64
@@ -995,7 +1006,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         else oslot = ~(size_t)0;
                     }
                 if (ARENA ? oslot != ~(size_t)0 : cpos < out_bucket_cap) {
-                    const uint32_t cgi = gi_alloc(gi_counter);
+                    // The gi this child is given. Dead on an octo rung's round 2: no
+                    // reference row is indexed by it and the 16 B record does not carry
+                    // it, so the atomic is not issued at all.
+                    constexpr bool kNeedGi = REFS || !(LMODE == LM_RD2 && OUTSTR == 2);
+                    const uint32_t cgi = kNeedGi ? gi_alloc(gi_counter) : 0u;
                     const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == kAblEmit) {
                         // NARROW the payload to 16 B rather than skipping it. Skipping
@@ -1018,6 +1033,9 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
                               make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi)));
+                    } else if constexpr (LMODE == LM_RD2 && OUTSTR == 2) {
+                        st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
+                              make_ulonglong2(quad16_w0(ckey, ctree), quad16_w1(ctree)));
                     } else if constexpr (LMODE == LM_RD2 && OUTSTR == 3) {
                         // Keyed on the STRIDE, not on MXBM_R3_QUAD: the miner
                         // instantiates both record formats and picks between them at

@@ -29,7 +29,9 @@ constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 2u };
 // and its leftContrib are all derivable and round 4 rebuilds them. 8 u64 becomes 4, which
 // is where set 1 halves. CUDA only, and only on rungs where the alternative is refusing.
 constexpr uint32_t fb_round_stride(int r, bool quad, bool impb = false, bool octo = false) {
-    if (r == 2) return quad ? 3u : (impb ? 8u : 9u);
+    // Round 2's quad record loses its gi on an octo rung -- nothing reads one there -- and
+    // 24 + 4 x 25 bits then fit 2 u64 instead of 3.
+    if (r == 2) return quad ? (octo ? 2u : 3u) : (impb ? 8u : 9u);
     if (r == 3) return octo ? 4u : kFbStride[4];
     return kFbStride[r + 1];
 }

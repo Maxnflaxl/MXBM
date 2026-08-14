@@ -59,7 +59,9 @@ constexpr uint32_t kQuadStride = 3u;
 // is the same, because the record carries the same INFORMATION either way. Offered only
 // on quad rungs, so round 3's octo form pairs with the quad input and nothing else.
 constexpr uint32_t kOctoStride = 4u;
-#define MXBM_R3QO_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,kOctoStride,kFCap
+constexpr uint32_t kQuad16Stride = 2u;   // the quad record with its gi retired
+#define MXBM_R2QO_ARGS 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuad16Stride,kFCap
+#define MXBM_R3QO_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuad16Stride,kOctoStride,kFCap
 #define MXBM_R4O_ARGS  6,1,2,LM_RD4, 288u,9u,2u,0u,0u, kOctoStride,2u,kFCap
 // Left alone the rebuild takes 128 registers, exactly 2 blocks/SM. Asking for a third
 // costs 88-96 B of spill and pays -2 %; 0 leaves the choice to ptxas.
@@ -80,6 +82,9 @@ static_assert(kQuadStride == fb_round_stride(2, true) &&
 static_assert(kOctoStride == fb_round_stride(3, true, false, true) &&
               fb_set_stride(1, true, false, true) == kOctoStride,
               "octo record widths must match the shared footprint arithmetic");
+static_assert(kQuad16Stride == fb_round_stride(2, true, false, true) &&
+              fb_set_stride(0, true, false, true) == kQuad16Stride,
+              "the gi-less quad record must match the shared footprint arithmetic");
 
 // Was hardcoded (16,1), so a card that could not host the finest rung was refused outright --
 // even though the same kernels run unchanged at 6.50 GiB. bb and sm are kernel
@@ -410,8 +415,8 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
         CARVE((fused_round<MXBM_R3QO_ARGS, false, false, false, true,  0u, true, false>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 0u, true, false>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  0u, true, false>));
-        CARVE((fused_round<MXBM_R2Q_ARGS, false, false, false, false, 0u, true, false>));
-        CARVE((fused_round<MXBM_R2Q_ARGS, false, false, false, true,  0u, true, false>));
+        CARVE((fused_round<MXBM_R2QO_ARGS, false, false, false, false, 0u, true, false>));
+        CARVE((fused_round<MXBM_R2QO_ARGS, false, false, false, true,  0u, true, false>));
         CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, false, 0u, true, true, MXBM_MB_OCTO>));
         CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, true,  0u, true, true, MXBM_MB_OCTO>));
         CARVE((fused_round<MXBM_R2_ARGS,  false, false, false, false, 16u, true>));
@@ -591,7 +596,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // implicit-bits pairs are the same strides with the pack folded into the
     // stores; the IMPB value is the bucket-bit count the pack drops, so each
     // geometry needs its own instantiation.
-    if (I.octo)          { ROUND_XNR(2, 0u, MXBM_R2Q_ARGS) ROUND_XNR(3, 0u, MXBM_R3QO_ARGS) }
+    if (I.octo)          { ROUND_XNR(2, 0u, MXBM_R2QO_ARGS) ROUND_XNR(3, 0u, MXBM_R3QO_ARGS) }
     else if (I.quad)     { ROUND_X(2, 0u,  MXBM_R2Q_ARGS) ROUND_X(3, 0u,  MXBM_R3Q_ARGS) }
     else if (I.impb && I.bb == 17u)
                          { ROUND_X(2, 17u, MXBM_R2_ARGS)  ROUND_X(3, 17u, MXBM_R3_ARGS)  }

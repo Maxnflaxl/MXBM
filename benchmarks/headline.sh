@@ -88,7 +88,19 @@ check_cotenants() {
     echo "a co-tenant on the card does not add noise, it moves the number."
     exit 1
 }
-check_cotenants "before starting" 
+check_cotenants "before starting"
+
+# The binary is re-exec'd for every arm, so a rebuild landing mid-run silently splits the
+# pin across two builds -- which reads as one clean set of six. Stamp it and re-check.
+BIN_STAMP=$(cksum "$ROOT/build/mxbm" | cut -d' ' -f1,2)
+check_binary() {
+    local now
+    now=$(cksum "$ROOT/build/mxbm" | cut -d' ' -f1,2)
+    [ "$now" = "$BIN_STAMP" ] && return 0
+    echo "ABORT ($1): build/mxbm changed since the run started."
+    echo "the arms already taken measured a different binary; nothing here is a pin."
+    exit 1
+}
 LOAD=$(cut -d' ' -f1 /proc/loadavg)
 echo "host load average (1 min): $LOAD"
 awk -v l="$LOAD" 'BEGIN{ if (l+0 > 1.0) print "  WARNING: the host is busy; solve() verifies on the CPU" }'
@@ -241,8 +253,10 @@ while [ "$i" -lt "$RUNS" ]; do
     # that arrives during the six timed arms, and one contaminated arm is a wrong number
     # rather than a noisy one.
     check_cotenants "between runs"
+    check_binary "between runs"
     R=$(run_one "run$i" "$SECS") || exit 1
     check_cotenants "after run$i"
+    check_binary "after run$i"
     echo "$R" >> "$OUT/rows.txt"
     echo "$R" | awk '{ printf "%-9s %8s %8s %8s %8s %7s %6s %6s %6s %5s   %s\n", \
                         $1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $13 }'

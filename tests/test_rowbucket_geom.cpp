@@ -369,14 +369,17 @@ int main() {
         check(fb_round_stride(3, true, false, true) == 4u
            && fb_set_stride(1, true, false, true) == 4u,
               "octo halves set 1: 8 u64 becomes 4");
-        check(fb_set_stride(0, true, false, true) == fb_set_stride(0, true),
-              "and leaves set 0 alone -- it is round 3's OUTPUT that changes");
+        // Set 0 narrows too, by a different mechanism: with the reference rows gone,
+        // nothing reads a round-2 element's gi and the quad record fits 2 u64.
+        check(fb_round_stride(2, true, false, true) == 2u
+           && fb_set_stride(0, true, false, true) == 2u,
+              "and set 0 goes 3 u64 to 2 -- round 2's record loses its gi");
 
         // Two things at once, and the second is the larger: the record set halves, AND
         // three of the four capacity-sized back-reference rows stop being allocated
         // because recovery reads round 3's leaves instead of walking down to them.
         struct { uint32_t bb; double total; } want[] = {
-            { 16, 2.33 }, { 15, 2.23 }, { 14, 2.17 },
+            { 16, 2.04 }, { 15, 1.95 }, { 14, 1.90 },
         };
         for (const auto& w : want) {
             size_t total = 0, single = 0, was = 0, ignore = 0;
@@ -386,7 +389,7 @@ int main() {
             std::snprintf(msg, sizeof msg, "quad (%u,%u) + dense caps + octo is %.2f GiB "
                           "(expect %.2f)", w.bb, 17u - w.bb, total/GiB, w.total);
             check(total/GiB > w.total - 0.05 && total/GiB < w.total + 0.05, msg);
-            check((was - total)/GiB > 1.8, "octo is worth over 1.8 GiB at every rung");
+            check((was - total)/GiB > 2.0, "octo is worth over 2 GiB at every rung");
         }
         // The reference rows are the second half of that, to the byte.
         {
@@ -394,10 +397,10 @@ int main() {
             rowbucket_bytes(cap, 14, with, ignore, true, false, true, true);
             rowbucket_bytes(cap, 14, without, ignore, true, false, true, false);
             const double refs = 3.0 * cap * 4 * 2 / GiB;      // three rows, left and right
-            const double recs = 36683776.0 * 4 * 8 / GiB;     // four u64 per slot
+            const double recs = 36683776.0 * 5 * 8 / GiB;     // four u64 of set 1, one of set 0
             check((without - with)/GiB > refs + recs - 0.02
                && (without - with)/GiB < refs + recs + 0.02,
-                  "octo saves exactly four u64 per slot plus three back-reference rows");
+                  "octo saves five u64 per slot plus three back-reference rows, exactly");
         }
 
         auto pick = [&](double v, bool octo) {
@@ -407,8 +410,13 @@ int main() {
         };
         // The floor, either side of it, and what it means in cards: with CUDA's 640 MiB
         // allowance a device is offered when its TOTAL VRAM clears 2.94 + 0.63 = 3.57 GiB.
-        check( pick(2.20, true).viable && !pick(2.15, true).viable,
-               "the octo floor is quad (14,3) + dense caps at 2.17 GiB");
+        check( pick(1.92, true).viable && !pick(1.88, true).viable,
+               "the octo floor is quad (14,3) + dense caps at 1.90 GiB");
+        // That is this design's information floor: set 0 is round 4's 16 B output record,
+        // set 1 is round 3's 32 B one, and neither carries a field nothing reads.
+        check(fb_set_stride(0, true, false, true) == 2u
+           && fb_set_stride(1, true, false, true) == 4u,
+              "6 u64 per slot, and no lever left on either set");
         // In card terms: CUDA reports 97.5 % of physical VRAM on this driver, and
         // availability holds back 640 MiB of that (cuda_solver.cu).
         check( pick(3.0 * 0.975 - 0.625, true).viable,

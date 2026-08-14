@@ -62,10 +62,12 @@ const RbRung* rb_rungs(int& n) {
         // The octo rows, below everything: round 4 rebuilds its work state from eight
         // leaves, which is the deepest re-derivation on the ladder. Only ever reached
         // when no row above fits, and only paired with quad and dense caps -- a card
-        // that can host the packed record has no use for them.
-        { 16u, 1u, true,  true,  true  },   // 2.33      55.4
-        { 15u, 2u, true,  true,  true  },   // 2.23      57.4
-        { 14u, 3u, true,  true,  true  },   // 2.17      61.1  -- the floor
+        // that can host the packed record has no use for them. Three things narrow at
+        // once here: round 3's record halves, three of the five reference rows stop
+        // being read, and round 2's record loses the gi nothing reads any more.
+        { 16u, 1u, true,  true,  true  },   // 2.04
+        { 15u, 2u, true,  true,  true  },   // 1.95
+        { 14u, 3u, true,  true,  true  },   // 1.90  -- the floor, and this design's
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;
