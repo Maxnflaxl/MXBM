@@ -16,9 +16,9 @@ report; BeamHash III yields ~1.9 solutions per solve.
 | | Requirement |
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
-| **VRAM — either backend** | **6 GB** — needs > 5.7 GiB *reported*. 10 GB and up get the fastest geometry; below that [the ladder](#the-vram-ladder) steps down, 7–33 % slower |
-| **VRAM — what a full search occupies** | **7.20 GiB** at the fastest geometry, down to **4.40 GiB** at the coarsest (either backend, with the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation)) |
-| **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~2.4× over |
+| **VRAM** | **5 GB on CUDA** (needs > 4.7 GiB *reported*), **6 GB on OpenCL** (> 5.7 GiB). 8 GB and up get the fastest geometry on CUDA; below that [the ladder](#the-vram-ladder) steps down, 2–36 % slower |
+| **VRAM — what a full search occupies** | CUDA **6.84 GiB** at the fastest geometry, down to **4.03 GiB** at the coarsest. OpenCL 7.20 down to 4.40 — it carries neither the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) nor the dense-cap rungs, only the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) |
+| **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — MXBM is ~1.3× over at the floor |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
 
@@ -49,8 +49,10 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
-| Row-bucket (default) | **7.20 GiB** | 231 B | 3.27 GiB |
+| Row-bucket, CUDA default | **6.84 GiB** | 219 B | 2.90 GiB |
+| Row-bucket, OpenCL default | **7.20 GiB** | 231 B | 3.27 GiB |
 | Row-bucket, quad record (both backends) | **5.02 GiB** | 161 B | 2.90 GiB |
+| Row-bucket, quad record + dense caps (CUDA) | **4.03 GiB** | 129 B | 2.42 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
 The largest single allocation is listed because OpenCL caps it: NVIDIA reports
@@ -65,9 +67,11 @@ backends. CUDA has no equivalent ceiling.
 ## The VRAM ladder
 
 Both backends pick their geometry from the same `rb_geometry_for()`
-(`src/gpu/rowbucket_geom.cpp`): the first rung that fits total VRAM with 1 GiB of
-headroom — and, on OpenCL, the single-allocation cap. Every rung is KAT-gated with drops
-zero.
+(`src/gpu/rowbucket_geom.cpp`): the first rung that fits, with headroom held back for what
+the driver and this process's own context occupy — 640 MiB on CUDA, measured, and 1 GiB on
+OpenCL — and, on OpenCL, the single-allocation cap. That is only the *offer*; construction
+re-asks against free memory and steps down on a real allocation failure. Every rung is
+KAT-gated with drops zero.
 
 **The ladder has two axes, and it is ordered by measured time rather than by footprint** —
 because the two disagree. Times are CUDA, one binary, 200 distinct nonces, 2026-07-28; the
@@ -81,7 +85,7 @@ absolutes:
 | **quad (16,1)** | **5.02 GiB** | 38.4 | ≥ 6.1 |
 | packed (14,3) | 6.24 GiB | 40.0 | only when a single-allocation ceiling binds |
 | **quad (15,2)** | **4.65 GiB** | 40.7 | ≥ 5.7 |
-| **quad (14,3)** | **4.40 GiB** | 44.8 | ≥ 5.4 — the floor |
+| **quad (14,3)** | **4.40 GiB** | 44.8 | ≥ 5.4 — the OpenCL floor |
 
 The row that matters is the third. **quad (16,1) is both smaller and faster than packed
 (14,3)** — 5.02 GiB at 38.4 ms against 6.24 at 40.0 — because a coarser geometry pays in
@@ -90,6 +94,38 @@ is cheaper. A ladder sorted by footprint would hand those cards the slower rung.
 (14,3) is kept below it only because its *single* allocation is smaller (2.76 GiB against
 2.90), which a `max_alloc`-bound backend can still need.
 
+**The CUDA backend narrows every row of that table, and adds a row between each pair.**
+Two mechanisms, neither of which the OpenCL kernels carry:
+
+- The **implicit-bits record** drops the key bits the bucket address already encodes, so
+  round 2's 9th-word plane has no writer and set 0 is 8 u64 per slot instead of 9. It fits
+  (16,1) and (17,0) only. Worth −0.36 GiB, and it is also ~3 % *faster* there.
+- **Dense caps** replace the per-bucket tail reserve with one overflow pool per record
+  set: a bucket that fills appends to the pool instead of dropping, so the cap falls from
+  mean + 8σ to mean + 2σ and ~22 % of the record slots go away. Zero drops becomes a
+  pool-full check against 65,536 slots — measured spill is ~56 elements per solve. The
+  mechanism costs a fixed few per cent, so it is a rung, never a default.
+
+| CUDA rung | footprint | runs when free VRAM is |
+|---|---|---|
+| packed (16,1) | **6.84 GiB** | ≥ 6.9 GiB |
+| packed (16,1) + dense caps | **5.77 GiB** | ≥ 5.9 |
+| quad (16,1) | 5.02 GiB | ≥ 5.1 |
+| quad (16,1) + dense caps | **4.29 GiB** | ≥ 4.4 |
+| quad (15,2) + dense caps | **4.13 GiB** | ≥ 4.2 |
+| **quad (14,3) + dense caps** | **4.03 GiB** | ≥ 4.1 — the CUDA floor |
+
+(The (15,2) and packed-(14,3) rows are still in the list, for the `max_alloc`-bound
+backend; on CUDA a card that fits them fits a faster row first.)
+
+**Two stages, two different numbers, and it matters which one is quoted.** A device is
+*offered* when its TOTAL VRAM clears the floor plus the 640 MiB allowance — 4.66 GiB
+reported, so a 5 GB card makes the list and a 4 GB one does not. Which rung it then
+*runs* is decided against FREE memory at construction, which is usually a better answer
+than the offer implied. The column above is the second number. Which card classes this
+actually moves is [the table below](#what-each-card-class-gets) — not every row of a
+ladder corresponds to a card that exists.
+
 The quad record buys no speed and no watts at any power limit — that is
 [measured, not assumed](performance-research.md#under-a-cap-the-effect-appears--and-the-trade-still-never-pays) —
 so the ladder reaches for it only when no packed rung fits. It is purely what lets a
@@ -97,14 +133,32 @@ smaller card run at all. `MXBM_QUAD=0|1` forces the choice.
 
 ### What each card class gets
 
-| Card | reported gmem / max_alloc | rung (both backends) | OpenCL allocation |
-|---|---|---|---|
-| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | (16,1) | one buffer per set |
-| 12 GB | 11.60 / 2.90 GiB | (16,1) | split into bucket-halves |
-| 11 GB | 10.60 / 2.65 GiB | (16,1) | split |
-| 10 GB | 9.70 / 2.42 GiB | (16,1) | split |
-| 8 GB | 8.00 / 2.00 GiB | (15,2) | split |
-| 6 GB | 5.70 / 1.43 GiB | quad (14,3) | split |
+| Card | reported gmem / max_alloc | CUDA rung | OpenCL rung | OpenCL allocation |
+|---|---|---|---|---|
+| 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | (16,1) | (16,1) | one buffer per set |
+| 12 GB | 11.60 / 2.90 GiB | (16,1) | (16,1) | split into bucket-halves |
+| 11 GB | 10.60 / 2.65 GiB | (16,1) | (16,1) | split |
+| 10 GB | 9.70 / 2.42 GiB | (16,1) | (16,1) | split |
+| 8 GB | 8.00 / 2.00 GiB | **(16,1)** | (15,2) | split |
+| 6 GB | 5.70 / 1.43 GiB | quad (16,1) | quad (14,3) | split |
+| 5 GB | 4.70 / 1.18 GiB | **quad (16,1) + dense caps** | — refuses | — |
+| 4 GB | 3.70 / 0.93 GiB | — refuses | — refuses | — |
+
+The general effect is that every rung's requirement fell, so a card climbs one whenever it
+was within 0.36 GiB of the next rung up (implicit bits) or 1.07 GiB (dense caps). Which
+cards that is depends on how much of the card the desktop is holding, since construction
+sizes against *free* memory — so the concrete cases are worth naming:
+
+- **5 GB gains reach.** 4.70 GiB reported clears the 4.03 GiB floor; before, nothing on
+  the ladder fit and the device was not offered at all.
+- **8 GB gains speed when it is also driving a desktop.** Idle and headless it already
+  cleared 7.20 GiB and ran (16,1); with a compositor holding ~0.5 GiB it did not, and
+  stepped to (15,2) at 36.0 ms. 6.84 GiB clears that case too — 33.7 ms, ~6 % back.
+- **6 GB is unchanged at rest** — it was already on quad (16,1) through the free-memory
+  path. What the dense-cap rungs add there is the same desktop fallback: quad (16,1) +
+  dense caps at ~39 ms where it used to drop to quad (15,2) at 40.7.
+
+4 GB is still out of reach — see [what is left](#what-would-take-it-to-3-gb).
 
 The back-ref rows (0.64 GiB) never split; they bind only below ~2.6 GiB of VRAM, which is
 under the floor anyway.
@@ -195,7 +249,7 @@ See [performance.md](performance.md) for the measured state, and
 
 These are open issues in MXBM, not properties of BeamHash III.
 
-### Memory efficiency is ~2.4× off the algorithm's design target
+### Memory efficiency is ~1.3× off the algorithm's design target
 
 Beam's own mining documentation states:
 
@@ -203,36 +257,49 @@ Beam's own mining documentation states:
 > — <https://beam.mw/docs/mining>
 
 That is the **algorithm's design target**, not a third-party miner's quirk: BeamHash III
-was designed by Wilke Trei, who also writes lolMiner. MXBM currently needs **7.20 GiB**,
-roughly **2.4× more** than the algorithm is meant to require.
+was designed by Wilke Trei, who also writes lolMiner. MXBM's CUDA floor is **4.03 GiB**,
+roughly **1.3× more** than the algorithm is meant to require — down from 2.4× over, which
+is what the quad record, the survivor-sized back-ref row, the implicit-bits record and the
+dense-cap rungs together bought.
 
-At 2^25 elements, a 3 GB budget implies **≈ 96 B/element in total** — less than the
-**3.61 GiB** that two live layers of raw 56 B work words occupy in MXBM's design. So the
-target is not reachable by trimming MXBM's current structure; it rules out holding two
-full layers of work words at once. A conforming implementation must do something
-structurally different, such as:
+#### What would take it to 3 GB
 
-- **streaming / in-place layer reuse** — writing round *r+1* into space freed by consumed
-  round-*r* buckets, exploiting the fact that the stored element narrows every round
-  (53 → 50 → 47 → 36 B), or
-- **index-only storage with re-derivation** — keeping 4 B indices and recomputing work
-  state on demand, trading arithmetic for memory.
+At the floor the 4.03 GiB is two things and nothing else:
 
-**The second route is implemented as far as it goes.** Rounds 1–2 store no work state at
-all — an element is rebuilt from the seed indices it already had to carry as leaves, so
-their records are 8 B and 16 B instead of 8 and 72. Round 3 stores work state: it had the
-same treatment and it was
-[taken back out](performance-research.md#retiring-the-round-3-quad-record), because once
-compile-time round constants sped the kernel up, its 4-seed rebuild no longer hid in memory
-stalls and cost more than the bytes it saved. It does **not** extend to rounds 4–5 either:
-rebuild cost doubles per round while the record it replaces shrinks, and round 3 is already
-past the point where the recompute hides inside the kernel's stalls (see "the
+| | GiB | what it is |
+|---|---|---|
+| record sets | 3.00 | 36.6 M slots × (24 B round-2 record + 64 B round-3 record) |
+| back-ref rows | 1.03 | two u32 parents per element per round, for solution recovery |
+
+Both have a named, unbuilt lever, and neither is a trim — each deletes a structure:
+
+- **An octo record for round 3's output.** Round 4's input carries work words it could
+  rebuild from eight leaf indices, exactly as rounds 1–2 already do: 32 B instead of 64,
+  which takes the record sets to ~1.91 GiB and the floor under 3 GiB on its own. Unbuilt,
+  and the reason is priced rather than assumed — the rebuild is 56 siphash rounds, and
+  round 3's own quad record was
+  [taken back out](performance-research.md#retiring-the-round-3-quad-record) when compile-
+  time constants sped the kernel past the point where a rebuild hid in its memory stalls.
+  What makes it a *reach* lever anyway: at the floor the alternative is not a slower miner
+  but no miner at all, and that trade has never been the one measured.
+- **Back-refs off the card, or narrower.** The rows are written near-sequentially by `gi`
+  and read ~160 times per solve during recovery, so they are the natural candidate for
+  pinned host memory; packing a reference as (parent-bucket, slot, slot) instead of two
+  full u32 is the cheaper half-measure at −0.31 to −0.47 GiB.
+
+The third route, **streaming / in-place layer reuse** — writing round *r+1* into space
+freed by consumed round-*r* buckets — remains open and is the only one that attacks the
+two-live-layers structure itself. It is a *reach* lever and only a reach lever: it writes
+the same bytes to reused addresses, so the peak allocation falls and the traffic does not
+move at all.
+
+**Index-only storage with re-derivation is implemented as far as it currently goes.**
+Rounds 1–2 store no work state at all — an element is rebuilt from the seed indices it
+already had to carry as leaves, so their records are 8 B and 16 B instead of 8 and 72.
+Round 3 stores work state, for the reason above; the same argument is what bounds rounds
+4–5, where rebuild cost doubles per round while the record it replaces shrinks (see "the
 compute-hiding budget" in
 [performance-research.md](performance-research.md#established-limits)).
-
-**Reaching 3 GB therefore needs the first route — streaming / in-place reuse.** That is a
-*reach* lever and only a reach lever: it writes the same bytes to reused addresses, so the
-peak allocation falls and the traffic does not move at all.
 
 **Traffic is the separate quantity, and it is the efficiency lever.** A solve moves
 **13.0 GB** of DRAM traffic, within **1 %** of the compulsory minimum for these record

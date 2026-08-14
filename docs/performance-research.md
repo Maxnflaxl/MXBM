@@ -25,7 +25,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
 | [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
-| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom |
+| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB, the plane had no writer but was still reserved) and the overflow arena ported from probe flag to fit-ladder rung (dense caps + a 65 K-slot pool per set, +1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**; with the availability allowance re-derived from what the driver and our own context actually hold (1 GiB → 640 MiB, measured) that is a **5 GB card that runs where nothing on the ladder used to fit** |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -212,7 +212,14 @@ of shared, keys read once); `-DMXBM_FCAP=N`, `-DMXBM_TAB=N`, `-DMXBM_SKEY=N` siz
 drop count is quoted with it, since drops remove downstream work and flatter the result.
 
 CUDA-side: `MXBM_BB` / `MXBM_SM` pin the row-bucket geometry (both backends; an explicit
-choice is never stepped down under the user), `MXBM_OCC` prints the worst bucket occupancy
+choice is never stepped down under the user), `MXBM_QUAD=0|1` and `MXBM_ARENA=0|1` pin the
+other two axes of the CUDA ladder — the quad record and the dense-cap/overflow-pool rung —
+and `MXBM_NO_IMPB=1` turns the implicit-bits record off in the kernels *and* in the
+allocation, so an A/B with it never sizes against a record it is not using.
+`MXBM_DROP_STATS=1` prints the four drop counters and the arena's run-long spill total
+after every solve: on an arena arm the gate is `drops == 0` **and** `spills != 0`, since
+a pool that never filled means the overflow path never ran and the arm measured nothing.
+`MXBM_OCC` prints the worst bucket occupancy
 in units of the reservation's sigma, `MXBM_ROUND_REPS="R:N"` and `MXBM_ENTRY_REPS=N` replay
 one stage in place for per-round attribution. Build flags: `-DMXBM_STCS=1` (streaming
 stores), `-DMXBM_WARPAGG=1` (warp-aggregated `gi`), `-DMXBM_CPASYNC=1`, `-DMXBM_WG=N`,
@@ -1542,7 +1549,7 @@ that is power-capped 99 % of the time the second one is what reaches the headlin
   bytes to reused addresses. Traffic is unchanged, so by this measurement it buys no
   clock at all. It is a **reach** lever — 8 GB cards — and nothing else.
 
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target)
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-13-off-the-algorithms-design-target)
 names in-place reuse as the route to the 3 GB target and treats memory efficiency and
 energy efficiency as one problem. It is the route to the *footprint* target; the energy
 half has to come from narrower records. Since [measured traffic is within 1 % of
@@ -4702,6 +4709,88 @@ cliff is not the binding resource at the shipped shape. Null by arithmetic.
 
 Emit store width audited on the way: every fused round already emits 4 ×
 STG.E.128 — the minimum for the record.
+
+</details>
+
+### The reach composition, built: the CUDA floor moves 4.40 → 4.03 GiB
+<details>
+<summary>Details</summary>
+
+The two footprint components measured on 08-13 are now in the solver, and the ladder
+carries the result. Both are CUDA-only; OpenCL and Metal pass `allow_impb` and
+`allow_arena` false and every figure they see is what it was.
+
+**The implicit-bits allocation was still reserving a plane nothing writes.** The pack
+shipped on 08-13 deletes round 2's 9th word, but `alloc_geometry` kept sizing set 0 at 9
+u64 per slot because `impb` was decided *after* the geometry. It is now decided *with* it
+(`rb_impb_ok`, shared by the footprint arithmetic and the allocator), and the stride comes
+from `fb_set_stride`, so the two cannot disagree. (16,1) goes 7.20 → **6.84 GiB** and
+(17,0) 8.09 → **7.67**; the miner's own occupancy on the card reads 7962 → **7590 MiB**,
+which is `nslots × 8 B` to the megabyte. Nothing else moves — the ladder's other rungs are
+quad, and the quad record has no plane to delete.
+
+**The overflow arena is now a rung rather than a probe flag.** `ARENA` joined `MFIRST` and
+`IMPB` as a template parameter with both variants instantiated, so the plain kernels are
+byte-for-byte what they were and the occupancy contract says so on every non-arena row.
+Dense per-bucket caps (mean + 2σ + 32, so 605 slots at (16,1) against the tail bound's
+743) with one 65,536-slot overflow pool per record set, laid out behind the bucket records
+in the same buffer so a single slot index addresses both regions and no store changed.
+`arena_link` threads the pool onto per-bucket chains between each producer and its
+consumer; the consumer walks its bucket's chain once into a 128 B shared list.
+
+*No round loses a block to it*, which is the fact the rung stands on: the shared list is
+128–136 B and round 1 had 448 B of headroom, so its fifth block survives (19144 B of
+19456); r2 holds 4 blocks on exactly 64 registers, r3 3, r4 4. Registers move only on the
+plain record (r3 56 → 60), which is shared-bound anyway.
+
+Speculative entry is off on these rungs, in the other direction from the low-power gate: a
+card takes an arena rung because it is short of memory, and speculation's dedicated entry
+buffer is 0.36 GiB of exactly that.
+
+Gates: KAT 3/3 and `drops == 0` on every arm, **and a non-zero spill count** — on an arena
+arm those two readings mean opposite things, since a pool that never filled means the
+overflow path never ran (`MXBM_DROP_STATS=1`; ~56 spills per solve at (16,1), reproducing
+to the element across repeats, which doubles as a determinism check).
+
+| (16,1), 3 interleaved ABBA blocks, 45 s arms, speculation off in both | ms/solve |
+|---|---|
+| tail-bound cap | 32.37 |
+| dense caps + pool | 32.92 |
+| | **+1.70 %** |
+
+−1.07 GiB of records for +1.7 %, and −1.43 GiB of card occupancy once speculation's buffer
+goes with it (7590 → **6126 MiB** in the miner). That price is a fixed mechanism cost, not
+a spill cost — the 08-13 probe's empty-pool control cost the same as its loaded pool — so
+it ships as a rung and never as a default.
+
+**What the ladder does with them.** Eleven rungs now, still ordered by measured time:
+
+| CUDA rung | footprint | was |
+|---|---|---|
+| packed (16,1) | 6.84 GiB | 7.20 |
+| packed (16,1) + dense caps | **5.77** | — |
+| quad (16,1) | 5.02 | 5.02 |
+| quad (16,1) + dense caps | **4.29** | — |
+| quad (15,2) + dense caps | **4.13** | — |
+| quad (14,3) + dense caps | **4.03** | 4.40, the floor |
+
+**And one number stood between that floor and a card.** Availability cannot call
+`cudaMemGetInfo` without creating a context on every enumerated device, so it sizes
+against TOTAL VRAM less a fixed allowance — which was a flat 1 GiB. Measured on this card,
+the driver holds 408 MB of 16376 with nothing running and this process's context 214 MB,
+both roughly fixed: ~0.4 GiB of that allowance was pure margin, and on a 5 GB card it was
+the whole difference between an offered device and a refused one. It is 640 MiB now, from
+the measurement. Being optimistic there is safe by construction — the constructor re-asks
+against *free* memory, steps down the ladder on a real allocation failure, and a throw is
+reported per-GPU with the OpenCL path as fallback.
+
+So a 5 GB card runs at all, where before nothing on the ladder fit. The other classes
+climb a rung only where a desktop was holding enough of the card to push them off one:
+8 GB back onto (16,1), 6 GB back onto quad (16,1). Idle and headless they were already
+there. 4 GB is still out of reach, and what it would take is on the record in
+[HW_REQUIREMENTS](HW_REQUIREMENTS.md#what-would-take-it-to-3-gb): the record sets are
+3.00 GiB at the floor and the back-ref rows 1.03, so the two named unbuilt levers are an
+octo (8-leaf, 32 B) round-3 record and moving or narrowing the references.
 
 </details>
 

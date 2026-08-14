@@ -40,7 +40,7 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 | Core clock | 2610 MHz | 2745 MHz | |
 | Memory clock | 10251 MHz | 10251 MHz | |
 | Temperature | 67 °C | 60 °C | |
-| VRAM for a full search | 7.20 GiB | ~4 GiB[^4g] | |
+| VRAM for a full search | 6.84 GiB[^4g] | ~4 GiB | |
 
 MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
 **62.32 ± 1.99 sol/s** (15 s windows), and the controlled benchmark the same day
@@ -78,8 +78,10 @@ worth ~17 % inside our own pipeline. The watts are trustworthy across miners bec
 instrument measured both; the sol/s columns are each miner against itself. Accepted pool
 shares over a fixed interval remain the only arbiter that needs neither counter.
 
-[^4g]: lolMiner selects "BeamHash III **4G** (CUDA)" on this card. MXBM needing 7.20 GiB
-is a known gap — see [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target).
+[^4g]: at the fastest geometry, which is what both miners run here. lolMiner selects
+"BeamHash III **4G** (CUDA)" on this card; MXBM's own floor is 4.03 GiB on a card that
+cannot host the fast rung — see
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-13-off-the-algorithms-design-target).
 
 ---
 
@@ -212,7 +214,7 @@ each block's **area** is the energy that stage costs. Generated from the table b
 Every stage draws the board limit, which is why there is no single kernel to "fix" for
 power. Total DRAM traffic is within **1 %** of the compulsory minimum for the record
 widths — there is no waste to reclaim, only records to narrow, which is the same problem
-as the 7.20 GiB footprint. Full analysis in
+as the footprint. Full analysis in
 [performance.md](performance.md#power-and-efficiency).
 
 ---
@@ -229,6 +231,8 @@ Build first — see [building.md](building.md).
 | Per-stage time and power | `benchmarks/stage_power.sh` | no |
 | Kernel counters (DRAM bytes, stalls) | `sudo ./cuda/profile.sh` | yes (Nsight) |
 | Pipeline A/B for a code change | `./cuda/pipeline 700` | no |
+| Any rung of the VRAM ladder, on any card | `MXBM_BB=14 MXBM_QUAD=1 MXBM_ARENA=1 mxbm --benchmark BEAM-III` | no |
+| Drop counters and the arena's spill total | prefix any run with `MXBM_DROP_STATS=1` | no |
 
 Run on an **idle GPU**. A benchmark taken while something else is using the card measures
 contention, not the miner — a lolMiner run taken while MXBM was mining read 25–27 sol/s

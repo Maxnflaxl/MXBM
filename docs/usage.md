@@ -732,6 +732,12 @@ degrades speed instead of failing cleanly — a reason not to set `--keepfree 0`
 a desktop machine. And the free figure is a snapshot taken at startup: something
 launched afterwards competes for what is left, whatever was reserved.
 
+On a small card the usable figure decides which **geometry** MXBM runs, not
+whether it runs at all: the solver walks a ladder of rungs from 6.84 GiB down to
+4.03 and takes the fastest that fits, so `--keepfree` is also the knob that
+trades a rung for desktop headroom. The rungs and what each card class gets are
+in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-vram-ladder).
+
 ### Choosing which GPU to mine on
 
 ```sh

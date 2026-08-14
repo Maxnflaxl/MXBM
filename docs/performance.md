@@ -140,7 +140,8 @@ Poisson one (~71,000 solutions → ±0.2 sol/s).
 The CUDA backend is **~6 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as
 beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **8.36 →
-7.20 GiB** (268 → 231 B/element; the last 0.26 GiB is the survivor-sized back-ref row, 2026-08-12).
+6.84 GiB** at the fastest geometry (268 → 219 B/element), and **4.03 GiB** at the CUDA
+floor, where the dense-cap rung is what a small card takes.
 
 <details>
 <summary>The earlier 2.5-hour session, and why a peak must never be quoted</summary>
@@ -642,7 +643,7 @@ Narrowing round 2's record so the solve moves 16 % fewer bytes buys **60 MHz at 
 210 MHz at 180 W** — the price of a byte rises 5× as the cap tightens, which is exactly
 the asymmetry the gap column shows. One lever worth 210 MHz against a 570 MHz deficit
 means the whole gap is the right order of magnitude for a traffic story: it needs about
-2.7× our lever, and lolMiner's 4 GB variant against our 7.20 GiB is plausibly that. See
+2.7× our lever, and lolMiner's 4 GB variant against our 6.84 GiB is plausibly that. See
 [bytes are not free in watts](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
 
 **This inverts one of our own conclusions.** [Bytes are nearly
@@ -909,8 +910,11 @@ into two. Round 2 is now the only line materially above compulsory, and that
 
 So the byte count can only fall by making records narrower, and one place was
 found where a record was wider than its own contents ([the round-2 alignment
-pad](performance-research.md#the-round-2-alignment-pad)). Everything else needs the structural change in
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-24-off-the-algorithms-design-target):
+pad](performance-research.md#the-round-2-alignment-pad)), and one where the record
+carried bits its own address already encoded ([the implicit-bits
+record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena)).
+Everything else needs the structural change in
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-13-off-the-algorithms-design-target):
 streaming / in-place layer reuse.
 
 ### What the footprint still costs
@@ -920,8 +924,8 @@ lolMiner spends **4.48 J per solution**; MXBM spends **4.94** at stock and
 only undercuts it by capping — 4.08 at 220 W, 3.95 at the ~200 W peak. Winning by
 11 % on energy while giving up 12 % of throughput to get there is a real lead but
 a bought one, and where the rest of it went is not mysterious: 13.0 GB of
-compulsory traffic per solve. **Traffic, specifically — not the 7.20 GiB
-footprint it sits in.** Those were treated here as one problem and they are two:
+compulsory traffic per solve. **Traffic, specifically — not the footprint it
+sits in.** Those were treated here as one problem and they are two:
 [the byte-power measurement](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz)
 prices the bytes *moved* at 60 MHz of sustained clock per 16 % of traffic, while
 a smaller peak allocation that moves the same bytes to reused addresses buys
