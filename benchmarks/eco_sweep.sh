@@ -41,11 +41,15 @@ DEFAULT=$(nvidia-smi --query-gpu=power.default_limit --format=csv,noheader,nouni
 restore() { sudo -n nvidia-smi -pl "$DEFAULT" >/dev/null 2>&1; }
 trap restore EXIT INT TERM
 
+# Both arms off the implicit-bits pack: MXBM_R2_FULL stores round 2's whole element and
+# the repack assumes the packed record -- the combination builds and then fails the KAT.
+# Pinning both keeps this an R2_FULL A/B instead of two changes priced as one.
+PIPELINE_FLAGS=""
 bench_build_pipeline
 R2F="$ROOT/cuda/pipeline-r2full"
 if bench_stale "$R2F"; then
     echo "  building cuda/pipeline-r2full ..."
-    "${NVCC:-nvcc}" -O3 -arch="${ARCH:-sm_89}" -std=c++17 -diag-suppress 186 \
+    "${NVCC:-nvcc}" -O3 -arch="${ARCH:-sm_89}" -std=c++17 -diag-suppress 186 $PIPELINE_FLAGS \
         -DMXBM_R2_FULL=1 \
         -I "$ROOT/src" -I "$ROOT/kernels/cuda" -I "$ROOT/tests" -I "$ROOT/third_party/blake2b" \
         "$ROOT/cuda/pipeline.cu" "$ROOT/src/beamhash/bh3_blake2b.cpp" \

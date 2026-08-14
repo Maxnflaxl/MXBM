@@ -40,6 +40,15 @@ bench_stale() {
 # taken against a pipeline predating the change under test -- the binary in the
 # tree on 2026-07-29 was three days older than fused_round.cuh, i.e. older than
 # both the quad record and the per-round group cap.
+#
+# PIPELINE_FLAGS is the probe's configuration; it defaults to what the miner
+# ships. MXBM_IMPBITS is the harness's own axis -- the solver passes IMPB to the
+# template directly -- and its 0 default profiled the record with the side plane
+# the miner has not written since 2026-08-13 (worth 3.5 % of a solve).
+#
+# Staleness is timestamps only, so a flag change would leave a fresh binary built
+# from a different configuration standing. The flags are stamped beside the binary
+# and a mismatch counts as stale.
 # bench_gpu_root
 #
 # True when this shell can issue the privileged nvidia-smi writes a sweep needs,
@@ -69,15 +78,17 @@ bench_gpu_root() {
 }
 
 bench_build_pipeline() {
-    local out="$ROOT/cuda/pipeline"
-    bench_stale "$out" || return 0
-    echo "  building cuda/pipeline (stale or missing) ..."
-    "${NVCC:-nvcc}" -O3 -arch="${ARCH:-sm_89}" -std=c++17 -diag-suppress 186 \
+    local out="$ROOT/cuda/pipeline" stamp="$ROOT/cuda/pipeline.flags"
+    local flags="${PIPELINE_FLAGS:--DMXBM_IMPBITS=1}"
+    if ! bench_stale "$out" && [ "$(cat "$stamp" 2>/dev/null)" = "$flags" ]; then return 0; fi
+    echo "  building cuda/pipeline [$flags] ..."
+    "${NVCC:-nvcc}" -O3 -arch="${ARCH:-sm_89}" -std=c++17 -diag-suppress 186 $flags \
         -I "$ROOT/src" -I "$ROOT/kernels/cuda" -I "$ROOT/tests" -I "$ROOT/third_party/blake2b" \
         "$ROOT/cuda/pipeline.cu" "$ROOT/src/beamhash/bh3_blake2b.cpp" \
         "$ROOT/src/beamhash/bh3_verify.cpp" "$ROOT/third_party/blake2b/blake2b-ref.c" \
         -o "$out" 2> "$ROOT/cuda/build-pipeline.log" \
       || { echo "build failed, see cuda/build-pipeline.log"; tail -5 "$ROOT/cuda/build-pipeline.log"; exit 1; }
+    printf '%s' "$flags" > "$stamp"
 }
 
 # bench_energy_mj

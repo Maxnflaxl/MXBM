@@ -503,6 +503,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                   "compare would reject true partners");
     static_assert(!IMPB || !MXBM_CPASYNC,
                   "IMPB repacks the record; the cp.async raw copy cannot carry it");
+    static_assert(!IMPB || LMODE != LM_EMIT || INSTR == 8,
+                  "IMPB's unpack is a fixed 4 x ulonglong2, so the record it reads must "
+                  "have been written at stride 8. A wider one (MXBM_R2_FULL) compiles "
+                  "and then fails the KAT");
     // `lead` is leaf 0 of the element's own prefix, so for every mode that stages real
     // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
     // exception: its leaf payload is the packed leftContrib, not leaves -- and LM_RD4

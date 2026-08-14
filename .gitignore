@@ -12,6 +12,7 @@
 # Listed by name because they have no extension and sit beside their sources.
 /cuda/pipeline
 /cuda/pipeline-*
+/cuda/pipeline.flags
 /cuda/emit_shape_probe
 /cuda/test_primitives
 /benchmarks/nvml_energy
