@@ -53,6 +53,19 @@ constexpr uint32_t kPairStride = 2u;     // r1 -> r2 pair record, 16 B
 constexpr uint32_t kQuadStride = 3u;
 #define MXBM_R2Q_ARGS 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuadStride,kFCap
 #define MXBM_R3Q_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap
+// The OCTO pair. Round 3 emits its eight leaves in 4 u64 instead of the 64 B record, and
+// round 4 rebuilds the work words, the lead and the leftContrib from them (LM_RD4). Only
+// round 3's OUTSTR and round 4's INSTR and mode change; every L value, tree width and cap
+// is the same, because the record carries the same INFORMATION either way. Offered only
+// on quad rungs, so round 3's octo form pairs with the quad input and nothing else.
+constexpr uint32_t kOctoStride = 4u;
+#define MXBM_R3QO_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,kOctoStride,kFCap
+#define MXBM_R4O_ARGS  6,1,2,LM_RD4, 288u,9u,2u,0u,0u, kOctoStride,2u,kFCap
+// Left alone the rebuild takes 128 registers, exactly 2 blocks/SM. Asking for a third
+// costs 88-96 B of spill and pays -2 %; 0 leaves the choice to ptxas.
+#ifndef MXBM_MB_OCTO
+#define MXBM_MB_OCTO 3
+#endif
 static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_stride(1),
               "CUDA record widths must match the shared footprint arithmetic");
 // Under the implicit-bits pack the 9th word has no writer, so set 0 is the record and
@@ -64,6 +77,9 @@ static_assert(kArenaCap == kRbArenaSlots,
 static_assert(kQuadStride == fb_round_stride(2, true) &&
               fb_set_stride(0, true) == kQuadStride && fb_set_stride(1, true) == 8u,
               "quad record widths must match the shared footprint arithmetic");
+static_assert(kOctoStride == fb_round_stride(3, true, false, true) &&
+              fb_set_stride(1, true, false, true) == kOctoStride,
+              "octo record widths must match the shared footprint arithmetic");
 
 // Was hardcoded (16,1), so a card that could not host the finest rung was refused outright --
 // even though the same kernels run unchanged at 6.50 GiB. bb and sm are kernel
@@ -102,12 +118,13 @@ RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
                                    /*allow_quad=*/true, power_limit_w,
                                    /*allow_split=*/false, slack,
                                    /*allow_impb=*/impb_allowed(),
-                                   /*allow_arena=*/true);
+                                   /*allow_arena=*/true, /*allow_octo=*/true);
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
                                                  g.viable = true; }
     if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
     if (const char* e = std::getenv("MXBM_QUAD")) { g.quad = atoi(e) != 0; g.viable = true; }
     if (const char* e = std::getenv("MXBM_ARENA")) { g.arena = atoi(e) != 0; g.viable = true; }
+    if (const char* e = std::getenv("MXBM_OCTO")) { g.octo = atoi(e) != 0; g.viable = true; }
     return g;
 }
 } // namespace
@@ -125,6 +142,9 @@ struct CudaSolver::Impl {
     // anext thread it onto per-bucket chains between a producer round and its consumer.
     // Null pointers are what make the plain kernels' path the one that runs.
     bool arena = false;
+    // Round 3's output as its eight leaves, round 4 rebuilding from them. See
+    // rowbucket_geom.h; only ever set together with quad and arena.
+    bool octo = false;
     uint32_t *ahead[2] = {nullptr,nullptr}, *anext[2] = {nullptr,nullptr};
     uint32_t *atag[2]  = {nullptr,nullptr}, *actr[2]  = {nullptr,nullptr};
     // Run-long spill count. A pool that never fills means the dense cap was never
@@ -161,12 +181,12 @@ struct CudaSolver::Impl {
 
     // The geometry-dependent half of the allocation: the two record sets and their
     // bucket counters. Split out so a step-down retries only what changes size.
-    bool alloc_geometry(uint32_t bb_, uint32_t sm_, bool quad_, bool arena_) {
+    bool alloc_geometry(uint32_t bb_, uint32_t sm_, bool quad_, bool arena_, bool octo_) {
         for (auto*& q : elem)   { cudaFree(q); q = nullptr; }
         for (auto*& q : counts) { cudaFree(q); q = nullptr; }
         for (auto* a : {ahead, anext, atag, actr})
             for (int k = 0; k < 2; ++k) { cudaFree(a[k]); a[k] = nullptr; }
-        bb = bb_; sm = sm_; nb = 1u << bb_; quad = quad_; arena = arena_;
+        bb = bb_; sm = sm_; nb = 1u << bb_; quad = quad_; arena = arena_; octo = octo_;
         impb   = impb_allowed() && rb_impb_ok(bb, sm, quad);
         cap    = fb_cap_for(kCapacity / nb, arena ? kRbDenseSigma : kRbCapSigma);
         nslots = (size_t)nb * cap;
@@ -176,8 +196,8 @@ struct CudaSolver::Impl {
         // sized the ladder against. The pool follows the bucket records in the same
         // buffer, so pool slot a is record index nslots + a and no store has to branch.
         const size_t slots = nslots + (arena ? kArenaCap : 0u);
-        elem[0] = dalloc<uint64_t>(slots*fb_set_stride(0, quad, impb));
-        elem[1] = dalloc<uint64_t>(slots*fb_set_stride(1, quad, impb));
+        elem[0] = dalloc<uint64_t>(slots*fb_set_stride(0, quad, impb, octo));
+        elem[1] = dalloc<uint64_t>(slots*fb_set_stride(1, quad, impb, octo));
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
         if (!elem[0] || !elem[1] || !counts[0] || !counts[1]) return false;
         for (int k = 0; arena && k < 2; ++k) {
@@ -305,13 +325,14 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
         throw std::runtime_error("CUDA: geometry leaves more key bits than the chain "
                                  "table can separate (bb + sm must be >= 17)");
     const bool forced = std::getenv("MXBM_BB") || std::getenv("MXBM_SM")
-                     || std::getenv("MXBM_QUAD") || std::getenv("MXBM_ARENA");
+                     || std::getenv("MXBM_QUAD") || std::getenv("MXBM_ARENA")
+                     || std::getenv("MXBM_OCTO");
     // bb == 17 without a force can only mean the power-limit preference fired; say so,
     // because a user comparing against a stock run will see different memory and speed.
     if (!forced && g.bb == 17u)
         std::fprintf(stderr, "CUDA: board power limit %u W is below %u W: selecting the "
                      "low-power (17,0) geometry\n", power_limit_w, kRbLowPowerW);
-    bool ok = p_->alloc_geometry(g.bb, g.sm, g.quad, g.arena);
+    bool ok = p_->alloc_geometry(g.bb, g.sm, g.quad, g.arena, g.octo);
     // Keep stepping down the SAME ladder rb_geometry_for walked, rather than
     // decrementing bb: the rungs interleave the record formats and the dense-cap rows,
     // so a bb-only retry would stop at the bottom of the packed half and refuse a card
@@ -320,20 +341,22 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
         int n = 0;
         const RbRung* rungs = rb_rungs(n);
         auto describe = [](const RbRung& r) {
-            return r.quad ? (r.arena ? " (quad record, dense caps)" : " (quad record)")
+            return r.octo ? " (quad record, dense caps, octo)"
+                 : r.quad ? (r.arena ? " (quad record, dense caps)" : " (quad record)")
                           : (r.arena ? " (dense caps)" : "");
         };
         int i = 0;
         while (i < n && !(rungs[i].bb == g.bb && rungs[i].quad == g.quad
-                          && rungs[i].arena == g.arena)) ++i;
+                          && rungs[i].arena == g.arena && rungs[i].octo == g.octo)) ++i;
         // A cap-selected (17,0) is not ON the ladder, so the scan above runs off the
         // end; when the allocator refuses it, retry from the top rung, not from i == n.
         if (i == n) i = -1;
         for (++i; !ok && i < n; ++i) {
             std::fprintf(stderr, "CUDA: %u buckets%s did not fit, retrying at %u%s\n",
-                         1u << g.bb, describe({g.bb, g.sm, g.quad, g.arena}),
+                         1u << g.bb, describe({g.bb, g.sm, g.quad, g.arena, g.octo}),
                          1u << rungs[i].bb, describe(rungs[i]));
-            ok = p_->alloc_geometry(rungs[i].bb, rungs[i].sm, rungs[i].quad, rungs[i].arena);
+            ok = p_->alloc_geometry(rungs[i].bb, rungs[i].sm, rungs[i].quad,
+                                    rungs[i].arena, rungs[i].octo);
         }
     }
     if (!ok) throw std::runtime_error("CUDA allocation failed (device out of memory)");
@@ -373,6 +396,12 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
         CARVE((fused_round<MXBM_R3Q_ARGS, false, false, false, false, 0u, true>));
         CARVE((fused_round<MXBM_R2Q_ARGS, false, false, false, true,  0u, true>));
         CARVE((fused_round<MXBM_R3Q_ARGS, false, false, false, true,  0u, true>));
+    }
+    if (p_->octo) {
+        CARVE((fused_round<MXBM_R3QO_ARGS, false, false, false, false, 0u, true>));
+        CARVE((fused_round<MXBM_R3QO_ARGS, false, false, false, true,  0u, true>));
+        CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, false, 0u, true, MXBM_MB_OCTO>));
+        CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, true,  0u, true, MXBM_MB_OCTO>));
         CARVE((fused_round<MXBM_R2_ARGS,  false, false, false, false, 16u, true>));
         CARVE((fused_round<MXBM_R3_ARGS,  false, false, false, false, 16u, true>));
         CARVE((fused_round<MXBM_R2_ARGS,  false, false, false, true,  16u, true>));
@@ -399,7 +428,13 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     // rebuild no walk reads, and skipping them costs the shared memory that holds r1's
     // fifth block. That trade loses at stock and wins once the rebuild bills at full
     // issue rate. Both variants are instantiated; MXBM_MATCH_FIRST=1 forces it on.
-    p_->matchFirst = specLowPower || (MXBM_MATCH_FIRST != 0);
+    // ...and on the octo rungs, for a third reason: what it skips for an element alone in
+    // its chain slot is there the eight-leaf rebuild, which is most of the round. Measured
+    // -6.5 % there, against a loss at stock.
+    p_->matchFirst = specLowPower || p_->octo || (MXBM_MATCH_FIRST != 0);
+    // MXBM_MFIRST=0|1 forces it either way; without it the variant is only reachable by
+    // presenting a board limit under kSpecMinPowerW.
+    if (const char* e = std::getenv("MXBM_MFIRST")) p_->matchFirst = atoi(e) != 0;
     if (specLowPower)
         std::fprintf(stderr, "CUDA: ... and match-first rebuild skipping on\n");
     // ...and off on the arena rungs too, for the opposite reason: a card takes one of
@@ -524,7 +559,8 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // implicit-bits pairs are the same strides with the pack folded into the
     // stores; the IMPB value is the bucket-bit count the pack drops, so each
     // geometry needs its own instantiation.
-    if (I.quad)          { ROUND_X(2, 0u,  MXBM_R2Q_ARGS) ROUND_X(3, 0u,  MXBM_R3Q_ARGS) }
+    if (I.octo)          { ROUND_X(2, 0u,  MXBM_R2Q_ARGS) ROUND_X(3, 0u,  MXBM_R3QO_ARGS) }
+    else if (I.quad)     { ROUND_X(2, 0u,  MXBM_R2Q_ARGS) ROUND_X(3, 0u,  MXBM_R3Q_ARGS) }
     else if (I.impb && I.bb == 17u)
                          { ROUND_X(2, 17u, MXBM_R2_ARGS)  ROUND_X(3, 17u, MXBM_R3_ARGS)  }
     else if (I.impb)     { ROUND_X(2, 16u, MXBM_R2_ARGS)  ROUND_X(3, 16u, MXBM_R3_ARGS)  }
@@ -550,6 +586,16 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
                 I.left, I.right, I.gictr, I.drops, I.dpp,
                 nullptr, nullptr, nullptr, nullptr,     // speculation is off with the arena
                 I.specPp, kElems, I.cap, I.specCounts, I.specElem, 3u);
+      } else if (I.octo && I.matchFirst) {
+          fused_round<MXBM_R4O_ARGS, false, false, false, true, 0u, true, MXBM_MB_OCTO>
+            <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, 3u*kCapacity,
+                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
+      } else if (I.octo) {
+          fused_round<MXBM_R4O_ARGS, false, false, false, false, 0u, true, MXBM_MB_OCTO>
+            <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, 3u*kCapacity,
+                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
       } else if (I.arena && I.matchFirst) {
           fused_round<MXBM_R4_ARGS, false, false, false, true, 0u, true>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, 3u*kCapacity,

@@ -9,13 +9,14 @@ uint32_t fb_cap_for(uint32_t mean, double sigma) {
 }
 
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
-                     bool quad, bool impb, bool arena) {
+                     bool quad, bool impb, bool arena, bool octo) {
     const uint32_t nb = 1u << bb;
     const uint32_t cap = fb_cap_for(capacity / nb, arena ? kRbDenseSigma : kRbCapSigma);
     // The pool sits behind the bucket records in the SAME buffer, so one slot index
     // addresses both regions and no store in the kernels has to know which it hit.
     const size_t nslots = (size_t)nb * cap + (arena ? kRbArenaSlots : 0u);
-    const uint32_t s0 = fb_set_stride(0, quad, impb), s1 = fb_set_stride(1, quad, impb);
+    const uint32_t s0 = fb_set_stride(0, quad, impb, octo),
+                   s1 = fb_set_stride(1, quad, impb, octo);
     // Under the quad record set 0 (3 u64) is no longer the larger of the two, so the
     // largest single allocation becomes set 1. Taking max() rather than assuming set 0
     // is what keeps the OpenCL single-allocation ceiling honest for both formats.
@@ -42,27 +43,35 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // on (16,1) and carried across the other rows, so their times are placings rather than
 // figures. Footprints are with the implicit-bits pack where the rung admits it.
 const RbRung* rb_rungs(int& n) {
+    //     bb   sm   quad   arena  octo        footprint / time
     static const RbRung kRungs[] = {
-        { 16u, 1u, false, false },   // 6.84 GiB  33.67 ms   (7.20 without implicit bits)
-        { 16u, 1u, false, true  },   // 5.77      +2 % on the row above
-        { 15u, 2u, false, false },   // 6.62      36.01
-        { 15u, 2u, false, true  },   // 5.82
-        { 16u, 1u, true,  false },   // 5.02      38.39
-        { 16u, 1u, true,  true  },   // 4.29
-        { 14u, 3u, false, false },   // 6.24      40.02   -- kept for max_alloc-bound backends
-        { 15u, 2u, true,  false },   // 4.65      40.65
-        { 15u, 2u, true,  true  },   // 4.13
-        { 14u, 3u, true,  false },   // 4.40      44.75
-        { 14u, 3u, true,  true  },   // 4.03      -- the floor
+        { 16u, 1u, false, false, false },   // 6.84 GiB  33.67 ms  (7.20 without impl. bits)
+        { 16u, 1u, false, true,  false },   // 5.77      +2 % on the row above
+        { 15u, 2u, false, false, false },   // 6.62      36.01
+        { 15u, 2u, false, true,  false },   // 5.82
+        { 16u, 1u, true,  false, false },   // 5.02      38.39
+        { 16u, 1u, true,  true,  false },   // 4.29
+        { 14u, 3u, false, false, false },   // 6.24      40.02  -- for max_alloc-bound backends
+        { 15u, 2u, true,  false, false },   // 4.65      40.65
+        { 15u, 2u, true,  true,  false },   // 4.13
+        { 14u, 3u, true,  false, false },   // 4.40      44.75
+        { 14u, 3u, true,  true,  false },   // 4.03
+        // The octo rows, below everything: round 4 rebuilds its work state from eight
+        // leaves, which is the deepest re-derivation on the ladder. Only ever reached
+        // when no row above fits, and only paired with quad and dense caps -- a card
+        // that can host the packed record has no use for them.
+        { 16u, 1u, true,  true,  true  },   // 3.10
+        { 15u, 2u, true,  true,  true  },   // 3.00
+        { 14u, 3u, true,  true,  true  },   // 2.94   -- the floor
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;
 }
 
 size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb,
-                              bool arena) {
+                              bool arena, bool octo) {
     size_t total = 0, single = 0;
-    rowbucket_bytes(capacity, bb, total, single, quad, impb, arena);
+    rowbucket_bytes(capacity, bb, total, single, quad, impb, arena, octo);
     const size_t half = single / 2;                     // nb is even on every rung
     const size_t backrefs = ((size_t)4 * capacity + 1024) * 4;  // left/right rows never split
     return half > backrefs ? half : backrefs;
@@ -70,7 +79,8 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool im
 
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad, unsigned power_limit_w, bool allow_split,
-                           uint64_t slack_bytes, bool allow_impb, bool allow_arena) {
+                           uint64_t slack_bytes, bool allow_impb, bool allow_arena,
+                           bool allow_octo) {
     // The implicit-bits record is not a rung, it is a NARROWER SET-0 STRIDE on the rungs
     // that admit it -- so it is folded into each rung's footprint here rather than
     // appearing in the ladder. A backend without it passes allow_impb false and every
@@ -86,18 +96,19 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
     // The figure max_alloc binds on: the whole larger set, or -- when the backend
     // can split each set into two bucket-halves -- whatever rowbucket_single_split
     // says is the largest piece left.
-    auto binding_single = [&](uint32_t bb, bool quad, bool impb, bool arena, size_t single) {
+    auto binding_single = [&](uint32_t bb, bool quad, bool impb, bool arena, bool octo,
+                              size_t single) {
         if (!allow_split) return single;
-        const size_t s = rowbucket_single_split(capacity, bb, quad, impb, arena);
+        const size_t s = rowbucket_single_split(capacity, bb, quad, impb, arena, octo);
         return s < single ? s : single;
     };
     if (kRbLowPowerW != 0 && power_limit_w != 0 && power_limit_w < kRbLowPowerW) {
         size_t total = 0, single = 0;
         const bool im = impb_at(17u, 0u, false);
         rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false, im);
-        if ((!max_alloc || binding_single(17u, false, im, false, single) <= (size_t)max_alloc)
+        if ((!max_alloc || binding_single(17u, false, im, false, false, single) <= (size_t)max_alloc)
             && (!global_mem || total + (size_t)slack_bytes <= (size_t)global_mem))
-            return { 17u, 0u, false, true, false };
+            return { 17u, 0u, false, true, false, false };
     }
     int n = 0;
     const RbRung* rungs = rb_rungs(n);
@@ -105,15 +116,16 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
         const RbRung& r = rungs[i];
         if (r.quad && !allow_quad) continue;
         if (r.arena && !allow_arena) continue;
+        if (r.octo && !allow_octo) continue;
         size_t total = 0, single = 0;
         const bool im = impb_at(r.bb, r.sm, r.quad);
-        rowbucket_bytes(capacity, r.bb, total, single, r.quad, im, r.arena);
-        if (max_alloc && binding_single(r.bb, r.quad, im, r.arena, single) > (size_t)max_alloc)
-            continue;
+        rowbucket_bytes(capacity, r.bb, total, single, r.quad, im, r.arena, r.octo);
+        if (max_alloc && binding_single(r.bb, r.quad, im, r.arena, r.octo, single)
+                         > (size_t)max_alloc) continue;
         if (global_mem && total + (size_t)slack_bytes > (size_t)global_mem) continue;
-        return { r.bb, r.sm, r.quad, true, r.arena };
+        return { r.bb, r.sm, r.quad, true, r.arena, r.octo };
     }
-    return { 14u, 3u, false, false, false };  // nothing fits; callers fall back to the sort path
+    return { 14u, 3u, false, false, false, false };  // nothing fits; callers fall back to sort
 }
 
 }} // namespace mxbm::gpu

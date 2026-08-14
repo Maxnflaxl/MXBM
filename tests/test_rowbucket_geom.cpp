@@ -209,8 +209,12 @@ int main() {
         // Every rung stays on the line the compile-time kernel constants assume.
         int n = 0;
         const RbRung* rungs = rb_rungs(n);
-        check(n == 11, "eleven rungs: three geometries x two record formats x the "
-                       "dense-cap rows, less the ones a faster row already dominates");
+        check(n == 14, "fourteen rungs: three geometries x two record formats x the "
+                       "dense-cap rows x the three octo rows, less the ones a faster "
+                       "row already dominates");
+        for (int i = 0; i < n; ++i)
+            check(!rungs[i].octo || (rungs[i].quad && rungs[i].arena),
+                  "an octo rung is always quad and dense-capped");
         for (int i = 0; i < n; ++i)
             check(rungs[i].bb + rungs[i].sm == 17u, "every rung is on the bb + sm == 17 line");
         // The ladder is walked in order and the first fit wins, so a rung that is both
@@ -354,6 +358,52 @@ int main() {
         // floor and a 4 GB one does not, which is where reach now stops.
         check( pick(4.70 - 0.625, true).viable, "a 5 GB card clears the arena floor");
         check(!pick(3.70 - 0.625, true).viable, "a 4 GB card does not");
+    }
+
+    section("the octo record and the floor it reaches");
+    {
+        // Round 3's output is 96 % information-dense as stored -- 376 work bits + 25 lead
+        // + 64 leftContrib + 26 gi is 491 of 512 -- so the only lever left on it is
+        // re-derivation. Eight leaves determine the element, and 24 + 8x25 + 26 = 250 bits
+        // fit the 256 the 4 u64 give.
+        check(fb_round_stride(3, true, false, true) == 4u
+           && fb_set_stride(1, true, false, true) == 4u,
+              "octo halves set 1: 8 u64 becomes 4");
+        check(fb_set_stride(0, true, false, true) == fb_set_stride(0, true),
+              "and leaves set 0 alone -- it is round 3's OUTPUT that changes");
+
+        struct { uint32_t bb; double total; } want[] = {
+            { 16, 3.10 }, { 15, 3.00 }, { 14, 2.94 },
+        };
+        for (const auto& w : want) {
+            size_t total = 0, single = 0, was = 0, ignore = 0;
+            rowbucket_bytes(cap, w.bb, total, single, true, false, true, /*octo=*/true);
+            rowbucket_bytes(cap, w.bb, was, ignore, true, false, true);
+            char msg[160];
+            std::snprintf(msg, sizeof msg, "quad (%u,%u) + dense caps + octo is %.2f GiB "
+                          "(expect %.2f)", w.bb, 17u - w.bb, total/GiB, w.total);
+            check(total/GiB > w.total - 0.05 && total/GiB < w.total + 0.05, msg);
+            check((was - total)/GiB > 1.0, "octo is worth over a GiB at every rung");
+        }
+
+        auto pick = [&](double v, bool octo) {
+            return rb_geometry_for(cap, 0, gib(v), /*allow_quad=*/true, 0,
+                                   /*allow_split=*/false, /*slack=*/0,
+                                   /*allow_impb=*/true, /*allow_arena=*/true, octo);
+        };
+        // The floor, either side of it, and what it means in cards: with CUDA's 640 MiB
+        // allowance a device is offered when its TOTAL VRAM clears 2.94 + 0.63 = 3.57 GiB.
+        check( pick(2.96, true).viable && !pick(2.90, true).viable,
+               "the octo floor is quad (14,3) + dense caps at 2.94 GiB");
+        check( pick(3.70 - 0.625, true).viable,
+               "a 4 GB card clears it -- the first card class below the quad floor");
+        check(!pick(3.70 - 0.625, false).viable,
+               "and without octo a 4 GB card fits nothing at all");
+        // Never reached while anything above it fits.
+        for (double v : {6.0, 5.0, 4.4, 4.1}) {
+            const RbGeometry g = pick(v, true);
+            check(!g.octo, "octo is the last resort, not a rung a larger card lands on");
+        }
     }
 
     section("invariants the kernels depend on");

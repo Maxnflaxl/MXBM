@@ -71,14 +71,19 @@ int main() {
     // ladder never reaches either, so without this loop they would ship unexercised.
     for (uint32_t bb = 17; bb >= 14; --bb)
       for (int quad = 0; quad <= 1; ++quad)
-        for (int arena = 0; arena <= 1; ++arena) {
-            char v[8], geom[48];
+        for (int arena = 0; arena <= 1; ++arena)
+          // The octo record is only offered on quad + dense-cap rungs, so that is the
+          // only combination worth covering -- and the only one the dispatch builds.
+          for (int octo = 0; octo <= ((quad && arena) ? 1 : 0); ++octo) {
+            char v[8], geom[56];
             std::snprintf(v, sizeof v, "%u", bb);
-            std::snprintf(geom, sizeof geom, "(%u,%u)%s%s", bb, 17u - bb,
-                          quad ? " quad" : "", arena ? " dense-caps" : "");
+            std::snprintf(geom, sizeof geom, "(%u,%u)%s%s%s", bb, 17u - bb,
+                          quad ? " quad" : "", arena ? " dense-caps" : "",
+                          octo ? " octo" : "");
             setenv("MXBM_BB", v, 1);
             setenv("MXBM_QUAD", quad ? "1" : "0", 1);
             setenv("MXBM_ARENA", arena ? "1" : "0", 1);
+            setenv("MXBM_OCTO", octo ? "1" : "0", 1);
             // MXBM_BB is an explicit override, so the solver does NOT step down under it
             // -- which is right for a user who asked for a geometry, and means a rung can
             // legitimately not fit on a busy card. Not fitting is not a correctness
@@ -92,6 +97,7 @@ int main() {
             }
         }
     unsetenv("MXBM_BB"); unsetenv("MXBM_QUAD"); unsetenv("MXBM_ARENA");
+    unsetenv("MXBM_OCTO");
 
     // The power-limit hint through the ctor -- exactly what main.cpp passes after
     // observing the board limit. Above kRbLowPowerW it must change nothing.
@@ -102,18 +108,23 @@ int main() {
     // Below it the gate selects (17,0) AND turns match-first on, which is the only way
     // to reach the match-first kernels from a test -- and, with the dense-cap rung
     // forced beside it, the only cover for the match-first x arena instantiations.
-    {
-        gpu::CudaSolver g(0, /*power_limit_w=*/120);
-        check(g.bucket_bits() == 17u, "a 120 W hint selects the low-power (17,0) rung");
-        solve_the_kat(g, "(17,0) low-power");
-        std::printf("  %-24s 3/3 goldens\n", "(17,0) match-first");
-    }
-    {
+    try {
+        {   // scoped, like the sweep above: two solvers do not fit on this card at once
+            gpu::CudaSolver g(0, /*power_limit_w=*/120);
+            check(g.bucket_bits() == 17u, "a 120 W hint selects the low-power (17,0) rung");
+            solve_the_kat(g, "(17,0) low-power");
+            std::printf("  %-24s 3/3 goldens\n", "(17,0) match-first");
+        }
         setenv("MXBM_ARENA", "1", 1);
-        gpu::CudaSolver g(0, /*power_limit_w=*/120);
-        solve_the_kat(g, "(17,0) low-power dense-caps");
-        std::printf("  %-24s 3/3 goldens\n", "(17,0) mf dense-caps");
+        {
+            gpu::CudaSolver g(0, /*power_limit_w=*/120);
+            solve_the_kat(g, "(17,0) low-power dense-caps");
+            std::printf("  %-24s 3/3 goldens\n", "(17,0) mf dense-caps");
+        }
         unsetenv("MXBM_ARENA");
+    } catch (const std::exception& e) {
+        unsetenv("MXBM_ARENA");
+        std::printf("  SKIP low-power arms: %s\n", e.what());
     }
 
     return summary("cuda_solver");

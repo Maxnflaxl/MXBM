@@ -53,6 +53,48 @@ __device__ __forceinline__ uint32_t quad_l2(uint64_t w1) { return (uint32_t)(w1 
 __device__ __forceinline__ uint32_t quad_l3(uint64_t w2) { return (uint32_t)(w2)       & kIdxMask; }
 __device__ __forceinline__ uint32_t quad_gi(uint64_t w2) { return (uint32_t)(w2 >> 25); }
 
+// r3 -> r4, OCTO RECORD: 32 B instead of 64. The same argument one round further down --
+// a round-3 output element is a combine of two round-3 inputs, each determined by four
+// seed indices, so EIGHT indices determine it and those eight ARE its leaves (sBuild = 8).
+// The 6 work words, the lead and the leftContrib are then all redundant: leaf 0 IS the
+// lead, the leftContrib is a mix of the eight leaves alone, and round 4 rebuilds the work
+// words with rebuild_r4.
+//
+// No slacker layout exists: key 24 + 8 x 25 + gi 26 = 250 bits of 256, so three leaves
+// straddle a word boundary and every field is a shift.
+//   w0 = key      | l0<<24 | l1<<49
+//   w1 = l1>>15   | l2<<10 | l3<<35 | l4<<60
+//   w2 = l4>>4    | l5<<21 | l6<<46
+//   w3 = l6>>18   | l7<<7  | gi<<32
+// w0's low 24 bits are the key, exactly as in the pair and quad records, so the staging
+// loop's `rec0 & 0xFFFFFF` extraction is shared with every other mode.
+__device__ __forceinline__ uint64_t octo_w0(uint32_t key, const uint32_t l[8]) {
+    return (uint64_t)key | ((uint64_t)l[0] << 24) | ((uint64_t)l[1] << 49);
+}
+__device__ __forceinline__ uint64_t octo_w1(const uint32_t l[8]) {
+    return ((uint64_t)l[1] >> 15) | ((uint64_t)l[2] << 10) | ((uint64_t)l[3] << 35)
+         | ((uint64_t)l[4] << 60);
+}
+__device__ __forceinline__ uint64_t octo_w2(const uint32_t l[8]) {
+    return ((uint64_t)l[4] >> 4) | ((uint64_t)l[5] << 21) | ((uint64_t)l[6] << 46);
+}
+__device__ __forceinline__ uint64_t octo_w3(const uint32_t l[8], uint32_t gi) {
+    return ((uint64_t)l[6] >> 18) | ((uint64_t)l[7] << 7) | ((uint64_t)gi << 32);
+}
+__device__ __forceinline__ void octo_leaves(uint64_t w0, uint64_t w1, uint64_t w2,
+                                            uint64_t w3, uint32_t l[8]) {
+    l[0] = (uint32_t)(w0 >> 24) & kIdxMask;
+    l[1] = (uint32_t)(((w0 >> 49) | (w1 << 15)) & kIdxMask);
+    l[2] = (uint32_t)(w1 >> 10) & kIdxMask;
+    l[3] = (uint32_t)(w1 >> 35) & kIdxMask;
+    l[4] = (uint32_t)(((w1 >> 60) | (w2 << 4)) & kIdxMask);
+    l[5] = (uint32_t)(w2 >> 21) & kIdxMask;
+    l[6] = (uint32_t)(((w2 >> 46) | (w3 << 18)) & kIdxMask);
+    l[7] = (uint32_t)(w3 >> 7) & kIdxMask;
+}
+__device__ __forceinline__ uint32_t octo_lead(uint64_t w0) { return (uint32_t)(w0 >> 24) & kIdxMask; }
+__device__ __forceinline__ uint32_t octo_gi  (uint64_t w3) { return (uint32_t)(w3 >> 32); }
+
 // Rebuild a ROUND-2 element from its two parent seed indices: two seeds mixed at
 // Lmix(1)=448, combined at Lout(1)=424, then mixed at Lmix(2)=424 over the 2-leaf tree.
 __device__ __forceinline__ void rebuild_r2(const uint64_t pp[4], uint32_t li, uint32_t ri,
@@ -78,6 +120,28 @@ __device__ __forceinline__ void rebuild_r3(const uint64_t pp[4], const uint32_t 
     bh3::combine(a, b, 400u, out);
     uint32_t t4[4] = { l[0], l[1], l[2], l[3] };
     bh3::apply_mix(out, t4, 4u, 400u);
+}
+
+// Rebuild a ROUND-3 OUTPUT element (round 4's input) from its eight leaves: two round-3
+// rebuilds, combined at Lout(3)=376, then mixed at Lmix(4)=376 over the 8-leaf tree. The
+// 6 is what apply_mix computes for itself at Lmix=376 ((512-376+24)/25), so the tree
+// length is not a second thing to keep in step. Twenty-eight siphash rounds against the
+// 32 B it saves reading, which is why it is a reach rung and never a default.
+__device__ __forceinline__ void rebuild_r4(const uint64_t pp[4], const uint32_t l[8],
+                                           bh3::Elem& out) {
+    bh3::Elem a, b;
+    rebuild_r3(pp, l,     a);
+    rebuild_r3(pp, l + 4, b);
+    bh3::combine(a, b, 376u, out);
+    bh3::apply_mix(out, l, 6u, 376u);
+}
+
+// The leftContrib round 3 stored: a mix of the eight leaves ALONE, over a zero element,
+// so it needs no work state and is the cheap half of what the octo record gives up.
+__device__ __forceinline__ uint64_t octo_contrib(const uint32_t l[8]) {
+    bh3::Elem z{};
+    bh3::apply_mix(z, l, 8u, 288u);
+    return bh3::rotl64(z.w[0], 40);
 }
 
 }} // namespace mxbm::cuda

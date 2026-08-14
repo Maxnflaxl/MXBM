@@ -24,15 +24,21 @@ constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 2u };
 // bits are packed out, the 400 - bb work bits fit 6 u64, and the 9th-word plane has no
 // writer at all -- so set 0 is 8 u64 per slot rather than 9. CUDA only, and only on the
 // rungs rb_impb_ok admits.
-constexpr uint32_t fb_round_stride(int r, bool quad, bool impb = false) {
+// The OCTO RECORD is the same argument one round further down: a round-3 output element
+// is determined by the eight seed indices at its leaves, so its 6 work words, its lead
+// and its leftContrib are all derivable and round 4 rebuilds them. 8 u64 becomes 4, which
+// is where set 1 halves. CUDA only, and only on rungs where the alternative is refusing.
+constexpr uint32_t fb_round_stride(int r, bool quad, bool impb = false, bool octo = false) {
     if (r == 2) return quad ? 3u : (impb ? 8u : 9u);
+    if (r == 3) return octo ? 4u : kFbStride[4];
     return kFbStride[r + 1];
 }
-constexpr uint32_t fb_set_stride(int set, bool quad = false, bool impb = false) {
+constexpr uint32_t fb_set_stride(int set, bool quad = false, bool impb = false,
+                                 bool octo = false) {
     uint32_t m = (set == 0) ? kFbStride[1] : 0u;          // entry writes set 0
     for (int r = 1; r <= 4; ++r)
-        if ((r & 1) == set && fb_round_stride(r, quad, impb) > m)
-            m = fb_round_stride(r, quad, impb);
+        if ((r & 1) == set && fb_round_stride(r, quad, impb, octo) > m)
+            m = fb_round_stride(r, quad, impb, octo);
     return m;
 }
 
@@ -83,7 +89,8 @@ constexpr uint32_t kRbArenaSlots = 65536;
 // allocation}. The single figure is what OpenCL's CL_DEVICE_MAX_MEM_ALLOC_SIZE caps,
 // and is what binds below 12 GB.
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
-                     bool quad = false, bool impb = false, bool arena = false);
+                     bool quad = false, bool impb = false, bool arena = false,
+                     bool octo = false);
 
 // The shipping element capacity: the 2^25 seed layer plus the 1/32 growth slack every
 // round is budgeted against. Each backend keeps its own kCapacity for kernel arithmetic
@@ -167,7 +174,12 @@ constexpr unsigned kSpecMinPowerW = 130;
 //               Costs a fixed few per cent of time for ~22 % of the record slots, so
 //               it is a RUNG -- what a card takes when the alternative is a coarser
 //               geometry, the quad record, or a refusal -- never a default.
-struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; bool arena; };
+//   octo      : round 3's output as its eight leaves (32 B), round 4 rebuilding the
+//               work words from them. The deepest re-derivation on the ladder and the
+//               slowest rung; only offered where the alternative is a refusal, and only
+//               together with quad and arena -- a card that can host the packed record
+//               does not need it.
+struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; bool arena; bool octo; };
 //   slack_bytes : held back from `global_mem` on top of the footprint. The 1 GiB
 //               default is for callers passing TOTAL VRAM, which says nothing
 //               about what is free; a caller that already sized against the
@@ -178,17 +190,19 @@ struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; bool arena; };
 //               and Metal have no such record and keep the default.
 //   allow_arena : the backend carries the dense-cap / overflow-pool kernels. CUDA
 //               passes true; OpenCL and Metal have neither and never see those rungs.
+//   allow_octo : the backend carries the octo record and rebuild_r4. CUDA only.
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad = false, unsigned power_limit_w = 0,
                            bool allow_split = false,
                            uint64_t slack_bytes = (uint64_t)1 << 30,
-                           bool allow_impb = false, bool allow_arena = false);
+                           bool allow_impb = false, bool allow_arena = false,
+                           bool allow_octo = false);
 
 // Largest single allocation when each record set may split into two bucket-halves:
 // half the larger set, or the never-split back-ref rows if bigger. The arithmetic
 // behind allow_split, exposed so viability and the tests ask the same question.
 size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb = false,
-                              bool arena = false);
+                              bool arena = false, bool octo = false);
 
 // The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
 // backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said
@@ -196,7 +210,7 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool im
 // Walking this list rather than decrementing `bb` is what makes that retry cross from
 // the packed rungs onto the quad ones instead of stopping at the bottom of the packed
 // half. `n` receives the count.
-struct RbRung { uint32_t bb, sm; bool quad; bool arena; };
+struct RbRung { uint32_t bb, sm; bool quad; bool arena; bool octo; };
 const RbRung* rb_rungs(int& n);
 
 }} // namespace mxbm::gpu

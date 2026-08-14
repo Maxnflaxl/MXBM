@@ -294,6 +294,20 @@ const Kernel kContract[] = {
     { "r3 quad mf arena",       true, {7,6,4,7,3,8,0,1,0,1}, nullptr,    256,  80, 26944,  0, 3, "" },
     { "r4 arena",               true, {6,1,2,2,8,2,0,0,0,1}, nullptr,    256,  46, 22464,  0, 4, "" },
     { "r4 mf arena",            true, {6,1,2,2,8,2,0,1,0,1}, nullptr,    256,  46, 23096,  0, 4, "" },
+    // The octo record. Round 3's side is free -- same kernel, a narrower store, and the
+    // 80-register cliff it already sat on. Round 4's side is where it is paid: rebuilding
+    // six work words from eight leaves costs 46 -> 128 registers, which is EXACTLY the
+    // limit for 2 blocks/SM, so the round halves its residency as well as its input
+    // bytes. That trade is the rung's whole question and it is measured, not assumed.
+    { "r3 quad octo",           true, {7,6,4,7,3,4,0,0,0,0}, nullptr,  256,  80, 26176,  0, 3, "" },
+    { "r3 quad octo mf",        true, {7,6,4,7,3,4,0,1,0,0}, nullptr,  256,  80, 26808,  0, 3, "" },
+    { "r3 quad octo arena",     true, {7,6,4,7,3,4,0,0,0,1}, nullptr,  256,  80, 26304,  0, 3, "" },
+    { "r3 quad octo mf arena",  true, {7,6,4,7,3,4,0,1,0,1}, nullptr,  256,  80, 26944,  0, 3, "" },
+    { "r4 octo arena",          true, {6,1,2,8,4,2,0,0,0,1}, nullptr,  256,  80, 22464, 96, 3,
+      "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM. Left to itself the "
+      "rebuild takes 128 and 2 blocks; MXBM_MB_OCTO asks for the third and ptxas finds it "
+      "with zero spill" },
+    { "r4 octo mf arena",       true, {6,1,2,8,4,2,0,1,0,1}, nullptr,  256,  80, 23096, 88, 3, "" },
     { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0EE", 256, 24, 8196, 0, 6,
       "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound" },
     { "terminal_round (arena)", false, {0,0,0,0,0,0}, "14terminal_roundILb1EE", 256, 24, 8328, 0, 6,

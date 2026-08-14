@@ -341,7 +341,12 @@ enum LMode { LM_EMIT = 1, LM_USE = 2, LM_SEED = 3, LM_RD2 = 4,
              // MXBM_R3_QUAD: round 3's mode. Reads a 24 B quad record and rebuilds; its
              // OUTPUT is byte-identical to LM_EMIT's, so every emit-side branch that
              // names LM_EMIT names this too.
-             LM_RD3 = 7 };
+             LM_RD3 = 7,
+             // The OCTO RECORD: round 4's mode. Reads a 32 B record of eight leaves and
+             // rebuilds the work words, the lead and the leftContrib; its OUTPUT is
+             // byte-identical to LM_USE's, so every emit-side branch that names LM_USE
+             // names this too. Round 3 emits the octo form when its OUTSTR is 4.
+             LM_RD4 = 8 };
 
 // MXBM_ABL_EMIT=R (1..4): skip round R's scattered record payload store. The bucket
 // atomic, the gi atomic, the back-refs, combine and apply_mix ALL still run, so element
@@ -431,7 +436,7 @@ struct RoundArgs {
 template<int INW, int LEAFW, int LMODE, uint32_t FCAP, bool SUBPASS,
          bool MFIRST = (MXBM_MATCH_FIRST != 0), bool ARENA = (MXBM_ARENA != 0)>
 struct RoundShared {
-    static constexpr bool kNeedLead = (LMODE == LM_USE);
+    static constexpr bool kNeedLead = (LMODE == LM_USE || LMODE == LM_RD4);
     static constexpr bool kNarrow6 =
         (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
     static constexpr int  kLws = kNarrow6 ? INW - 1 : INW;
@@ -493,8 +498,9 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                   "IMPB repacks the record; the cp.async raw copy cannot carry it");
     // `lead` is leaf 0 of the element's own prefix, so for every mode that stages real
     // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
-    // exception: its leaf payload is the packed leftContrib, not leaves.
-    constexpr bool kNeedLead = (LMODE == LM_USE);
+    // exception: its leaf payload is the packed leftContrib, not leaves -- and LM_RD4
+    // derives that payload rather than reading it, but stores it in the same place.
+    constexpr bool kNeedLead = (LMODE == LM_USE || LMODE == LM_RD4);
     // Derived, not passed: LM_EMIT is round 3's mode and nothing else uses it, so the
     // launch sites need no new argument.
     constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
@@ -735,6 +741,20 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = l0;          lleaf[pos*LEAFW + 1] = r3_l1(p0);
             lleaf[pos*LEAFW + 2] = r3_l2(p0,p1); lleaf[pos*LEAFW + 3] = r3_l3(p1);
+        } else if constexpr (LMODE == LM_RD4) {
+            // 32 B octo record: two LD.128 where LM_USE reads eight u64. The raw words
+            // go into lwork's own slots, which the rebuild below overwrites with the six
+            // it derives, so this mode costs no shared memory over LM_USE. lwork word 0
+            // carries the key in its low 24 bits both before and after the rebuild, so
+            // the chain build downstream needs no special case.
+            static_assert(INSTR == 4 && INW >= 4, "the octo record is 4 u64 in lwork");
+            const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
+            const ulonglong2 q0 = v[0], q1 = v[1];
+            stw(pos, 0, q0.x); stw(pos, 1, q0.y);
+            stw(pos, 2, q1.x); stw(pos, 3, q1.y);
+            lgi[pos]   = octo_gi(q1.y);
+            llead[pos] = octo_lead(q0.x);          // leaf 0 IS the lead
+            if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
             // INW-generic: this branch serves LM_USE (INW=6) and LM_RAW (INW=7), and
             // hardcoding three ulonglong2 loads silently dropped word 6 for the latter.
@@ -876,6 +896,21 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             bh3::Elem e;
             rebuild_r3(pp, l, e);
             for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+        } else if constexpr (LMODE == LM_RD4) {
+            // Deferred here for the same reason as the two rebuilds above: every lane is
+            // live, and only 1/2^submask_bits of them were in the staging loop. The leaves
+            // are unpacked into registers before the overwrite, so the aliasing on lwork
+            // is only apparent.
+            MXBM_PP_LOAD(pp);
+            uint32_t l[8];
+            octo_leaves(lwork[lwx(pos,0)], lwork[lwx(pos,1)],
+                        lwork[lwx(pos,2)], lwork[lwx(pos,3)], l);
+            bh3::Elem e;
+            rebuild_r4(pp, l, e);
+            const uint64_t lc = octo_contrib(l);   // the leftContrib round 3 did not store
+            for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+            lleaf[pos*LEAFW + 0] = (uint32_t)lc;
+            lleaf[pos*LEAFW + 1] = (uint32_t)(lc >> 32);
         }
 #if MXBM_ABL_TAIL == 2
       }
@@ -910,7 +945,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                 bh3::combine(a, b, LOUT, c);
 
                 uint32_t ctree[9]; uint64_t contribOut = 0;
-                if constexpr (LMODE == LM_USE) {
+                if constexpr (LMODE == LM_USE || LMODE == LM_RD4) {
                     for (int i = 0; i < 8; ++i) ctree[i] = 0u;
                     ctree[8] = lead_of(rightPos);
                     const uint64_t lc = ((uint64_t)lleaf[leftPos*LEAFW+1] << 32)
@@ -924,7 +959,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                                              : lleaf[rightPos*LEAFW + (i - SIN)];
                     if constexpr (LMODE != kAblMix) {
                         bh3::apply_mix(c, ctree, PADN, LOUT);
-                        if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
+                        // The leftContrib round 4 consumes. Under the octo record round 4
+                        // derives it from the same eight leaves, so it is not computed
+                        // here rather than computed and discarded.
+                        if constexpr ((LMODE == LM_EMIT || LMODE == LM_RD3) && OUTSTR != 4) {
                             bh3::Elem z{};
                             bh3::apply_mix(z, ctree, 8u, 288u);
                             contribOut = bh3::rotl64(z.w[0], 40);
@@ -957,7 +995,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         uint64_t f = contribOut;
                         #pragma unroll
                         for (int w = 0; w < 7; ++w) f ^= c.w[w];
-                        constexpr uint32_t NF = (LMODE == LM_USE) ? 9u : SBUILD;
+                        constexpr uint32_t NF = (LMODE == LM_USE || LMODE == LM_RD4) ? 9u : SBUILD;
                         #pragma unroll
                         for (uint32_t i = 0; i < NF; ++i) f ^= (uint64_t)ctree[i];
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
@@ -1028,6 +1066,16 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         st_em(v + 3, make_ulonglong2(c.w[6],
                                    ((uint64_t)cgi << 32) | (uint64_t)ctree[0]));
                         st_em(out_belem + od + 8, ((uint64_t)ctree[1] << 32) | (uint64_t)ctree[0]);
+                    } else if constexpr ((LMODE == LM_EMIT || LMODE == LM_RD3)
+                                         && OUTSTR == 4) {
+                        // THE OCTO RECORD. ctree already holds the eight leaves that
+                        // determine this child, so the six work words, the lead and the
+                        // leftContrib are all derivable and none is stored: 32 B instead
+                        // of 64, in one ST.128 pair.
+                        static_assert(SBUILD == 8, "the octo record is the 8-leaf tree");
+                        ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
+                        st_em(v + 0, make_ulonglong2(octo_w0(ckey, ctree), octo_w1(ctree)));
+                        st_em(v + 1, make_ulonglong2(octo_w2(ctree), octo_w3(ctree, cgi)));
                     } else if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
                         // LM_RD3 differs from LM_EMIT only in how it READ its input; what
                         // round 3 writes for round 4 is byte-identical either way.
