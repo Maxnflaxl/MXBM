@@ -901,26 +901,28 @@ each round reading its input layer once and writing its output layer once:
 
 | stage | compulsory rd | wr | measured rd | wr | excess |
 |---|---|---|---|---|---|
-| entry | — | 268 MB | 5 | 258 MB | −1.9 % |
-| r1 | 268 | 805 | 271 | 796 | −0.6 % |
-| r2 | 537 | 2685 | 543 | 2811 | +4.1 % |
-| r3 | 2416 | 2416 | 2427 | 2398 | −0.2 % |
+| entry | — | 268 MB | 0 | 257 MB | −4.1 % |
+| r1 | 268 | 805 | 271 | 797 | −0.6 % |
+| r2 | 537 | 2416 | 539 | 2399 | −0.5 % |
+| r3 | 2147 | 2416 | 2148 | 2400 | −0.3 % |
 | r4 | 2147 | 805 | 2149 | 802 | −0.1 % |
-| terminal | 537 | — | 539 | 1 | +0.4 % |
-| **total** | | | **13.00 GB** | | **+1.0 %** |
+| terminal | 537 | — | 539 | 2 | +0.7 % |
+| **total** | | | **12.30 GB** | | **−0.4 %** |
 
-Measured traffic is within **1 %** of compulsory: no write amplification, no
-redundant re-reads, nothing left for the cache to save. The 13.0 GB is not waste
-— it is what a 72 B element costs when five rounds each consume a layer and
-produce one. The kernel times sum to **101 %** of the solve, which also rules out
+Every line is now within **0.7 %** of compulsory: no write amplification, no
+redundant re-reads, nothing left for the cache to save. The compulsory column
+includes the two 4 B back-reference stores per child, which is why the write
+figures exceed the record width. Entry's −4.1 % is not a saving — it is ~11 MB of
+its output still sitting dirty in a 48 MB L2 when the kernel ends, billed to the
+next one. The kernel times sum to **101 %** of the solve, which also rules out
 the fourth lead: there is no idle spin between rounds to reclaim.
 
-This is the post-fix profile (`sudo ./cuda/profile.sh`, 2026-07-25). Before
-[the pad was removed](performance-research.md#the-round-2-alignment-pad) the total was **13.51 GB**:
-round 3's read fell by exactly the predicted 268 MB and round 2's write by
-204 MB, the shortfall being the sector granularity of splitting one store stream
-into two. Round 2 is now the only line materially above compulsory, and that
-+4.1 % is the same split — it writes 72 B of record as 64 + 8 to two places.
+`./cuda/profile.sh`, 2026-08-14. The total was 13.51 GB before
+[the pad was removed](performance-research.md#the-round-2-alignment-pad) and 13.00 GB
+after; the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena)
+took it to 12.30 by deleting round 2's side plane. That plane was the last line
+materially above compulsory — round 2 used to write 72 B of record as 64 + 8 to
+two places, and the +4.1 % it cost was the sector granularity of the split.
 
 So the byte count can only fall by making records narrower, and one place was
 found where a record was wider than its own contents ([the round-2 alignment

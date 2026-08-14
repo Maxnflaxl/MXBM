@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Profile the CUDA pipeline and write the report to cuda/ncu_report.txt.
 #
-# Nsight needs GPU counter access, which is admin-restricted by default. Either run this
-# with sudo, or make it permanent (already staged in /etc/modprobe.d/nvidia-profiling.conf)
-# and reboot -- the module cannot be reloaded while the GPU drives the display.
-#
-#   sudo ./cuda/profile.sh
+# Nsight needs GPU counter access, which is admin-restricted by default. Run this with
+# sudo, or lift the restriction permanently with NVreg_RestrictProfilingToAdminUsers=0 in
+# /etc/modprobe.d and reboot -- the module cannot be reloaded while the GPU drives a
+# display. /proc/driver/nvidia/params reports the state as RmProfilingAdminOnly.
 #
 # One solve only (MXBM_CUDA_ITERS=1): ncu replays each launch to collect counters.
 set -u

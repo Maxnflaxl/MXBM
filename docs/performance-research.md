@@ -25,7 +25,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
 | [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
-| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB, the plane had no writer but was still reserved) and the overflow arena ported from probe flag to fit-ladder rung (dense caps + a 65 K-slot pool per set, +1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**; with the availability allowance re-derived from what the driver and our own context actually hold (1 GiB → 640 MiB, measured) that is a 5 GB card that runs where nothing on the ladder used to fit; and **the octo record takes it to 1.90 GiB for +35 %** — round 3's output as its eight leaves, which cascades twice: three of the five back-reference rows go dead (recovery reads the leaves instead of walking down to them, and no gi-to-slot map is needed once round 4 names its parents by slot), and with those rows gone nothing reads a round-2 element's `gi` either, so that record drops 3 u64 to 2 and round 2's atomic is not issued. Six u64 per slot with no field nothing reads — this design's floor — and it clears BeamHash III's stated 3 GB minimum and the card class behind it; **the stock per-stage profile re-taken on the shipping kernels** — 32.39 ms attributed, and the implicit-bits record's 1.5 ms lands where its mechanism says (r2 −0.94, r3 −0.52, nothing else past 0.06); and **the octo record's two halves priced apart** — round 4's rebuild is a flat **+16 ms** whether round 3 hands it the packed record or the quad one, so the bundled +38 % and the packed-input +49 % are one constant over two baselines: a reach lever that can never be a speed lever; and **the solutions-per-solve multiplier is the algorithm's, not the solver's** — nothing is dropped (all four counters zero over 1,892 consecutive solves, the chain walk's 64-step cap included), nothing invalid is produced (56,781 of 56,783 candidates verify over 28,305 solves, the 2 being inherent duplicate-index), and `bb + sm + 7 = 24` makes the partition incapable of separating a colliding pair. Pinned at **2.006 ± 0.008** against a theoretical 2, which corrects the 1.98 this ledger quoted and moves the reference miner's solve time from 36 to **37.9 ms** |
+| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB, the plane had no writer but was still reserved) and the overflow arena ported from probe flag to fit-ladder rung (dense caps + a 65 K-slot pool per set, +1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**; with the availability allowance re-derived from what the driver and our own context actually hold (1 GiB → 640 MiB, measured) that is a 5 GB card that runs where nothing on the ladder used to fit; and **the octo record takes it to 1.90 GiB for +35 %** — round 3's output as its eight leaves, which cascades twice: three of the five back-reference rows go dead (recovery reads the leaves instead of walking down to them, and no gi-to-slot map is needed once round 4 names its parents by slot), and with those rows gone nothing reads a round-2 element's `gi` either, so that record drops 3 u64 to 2 and round 2's atomic is not issued. Six u64 per slot with no field nothing reads — this design's floor — and it clears BeamHash III's stated 3 GB minimum and the card class behind it; **the stock per-stage profile re-taken on the shipping kernels** — 32.39 ms attributed, and the implicit-bits record's 1.5 ms lands where its mechanism says (r2 −0.94, r3 −0.52, nothing else past 0.06); and **the octo record's two halves priced apart** — round 4's rebuild is a flat **+16 ms** whether round 3 hands it the packed record or the quad one, so the bundled +38 % and the packed-input +49 % are one constant over two baselines: a reach lever that can never be a speed lever; and **the solutions-per-solve multiplier is the algorithm's, not the solver's** — nothing is dropped (all four counters zero over 1,892 consecutive solves, the chain walk's 64-step cap included), nothing invalid is produced (56,781 of 56,783 candidates verify over 28,305 solves, the 2 being inherent duplicate-index), and `bb + sm + 7 = 24` makes the partition incapable of separating a colliding pair. Pinned at **2.006 ± 0.008** against a theoretical 2, which corrects the 1.98 this ledger quoted and moves the reference miner's solve time from 36 to **37.9 ms**; and **the stock census re-taken on the shipping kernels** — `sm__throughput` turns out to BE the integer pipe (identical to two decimals in every round), so the currency is ALU-pipe slots on a half-width INT32 unit: entry is at 98.7 % of it, r1+r2 at 76–78 % with issue slots only half busy, r3+r4 at 76.5/82.7 % of DRAM peak with traffic now exactly compulsory (12.30 GB, every line within 0.7 %). The barrier is top stall in round 2 as well as round 1, which falsifies the earlier census's premise for the warp-specialization closure without changing its verdict — four resident blocks keep the SM issuing while one waits |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -5037,6 +5037,62 @@ Three explanations are already excluded, each by measurement:
 The one structural difference left unexplored: under octo, set 0's stride is 2, so round 2
 and round 4 write the same addresses, where in every shipping configuration they do not
 (3 against 2). Nothing has yet shown that to be the mechanism.
+
+</details>
+
+### The stock census on the shipping kernels: every round is against a roofline
+<details>
+<summary>Details</summary>
+
+The previous hardware census was taken at base clock on the pre-implicit-bits build, and
+its conclusions are quoted throughout this ledger. Re-taken at stock on the shipping
+kernels (`./cuda/profile.sh`, two passes, 2026-08-14). Cross-instrument gate: the ncu
+durations sum to 32.06 ms against the marginal-replay attribution's 32.39, agreeing per
+stage within 1–3 %.
+
+| | entry | r1 | r2 | r3 | r4 | term |
+|---|---|---|---|---|---|---|
+| duration (ms) | 2.57 | 5.01 | 8.98 | 9.07 | 5.45 | 0.98 |
+| instructions (M) | 1083 | 1901 | **3330** | 1120 | 716 | 272 |
+| issue slots busy % | 59.9 | 55.2 | 53.4 | 18.2 | 19.7 | 43.1 |
+| pipe ALU % | **98.7** | **76.4** | **78.3** | 17.9 | 17.7 | 28.0 |
+| pipe FMA % | 9.6 | 8.3 | 8.8 | 3.8 | 2.9 | 4.0 |
+| pipe LSU % | 3.3 | 30.2 | 21.2 | 22.6 | 27.3 | 60.4 |
+| DRAM % of peak | 15.3 | 32.5 | 49.9 | **76.5** | **82.7** | 84.0 |
+| threads/warp | 32.0 | 23.4 | 24.8 | 12.7 | 14.1 | 19.2 |
+| eligible warps/sched | 5.45 | 2.53 | 2.18 | 0.27 | 0.29 | 0.66 |
+| top stall | math 43 % | barrier 31 % | barrier 28 % | long sb 45 % | long sb 45 % | long sb 39 % |
+
+**`sm__throughput` IS the integer pipe.** For every round the SM-throughput figure and the
+ALU-pipe figure are the same number to two decimals (78.29 for round 2). On Ada a
+sub-partition has 32 FP32 lanes and 16 INT32, so integer ops issue at half rate — and this
+solver is integer end to end. That is the sharper form of the ledger's "only count is a
+currency": the currency is specifically **ALU-pipe slots**, and they are the top SM
+sub-unit in every round that is not DRAM-bound.
+
+The solve splits three ways, and each part is against something:
+
+- **entry (8 %) is at the ALU roofline**, 98.7 %. Pure siphash, 32 threads/warp, nothing
+  else running. There is no headroom here at all.
+- **r1 + r2 (45 %) are ALU-pipe-bound** at 76–78 %, with issue slots only half busy.
+  Round 2 alone executes 3.33 G of the solve's 8.42 G instructions, roughly two thirds of
+  which is the re-derivation of its two seed indices.
+- **r3 + r4 (45 %) are at the memory roofline**, 76.5 % and 82.7 % of DRAM peak, with the
+  ALU pipe idle at 18 % — and their traffic is exactly compulsory (see
+  [the traffic table](performance.md#the-memory-traffic-is-compulsory)), so there are no
+  bytes left to remove short of the octo record, which costs a flat 16 ms.
+
+**A correction to the earlier census's stall reading, which does not change its verdict.**
+That census recorded the CTA barrier as the top stall *only* in round 1, with r2/r3/r4
+long-scoreboard-bound, and that sentence is the stated premise of the warp-specialization
+closure. On the current build the barrier is also the top stall in round 2 (27.9 %, above
+math at 19.8 % and long scoreboard at 11.3 %). The premise is therefore wrong for round 2
+— but the closure survives on better evidence: with four resident blocks the SM issues
+from the other three while one waits, which is why round 2 reaches 78 % ALU-pipe occupancy
+*despite* a 28 % barrier stall. The barrier is a warp-level wait, not a lost SM cycle,
+which is exactly what the kWG-288 kill test measured from the other side (+0.4 % at stock).
+Only three barriers per pass are unconditional; the spill block's are inside a
+group-uniform condition the common path skips.
 
 </details>
 
