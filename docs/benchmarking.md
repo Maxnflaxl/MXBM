@@ -118,7 +118,7 @@ headless**):
 | ms/solve median | **32.00** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
 | sol/s | **62.70** — all six runs (spread 0.0 %) | derived from the above; quoted because the pin is what the headline cites |
 | SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
-| board draw | **272.9 W** (spread 0.3 %) | context, not a gate — it has read 273–281 W across four sessions at identical clocks, times and solve counts |
+| board draw | **272.9 W** (spread 0.3 %) | context, not a gate — it has read 273–281 W across five sessions at identical clocks, times and solve counts, the last two agreeing to the decimal |
 | `clocks_event_reasons` | none, or `sw_power_cap` on any fraction of samples | any **other** flag voids the run. The fraction has read 0 %, 0–3 %, 14–18 % and 0 % again on four sessions that agreed on ms/solve to the digit, so it is not predictive and is not a gate |
 | display on the compute GPU | **no** — monitor on the motherboard iGPU | a compositor on this card costs **0.20 ms and ~6 W** (measured) |
 
@@ -134,6 +134,7 @@ Lineage, most recent first — the number belongs to a build *and* a rig, the
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
+| 2026-08-14 `6338600` | **32.00** | 272.9 W | **nothing at stock** — the day's last two kernel changes (three back-reference rows retired, `gi` dropped from round 2's record) are both selected only on the octo rungs, which the stock config does not pick. Fourth pin of the day, fourth 32.00 / 62.70 with 0.0 % spread. The draw reproduces the previous pin **to the decimal** at identical clocks and identical work — the first time two sessions have agreed on it, which is what the draw column is for |
 | 2026-08-14 `4882613` | **32.00** | 272.9 W | **nothing at stock** — the octo record adds kernel instantiations that only the bottom three rungs launch, and the occupancy contract reports no drift on any shipping kernel. Third pin of the day, third 32.00 / 62.70 with 0.0 % spread. Fourth distinct draw reading at identical work (273 W, `sw_power_cap` absent), which is why the gate row no longer names a fraction |
 | 2026-08-14 `6f266c7` | **32.00** | 279.9 W | **nothing at stock, again as designed** — the day's work was reach (implicit-bits allocation reclaim, the overflow-arena rung, the availability allowance), and the stock config selects none of the new rungs. 32.00 ms and 62.70 sol/s on all six runs, spread 0.0 %. The draw sits between the two previous pins and `sw_power_cap` is back to 14–18 % of samples where the morning's run showed 0–3 %, with time identical in both: the fraction is a rig-day reading, not a build property, and the gate row above was widened to say so |
 | 2026-08-14 `41bf676` | **32.00** | 274.1 W | **nothing at stock, as designed** — the pack is selected only under the low-power gate and its (16,1) build is SASS-identical, so this run is a re-take under the kernel-shipping-day rule rather than a new number. Time, clocks and solve count reproduce to the digit six runs out of six. The draw is **7.3 W lower** than the 08-13 pin at identical clocks and identical work, with `sw_power_cap` now rare where it was ~20 % of samples; nothing in the build accounts for it, so it is recorded as a rig-day difference and **not** attributed to the change |
