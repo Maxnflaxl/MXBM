@@ -454,14 +454,15 @@ struct RoundShared {
     uint32_t gcount;
     uint32_t cnt8[MXBM_SPILL ? 8 : 1];
     uint8_t  skey[SUBPASS ? kSKey : 1];
-    // This bucket's pool entries, chain-walked once. Zero-length off the arena rungs so
-    // a non-arena kernel's shared total is byte-for-byte what it was -- round 1 sits
-    // 448 B under a resident-block cliff, which a few bytes here would cost it.
-    uint16_t aidx[ARENA ? kAMax : 0];
-    uint32_t acnt[ARENA ? 1 : 0];
+    // This bucket's pool entries, chain-walked once. One element rather than zero off
+    // their rungs, matching the other placeholders here: a zero-length member is a GNU
+    // extension MSVC rejects. Costs 8 B where the mode is off, which no round's
+    // resident-block cliff notices -- test_cuda_resources holds every one of them.
+    uint16_t aidx[ARENA ? kAMax : 1];
+    uint32_t acnt[1];
     // Where each staged element was read from. LM_RD4 only: its back-references name a
     // parent by slot rather than by gi -- see recover() in pipeline_kernels.cuh.
-    uint32_t lslot[LMODE == LM_RD4 ? FCAP : 0];
+    uint32_t lslot[LMODE == LM_RD4 ? FCAP : 1];
 };
 
 // The round body, extracted so a kernel can run DIFFERENT rounds in different blocks of

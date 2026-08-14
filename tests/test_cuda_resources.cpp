@@ -213,52 +213,54 @@ struct Kernel {
 // Shared figures re-baselined 2026-07-31 for the RoundShared refactor (the arrays moved
 // into one struct so fused_pair can union two rounds' layouts): each round pays +12-20 B
 // for the struct's 1-sized placeholder members plus padding, blocks/SM unchanged on
-// every kernel and registers unchanged or lower (r4 47 -> 46).
+// every kernel and registers unchanged or lower (r4 47 -> 46). Re-baselined again
+// 2026-08-14 when the arena and LM_RD4 scratch joined that convention: +8 B on the 34
+// rows where their mode is off, registers, stack and blocks/SM unchanged on all of them.
 const Kernel kContract[] = {
     // name                    tmpl   INW OUT LEAF LM IN OUT   token                wg  reg   smem stk min
     { "entry_scatter",         false, {0,0,0,0,0,0}, "13entry_scatterE",  256,  40,     0,  0, 6,
       "ON A CLIFF: 40 registers is EXACTLY the limit for 6 blocks/SM. Measured at 6 "
       "blocks/SM standalone (docs/performance-research.md:951); the pass costs 2.77 ms" },
-    { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2,0,0,0,0,1}, nullptr,             256,  48, 19008,  0, 5,
-      "ON TWO CLIFFS: 48 registers of 48 AND 19008 B of 19456. r1's fifth block is "
+    { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2,0,0,0,0,1}, nullptr,             256,  48, 19016,  0, 5,
+      "ON TWO CLIFFS: 48 registers of 48 AND 19016 B of 19456. r1's fifth block is "
       "worth 0.15 ms (docs/performance-research.md:1719)" },
-    { "r2 (packed record)",     true, {7,7,2,4,2,8,0,0,0,0,1}, nullptr,             256,  64, 23616,  0, 4,
+    { "r2 (packed record)",     true, {7,7,2,4,2,8,0,0,0,0,1}, nullptr,             256,  64, 23624,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM. r1 and r2 "
       "crossing 3 -> 4 together was worth 1.13 ms (docs/performance-research.md:1609)" },
-    { "r2 (quad record)",       true, {7,7,2,4,2,3,0,0,0,0,1}, nullptr,             256,  64, 23616,  0, 4,
+    { "r2 (quad record)",       true, {7,7,2,4,2,3,0,0,0,0,1}, nullptr,             256,  64, 23624,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM" },
-    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  56, 26176,  0, 3,
+    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  56, 26184,  0, 3,
       "shared-bound at 3 blocks; r3 does not want a fourth "
       "(docs/performance-research.md:1731-1745)" },
-    { "r3 (quad record)",       true, {7,6,4,7,3,8,0,0,0,0,1}, nullptr,             256,  80, 26176,  0, 3,
+    { "r3 (quad record)",       true, {7,6,4,7,3,8,0,0,0,0,1}, nullptr,             256,  80, 26184,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
-    { "r4 (LM_USE)",            true, {6,1,2,2,8,2,0,0,0,0,1}, nullptr,             256,  46, 22328,  0, 4, "" },
+    { "r4 (LM_USE)",            true, {6,1,2,2,8,2,0,0,0,0,1}, nullptr,             256,  46, 22336,  0, 4, "" },
     // The match-first variants: same rounds, chain built at staging so the rebuild can
     // skip the elements no walk reads. mlist costs ~640 B of shared per round, which is
     // what takes r1 off its fifth block -- the reason the variant is selected only in
     // the low-power band. See docs/performance-research.md.
-    { "r1 match-first",         true, {7,7,1,3,1,2,0,1,0,0,1}, nullptr,         256,  64, 19584,  0, 4,
+    { "r1 match-first",         true, {7,7,1,3,1,2,0,1,0,0,1}, nullptr,         256,  64, 19592,  0, 4,
       "the fifth block is GONE (5 -> 4): mlist's 640 B crosses r1's 19456 B line, and "
       "registers go 48 -> 64 with it" },
-    { "r2 match-first",         true, {7,7,2,4,2,8,0,1,0,0,1}, nullptr,         256,  64, 24248,  0, 4, "" },
-    { "r2 implicit-bits",       true, {7,7,2,4,2,8,0,0,16,0,1}, nullptr,       256,  64, 23616,  0, 4,
+    { "r2 match-first",         true, {7,7,2,4,2,8,0,1,0,0,1}, nullptr,         256,  64, 24256,  0, 4, "" },
+    { "r2 implicit-bits",       true, {7,7,2,4,2,8,0,0,16,0,1}, nullptr,       256,  64, 23624,  0, 4,
       "the packed stores fold the repack; resources identical to the base record, "
       "still exactly on the 64-register cliff" },
-    { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,16,0,1}, nullptr,       256,  64, 24248,  0, 4, "" },
-    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,16,0,1}, nullptr,       256,  56, 26176,  0, 3, "" },
-    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,16,0,1}, nullptr,       256,  56, 26808,  0, 3, "" },
+    { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,16,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
+    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,16,0,1}, nullptr,       256,  56, 26184,  0, 3, "" },
+    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,16,0,1}, nullptr,       256,  56, 26816,  0, 3, "" },
     // The (17,0) pack: same code with 17 address-implied bits, selected under the
     // low-power gate. Resources identical to the 16-bit pack on every variant --
     // r2 stays exactly on the 64-register cliff.
-    { "r2 implicit-bits 17",    true, {7,7,2,4,2,8,0,0,17,0,1}, nullptr,       256,  64, 23616,  0, 4, "" },
-    { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17,0,1}, nullptr,       256,  64, 24248,  0, 4, "" },
-    { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17,0,1}, nullptr,       256,  56, 26176,  0, 3, "" },
-    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17,0,1}, nullptr,       256,  56, 26808,  0, 3, "" },
-    { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1,0,0,1}, nullptr,         256,  64, 24248,  0, 4, "" },
-    { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  56, 26808,  0, 3, "" },
-    { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1,0,0,1}, nullptr,         256,  80, 26808,  0, 3, "" },
-    { "r4 match-first",         true, {6,1,2,2,8,2,0,1,0,0,1}, nullptr,         256,  46, 22968,  0, 4, "" },
-    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,2,1,0,0,0,1}, nullptr,           256,  64, 22328,  0, 4,
+    { "r2 implicit-bits 17",    true, {7,7,2,4,2,8,0,0,17,0,1}, nullptr,       256,  64, 23624,  0, 4, "" },
+    { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
+    { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17,0,1}, nullptr,       256,  56, 26184,  0, 3, "" },
+    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17,0,1}, nullptr,       256,  56, 26816,  0, 3, "" },
+    { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1,0,0,1}, nullptr,         256,  64, 24256,  0, 4, "" },
+    { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  56, 26816,  0, 3, "" },
+    { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1,0,0,1}, nullptr,         256,  80, 26816,  0, 3, "" },
+    { "r4 match-first",         true, {6,1,2,2,8,2,0,1,0,0,1}, nullptr,         256,  46, 22976,  0, 4, "" },
+    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,2,1,0,0,0,1}, nullptr,           256,  64, 22336,  0, 4,
       "ON A CLIFF: hosting the speculative entry pass costs 18 registers (46 -> 64), "
       "landing EXACTLY on the 4-blocks/SM limit. One more and the whole launch -- the "
       "round AND the co-scheduled entry -- drops to 3 blocks" },
@@ -274,26 +276,26 @@ const Kernel kContract[] = {
     { "r1 arena",               true, {7,7,1,3,1,2,0,0,0,1,1}, nullptr,    256,  48, 19144,  0, 5,
       "STILL ON BOTH CLIFFS: 48 registers of 48, 19144 B of 19456 -- the pool's shared "
       "list fits in r1's 448 B of headroom and the fifth block survives" },
-    { "r1 mf arena",            true, {7,7,1,3,1,2,0,1,0,1,1}, nullptr,    256,  64, 19712,  0, 4, "" },
-    { "r2 arena",               true, {7,7,2,4,2,8,0,0,0,1,1}, nullptr,    256,  64, 23744,  0, 4, "" },
+    { "r1 mf arena",            true, {7,7,1,3,1,2,0,1,0,1,1}, nullptr,    256,  64, 19720,  0, 4, "" },
+    { "r2 arena",               true, {7,7,2,4,2,8,0,0,0,1,1}, nullptr,    256,  64, 23752,  0, 4, "" },
     { "r2 mf arena",            true, {7,7,2,4,2,8,0,1,0,1,1}, nullptr,    256,  64, 24384,  0, 4, "" },
-    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  60, 26304,  0, 3, "" },
+    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  60, 26312,  0, 3, "" },
     { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1,1}, nullptr,    256,  60, 26944,  0, 3, "" },
-    { "r2 implicit-bits arena", true, {7,7,2,4,2,8,0,0,16,1,1}, nullptr,   256,  64, 23744,  0, 4, "" },
+    { "r2 implicit-bits arena", true, {7,7,2,4,2,8,0,0,16,1,1}, nullptr,   256,  64, 23752,  0, 4, "" },
     { "r2 implicit-bits mf arena", true, {7,7,2,4,2,8,0,1,16,1,1}, nullptr,256,  64, 24384,  0, 4, "" },
-    { "r3 implicit-bits arena", true, {7,6,4,1,8,8,0,0,16,1,1}, nullptr,   256,  58, 26304,  0, 3, "" },
+    { "r3 implicit-bits arena", true, {7,6,4,1,8,8,0,0,16,1,1}, nullptr,   256,  58, 26312,  0, 3, "" },
     { "r3 implicit-bits mf arena", true, {7,6,4,1,8,8,0,1,16,1,1}, nullptr,256,  58, 26944,  0, 3, "" },
-    { "r2 implicit-bits 17 arena", true, {7,7,2,4,2,8,0,0,17,1,1}, nullptr,256,  64, 23744,  0, 4, "" },
+    { "r2 implicit-bits 17 arena", true, {7,7,2,4,2,8,0,0,17,1,1}, nullptr,256,  64, 23752,  0, 4, "" },
     { "r2 implicit-bits 17 mf arena", true, {7,7,2,4,2,8,0,1,17,1,1}, nullptr, 256, 64, 24384, 0, 4, "" },
-    { "r3 implicit-bits 17 arena", true, {7,6,4,1,8,8,0,0,17,1,1}, nullptr,256,  58, 26304,  0, 3, "" },
+    { "r3 implicit-bits 17 arena", true, {7,6,4,1,8,8,0,0,17,1,1}, nullptr,256,  58, 26312,  0, 3, "" },
     { "r3 implicit-bits 17 mf arena", true, {7,6,4,1,8,8,0,1,17,1,1}, nullptr, 256, 58, 26944, 0, 3, "" },
-    { "r2 quad arena",          true, {7,7,2,4,2,3,0,0,0,1,1}, nullptr,    256,  64, 23744,  0, 4, "" },
+    { "r2 quad arena",          true, {7,7,2,4,2,3,0,0,0,1,1}, nullptr,    256,  64, 23752,  0, 4, "" },
     { "r2 quad mf arena",       true, {7,7,2,4,2,3,0,1,0,1,1}, nullptr,    256,  64, 24384,  0, 4, "" },
-    { "r3 quad arena",          true, {7,6,4,7,3,8,0,0,0,1,1}, nullptr,    256,  80, 26304,  0, 3,
+    { "r3 quad arena",          true, {7,6,4,7,3,8,0,0,0,1,1}, nullptr,    256,  80, 26312,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
     { "r3 quad mf arena",       true, {7,6,4,7,3,8,0,1,0,1,1}, nullptr,    256,  80, 26944,  0, 3, "" },
     { "r4 arena",               true, {6,1,2,2,8,2,0,0,0,1,1}, nullptr,    256,  46, 22464,  0, 4, "" },
-    { "r4 mf arena",            true, {6,1,2,2,8,2,0,1,0,1,1}, nullptr,    256,  46, 23096,  0, 4, "" },
+    { "r4 mf arena",            true, {6,1,2,2,8,2,0,1,0,1,1}, nullptr,    256,  46, 23104,  0, 4, "" },
     // The octo record. Round 3's side is free -- same kernel, a narrower store, and the
     // 80-register cliff it already sat on; its rows are all no-refs, below. Round 4's side is where it is paid: rebuilding
     // six work words from eight leaves costs 46 -> 128 registers, which is EXACTLY the
@@ -310,11 +312,11 @@ const Kernel kContract[] = {
     // one -- r1 keeps its fifth block, r2 its fourth, r3 its third -- so what the two
     // deleted stores per element buy is traffic, not occupancy.
     { "r1 arena no-refs",       true, {7,7,1,3,1,2,0,0,0,1,0}, nullptr,  256,  48, 19144,  0, 5, "" },
-    { "r1 mf arena no-refs",    true, {7,7,1,3,1,2,0,1,0,1,0}, nullptr,  256,  64, 19712,  0, 4, "" },
-    { "r2 quad16 arena no-refs", true, {7,7,2,4,2,2,0,0,0,1,0}, nullptr, 256,  64, 23744,  0, 4,
+    { "r1 mf arena no-refs",    true, {7,7,1,3,1,2,0,1,0,1,0}, nullptr,  256,  64, 19720,  0, 4, "" },
+    { "r2 quad16 arena no-refs", true, {7,7,2,4,2,2,0,0,0,1,0}, nullptr, 256,  64, 23752,  0, 4,
       "the gi-less 16 B quad record: same kernel, one u64 less stored, and the same 64-\n      register cliff" },
     { "r2 quad16 mf arena no-refs", true, {7,7,2,4,2,2,0,1,0,1,0}, nullptr, 256, 64, 24384, 0, 4, "" },
-    { "r3 quad16 octo no-refs", true, {7,6,4,7,2,4,0,0,0,1,0}, nullptr,  256,  80, 26304,  0, 3, "" },
+    { "r3 quad16 octo no-refs", true, {7,6,4,7,2,4,0,0,0,1,0}, nullptr,  256,  80, 26312,  0, 3, "" },
     { "r3 quad16 octo mf no-refs", true, {7,6,4,7,2,4,0,1,0,1,0}, nullptr, 256, 80, 26944,  0, 3, "" },
     { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0EE", 256, 24, 8196, 0, 6,
       "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound" },
