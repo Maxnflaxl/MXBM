@@ -585,8 +585,8 @@ recommendation derived from it — run `sudo mxbm --tune` once
 **Running capped below ~170 W? Drop the memory clock too.** Under a low cap the
 GDDR interface burns watts for bandwidth the slowed core cannot use; on the reference
 card the 5001 MHz rung returns them as core clock — **8–14 % more sol/s at the same
-wall power** between 100 and 160 W, and the best efficiency the card has ever measured
-(3.79 J/solution at 160 W). Pair the two through the miner itself — one command, and
+wall power** between 100 and 160 W, and the best efficiency the card has ever
+measured (**3.70 J/solution** at 160 W). Pair the two through the miner itself — one command, and
 both settings are restored when it exits:
 
 ```sh

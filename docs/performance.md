@@ -713,16 +713,20 @@ Two other candidates died in the same week:
   so `ptxas` lowers `mad.lo.cc.u32` to `IMAD.IADD` **plus** a carry-synthesising `LEA`,
   and the ALU pipe gets *busier* (`entry_scatter` 855 → 876). The surviving rotate-only
   form is ≈0.18 ms, under the 1 %-of-a-solve floor.
-- **Undervolting.** Not testable on the reference machine: the benchmark card drives the
-  display, so an unstable offset corrupts the screen before it corrupts a solve, and the
-  KAT gate cannot catch a failure that arrives ahead of it. See
-  [overclocking.md](overclocking.md).
+- **Undervolting.** Untestable at the time, because the benchmark card drove the display.
+  It became testable when the monitor moved to the motherboard iGPU and was then
+  [measured and closed](performance-research.md#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs):
+  null under every cap, because the power governor outranks the clock lock.
 
-**The practical conclusion.** MXBM's advantage is a band: **lolMiner below ~210 W, MXBM
-between ~210 W and ~256 W, and MXBM alone above it** at a ceiling lolMiner cannot reach at
-any setting (59.05 sol/s against ~54.0). Recommending MXBM for a rig capped below 210 W is
-not supportable on this hardware. **Effort belongs on goals 2 and 3**, where the pipeline
-runs at 57 % of its 19.8 ms floor and rounds 1 and 2 hold 65 % of the gap.
+**The practical conclusion, and what has since moved.** MXBM's advantage is a band:
+lolMiner below the crossing, MXBM between the crossings, and MXBM alone above the upper
+one at a ceiling lolMiner cannot reach at any setting. That shape still holds; the figures
+in it do not. On the current kernels the band is **~210 W to ~277 W** and the ceiling
+**62.8 sol/s against ~54.0** — see
+[both miners under the same cap](#both-miners-under-the-same-cap), which is the live
+table. The low-end verdict has moved furthest: "not supportable below 210 W" was true of
+the 07-29 build, and the gap there is now **−6 to −12 %** once both miners run their best
+low-power configuration.
 
 *Reopening: a no-replay 180 W A/B putting the whole-solve rate materially above
 92 MHz/GB; a narrowing worth more than 1.07 GB; or a machine where the compute GPU does
