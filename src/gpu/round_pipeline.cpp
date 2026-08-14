@@ -133,7 +133,7 @@ bool compact_active();   // defined below; gates the compacted sort path
 // synthetic Budgets) only honors an explicit force. MXBM_BB / MXBM_SM override.
 // `quad` rides along because it is a second axis of the same ladder, not a tuning
 // knob: it changes the record format, hence the strides, hence the allocation.
-struct RbGeom { uint32_t bb, sm; bool quad; };
+struct RbGeom { uint32_t bb, sm; bool quad; bool arena; };
 
 // `usable` is the budget's free-derived figure (driver free less gpu/budget.h's
 // reserve), which is what rowbucket_viable checks against; the ladder has to answer
@@ -149,7 +149,8 @@ static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity, uint64_t usable) 
         // CudaSolver::pick_geometry does, and let an explicit MXBM_SM override it.
         const uint32_t bb = rb_bucket_bits();
         const uint32_t sm = std::getenv("MXBM_SM") ? rb_submask_bits() : (17u - bb);
-        return { bb, sm, std::getenv("MXBM_QUAD") != nullptr };
+        return { bb, sm, std::getenv("MXBM_QUAD") != nullptr,
+                 std::getenv("MXBM_ARENA") != nullptr };
     }
     const DeviceInfo& d = rt.device();
     // allow_quad: the OpenCL row-bucket kernels now carry the 24 B quad record
@@ -162,12 +163,17 @@ static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity, uint64_t usable) 
     // (fb_elem_hi) -- what took the OpenCL floor from 11 GB to CUDA's ~5.7 GiB.
     const uint64_t mem   = usable ? usable : (uint64_t)d.global_mem;
     const uint64_t slack = usable ? 0ull   : ((uint64_t)1 << 30);
+    // allow_arena: dense per-bucket caps plus an overflow pool per record set
+    // (LDS_ARENA in lds.cl). A rung, not a default -- it costs time for ~22 % of the
+    // slots, so the ladder only reaches for it when the rows above do not fit.
     const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, mem,
                                          /*allow_quad=*/true, 0, /*allow_split=*/true,
-                                         slack);
-    // MXBM_QUAD forces the record format on a card that would not otherwise need it,
-    // which is the only way to exercise this path on a 16 GB device.
-    return { g.bb, g.sm, g.quad || std::getenv("MXBM_QUAD") != nullptr };
+                                         slack, /*allow_impb=*/false,
+                                         /*allow_arena=*/true);
+    // MXBM_QUAD / MXBM_ARENA force a format a card would not otherwise need, which is
+    // the only way to exercise those paths on a 16 GB device.
+    return { g.bb, g.sm, g.quad || std::getenv("MXBM_QUAD") != nullptr,
+             g.arena || std::getenv("MXBM_ARENA") != nullptr };
 }
 
 bool rowbucket_viable(Runtime& rt, const Budget& b) {
@@ -183,11 +189,11 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
     const RbGeom g = rb_pick_geometry(rt, capacity, b.usable);
     size_t total = 0, single = 0;
-    rowbucket_bytes(capacity, g.bb, total, single, g.quad);
+    rowbucket_bytes(capacity, g.bb, total, single, g.quad, false, g.arena);
     // max_alloc binds on the split figure when smaller. Checked here too, not just
     // in rb_geometry_for: MXBM_BB/MXBM_SM bypass the ladder yet still get the split.
     size_t bind = single;
-    { const size_t s = rowbucket_single_split(capacity, g.bb, g.quad);
+    { const size_t s = rowbucket_single_split(capacity, g.bb, g.quad, false, g.arena);
       if (s < bind) bind = s; }
     if (bind > (size_t)d.max_alloc) return false;
     // Against the budget's usable figure -- free VRAM less the reserve (gpu/budget.h)
@@ -202,11 +208,16 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
 // flat work[]/leaves[]/sort scratch (the buckets ARE the resident storage). Sized
 // so bucketDrops==0 at 2^25 (cap ~1.75x mean).
 static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
-                                uint32_t bb, uint32_t sm, bool quad) {
+                                uint32_t bb, uint32_t sm, bool quad, bool arena = false) {
     p.fb_num_buckets  = 1u << bb;
     p.fb_submask_bits = sm;
-    p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets);
+    p.fb_bucket_cap = fb_cap_for(p.capacity / p.fb_num_buckets,
+                                 arena ? kRbDenseSigma : kRbCapSigma);
     p.fb_quad = quad;
+    p.fb_arena = arena;
+    // The pool is split between the two halves, so the total matches what the footprint
+    // arithmetic budgeted whether or not the set ends up split.
+    p.fb_arena_cap = arena ? kRbArenaSlots / 2 : 0u;
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     const uint64_t maxAlloc = rt.device().max_alloc;
     const bool forceSplit = std::getenv("MXBM_SPLIT") != nullptr;
@@ -216,12 +227,15 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
         // fb_side so every record access is 16 B aligned. Slot cost stays 9 u64
         // (rowbucket_bytes' figure), split 8 + 1.
         if (i == 0 && !quad) p.fb_stride[i] = 8u;
-        const size_t bytes = nslots * p.fb_stride[i] * 8;
+        // Each buffer carries its half's pool region behind the bucket records, which
+        // is what lets one slot index address both.
+        const size_t pool = (size_t)p.fb_arena_cap * p.fb_stride[i] * 8;
+        const size_t bytes = nslots * p.fb_stride[i] * 8 + pool;
         // A set the driver's single-allocation cap refuses whole goes in as two
         // bucket-halves; the kernels select by child bucket (fb_half). MXBM_SPLIT
         // forces it, which is how the 16 GB dev rig exercises this path at all.
         if (forceSplit || (maxAlloc != 0 && bytes > (size_t)maxAlloc)) {
-            const size_t halfBytes = (nslots / 2) * p.fb_stride[i] * 8;
+            const size_t halfBytes = (nslots / 2) * p.fb_stride[i] * 8 + pool;
             p.fb_elem[i]    = rt.alloc(CL_MEM_READ_WRITE, halfBytes);
             p.fb_elem_hi[i] = rt.alloc(CL_MEM_READ_WRITE, halfBytes);
             p.fb_half[i]    = p.fb_num_buckets / 2;
@@ -231,7 +245,14 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
             p.fb_half[i]    = p.fb_num_buckets;
         }
         p.fb_counts[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
+        if (arena) {
+            p.fb_ahead[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_num_buckets * 4);
+            p.fb_anext[i] = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_arena_cap * 2 * 4);
+            p.fb_atag[i]  = rt.alloc(CL_MEM_READ_WRITE, (size_t)p.fb_arena_cap * 2 * 4);
+            p.fb_actr[i]  = rt.alloc(CL_MEM_READ_WRITE, 2 * 4);
+        }
     }
+    if (arena) { p.fb_spill = rt.alloc(CL_MEM_READ_WRITE, 4); rt.fill_u32(p.fb_spill.get(), 0u, 1); }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
     if (!quad) p.fb_side = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
     // Consolidated back-ref rows for recover. Rows 1-4 are gi-indexed and need full
@@ -249,8 +270,9 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
     auto touch = [&](const Mem& m, size_t bytes) { if (m) rt.fill_u32(m.get(), 0u, bytes / 4); };
     for (int i = 0; i < 2; ++i) {
         const size_t nsl = (p.fb_half[i] == p.fb_num_buckets) ? nslots : nslots / 2;
-        touch(p.fb_elem[i], nsl * p.fb_stride[i] * 8);
-        touch(p.fb_elem_hi[i], nsl * p.fb_stride[i] * 8);
+        const size_t b = nsl * p.fb_stride[i] * 8 + (size_t)p.fb_arena_cap * p.fb_stride[i] * 8;
+        touch(p.fb_elem[i], b);
+        touch(p.fb_elem_hi[i], b);
     }
     touch(p.fb_side, nslots * 8);
     touch(p.left, backrefBytes); touch(p.right, backrefBytes);
@@ -260,7 +282,10 @@ static void release_rowbucket(PipelineBuffers& p) {
     for (int i = 0; i < 2; ++i) {
         p.fb_elem[i] = Mem(); p.fb_elem_hi[i] = Mem(); p.fb_counts[i] = Mem();
         p.fb_half[i] = 0; p.fb_stride[i] = 0;
+        p.fb_ahead[i] = Mem(); p.fb_anext[i] = Mem();
+        p.fb_atag[i] = Mem(); p.fb_actr[i] = Mem();
     }
+    p.fb_arena = false; p.fb_arena_cap = 0; p.fb_spill = Mem();
     p.fb_gictr = Mem(); p.fb_side = Mem();
     p.left = Mem(); p.right = Mem(); p.counters = Mem();
     p.spec_elem = Mem(); p.spec_counts = Mem(); p.spec_on = false;
@@ -272,6 +297,10 @@ static void release_rowbucket(PipelineBuffers& p) {
 // a lazy allocation cannot fail later, during mining.
 static void alloc_spec_entry(Runtime& rt, PipelineBuffers& p) {
     if (std::getenv("MXBM_NO_SPEC")) return;
+    // Not on an arena rung. The spec set is its own buffer with no pool region behind
+    // it, so at the dense cap a full bucket there would have nowhere to append; giving
+    // it a pool would cost reach on exactly the cards that took this rung to get it.
+    if (p.fb_arena) return;
     const size_t nslots = (size_t)p.fb_num_buckets * p.fb_bucket_cap;
     try {
         p.spec_elem   = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
@@ -286,9 +315,13 @@ static void alloc_spec_entry(Runtime& rt, PipelineBuffers& p) {
 
 static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     const RbGeom g = rb_pick_geometry(rt, p.capacity, b.usable);
-    // An explicit MXBM_BB/MXBM_SM geometry is the user's choice: never stepped down.
-    if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM")) {
-        try_alloc_rowbucket(rt, p, g.bb, g.sm, g.quad);
+    // An explicitly forced geometry or record format is the user's choice: allocate it
+    // as asked and never step down. Without this the ladder re-walk below would look
+    // for a rung matching the forced combination, fail to find one, and quietly hand
+    // back the top rung -- which reads as "the flag did nothing".
+    if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM") ||
+        std::getenv("MXBM_QUAD") || std::getenv("MXBM_ARENA")) {
+        try_alloc_rowbucket(rt, p, g.bb, g.sm, g.quad, g.arena);
         return;
     }
     // The allocator can refuse a rung the arithmetic accepted (a compositor's
@@ -297,14 +330,16 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     const RbRung* rungs = rb_rungs(n);
     int start = 0;
     for (int i = 0; i < n; ++i)
-        if (rungs[i].bb == g.bb && rungs[i].sm == g.sm && rungs[i].quad == g.quad) { start = i; break; }
+        if (rungs[i].bb == g.bb && rungs[i].sm == g.sm && rungs[i].quad == g.quad
+            && rungs[i].arena == g.arena) { start = i; break; }
     for (int i = start; i < n; ++i) {
         // Rungs whose record or bucket machinery this backend does not carry. Skipped
         // by capability rather than by position, so a ladder row added above them
         // cannot be walked into by accident.
-        if (rungs[i].arena || rungs[i].octo) continue;
+        if (rungs[i].octo) continue;
         try {
-            try_alloc_rowbucket(rt, p, rungs[i].bb, rungs[i].sm, rungs[i].quad);
+            try_alloc_rowbucket(rt, p, rungs[i].bb, rungs[i].sm, rungs[i].quad,
+                                rungs[i].arena);
             if (i != start)
                 std::fprintf(stderr, "[mxbm] row-bucket rung (%u,%u)%s refused by the "
                              "allocator; stepped down to (%u,%u)%s\n",
@@ -314,10 +349,12 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
             // the rung is what decides the card's speed.
             else if (i != 0) {
                 size_t tot = 0, sng = 0;
-                rowbucket_bytes(p.capacity, rungs[i].bb, tot, sng, rungs[i].quad);
-                std::fprintf(stderr, "[mxbm] row-bucket rung (%u,%u)%s -- %.2f GiB, "
+                rowbucket_bytes(p.capacity, rungs[i].bb, tot, sng, rungs[i].quad,
+                                false, rungs[i].arena);
+                std::fprintf(stderr, "[mxbm] row-bucket rung (%u,%u)%s%s -- %.2f GiB, "
                              "chosen for %.2f GiB of usable VRAM\n",
                              rungs[i].bb, rungs[i].sm, rungs[i].quad ? " quad" : "",
+                             rungs[i].arena ? " arena" : "",
                              tot / 1073741824.0, (double)b.usable / 1073741824.0);
             }
             return;
@@ -1023,6 +1060,18 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     // string, so each geometry gets its own build. MXBM_NO_GEOBAKE restores the
     // runtime args, giving both arms from one binary.
     std::string opts = rowbucket_cl_opts();
+    // The arena is a build option for the same reason the geometry is: this program is
+    // compiled after the ladder has settled, so an arena rung compiles the pool paths in
+    // and every other rung compiles the kernels it always had. The pool region only
+    // exists behind the RECORD buffers, and the packed r2->r3 side plane has none, so
+    // the pairing is refused rather than silently mis-indexed.
+    if (pb.fb_arena) {
+        if (!pb.fb_quad)
+            throw ClError(CL_INVALID_VALUE,
+                          "the overflow arena needs the quad record: the packed r2->r3 "
+                          "side plane carries no pool region");
+        opts += " -DLDS_ARENA=1 -DLDS_ARENA_CAP=" + std::to_string(pb.fb_arena_cap) + "u";
+    }
     if (!std::getenv("MXBM_NO_GEOBAKE")) {
         uint32_t bbv0 = 0; for (uint32_t t = nb; t > 1u; t >>= 1) ++bbv0;
         opts += " -DGEO_BAKED=1 -DGEO_BB=" + std::to_string(bbv0) + "u"
@@ -1076,6 +1125,28 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     // calls so the per-round steady_clock timers stay accurate GPU time.
     auto RUN  = [&](cl_kernel k, size_t g, size_t l) { if (verbose) rt.run1d(k, g, l); else rt.run1d_async(k, g, l); };
     auto FILL = [&](cl_mem bm, uint32_t v, size_t c) { if (verbose) rt.fill_u32(bm, v, c); else rt.fill_u32_async(bm, v, c); };
+    // Arena bookkeeping for one record set. RESET clears the pool cursor and empties
+    // every chain before the producer writes; LINK threads what the producer appended
+    // onto per-bucket chains, and must run between the producer and its consumer.
+    auto ARENA_RESET = [&](int set) {
+        if (!pb.fb_arena) return;
+        FILL(pb.fb_actr[set].get(), 0u, 2);
+        FILL(pb.fb_ahead[set].get(), 0xFFFFFFFFu, nb);
+    };
+    auto ARENA_LINK = [&](int set) {
+        if (!pb.fb_arena) return;
+        Kernel kl = rt.kernel(prog, "arena_link");
+        cl_mem ac = pb.fb_actr[set].get(), at = pb.fb_atag[set].get();
+        cl_mem ah = pb.fb_ahead[set].get(), an = pb.fb_anext[set].get();
+        cl_mem sp = pb.fb_spill.get();
+        const uint32_t halves = (pb.fb_half[set] == nb) ? 1u : 2u;
+        rt.set_arg(kl.get(), 0, sizeof(cl_mem), &ac); rt.set_arg(kl.get(), 1, sizeof(cl_mem), &at);
+        rt.set_arg(kl.get(), 2, sizeof(cl_mem), &ah); rt.set_arg(kl.get(), 3, sizeof(cl_mem), &an);
+        rt.set_arg(kl.get(), 4, sizeof(cl_mem), &sp); rt.set_arg(kl.get(), 5, halves);
+        RUN(kl.get(), (size_t)pb.fb_arena_cap * halves, 0);
+    };
+    // Bound to every kernel off the arena rungs, where LDS_ARENA compiles the uses out.
+    cl_mem aDummy = pb.fb_gictr.get();
 
     // ENTRY: mix seeds + scatter into round-1 FAT buckets. Under speculation the
     // destination is the spec set instead of set 0 -- one code path, so a hit and a
@@ -1091,8 +1162,11 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     auto tSeed = clk::now();
     if (!specHit) {
         FILL(r1Counts, 0u, nb);
+        ARENA_RESET(0);
         Kernel k = rt.kernel(prog, "round1_mix_scatter_fat");
         cl_mem ppMem = mpp.get(), dr = mdrops.get();
+        cl_mem eActr = pb.fb_arena ? pb.fb_actr[0].get() : aDummy;
+        cl_mem eAtag = pb.fb_arena ? pb.fb_atag[0].get() : aDummy;
         for (uint32_t begin = 0; begin < total; begin += batch) {
             uint32_t count = (total - begin < batch) ? (total - begin) : batch;
             rt.set_arg(k.get(), 0, sizeof(cl_mem), &ppMem); rt.set_arg(k.get(), 1, begin); rt.set_arg(k.get(), 2, count);
@@ -1101,8 +1175,11 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
             rt.set_arg(k.get(), 7, sizeof(cl_mem), &r1ElemLo); rt.set_arg(k.get(), 8, sizeof(cl_mem), &r1ElemHi);
             rt.set_arg(k.get(), 9, r1Half);
             rt.set_arg(k.get(), 10, sizeof(cl_mem), &dr);
+            rt.set_arg(k.get(), 11, sizeof(cl_mem), &eActr);
+            rt.set_arg(k.get(), 12, sizeof(cl_mem), &eAtag);
             RUN(k.get(), count, 0);
         }
+        ARENA_LINK(0);
     }
     if (verbose) rt.finish();
     result.t_seed_ms = ms_since(tSeed);
@@ -1178,6 +1255,18 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &gc); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
         cl_mem ppm = mpp.get(); rt.set_arg(k.get(), a++, sizeof(cl_mem), &ppm);
+        // Arena: this round consumes the input set's chains and fills the output set's
+        // pool. The output set's bookkeeping is cleared here, after the previous round
+        // finished reading it as ITS input, and linked once this round has written it.
+        ARENA_RESET(outSet);
+        cl_mem iAhead = pb.fb_arena ? pb.fb_ahead[inSet].get() : aDummy;
+        cl_mem iAnext = pb.fb_arena ? pb.fb_anext[inSet].get() : aDummy;
+        cl_mem oActr  = pb.fb_arena ? pb.fb_actr[outSet].get() : aDummy;
+        cl_mem oAtag  = pb.fb_arena ? pb.fb_atag[outSet].get() : aDummy;
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &iAhead);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &iAnext);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oActr);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &oAtag);
         size_t groups = (size_t)nb << submaskBits;
         if (cob) {
             // Zeroing the spec counters belongs HERE: after round 1 read them on the
@@ -1199,10 +1288,15 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
             rt.set_arg(k.get(), a++, sizeof(cl_mem), &cel);
             rt.set_arg(k.get(), a++, sizeof(cl_mem), &cel);   // never split: bound twice
             rt.set_arg(k.get(), a++, nb);
+            // The co-entry writes the spec set, which has no pool -- and speculation is
+            // off on the arena rungs for exactly that reason, so these are never read.
+            rt.set_arg(k.get(), a++, sizeof(cl_mem), &aDummy);
+            rt.set_arg(k.get(), a++, sizeof(cl_mem), &aDummy);
             groups += groups / (coStride - 1u);
             spec->seeded = true;
         }
         RUN(k.get(), groups * 256u, 256u);
+        ARENA_LINK(outSet);
         // MXBM_OCC=1: read this round's arrival counts and report the occupancy
         // distribution. fb_cap_for's headroom is a guess; this measures the tail it
         // actually has to cover.
@@ -1252,6 +1346,10 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &aL); rt.set_arg(k.get(), a++, sizeof(cl_mem), &aR);
         rt.set_arg(k.get(), a++, sizeof(cl_mem), &ss); rt.set_arg(k.get(), a++, sizeof(cl_mem), &sc);
         rt.set_arg(k.get(), a++, survCap); rt.set_arg(k.get(), a++, sizeof(cl_mem), &dr);
+        cl_mem iAhead = pb.fb_arena ? pb.fb_ahead[inSet].get() : aDummy;
+        cl_mem iAnext = pb.fb_arena ? pb.fb_anext[inSet].get() : aDummy;
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &iAhead);
+        rt.set_arg(k.get(), a++, sizeof(cl_mem), &iAnext);
         RUN(k.get(), (size_t)(nb << submaskBits) * 256u, 256u);
     }
     // Blocking read drains the whole async chain (entry -> r1..4 -> terminal).
@@ -1265,6 +1363,17 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     result.t_total_ms = ms_since(tPipeline);
 
     uint32_t dr[4]; rt.read(mdrops.get(), sizeof dr, dr);
+    // The arena's POSITIVE CONTROL, on the same instrument channel as the occupancy
+    // histogram. A run-long spill total of zero means no bucket ever exceeded the dense
+    // cap, so the pool carried nothing and the arm measured the plain rung under another
+    // name -- indistinguishable from success without this line. Also prints the drops,
+    // which is the other half of the gate every arena A/B is held to.
+    if (pb.fb_arena && (verbose || std::getenv("MXBM_OCC"))) {
+        uint32_t sp = 0; rt.read(pb.fb_spill.get(), 4, &sp);
+        std::printf("  [arena] dense cap %u, pool %u/half, spilled %u so far | "
+                    "drops{bucket=%u out=%u chain=%u}\n",
+                    pb.fb_bucket_cap, pb.fb_arena_cap, sp, dr[1], dr[2], dr[3]);
+    }
     if (verbose) {
         double sps = result.t_total_ms > 0.0 ? 1000.0 / result.t_total_ms : 0.0;
         std::printf("  r5: survivors=%u  drops{bucket/group=%u out=%u chain=%u}\n", clamped, dr[1], dr[2], dr[3]);

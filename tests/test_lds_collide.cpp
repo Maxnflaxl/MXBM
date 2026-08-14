@@ -598,6 +598,9 @@ static void test_fused_round(Runtime& rt, cl_program prog, int r, uint32_t N,
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&aL); rt.set_arg(k.get(),a++,sizeof(cl_mem),&aR);
       rt.set_arg(k.get(),a++,sizeof(cl_mem),&gc); rt.set_arg(k.get(),a++,sizeof(cl_mem),&dr);
       cl_mem ppm=mInElem.get(); rt.set_arg(k.get(),a++,sizeof(cl_mem),&ppm); /*unused by RAW*/
+      // Arena chain/pool args: inert dummies -- this program is built without
+      // LDS_ARENA, so the kernel never dereferences them.
+      for (int i=0;i<4;++i) rt.set_arg(k.get(),a++,sizeof(cl_mem),&gc);
       rt.run1d(k.get(), ((size_t)numBuckets << submaskBits)*WG, WG); }
 
     uint32_t drops[4]; rt.read(mDrops.get(),16,drops);
@@ -865,6 +868,7 @@ static void test_seed_rederivation(Runtime& rt, cl_program prog) {
         rt.set_arg(k.get(),7,sizeof(cl_mem),&be); rt.set_arg(k.get(),8,sizeof(cl_mem),&be);
         rt.set_arg(k.get(),9,nb);
         rt.set_arg(k.get(),10,sizeof(cl_mem),&dr);
+        rt.set_arg(k.get(),11,sizeof(cl_mem),&dr); rt.set_arg(k.get(),12,sizeof(cl_mem),&dr);
         auto t0=std::chrono::steady_clock::now(); rt.run1d(k.get(),N,256);
         return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count(); });
     std::printf("  entry storing 72 B packed record (today)            : %.2f ms\n", tf);

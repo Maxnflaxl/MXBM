@@ -341,6 +341,31 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 #endif
 #define LDS_FLEAF 8u         // max parent leaf prefix staged (sleaves_for(<=4) = 8)
 
+// OVERFLOW ARENA. Per-bucket capacities are cut from a mean + 8 sigma tail bound to
+// mean + 2 sigma, and a bucket that fills appends to a global pool instead of dropping;
+// arena_link threads the pool onto per-bucket chains between producer and consumer, and
+// the consumer walks its chain alongside its own records. That trades 3.6 % of time
+// (measured, (14,3) quad, interleaved) for ~22 % of the record slots -- what lets a card
+// take a finer geometry, or run at all. The pool sits BEHIND the bucket records in the
+// same buffer, so one slot index addresses both regions and no store has to know which
+// it hit.
+//
+// A -D rather than a per-kernel parameter: the program is compiled after the ladder
+// settles (GEO_BAKED does the same), so an arena rung compiles the path in and every
+// other rung compiles byte-identical kernels. LDS_ARENA_CAP counts slots per record-set
+// HALF -- a split set has a pool behind each half, and the two must sum to the pool the
+// footprint arithmetic budgeted (gpu/rowbucket_geom.h, kRbArenaSlots).
+#ifndef LDS_ARENA
+#define LDS_ARENA 0
+#endif
+#ifndef LDS_ARENA_CAP
+#define LDS_ARENA_CAP 65536u
+#endif
+// Pool entries staged per bucket. At the dense cap ~95 % of chains are empty, so this
+// bounds a list that is almost always length 0; overrunning it loses elements, which
+// drops[1] reports rather than hiding.
+#define LDS_AMAX 64u
+
 // ===========================================================================
 // DECOUPLED-SCATTER OCCUPANCY PROBE. Question: does the SAME uncoalesced fat
 // scatter run faster at high occupancy (standalone kernel, tiny LDS) than at the
@@ -622,7 +647,8 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
 #define COB_ARGS_0
 #define COB_ARGS_1 , __global const ulong* restrict co_pp4, uint co_count,            \
     uint co_bucket_cap, uint co_stride, __global uint* restrict co_counts,            \
-    __global ulong* restrict co_lo, __global ulong* restrict co_hi, uint co_half
+    __global ulong* restrict co_lo, __global ulong* restrict co_hi, uint co_half,     \
+    __global uint* restrict co_actr, __global uint* restrict co_atag
 #define COB_DISPATCH_0
 #define COB_DISPATCH_1                                                                \
     if (grp % co_stride == co_stride - 1u) {                                          \
@@ -631,7 +657,7 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
         if (nE == 0u) nE = 1u;                        /* a zero stride would hang */  \
         for (uint g = eb * LDS_WG + lId; g < co_count; g += nE * LDS_WG)              \
             bh3_entry_body(g, co_pp4, bb_, co_bucket_cap, 1u, co_counts,              \
-                           co_lo, co_hi, co_half, drops);                             \
+                           co_lo, co_hi, co_half, drops, co_actr, co_atag);           \
         return;                                                                       \
     }                                                                                 \
     grp -= grp / co_stride;                           /* rank among round groups */
@@ -662,7 +688,11 @@ void NAME(                                                                      
     __global ulong* restrict side_out,                                                \
     __global uint* restrict all_left, __global uint* restrict all_right,              \
     __global uint* restrict gi_counter, __global uint* restrict drops,                \
-    __global const ulong* restrict pp4                                               \
+    __global const ulong* restrict pp4,                                              \
+    /* arena: the input set's per-bucket chains, and the output set's pool cursor.    \
+       Bound to a dummy off the arena rungs, where LDS_ARENA compiles the uses out. */\
+    __global const uint* restrict in_ahead, __global const uint* restrict in_anext,   \
+    __global uint* restrict out_actr, __global uint* restrict out_atag                \
     COB_ARGS_##COB ) {                                                               \
     /* Mode-dependent sizes. Round 1's gi IS its leaf (both are the seed index), so  \
        LMODE_SEED keeps ONE copy in lleaf and lgi collapses. `lead` is leaf 0 of the \
@@ -677,6 +707,7 @@ void NAME(                                                                      
     __local uint  lchain[(FCAP)];                                                     \
     __local uint  tab[(TAB)]; __local uint gcount;                                    \
     __local uint  cnt8[(SPILL) ? 8 : 1];                                              \
+    __local uint  aidx[(LDS_ARENA) ? LDS_AMAX : 1]; __local uint acnt_sh;             \
     uint lId = get_local_id(0);                                                       \
     /* GEO_BAKED folds these to literals; otherwise they are the kernel args. */      \
     const uint bb_ = (GEO_BAKED) ? GEO_BB : bucket_bits;                              \
@@ -695,6 +726,26 @@ void NAME(                                                                      
     size_t base = (size_t)(bucket < in_half ? bucket : bucket - in_half) * incap_; \
     /* Side plane indexes by GLOBAL slot: the plane never splits. */                  \
     size_t side_base = (size_t)bucket * incap_;                                \
+    /* This bucket's pool entries, chain-walked ONCE into local before the sweep      \
+       loop -- at the dense cap ~95 % of chains are empty, so the common case is one  \
+       global load. The pool for this bucket's half starts at in_half * incap_. */    \
+    uint acnt = 0u;                                                                   \
+    size_t apool = 0u; uint ah_ = 0u;                                                 \
+    if (LDS_ARENA) {                                                                  \
+        ah_ = (bucket < in_half) ? 0u : 1u;                                           \
+        apool = (size_t)in_half * incap_;                                             \
+        if (lId == 0) {                                                               \
+            uint n_ = 0u;                                                             \
+            for (uint a_ = in_ahead[bucket]; a_ != LDS_EMPTY;                         \
+                 a_ = in_anext[ah_ * LDS_ARENA_CAP + a_]) {                           \
+                if (n_ >= LDS_AMAX) { atomic_inc(&drops[1]); break; }                 \
+                aidx[n_++] = a_;                                                      \
+            }                                                                         \
+            acnt_sh = n_;                                                             \
+        }                                                                             \
+        barrier(CLK_LOCAL_MEM_FENCE);                                                 \
+        acnt = acnt_sh;                                                               \
+    }                                                                                 \
     /* SPILL state: xb = extra split bits (level chosen ONCE, never escalated -- an  \
        escalation after a walk would re-emit the coarser parts' children), xp = the  \
        part being processed this pass, nparts = 1 << xb. Without SPILL the loop runs \
@@ -706,8 +757,10 @@ void NAME(                                                                      
     if (lId == 0) gcount = 0;                                                         \
     for (uint i = lId; i < (TAB); i += LDS_WG) tab[i] = LDS_EMPTY;                    \
     barrier(CLK_LOCAL_MEM_FENCE);                                                     \
-    for (uint p = lId; p < cnt; p += LDS_WG) {                                        \
-        size_t d = (base + p) * (INSTR);                                              \
+    for (uint p = lId; p < cnt + acnt; p += LDS_WG) {                                  \
+        /* Pool entries are staged after the bucket's own, from the same buffer. */    \
+        size_t sl_ = (LDS_ARENA && p >= cnt) ? apool + aidx[p - cnt] : base + p;       \
+        size_t d = sl_ * (INSTR);                                                      \
         ulong rec0; ulong rec1 = 0ul;                                                 \
         if ((LDS_V2) && (LMODE) == LMODE_RD2) {                                       \
             /* PAIR128: both words of the 16 B pair record in one aligned load,       \
@@ -752,7 +805,10 @@ void NAME(                                                                      
                 lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                   \
             } else if ((LMODE) == LMODE_EMIT) {                                       \
                 /* Stride-8 r2 record [work0..6 | p0], p1 in the side plane: 4 x 16 B \
-                   loads where 9 scalars were (CUDA: the MIO-queue win, 41.5->35.3). */ \
+                   loads where 9 scalars were (CUDA: the MIO-queue win, 41.5->35.3). \
+                   Indexed by p, not by the staged slot: the plane has no pool region \
+                   behind it, which is why the arena rungs are quad-only and the host \
+                   refuses the pairing rather than reaching this line with p >= cnt. */ \
                 ulong p0, p1 = side_in[side_base + p];                                \
                 if (LDS_V2) {                                                         \
                     __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
@@ -926,7 +982,22 @@ void NAME(                                                                      
                 uint cb = ckey >> (24u - bb_);                                \
                 uint cpos = ABL_HIT(32, LMODE) ? ((pos * 7u + walk) & 1023u)          \
                                               : atomic_inc(&out_counts[cb]);          \
-                if (cpos < outcap_) {                                          \
+                /* A full bucket appends to its half's pool instead of dropping. The  \
+                   pool sits behind that half's records, so the slot below addresses  \
+                   both regions and every store past it is unchanged. */              \
+                size_t oslot = (size_t)(cb < out_half ? cb : cb - out_half)           \
+                             * outcap_ + cpos;                                        \
+                bool okeep = cpos < outcap_;                                          \
+                if (LDS_ARENA && cpos >= outcap_) {                                   \
+                    uint oh_ = (cb < out_half) ? 0u : 1u;                             \
+                    uint a_  = atomic_inc(&out_actr[oh_]);                            \
+                    if (a_ < LDS_ARENA_CAP) {                                         \
+                        out_atag[oh_ * LDS_ARENA_CAP + a_] = cb;                      \
+                        oslot = (size_t)out_half * outcap_ + a_;                      \
+                        okeep = true;                                                 \
+                    }                                                                 \
+                }                                                                     \
+                if (okeep) {                                                          \
                     /* The dense gi is NOT just a cost. It removes a global atomic to \
                        replace it with the bucket slot (cb*cap + cpos) -- measured     \
                        4.5 ms SLOWER, because consecutive gi values make the two       \
@@ -937,8 +1008,7 @@ void NAME(                                                                      
                     /* One predictable select per child; free (measured 2026-08-01). */ \
                     __global ulong* restrict out_belem =                              \
                         (cb < out_half) ? out_lo : out_hi;                            \
-                    size_t od = ((size_t)(cb < out_half ? cb : cb - out_half)         \
-                                 * outcap_ + cpos) * (OUTSTR);                 \
+                    size_t od = oslot * (OUTSTR);                                     \
                     if (ABL_HIT(1, LMODE)) { /* payload write ablated */ }                      \
                     else if ((LMODE) == LMODE_SEED) {                                 \
                         /* 16 B PAIR RECORD instead of the 72 B element: round 2       \
@@ -1060,7 +1130,9 @@ static void bh3_entry_body(uint idx, __global const ulong* restrict pp4,
                            __global ulong* restrict belem_lo,
                            __global ulong* restrict belem_hi,
                            uint half_buckets,
-                           __global uint* restrict drops) {
+                           __global uint* restrict drops,
+                           __global uint* restrict actr,
+                           __global uint* restrict atag) {
     ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
     ulong e[7];
     bh3_seed_element(pp, idx, e);
@@ -1069,16 +1141,26 @@ static void bh3_entry_body(uint idx, __global const ulong* restrict pp4,
     uint key = (uint)(e[0] & 0xFFFFFFu);
     uint b = key >> (24u - bucket_bits);
     uint pos = atomic_inc(&counts[b]);
-    if (pos < bucket_cap) {
-        // THIN round-1 record: (index << 32) | key, 8 B total. The 56 B work state is
-        // NOT stored -- round 1 re-derives it from the index while staging into LDS
-        // (LMODE_SEED). gi, lead and leaf0 are all the index for a seed element, so
-        // nothing else needs carrying. Measured 2.5 ms vs 18.2 ms for the 72 B record.
-        // lo/hi + half_buckets: split record set, see the FUSED_LDS note.
-        __global ulong* restrict belem = (b < half_buckets) ? belem_lo : belem_hi;
-        size_t d = ((size_t)(b < half_buckets ? b : b - half_buckets)*bucket_cap + pos) * stride;
-        belem[d] = ((ulong)idx << 32) | (ulong)key;
-    } else atomic_inc(&drops[1]);
+    // THIN round-1 record: (index << 32) | key, 8 B total. The 56 B work state is
+    // NOT stored -- round 1 re-derives it from the index while staging into LDS
+    // (LMODE_SEED). gi, lead and leaf0 are all the index for a seed element, so
+    // nothing else needs carrying. Measured 2.5 ms vs 18.2 ms for the 72 B record.
+    // lo/hi + half_buckets: split record set, see the FUSED_LDS note.
+    __global ulong* restrict belem = (b < half_buckets) ? belem_lo : belem_hi;
+    size_t slot = (size_t)(b < half_buckets ? b : b - half_buckets)*bucket_cap + pos;
+#if LDS_ARENA
+    if (pos >= bucket_cap) {
+        // Overflow goes to this half's pool, which lives behind its bucket records.
+        uint h = (b < half_buckets) ? 0u : 1u;
+        uint a = atomic_inc(&actr[h]);
+        if (a >= LDS_ARENA_CAP) { atomic_inc(&drops[1]); return; }
+        atag[h * LDS_ARENA_CAP + a] = b;
+        slot = (size_t)half_buckets * bucket_cap + a;
+    }
+#else
+    if (pos >= bucket_cap) { atomic_inc(&drops[1]); return; }
+#endif
+    belem[slot * stride] = ((ulong)idx << 32) | (ulong)key;
 }
 
 // No reqd_work_group_size here, unlike the fused kernels: pinning it to 256 (what
@@ -1091,11 +1173,33 @@ __kernel void round1_mix_scatter_fat(__global const ulong* restrict pp4, uint be
                                      __global ulong* restrict belem_lo,
                                      __global ulong* restrict belem_hi,
                                      uint half_buckets,
-                                     __global uint* restrict drops) {
+                                     __global uint* restrict drops,
+                                     __global uint* restrict actr,
+                                     __global uint* restrict atag) {
     uint g = (uint)get_global_id(0);
     if (g >= count) return;
     bh3_entry_body(begin + g, pp4, bucket_bits, bucket_cap, stride, counts,
-                   belem_lo, belem_hi, half_buckets, drops);
+                   belem_lo, belem_hi, half_buckets, drops, actr, atag);
+}
+
+// Between a producer and its consumer: thread this round's pool entries onto per-bucket
+// chains. ahead must be 0xFF-memset first. spill_total is the run-long POSITIVE CONTROL
+// -- a pool that never fills means the dense cap was never exceeded and the arena
+// measured nothing, which reads identically to "the arena works" without it.
+__kernel void arena_link(__global const uint* restrict actr,
+                         __global const uint* restrict atag,
+                         __global uint* restrict ahead, __global uint* restrict anext,
+                         __global uint* restrict spill_total, uint halves) {
+    uint i = (uint)get_global_id(0);
+    if (i == 0u) {
+        uint t = 0u;
+        for (uint h = 0u; h < halves; ++h)
+            t += min(actr[h], LDS_ARENA_CAP);
+        atomic_add(spill_total, t);
+    }
+    uint h = i / LDS_ARENA_CAP, a = i % LDS_ARENA_CAP;
+    if (h >= halves || a >= min(actr[h], LDS_ARENA_CAP)) return;
+    anext[i] = atomic_xchg(&ahead[atag[i]], a);
 }
 
 // Round 4 again, hosting the next nonce's entry as co-blocks. Instantiated here, not
@@ -1119,7 +1223,8 @@ void round5_fused_lds(
     uint in_half,
     __global uint* restrict all_left, __global uint* restrict all_right,  // by survivor slot
     __global uint* restrict surv_slots, __global uint* restrict surv_count, uint surv_cap,
-    __global uint* restrict drops) {    // [1]=group ovf, [3]=chain cap, [2]=surv ovf
+    __global uint* restrict drops,      // [1]=group ovf, [3]=chain cap, [2]=surv ovf
+    __global const uint* restrict in_ahead, __global const uint* restrict in_anext) {
     // Round-5 input = ONE work word, not the 5 significant ones round 4 produces.
     // The terminal test is z = OR(c[0..6]) after bh3_combine at Lout(5) = 24, which
     // forces c[1..6] to zero and masks c[0] to 24 bits; and
@@ -1148,6 +1253,8 @@ void round5_fused_lds(
     __local uint  lchain[LDS_TCAP];
     __local uint  tab[LDS_R5TAB];
     __local uint  gcount;
+    __local uint  aidx[LDS_ARENA ? LDS_AMAX : 1];
+    __local uint  acnt_sh;
 
     uint lId = get_local_id(0);
     uint submaskCount = 1u << submask_bits;
@@ -1162,8 +1269,27 @@ void round5_fused_lds(
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
     __global const ulong* in_belem = (bucket < in_half) ? in_lo : in_hi;
     size_t base = (size_t)(bucket < in_half ? bucket : bucket - in_half) * in_bucket_cap;
-    for (uint p = lId; p < cnt; p += LDS_WG) {
-        size_t d = (base + p) * LDS_R5STR;
+    // Same chain walk as the fused rounds': round 4's output carries a pool too, and
+    // a survivor's ancestor can sit in it.
+    uint acnt = 0u;
+    size_t apool = 0u;
+    if (LDS_ARENA) {
+        const uint ah_ = (bucket < in_half) ? 0u : 1u;
+        apool = (size_t)in_half * in_bucket_cap;
+        if (lId == 0) {
+            uint n_ = 0u;
+            for (uint a_ = in_ahead[bucket]; a_ != LDS_EMPTY;
+                 a_ = in_anext[ah_ * LDS_ARENA_CAP + a_]) {
+                if (n_ >= LDS_AMAX) { atomic_inc(&drops[1]); break; }
+                aidx[n_++] = a_;
+            }
+            acnt_sh = n_;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+        acnt = acnt_sh;
+    }
+    for (uint p = lId; p < cnt + acnt; p += LDS_WG) {
+        size_t d = ((LDS_ARENA && p >= cnt) ? apool + aidx[p - cnt] : base + p) * LDS_R5STR;
 #if LDS_V2
         ulong2 q = *((__global const ulong2*)(in_belem + d));
         uint key = (uint)(q.x & 0xFFFFFFu);

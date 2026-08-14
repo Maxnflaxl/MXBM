@@ -88,6 +88,18 @@ struct PipelineBuffers {
                                // access is 16 B aligned. Empty under quad.
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
+    // OVERFLOW ARENA (fb_arena true). Per-bucket capacities fall from a mean + 8 sigma
+    // tail bound to mean + 2 sigma, and a bucket that fills appends to a pool that lives
+    // BEHIND the bucket records inside fb_elem itself -- so no separate record buffer
+    // appears here, only the chain metadata. A split set has one pool per half, each of
+    // fb_arena_cap slots, and the halves' pools sum to rowbucket_geom.h's kRbArenaSlots.
+    bool fb_arena = false;
+    uint32_t fb_arena_cap = 0;      // pool slots per half; baked into the program
+    Mem fb_ahead[2];                // uint[nb] chain head per bucket, 0xFF = empty
+    Mem fb_anext[2];                // uint[2*cap] next-in-chain, indexed h*cap + slot
+    Mem fb_atag[2];                 // uint[2*cap] which bucket each pool slot belongs to
+    Mem fb_actr[2];                 // uint[2] pool cursor per half
+    Mem fb_spill;                   // uint[1] run-long spill total: the positive control
     // SPECULATIVE ENTRY. The entry output moves to its own set (+nb*cap*8 B) so it can
     // SURVIVE the solve that produced it -- fb_elem[0] is overwritten by round 2. Round
     // 4 seeds the next nonce into it as co-blocks and the next solve skips its own entry
