@@ -24,7 +24,8 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What worked](#what-worked) | the 20 shipped optimizations, with their mechanisms |
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
-| [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36 |
+| [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
+| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped) |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -69,7 +70,7 @@ Fusion is the point: the coalesced-gather win is destroyed if a separate scatter
 re-reads the elements — see [Un-fused LDS path](#un-fused-lds-path).
 
 Path selection is by device memory (`want_rowbucket` in `src/gpu/round_pipeline.cpp`):
-row-bucket needs 7.46 GiB with a 3.27 GiB largest single allocation, so smaller cards fall
+row-bucket needs 7.20 GiB with a 3.27 GiB largest single allocation, so smaller cards fall
 back to the sort path automatically. `MXBM_ROWBUCKET=1` / `MXBM_NO_ROWBUCKET=1` override.
 (The *budget* still gates on a single sort-path-sized constant, which is stricter than
 this — see [open leads](#current-focus-and-open-leads).)
@@ -4334,6 +4335,33 @@ their job. Probe code, diffs and per-point logs:
 
 </details>
 
+### Merging the two back-ref stores into one u64 is a wash: a store stream is priced by its scatter pattern
+<details>
+<summary>Details</summary>
+
+The plane-deletion keeper above (one scattered RMW sector per child gone, −2.4 ms)
+suggested a family: the shipping pipeline writes two 4 B back-refs per child
+(`all_left`, `all_right`) in every fused round, the terminal and the recovery walk.
+`MXBM_BRLR` merges them into one u64 store, `(right << 32) | left`. KAT 3/3 on both
+arms (the recovery walk is exactly what the KAT gates), drops 0, warmed and
+interleaved; a first 120 W set that drifted +1.5 % bracket-to-bracket was discarded
+and retaken.
+
+Wash at every operating point: stock 33.46 → 33.39 ms, 120 W + rung 70.55 → 70.57,
+100 W + rung 88.45 → 88.32 — all inside the bracket spread (an early unwarmed
+−0.8 % at 100 W did not reproduce). Display-attached session; deltas only.
+
+Mechanism, which also bounds the plane-deletion win: back-ref writes index by
+`cgi`, which a warp allocates near-sequentially — 32 lanes' stores to each plane
+span ~4 L2 sectors and merge, while the u64 form spans ~8 sectors for its one
+store. Same sector traffic, one instruction fewer, and instruction issue is not
+the binding resource in these rounds. The h=1 plane paid because it was
+bucket-scattered: slot-indexed stores with no neighbours to merge with. **A store
+stream is priced by its scatter pattern, not its store count.** Patch:
+`docs-internal/campaign/2026-08-12-lowpower/patches/brlr.patch`.
+
+</details>
+
 ### Co-residency is closed for same-mix tenants: the binding budget is joules, not SM-seconds
 <details>
 <summary>Details</summary>
@@ -4526,6 +4554,107 @@ card classes climb a rung: ~6.2 GiB free now hosts quad (16,1) and the 6 GB clas
 quad (15,2), each the faster geometry.** Gates: full suite green, GPU goldens on
 both paths (recover is on the golden path). Metal keeps 5 × capacity until a Mac
 session can gate the same change.
+
+</details>
+
+## Measured results, 2026-08-14
+
+### The implicit-bits record at (17,0): the low-power gate gets the pack too
+<details>
+<summary>Details</summary>
+
+The packed record's dropped bit count is the bucket-address width, and nothing in
+the pack is specific to 16: with IMPB carrying the count as a template value,
+(17,0) packs 400−17 = 383 bits into the same 6 u64 with one spare bit, and at
+sm=0 the kept 7 low key bits are exactly the tab-hash bits — the sub-mask rescan
+does not exist there. Gates: SASS byte-identical at bb=16 (the generalization is
+a no-op on the stock config), KAT 3/3 with zero drops at (17,0), occupancy
+contract extended (all four (17,0) variants identical to their 16-bit twins; r2
+stays exactly on the 64-register cliff).
+
+ABBA at (17,0), N=150, pair means:
+
+| point | plain | packed | Δ | match-first | MF + packed | Δ |
+|---|---|---|---|---|---|---|
+| 120 W + rung | 65.96 | 63.42 | **−3.9 %** | 65.68 | 63.04 | **−4.0 %** |
+| 100 W + rung | 82.56 | 78.92 | **−4.4 %** | 82.07 | 78.24 | **−4.7 %** |
+
+Composes additively with match-first, like the (16,1) pair did. Shipped: the
+low-power gate now selects match-first × packed-17, and the live miner reads
+(45 s runs, headless, 5001 rung):
+
+| cap | ms/solve | sol/s | J/sol |
+|---|---|---|---|
+| 100 W | 78.8 | 25.5 | 3.94 |
+| 120 W | 63.0 | 31.9 | 3.76 |
+| 140 W | 54.3 | 37.0 | 3.79 |
+| 160 W | 46.6 | 43.2 | **3.70** |
+
+(120 s pairs in mirrored cap order; arms agree within 1.5 %.) Stock is untouched
+(31.7 vs 31.6 ms same-session). 3.70 J/sol at 160 W + rung is the new efficiency
+record (was 3.79), 120 W sits at 3.76, and the efficiency curve is nearly flat
+from 120 to 160 W — it flattened leftward.
+
+The same change fixed a carveout drift: since the (16,1) pack shipped, the CARVE
+list had named the unpacked non-match-first pair — instantiations that no longer
+launch. Every launched variant now receives the max-shared preference; no
+measurable stock delta from the fix on this driver.
+
+</details>
+
+### Duty-cycled average power: the concave-hull arbitrage is real and the idle floor eats it
+<details>
+<summary>Details</summary>
+
+Time-sharing an efficient burst point with idle traces the concave hull of the
+sol/s-vs-W curve, which beats every continuous point left of the efficiency peak
+— IF idle is cheap. Measured with SIGSTOP/SIGCONT cycling around the benchmark
+(the energy counter and wall clock span the stops): solve throughput tracks duty
+exactly (12.58 vs 0.577 × 21.78 solves/s at 57 % duty), so the mechanism is real.
+The efficiency is not: 4.42 J/sol at a 110 W average, against 4.16 for the
+continuous 100 W + rung point (pre-17-pack figures, same session).
+
+The killer is the idle intercept, decomposed: a resident CUDA context holds the
+card at P2/P3 with the SM at full idle clock — 41–47 W, flat over 83 s, and
+releasing the memory lock makes it WORSE (P2, mem 10251). The best managed gap
+state (SM locked to the 210 MHz floor) is 31.7 W; break-even at a 100 W average
+needs < 27.6 W. Ceiling with full context teardown (the no-context 14.2 W floor):
++7.5 % at 100 W, minus ~1–3 % per-burst realloc of the 7.2 GiB working set — thin,
+and it shrinks to nothing by 120 W. Closed. Scope: this driver's resident-context
+P-state behavior; a driver that parks a resident context at P8 reopens the
+arithmetic, as does a card whose sub-peak curve sags more.
+
+Residual fact: duty-cycling reaches average draws BELOW the driver's 100 W cap
+floor (~80 W at ~4.8 J/sol) where no continuous configuration exists — a niche
+capability, not an efficiency win.
+
+</details>
+
+### Three small closures: kWG 288, PRMT rotates, uniform-datapath offload
+<details>
+<summary>Details</summary>
+
+**kWG 288** (one 92 %-full pass over the 264-element group instead of 256 + a
+thin second pass): occupancy survives — r1 keeps 5 blocks/SM, every round
+unchanged — and it still loses +0.4 % at stock, +0.2 % at 120 W + rung, same sign
+in every bracket. The thin second passes were nearly free: predicated-off lanes
+and one extra barrier cost less than the wider group's slower barrier. With the
+census showing r1's stalls 31.5 % on its own CTA barrier, this closes the cheap
+end of the barrier family: the bill is the WAIT, not the pass count, and only the
+producer/consumer warp redesign attacks the wait. (The chain build already rides
+the staging loop — the stage→build barrier was fused out long ago.)
+
+**PRMT for byte-aligned rotates**: the emitted SASS has zero PRMT and all 64-bit
+rotates are already 2-SHF funnel pairs — the shift+OR fusion PRMT would provide
+is already fused, so PRMT is a same-count re-encoding, and instruction placement
+is not a currency on sm_89 (single-issue). Null by audit.
+
+**Uniform-datapath offload for r2**: freed vector registers buy nothing — r2 is
+shared-capped at 4 blocks/SM (23616 B × 5 > the carveout), so the 64-register
+cliff is not the binding resource at the shipped shape. Null by arithmetic.
+
+Emit store width audited on the way: every fused round already emits 4 ×
+STG.E.128 — the minimum for the record.
 
 </details>
 

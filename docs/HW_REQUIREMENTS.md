@@ -156,10 +156,14 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **59.8 sol/s** | 59.4 sol/s |
-| End-to-end solve | **33.3 ms** | 33.5 ms |
-| Board power | 284 W — the card's 285 W limit, `sw_power_cap` active 99–100 % of the time | — |
-| Efficiency | 0.208 sol/s/W stock, **0.258 at 210 W** (its optimum on the stock memory clock), best measured **0.264** at 160 W with `--mclk 5001` | — |
+| Throughput | **62.7 sol/s** | 59.4 sol/s |
+| End-to-end solve | **32.00 ms** | 33.5 ms |
+| Board power | 281 W — near the card's 285 W limit, `sw_power_cap` intermittently active | — |
+| Efficiency | 0.221 sol/s/W stock, **0.259 at 220 W** (its optimum on the stock memory clock), best measured **0.271** at 160 W with `--mclk 5001` | — |
+
+*(CUDA column: the locked-clock pin, re-confirmed 2026-08-14, and the 2026-08-14
+rung measurements.
+The OpenCL column is its own 2026-08-02 headline and has not been re-measured since.)*
 
 The two backends are within **1.012×** of each other, measured in the same session
 (CUDA 33.1 ms, OpenCL 33.5 ms, 2026-08-02). Cross-session figures carry a ~2.5 % band, so
@@ -167,12 +171,12 @@ that is the only comparison that means anything; the column figures above are ea
 backend's own controlled headline.
 
 The card is power-limited, not thermally limited, in every kernel, so the board power
-limit is the most valuable knob on it: **at 220 W the solver does 54.85 sol/s for 219.5 W,
-against 59.05 at 284 W** — 7 % of the speed for 23 % of the power. Below ~170 W the memory
+limit is the most valuable knob on it: **at 220 W the solver does 56.9 sol/s for 219.6 W,
+against 62.8 at 284 W** — 9 % of the speed for 23 % of the power. Below ~170 W the memory
 clock is the second knob: `--mclk 5001` is worth 8.5–14.4 % there and puts the efficiency
-optimum at 160 W (**3.79 J/solution**, against ~4.8 at stock). Against an *equally capped*
-lolMiner, MXBM wins on both speed and efficiency between ~210 W and ~256 W, and loses
-below that band. The full curves are in
+optimum at 160 W (**3.70 J/solution**, against ~4.8 at stock). Against an *equally capped*
+lolMiner, MXBM wins on both speed and efficiency between ~210 W and ~277 W, and loses
+below that band — by 6–12 % once both miners run their best low-power configuration. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
 [the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
 

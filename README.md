@@ -9,8 +9,9 @@ auditable alternative to the closed-source miners in the ecosystem.
 
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
 > Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
-> RTX 4070 Ti SUPER the CUDA backend does **59.8 sol/s** and the portable OpenCL
-> one **59.4**, measured in the same session.
+> RTX 4070 Ti SUPER the CUDA backend does **62.7 sol/s** (32.00 ms/solve, the
+> locked-clock pin, re-confirmed 2026-08-14) and the portable OpenCL one **59.4**
+> (2026-08-02, 1.012× of the same-session CUDA of its day).
 >
 > **Where MXBM wins, and where it does not.** Both miners were swept against each other
 > at identical board power limits, interleaved in one session — the only way the
@@ -22,10 +23,13 @@ auditable alternative to the closed-source miners in the ecosystem.
 > | 220 W | **54.9 sol/s · 0.250 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
 > | 285 W | **59.1 sol/s** · 0.208 sol/s/W | 53.7 sol/s · **0.226 sol/s/W** | faster vs more efficient |
 >
-> **MXBM has the higher ceiling — 59.1 sol/s against ~54.0, which lolMiner cannot reach
-> at any setting — and it leads on both speed and efficiency between roughly 210 W and
-> 256 W.** Outside that window lolMiner is the better choice, and clearly so at the
-> efficient end, where its best efficiency beats MXBM's by 16 %. Closing that is
+> **MXBM has the higher ceiling — now 62.8 sol/s against ~54.0, which lolMiner cannot
+> reach at any setting — and it leads on both speed and efficiency between roughly
+> 210 W and 256 W.** (The table is the 2026-07-30 sweep; the kernels have moved since.)
+> Below that window lolMiner is still ahead, but the gap has been driven to single
+> digits across 100–160 W — −6 to −12 % best-config-vs-best-config as of
+> [2026-08-14](docs/performance.md#the-low-band-after-the-2026-08-1314-kernel-ships) —
+> and closing the rest is
 > [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
 >
 > **`--pl 220` is the setting to use.** Needs root; restored on exit. See
@@ -132,8 +136,8 @@ In rough priority order:
 
 | Next | What it delivers |
 |------|------------------|
-| **Efficiency at low power** | lolMiner holds 0.2991 sol/s/W at 175 W where MXBM peaks at 0.2575 on stock memory, because [we lose core clock under a cap](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock). **Half of that gap has since been closed by the memory clock**: below ~173 W the 5001 MHz rung is worth 8.5–14.4 %, which moves MXBM's own record to [0.264 sol/s/W — 3.79 J/solution at 160 W](docs/performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record) and roughly halves the 120–160 W deficit. The rest is open: [traffic supplies at most 17 % of the clock deficit](docs/performance.md#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found), so a store-everything eco pipeline is the remaining candidate |
-| **Smaller footprint** | 7.46 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) has taken the floor to **4.66 GiB** and the stated requirement from 8 GB to **6 GB** — on *both* backends since the [record-set split](docs/performance-research.md#the-record-set-split-opencl-reaches-cudas-57-gib-floor-and-gets-faster-doing-it) lifted OpenCL's single-allocation ceiling. What is left is the 3 GB target itself, which needs streaming / in-place layer reuse |
+| **Efficiency at low power** | lolMiner does ~2.3× more useful work per core cycle under a cap, because it stores state where MXBM re-derives it and [under a cap the currency is instructions issued](docs/performance.md#-below-160-w-the-clock-gap-inverts-and-the-clock-explanation-stops-applying). The gap has been driven down in steps — the [5001 MHz memory rung](docs/performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record) (8.5–14.4 %), then the [low-power kernel pair and the packed record](docs/performance.md#the-low-band-after-the-2026-08-1314-kernel-ships) — to **−7 to −11 % across 100–160 W**, with MXBM's efficiency record at **3.70 J/solution at 160 W**. The obvious counter-design was built and measured dead: a [storing round 1 pays back in scattered L2 sectors exactly what the saved rebuild wins](docs/performance-research.md#the-h1-pipeline-built-and-killed-the-caps-currency-is-l2-sectors-not-dram-bytes). What remains is the issue economy itself |
+| **Smaller footprint** | 7.20 GiB against a 3 GB design target ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)). The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) and the [survivor-sized back-ref row](docs/performance-research.md#measured-results-2026-08-12) have taken the floor to **4.40 GiB** and the stated requirement from 8 GB to **6 GB** — on *both* backends since the [record-set split](docs/performance-research.md#the-record-set-split-opencl-reaches-cudas-57-gib-floor-and-gets-faster-doing-it) lifted OpenCL's single-allocation ceiling. The remaining path to ~3 GB is measured piecewise (spill arena −1.50 GiB, address-implied record bits −0.36) and awaits its build |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
 | **Per-GPU verification** | A two-card rig (3060 Ti + 4070 SUPER) ran [21 minutes on a pool](docs/performance.md#third-party-hardware--a-two-card-rig-2026-08-02), 42 shares, 42 accepted, and found two defects in per-card power control that are now fixed. Both cards chose CUDA, so the case the join exists for — two *different* backends live in one process — is still unexercised, as is the skip path on a card no backend can drive |
 

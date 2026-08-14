@@ -109,8 +109,10 @@ about 19 % at 180 W. Between ~210 W and ~277 W MXBM is ahead on both, by 4.6 % a
 220 W and 12 % at 240 W. Above ~277 W MXBM is faster and lolMiner is more efficient.
 lolMiner barely responds to a cap at all — it gives up 2.4 % of its speed for 24 % less
 power, and above ~237 W the cap does nothing — so its best efficiency (0.2991 sol/s/W at
-175 W) still beats MXBM's best anywhere (0.2592 at 220 W). What MXBM has is the ceiling:
-62.8 sol/s against ~54.0, which lolMiner cannot reach at any setting.
+175 W) beats MXBM's best on stock memory (0.2592 at 220 W). On the memory rung, with the
+low-power kernels, MXBM's own best is **0.271 sol/s/W at 160 W** — see the next section;
+lolMiner keeps a 10 % efficiency lead at each miner's best point. What MXBM has is the
+ceiling: 62.8 sol/s against ~54.0, which lolMiner cannot reach at any setting.
 
 The July sweep was run twice, two days apart, and **reproduced within ~1 %** at every
 cap, so the crossings are a property of the two miners, not of the day. The MXBM
@@ -151,6 +153,38 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
 `--pl` needs root. Without it MXBM says so by name and mines on at the card's current
 limit. The previous limit is restored on exit, including on Ctrl+C. See
 [usage.md](usage.md#power-limit).
+
+---
+
+## Capped rigs: the memory rung and the low-power kernels
+
+The curve above is stock memory. Under a cap that is the wrong configuration: the memory
+clock does not scale with the core, so the interface burns a fixed slice of a small budget
+for bandwidth nothing is using. Dropping it to the **5001 MHz rung** returns those watts as
+core clock, and below ~130 W MXBM also switches to a different geometry and rebuild
+variant. Together that is MXBM's best configuration at each cap.
+
+Measured 2026-08-14 on the current build, headless, two 120 s runs per point in mirrored
+cap order (the two arms agree within 1.5 % everywhere):
+
+| cap | ms/solve | sol/s | J/solution | sol/s/W | lolMiner at its own best |
+|---|---|---|---|---|---|
+| 100 W | 78.8 | 25.5 | 3.94 | 0.255 | 28.85 sol/s |
+| 120 W | 63.0 | 31.9 | 3.76 | 0.266 | 34.05 |
+| 140 W | 54.3 | 37.0 | 3.79 | 0.264 | 39.75 |
+| **160 W** | 46.6 | 43.2 | **3.70** | **0.271** | 47.85 |
+
+**160 W + the rung is MXBM's efficiency optimum — 3.70 J/solution**, better than anything
+on stock memory at any cap, and the curve is nearly flat from 120 to 160 W. lolMiner is
+still ahead in this band, but by **6–12 %** rather than the 19–32 % it led by on stock
+memory. The mechanism, the A/Bs behind each step and lolMiner's own rung sweep are in
+[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
+
+```sh
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
+```
+
+Both settings are restored on exit. Above ~173 W the rung is a wall — do not use it there.
 
 ---
 
