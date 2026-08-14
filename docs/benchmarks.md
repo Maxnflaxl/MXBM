@@ -79,9 +79,9 @@ instrument measured both; the sol/s columns are each miner against itself. Accep
 shares over a fixed interval remain the only arbiter that needs neither counter.
 
 [^4g]: at the fastest geometry, which is what both miners run here. lolMiner selects
-"BeamHash III **4G** (CUDA)" on this card; MXBM's own floor is 4.03 GiB on a card that
-cannot host the fast rung — see
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-13-off-the-algorithms-design-target).
+"BeamHash III **4G** (CUDA)" on this card; MXBM's own floor is 2.94 GiB on a card that
+cannot host the fast rung, which is the same 4 GB class — see
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-design-target-is-met-on-footprint-not-yet-on-a-3-gb-card).
 
 ---
 

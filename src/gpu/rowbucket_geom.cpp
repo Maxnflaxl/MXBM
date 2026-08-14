@@ -60,9 +60,9 @@ const RbRung* rb_rungs(int& n) {
         // leaves, which is the deepest re-derivation on the ladder. Only ever reached
         // when no row above fits, and only paired with quad and dense caps -- a card
         // that can host the packed record has no use for them.
-        { 16u, 1u, true,  true,  true  },   // 3.10
-        { 15u, 2u, true,  true,  true  },   // 3.00
-        { 14u, 3u, true,  true,  true  },   // 2.94   -- the floor
+        { 16u, 1u, true,  true,  true  },   // 3.10      56.0
+        { 15u, 2u, true,  true,  true  },   // 3.00      58.0
+        { 14u, 3u, true,  true,  true  },   // 2.94      62.1  -- the floor
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;

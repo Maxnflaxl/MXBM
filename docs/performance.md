@@ -140,8 +140,8 @@ Poisson one (~71,000 solutions → ±0.2 sol/s).
 The CUDA backend is **~6 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as
 beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **8.36 →
-6.84 GiB** at the fastest geometry (268 → 219 B/element), and **4.03 GiB** at the CUDA
-floor, where the dense-cap rung is what a small card takes.
+6.84 GiB** at the fastest geometry (268 → 219 B/element), and **2.94 GiB** at the CUDA
+floor, which meets BeamHash III's stated 3 GB design target on footprint.
 
 <details>
 <summary>The earlier 2.5-hour session, and why a peak must never be quoted</summary>
@@ -914,7 +914,7 @@ pad](performance-research.md#the-round-2-alignment-pad)), and one where the reco
 carried bits its own address already encoded ([the implicit-bits
 record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena)).
 Everything else needs the structural change in
-[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#memory-efficiency-is-13-off-the-algorithms-design-target):
+[HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-design-target-is-met-on-footprint-not-yet-on-a-3-gb-card):
 streaming / in-place layer reuse.
 
 ### What the footprint still costs
