@@ -3,16 +3,18 @@
 
 namespace mxbm { namespace gpu {
 
-uint32_t fb_cap_for(uint32_t mean) {
+uint32_t fb_cap_for(uint32_t mean, double sigma) {
     const double sd = std::sqrt((double)mean);
-    return mean + (uint32_t)(8.0 * sd) + 32u;
+    return mean + (uint32_t)(sigma * sd) + 32u;
 }
 
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
-                     bool quad, bool impb) {
+                     bool quad, bool impb, bool arena) {
     const uint32_t nb = 1u << bb;
-    const uint32_t cap = fb_cap_for(capacity / nb);
-    const size_t nslots = (size_t)nb * cap;
+    const uint32_t cap = fb_cap_for(capacity / nb, arena ? kRbDenseSigma : kRbCapSigma);
+    // The pool sits behind the bucket records in the SAME buffer, so one slot index
+    // addresses both regions and no store in the kernels has to know which it hit.
+    const size_t nslots = (size_t)nb * cap + (arena ? kRbArenaSlots : 0u);
     const uint32_t s0 = fb_set_stride(0, quad, impb), s1 = fb_set_stride(1, quad, impb);
     // Under the quad record set 0 (3 u64) is no longer the larger of the two, so the
     // largest single allocation becomes set 1. Taking max() rather than assuming set 0
@@ -22,8 +24,11 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
     // terminal-survivor indices, so it is sized by the 1024 survivor cap, not by
     // capacity. Must match the allocations in cuda_solver.cu / round_pipeline.cpp.
     const size_t backrefs = ((size_t)4*capacity + 1024) * 4 * 2;
+    // Per record set the arena also carries a chain head per bucket and a next/tag pair
+    // per pool slot -- ~1.5 MB at (16,1), against the ~1.5 GiB the dense cap gives back.
+    const size_t arena_meta = arena ? 2 * ((size_t)nb*4 + 2*(size_t)kRbArenaSlots*4 + 4) : 0;
     total = nslots * (s0 + s1) * 8                                // both record sets
-          + 2*(size_t)nb*4 + backrefs + 64;                       // +counts/refs/counters
+          + 2*(size_t)nb*4 + backrefs + arena_meta + 64;          // +counts/refs/counters
 }
 
 // Ordered by MEASURED time, fastest first -- NOT by footprint, which disagrees:
@@ -31,22 +36,33 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // 6.24 / 40.02, so a footprint-sorted ladder would hand a card the slower rung. packed
 // (14,3) stays in the list after it because its single allocation is smaller (2.76 GiB
 // against 2.90), so a max_alloc-bound backend can still want it.
+//
+// An arena row is its neighbour's geometry at a dense cap: same kernels, same record,
+// ~22 % fewer record slots, plus the pool's fixed mechanism cost. That cost is measured
+// on (16,1) and carried across the other rows, so their times are placings rather than
+// figures. Footprints are with the implicit-bits pack where the rung admits it.
 const RbRung* rb_rungs(int& n) {
     static const RbRung kRungs[] = {
-        { 16u, 1u, false },   // 7.20 GiB  33.67 ms   (6.84 with the implicit-bits pack)
-        { 15u, 2u, false },   // 6.62      36.01
-        { 16u, 1u, true  },   // 5.02      38.39
-        { 14u, 3u, false },   // 6.24      40.02   -- kept for max_alloc-bound backends
-        { 15u, 2u, true  },   // 4.65      40.65
-        { 14u, 3u, true  },   // 4.40      44.75
+        { 16u, 1u, false, false },   // 6.84 GiB  33.67 ms   (7.20 without implicit bits)
+        { 16u, 1u, false, true  },   // 5.77      +2 % on the row above
+        { 15u, 2u, false, false },   // 6.62      36.01
+        { 15u, 2u, false, true  },   // 5.82
+        { 16u, 1u, true,  false },   // 5.02      38.39
+        { 16u, 1u, true,  true  },   // 4.29
+        { 14u, 3u, false, false },   // 6.24      40.02   -- kept for max_alloc-bound backends
+        { 15u, 2u, true,  false },   // 4.65      40.65
+        { 15u, 2u, true,  true  },   // 4.13
+        { 14u, 3u, true,  false },   // 4.40      44.75
+        { 14u, 3u, true,  true  },   // 4.03      -- the floor
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;
 }
 
-size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb) {
+size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb,
+                              bool arena) {
     size_t total = 0, single = 0;
-    rowbucket_bytes(capacity, bb, total, single, quad, impb);
+    rowbucket_bytes(capacity, bb, total, single, quad, impb, arena);
     const size_t half = single / 2;                     // nb is even on every rung
     const size_t backrefs = ((size_t)4 * capacity + 1024) * 4;  // left/right rows never split
     return half > backrefs ? half : backrefs;
@@ -54,7 +70,7 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool im
 
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad, unsigned power_limit_w, bool allow_split,
-                           uint64_t slack_bytes, bool allow_impb) {
+                           uint64_t slack_bytes, bool allow_impb, bool allow_arena) {
     // The implicit-bits record is not a rung, it is a NARROWER SET-0 STRIDE on the rungs
     // that admit it -- so it is folded into each rung's footprint here rather than
     // appearing in the ladder. A backend without it passes allow_impb false and every
@@ -70,32 +86,34 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
     // The figure max_alloc binds on: the whole larger set, or -- when the backend
     // can split each set into two bucket-halves -- whatever rowbucket_single_split
     // says is the largest piece left.
-    auto binding_single = [&](uint32_t bb, bool quad, bool impb, size_t single) {
+    auto binding_single = [&](uint32_t bb, bool quad, bool impb, bool arena, size_t single) {
         if (!allow_split) return single;
-        const size_t s = rowbucket_single_split(capacity, bb, quad, impb);
+        const size_t s = rowbucket_single_split(capacity, bb, quad, impb, arena);
         return s < single ? s : single;
     };
     if (kRbLowPowerW != 0 && power_limit_w != 0 && power_limit_w < kRbLowPowerW) {
         size_t total = 0, single = 0;
         const bool im = impb_at(17u, 0u, false);
         rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false, im);
-        if ((!max_alloc || binding_single(17u, false, im, single) <= (size_t)max_alloc)
+        if ((!max_alloc || binding_single(17u, false, im, false, single) <= (size_t)max_alloc)
             && (!global_mem || total + (size_t)slack_bytes <= (size_t)global_mem))
-            return { 17u, 0u, false, true };
+            return { 17u, 0u, false, true, false };
     }
     int n = 0;
     const RbRung* rungs = rb_rungs(n);
     for (int i = 0; i < n; ++i) {
         const RbRung& r = rungs[i];
         if (r.quad && !allow_quad) continue;
+        if (r.arena && !allow_arena) continue;
         size_t total = 0, single = 0;
         const bool im = impb_at(r.bb, r.sm, r.quad);
-        rowbucket_bytes(capacity, r.bb, total, single, r.quad, im);
-        if (max_alloc && binding_single(r.bb, r.quad, im, single) > (size_t)max_alloc) continue;
+        rowbucket_bytes(capacity, r.bb, total, single, r.quad, im, r.arena);
+        if (max_alloc && binding_single(r.bb, r.quad, im, r.arena, single) > (size_t)max_alloc)
+            continue;
         if (global_mem && total + (size_t)slack_bytes > (size_t)global_mem) continue;
-        return { r.bb, r.sm, r.quad, true };
+        return { r.bb, r.sm, r.quad, true, r.arena };
     }
-    return { 14u, 3u, false, false };   // nothing fits; callers fall back to the sort path
+    return { 14u, 3u, false, false, false };  // nothing fits; callers fall back to the sort path
 }
 
 }} // namespace mxbm::gpu

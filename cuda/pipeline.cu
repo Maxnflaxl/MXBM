@@ -197,7 +197,7 @@ struct CudaSolver {
                                               cudaSharedmemCarveoutMaxShared)
         CARVE((fused_round<MXBM_R1_ARGS>)); CARVE((fused_round<MXBM_R2_ARGS>));
         CARVE((fused_round<MXBM_R3_ARGS>)); CARVE((fused_round<MXBM_R4_ARGS>));
-        CARVE(terminal_round);
+        CARVE((terminal_round<>));
         #undef CARVE
         return elem[0] && elem[1] && left && right && dpp
             && entryOut[0] && entryOut[1] && entryCounts[0] && entryCounts[1];
@@ -383,7 +383,7 @@ struct CudaSolver {
         #undef ARN_LINK
         for (int rp = 0, treps = (rep_round() == 5) ? rep_count() : 1; rp < treps; ++rp) {
             cudaMemsetAsync(survCount, 0, 4, st);
-            terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
+            terminal_round<><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
                                               elem[inSet], left, right, survSlots, survCount,
                                               survCap, drops
 #if MXBM_ARENA
@@ -513,7 +513,7 @@ struct CudaSolver {
                 3u*capacity, counts[1], elem[1], counts[0], elem[0],
                 brL(p), brR(p), gictr, drops, dpp);
         }
-        terminal_round<<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[0],
+        terminal_round<><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[0],
             elem[0], brL(p), brR(p), survSlots, survCount, survCap, drops);
 
         cudaError_t le = cudaGetLastError();

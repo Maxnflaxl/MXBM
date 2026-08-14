@@ -11,24 +11,16 @@ __global__ __launch_bounds__(256)
 void entry_scatter(const uint64_t* __restrict__ pp4, uint32_t begin, uint32_t count,
                    uint32_t bucket_bits, uint32_t bucket_cap,
                    uint32_t* __restrict__ counts, uint64_t* __restrict__ belem,
-                   uint32_t* __restrict__ drops
-#if MXBM_ARENA
-                 , uint32_t* __restrict__ actr = nullptr
-                 , uint32_t* __restrict__ atag = nullptr
-#endif
-                   ) {
+                   uint32_t* __restrict__ drops,
+                   uint32_t* __restrict__ actr = nullptr,
+                   uint32_t* __restrict__ atag = nullptr) {
     const uint32_t g = blockIdx.x*blockDim.x + threadIdx.x;
     if (g >= count) return;
     // Body shared with fused_round's COTENANT path, so the co-resident entry cannot
     // drift from the standalone one.
-    entry_body(begin + g, pp4, bucket_bits, bucket_cap, counts, belem, drops
-#if MXBM_ARENA
-             , actr, atag
-#endif
-               );
+    entry_body(begin + g, pp4, bucket_bits, bucket_cap, counts, belem, drops, actr, atag);
 }
 
-#if MXBM_ARENA
 // Between a producer round and its consumer: thread the pool entries onto per-bucket
 // chains. ahead must be 0xFF-memset first; spill_total is the run-long positive
 // control (a pool that never fills means the dense cap was never exceeded, and the
@@ -42,12 +34,12 @@ __global__ void arena_link(const uint32_t* __restrict__ actr,
     if (i == 0 && spill_total) atomicAdd(spill_total, n);
     if (i < n) anext[i] = atomicExch(&ahead[atag[i]], i);
 }
-#endif
 
 // ---- terminal: combine at Lout(5)=24 and keep the all-zero survivors ----------------
 // Only work word 0 is consulted: at Lout=24 combine zeroes c[1..6] and masks c[0] to 24
 // bits, and the x[1]<<40 term contributes nothing below bit 40. See "the terminal
 // round's dead work words" in docs/performance.md.
+template<bool ARENA = (MXBM_ARENA != 0)>
 __global__ __launch_bounds__(kWG)
 void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_bucket_cap,
                     uint32_t out_off,
@@ -55,12 +47,9 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
                     const uint64_t* __restrict__ in_belem,
                     uint32_t* __restrict__ all_left, uint32_t* __restrict__ all_right,
                     uint32_t* __restrict__ surv_slots, uint32_t* __restrict__ surv_count,
-                    uint32_t surv_cap, uint32_t* __restrict__ drops
-#if MXBM_ARENA
-                  , const uint32_t* __restrict__ in_ahead = nullptr
-                  , const uint32_t* __restrict__ in_anext = nullptr
-#endif
-                    ) {
+                    uint32_t surv_cap, uint32_t* __restrict__ drops,
+                    const uint32_t* __restrict__ in_ahead = nullptr,
+                    const uint32_t* __restrict__ in_anext = nullptr) {
     __shared__ uint64_t lwork[kTCap];
     __shared__ uint32_t lgi[kTCap], llead[kTCap], lchain[kTCap], tab[kTabSize];
     // Same perfect-hash argument as the fused rounds (MXBM_PERFECT_TAB in
@@ -79,29 +68,30 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
     uint32_t cnt = in_counts[bucket];
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
     const size_t base = (size_t)bucket * in_bucket_cap;
-#if MXBM_ARENA
-    const size_t nbcap_in = ((size_t)1u << bucket_bits) * in_bucket_cap;
-    __shared__ uint16_t aidx[kAMax];
-    __shared__ uint32_t acnt_sh;
-    if (lId == 0) {
-        uint32_t n_ = 0;
-        if (in_ahead)
-            for (uint32_t a_ = in_ahead[bucket]; a_ != 0xFFFFFFFFu; a_ = in_anext[a_]) {
-                if (n_ >= kAMax) { atomicAdd(&drops[1], 1u); break; }
-                aidx[n_++] = (uint16_t)a_;
-            }
-        acnt_sh = n_;
+    // Same chain walk as the fused rounds'. Declared at 1 rather than 0 off the arena
+    // rungs -- nvcc rejects a zero-sized shared variable -- and unused there, so ptxas
+    // drops it exactly as it drops lkey above.
+    [[maybe_unused]] const size_t nbcap_in = ((size_t)1u << bucket_bits) * in_bucket_cap;
+    __shared__ uint16_t aidx[ARENA ? kAMax : 1];
+    __shared__ uint32_t acnt_sh[1];
+    uint32_t acnt = 0u;
+    if constexpr (ARENA) {
+        if (lId == 0) {
+            uint32_t n_ = 0;
+            if (in_ahead)
+                for (uint32_t a_ = in_ahead[bucket]; a_ != 0xFFFFFFFFu; a_ = in_anext[a_]) {
+                    if (n_ >= kAMax) { atomicAdd(&drops[1], 1u); break; }
+                    aidx[n_++] = (uint16_t)a_;
+                }
+            acnt_sh[0] = n_;
+        }
+        __syncthreads();
+        acnt = acnt_sh[0];
     }
-    __syncthreads();
-    const uint32_t acnt = acnt_sh;
-#else
-    constexpr uint32_t acnt = 0u;
-#endif
     for (uint32_t p = lId; p < cnt + acnt; p += kWG) {
         size_t idx_ = base + p;
-#if MXBM_ARENA
-        if (p >= cnt) idx_ = nbcap_in + aidx[p - cnt];
-#endif
+        if constexpr (ARENA)
+            if (p >= cnt) idx_ = nbcap_in + aidx[p - cnt];
         const size_t d = idx_ * 2u;                       // kFbStride[5]
         const uint64_t w0 = in_belem[d];
         const uint32_t key = (uint32_t)(w0 & 0xFFFFFFu);

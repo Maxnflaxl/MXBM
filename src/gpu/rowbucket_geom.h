@@ -63,13 +63,27 @@ constexpr bool rb_impb_ok(uint32_t bb, uint32_t sm, bool quad) {
 // A dropped child can be a valid solution's ancestor, and bucketDrops != 0 fails the
 // gate every run is held to. So the geometry ladder below -- not a tighter cap -- is
 // the lever for fitting a smaller card.
-uint32_t fb_cap_for(uint32_t mean);
+//
+// THE ARENA RUNGS BREAK THAT TRADE by moving zero-drops off the tail bound. With one
+// global overflow pool per record set, a bucket that fills appends there instead of
+// dropping, so the cap only has to be tight enough that the pool absorbs the rest:
+// measured over 21 solves x 5 stages, a mean + 2 sigma cap spills 0.01 % of elements
+// (worst solve 2,774) against a 65,536-slot pool. The reservation multiplier falls
+// 1.407x -> 1.085x at (16,1). Zero drops becomes a pool-full check.
+constexpr double kRbCapSigma   = 8.0;   // the tail bound the plain rungs reserve
+constexpr double kRbDenseSigma = 2.0;   // arena rungs: the pool carries the tail
+uint32_t fb_cap_for(uint32_t mean, double sigma = kRbCapSigma);
+
+// Overflow-pool slots per record set. >20x the worst spill observed, and small enough
+// (a few MB) that it does not show up beside what the dense cap gives back. Must equal
+// kArenaCap in kernels/cuda/fused_round.cuh, which the CUDA solver static_asserts.
+constexpr uint32_t kRbArenaSlots = 65536;
 
 // Bytes the row-bucket path needs at a given geometry: {total, largest single
 // allocation}. The single figure is what OpenCL's CL_DEVICE_MAX_MEM_ALLOC_SIZE caps,
 // and is what binds below 12 GB.
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
-                     bool quad = false, bool impb = false);
+                     bool quad = false, bool impb = false, bool arena = false);
 
 // The shipping element capacity: the 2^25 seed layer plus the 1/32 growth slack every
 // round is budgeted against. Each backend keeps its own kCapacity for kernel arithmetic
@@ -149,7 +163,11 @@ constexpr unsigned kSpecMinPowerW = 130;
 //               (17,0) rung is preferred when its 8.35 GiB fits -- currently
 //               DISARMED (kRbLowPowerW == 0; see its comment for why), so every
 //               value is inert. Only the CUDA backend passes a real value.
-struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
+//   arena     : dense per-bucket caps plus a global overflow pool (see fb_cap_for).
+//               Costs a fixed few per cent of time for ~22 % of the record slots, so
+//               it is a RUNG -- what a card takes when the alternative is a coarser
+//               geometry, the quad record, or a refusal -- never a default.
+struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; bool arena; };
 //   slack_bytes : held back from `global_mem` on top of the footprint. The 1 GiB
 //               default is for callers passing TOTAL VRAM, which says nothing
 //               about what is free; a caller that already sized against the
@@ -158,16 +176,19 @@ struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
 //   allow_impb : the backend carries the implicit-bits record, so a rung rb_impb_ok
 //               admits is sized 8 u64 wide instead of 9. CUDA passes true; OpenCL
 //               and Metal have no such record and keep the default.
+//   allow_arena : the backend carries the dense-cap / overflow-pool kernels. CUDA
+//               passes true; OpenCL and Metal have neither and never see those rungs.
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad = false, unsigned power_limit_w = 0,
                            bool allow_split = false,
                            uint64_t slack_bytes = (uint64_t)1 << 30,
-                           bool allow_impb = false);
+                           bool allow_impb = false, bool allow_arena = false);
 
 // Largest single allocation when each record set may split into two bucket-halves:
 // half the larger set, or the never-split back-ref rows if bigger. The arithmetic
 // behind allow_split, exposed so viability and the tests ask the same question.
-size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb = false);
+size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb = false,
+                              bool arena = false);
 
 // The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
 // backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said
@@ -175,7 +196,7 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool im
 // Walking this list rather than decrementing `bb` is what makes that retry cross from
 // the packed rungs onto the quad ones instead of stopping at the bottom of the packed
 // half. `n` receives the count.
-struct RbRung { uint32_t bb, sm; bool quad; };
+struct RbRung { uint32_t bb, sm; bool quad; bool arena; };
 const RbRung* rb_rungs(int& n);
 
 }} // namespace mxbm::gpu

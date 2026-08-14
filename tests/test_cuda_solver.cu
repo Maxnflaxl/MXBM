@@ -66,31 +66,54 @@ int main() {
     // merely allocate. On a 16 GB card auto is always (16,1) -- which is exactly why the
     // other two would otherwise ship untested. bb = 17 is off-ladder (users reach it by
     // MXBM_BB=17 while the power-cap policy stays disarmed) and keeps its kernels covered.
-    for (uint32_t bb = 17; bb >= 14; --bb) {
-        char v[8], geom[32];
-        std::snprintf(v, sizeof v, "%u", bb);
-        std::snprintf(geom, sizeof geom, "(%u,%u)", bb, 17u - bb);
-        setenv("MXBM_BB", v, 1);
-        // MXBM_BB is an explicit override, so the solver does NOT step down under it --
-        // which is right for a user who asked for a geometry, and means a rung can
-        // legitimately not fit on a busy card. Not fitting is not a correctness failure;
-        // producing the wrong answer would be.
-        try {
-            gpu::CudaSolver g;
-            solve_the_kat(g, geom);
-        } catch (const std::exception& e) {
-            std::printf("  SKIP %s: %s\n", geom, e.what());
+    // ...and the ladder's other two axes with it: the quad record and the dense-cap /
+    // overflow-pool rung are separate kernel instantiations, and on a 16 GB card the
+    // ladder never reaches either, so without this loop they would ship unexercised.
+    for (uint32_t bb = 17; bb >= 14; --bb)
+      for (int quad = 0; quad <= 1; ++quad)
+        for (int arena = 0; arena <= 1; ++arena) {
+            char v[8], geom[48];
+            std::snprintf(v, sizeof v, "%u", bb);
+            std::snprintf(geom, sizeof geom, "(%u,%u)%s%s", bb, 17u - bb,
+                          quad ? " quad" : "", arena ? " dense-caps" : "");
+            setenv("MXBM_BB", v, 1);
+            setenv("MXBM_QUAD", quad ? "1" : "0", 1);
+            setenv("MXBM_ARENA", arena ? "1" : "0", 1);
+            // MXBM_BB is an explicit override, so the solver does NOT step down under it
+            // -- which is right for a user who asked for a geometry, and means a rung can
+            // legitimately not fit on a busy card. Not fitting is not a correctness
+            // failure; producing the wrong answer would be.
+            try {
+                gpu::CudaSolver g;
+                solve_the_kat(g, geom);
+                std::printf("  %-24s 3/3 goldens\n", geom);
+            } catch (const std::exception& e) {
+                std::printf("  SKIP %s: %s\n", geom, e.what());
+            }
         }
-    }
-    unsetenv("MXBM_BB");
+    unsetenv("MXBM_BB"); unsetenv("MXBM_QUAD"); unsetenv("MXBM_ARENA");
 
     // The power-limit hint through the ctor -- exactly what main.cpp passes after
-    // observing the board limit. The policy is DISARMED (kRbLowPowerW == 0; the
-    // low-band prize failed reproduction -- rowbucket_geom.h tells the story), so the
-    // plumbing must be live and the value must change NOTHING.
+    // observing the board limit. Above kRbLowPowerW it must change nothing.
     {
         gpu::CudaSolver g(0, /*power_limit_w=*/160);
-        check(g.bucket_bits() == 16u, "disarmed: a 160 W hint is inert, (16,1) as always");
+        check(g.bucket_bits() == 16u, "a 160 W hint is above the gate: (16,1) as always");
+    }
+    // Below it the gate selects (17,0) AND turns match-first on, which is the only way
+    // to reach the match-first kernels from a test -- and, with the dense-cap rung
+    // forced beside it, the only cover for the match-first x arena instantiations.
+    {
+        gpu::CudaSolver g(0, /*power_limit_w=*/120);
+        check(g.bucket_bits() == 17u, "a 120 W hint selects the low-power (17,0) rung");
+        solve_the_kat(g, "(17,0) low-power");
+        std::printf("  %-24s 3/3 goldens\n", "(17,0) match-first");
+    }
+    {
+        setenv("MXBM_ARENA", "1", 1);
+        gpu::CudaSolver g(0, /*power_limit_w=*/120);
+        solve_the_kat(g, "(17,0) low-power dense-caps");
+        std::printf("  %-24s 3/3 goldens\n", "(17,0) mf dense-caps");
+        unsetenv("MXBM_ARENA");
     }
 
     return summary("cuda_solver");

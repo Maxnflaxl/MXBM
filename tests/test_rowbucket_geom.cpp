@@ -209,9 +209,25 @@ int main() {
         // Every rung stays on the line the compile-time kernel constants assume.
         int n = 0;
         const RbRung* rungs = rb_rungs(n);
-        check(n == 6, "six rungs: three geometries x two record formats");
+        check(n == 11, "eleven rungs: three geometries x two record formats x the "
+                       "dense-cap rows, less the ones a faster row already dominates");
         for (int i = 0; i < n; ++i)
             check(rungs[i].bb + rungs[i].sm == 17u, "every rung is on the bb + sm == 17 line");
+        // The ladder is walked in order and the first fit wins, so a rung that is both
+        // slower and larger than one above it can never be chosen. Nothing here asserts
+        // the times -- only that footprint alone does not order the list, which is the
+        // trap a footprint-sorted ladder falls into.
+        bool monotonic = true;
+        size_t prev = 0;
+        for (int i = 0; i < n; ++i) {
+            size_t t = 0, s = 0;
+            rowbucket_bytes(cap, rungs[i].bb, t, s, rungs[i].quad,
+                            rb_impb_ok(rungs[i].bb, rungs[i].sm, rungs[i].quad),
+                            rungs[i].arena);
+            if (i && t > prev) monotonic = false;
+            prev = t;
+        }
+        check(!monotonic, "the ladder is ordered by time, not by footprint");
     }
 
     section("split record sets take the OpenCL floor from 11 GB to CUDA's ~5.7 GiB");
@@ -283,6 +299,56 @@ int main() {
            != rb_geometry_for(kRbCapacity, 0, gib(15.59), true, 100).bb,
               "armed: crossing the band changes the selection -> the notice can fire");
         check(kRbCapacity == cap, "the exposed capacity is the shipping capacity");
+    }
+
+    section("the dense-cap rungs and their overflow pool");
+    {
+        // The cap stops being the tail bound and becomes "tight enough that the pool
+        // absorbs the rest": mean + 8 sigma -> mean + 2 sigma, and zero drops moves to a
+        // pool-full check. At (16,1) that is 743 slots per bucket down to 605.
+        check(fb_cap_for(528u) == 743u && fb_cap_for(528u, kRbDenseSigma) == 605u,
+              "(16,1): the dense cap is 605 slots against the tail bound's 743");
+        check(fb_cap_for(2112u) == 2511u && fb_cap_for(2112u, kRbDenseSigma) == 2235u,
+              "(14,3): 2235 against 2511 -- coarser buckets had less slack to give back");
+
+        struct { uint32_t bb; bool quad; double total; } want[] = {
+            { 16, false, 5.77 },     // with the implicit-bits pack: the new best rung
+            { 15, false, 5.82 },
+            { 16, true,  4.29 },
+            { 14, true,  4.03 },     // the floor
+        };
+        for (const auto& w : want) {
+            size_t total = 0, single = 0, plain = 0, ignore = 0;
+            const bool im = rb_impb_ok(w.bb, 17u - w.bb, w.quad);
+            rowbucket_bytes(cap, w.bb, total, single, w.quad, im, /*arena=*/true);
+            rowbucket_bytes(cap, w.bb, plain, ignore, w.quad, im);
+            char msg[160];
+            std::snprintf(msg, sizeof msg, "%s(%u,%u) + arena is %.2f GiB (expect %.2f)",
+                          w.quad ? "quad " : "", w.bb, 17u - w.bb, total/GiB, w.total);
+            check(total/GiB > w.total - 0.05 && total/GiB < w.total + 0.05, msg);
+            check(total < plain, "the dense cap always gives memory back");
+        }
+
+        // What it buys the ladder. allow_arena defaults FALSE, so OpenCL and Metal never
+        // see these rungs and their answers are exactly what they were.
+        auto pick = [&](double v, bool arena) {
+            return rb_geometry_for(cap, 0, gib(v), /*allow_quad=*/true, 0,
+                                   /*allow_split=*/false, /*slack=*/0,
+                                   /*allow_impb=*/true, arena);
+        };
+        for (double v : {15.59, 9.70, 8.00, 7.00, 6.20, 5.00}) {
+            const RbGeometry g = rb_geometry_for(cap, 0, gib(v), /*allow_quad=*/true);
+            check(!g.arena, "allow_arena defaults false: the plain ladder is unchanged");
+        }
+        const RbGeometry a = pick(6.0, true), b = pick(6.0, false);
+        check(a.bb == 16 && !a.quad && a.arena && b.bb == 16 && b.quad && !b.arena,
+              "6.0 GiB usable: dense caps keep the PACKED (16,1) record where the ladder "
+              "had to take the quad one");
+        // And the floor, either side of it.
+        check( pick(4.05, true).viable && !pick(4.00, true).viable,
+               "the arena floor is quad (14,3) at 4.03 GiB");
+        check(!pick(4.35, false).viable,
+               "without it the floor is quad (14,3) at 4.40 -- 0.37 GiB higher");
     }
 
     section("invariants the kernels depend on");

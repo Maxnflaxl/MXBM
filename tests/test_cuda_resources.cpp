@@ -195,7 +195,7 @@ struct Kernel {
     // is a distinct kernel with the same six round numbers, so the identity needs the
     // bool. Rows written with six values zero-initialise it, which matches the plain
     // kernels.
-    int         id[9];
+    int         id[10];
     const char* token;
     int         blockSize;
     int         reg;
@@ -264,8 +264,42 @@ const Kernel kContract[] = {
       "round AND the co-scheduled entry -- drops to 3 blocks" },
     // Re-baselined 2026-07-31 for the perfect chain table (MXBM_PERFECT_TAB reaching
     // terminal_round): lkey's 4 B x 384 of shared removed, REG 22 -> 24. blocks/SM held.
-    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundE", 256,  24,  8196,  0, 6,
+    // The arena rungs: every round again with dense per-bucket caps and one overflow
+    // pool per set. The pool's per-bucket shared list costs 128-136 B, and THE POINT OF
+    // THESE ROWS IS THAT NO ROUND LOSES A BLOCK TO IT -- r1 keeps its fifth (19144 B of
+    // 19456), r2 its fourth on exactly 64 registers, r3 and r4 their third and fourth.
+    // Registers move only on r2/r3's plain record (56 -> 60 at r3), which is shared-bound
+    // anyway. The IMPB 17 pairs are instantiated by the round macro and reachable through
+    // MXBM_BB=17 with MXBM_ARENA=1, which is how the rung is A/B'd.
+    { "r1 arena",               true, {7,7,1,3,1,2,0,0,0,1}, nullptr,    256,  48, 19144,  0, 5,
+      "STILL ON BOTH CLIFFS: 48 registers of 48, 19144 B of 19456 -- the pool's shared "
+      "list fits in r1's 448 B of headroom and the fifth block survives" },
+    { "r1 mf arena",            true, {7,7,1,3,1,2,0,1,0,1}, nullptr,    256,  64, 19712,  0, 4, "" },
+    { "r2 arena",               true, {7,7,2,4,2,8,0,0,0,1}, nullptr,    256,  64, 23744,  0, 4, "" },
+    { "r2 mf arena",            true, {7,7,2,4,2,8,0,1,0,1}, nullptr,    256,  64, 24384,  0, 4, "" },
+    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1}, nullptr,    256,  60, 26304,  0, 3, "" },
+    { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1}, nullptr,    256,  60, 26944,  0, 3, "" },
+    { "r2 implicit-bits arena", true, {7,7,2,4,2,8,0,0,16,1}, nullptr,   256,  64, 23744,  0, 4, "" },
+    { "r2 implicit-bits mf arena", true, {7,7,2,4,2,8,0,1,16,1}, nullptr,256,  64, 24384,  0, 4, "" },
+    { "r3 implicit-bits arena", true, {7,6,4,1,8,8,0,0,16,1}, nullptr,   256,  58, 26304,  0, 3, "" },
+    { "r3 implicit-bits mf arena", true, {7,6,4,1,8,8,0,1,16,1}, nullptr,256,  58, 26944,  0, 3, "" },
+    { "r2 implicit-bits 17 arena", true, {7,7,2,4,2,8,0,0,17,1}, nullptr,256,  64, 23744,  0, 4, "" },
+    { "r2 implicit-bits 17 mf arena", true, {7,7,2,4,2,8,0,1,17,1}, nullptr, 256, 64, 24384, 0, 4, "" },
+    { "r3 implicit-bits 17 arena", true, {7,6,4,1,8,8,0,0,17,1}, nullptr,256,  58, 26304,  0, 3, "" },
+    { "r3 implicit-bits 17 mf arena", true, {7,6,4,1,8,8,0,1,17,1}, nullptr, 256, 58, 26944, 0, 3, "" },
+    { "r2 quad arena",          true, {7,7,2,4,2,3,0,0,0,1}, nullptr,    256,  64, 23744,  0, 4, "" },
+    { "r2 quad mf arena",       true, {7,7,2,4,2,3,0,1,0,1}, nullptr,    256,  64, 24384,  0, 4, "" },
+    { "r3 quad arena",          true, {7,6,4,7,3,8,0,0,0,1}, nullptr,    256,  80, 26304,  0, 3,
+      "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
+    { "r3 quad mf arena",       true, {7,6,4,7,3,8,0,1,0,1}, nullptr,    256,  80, 26944,  0, 3, "" },
+    { "r4 arena",               true, {6,1,2,2,8,2,0,0,0,1}, nullptr,    256,  46, 22464,  0, 4, "" },
+    { "r4 mf arena",            true, {6,1,2,2,8,2,0,1,0,1}, nullptr,    256,  46, 23096,  0, 4, "" },
+    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0EE", 256, 24, 8196, 0, 6,
       "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound" },
+    { "terminal_round (arena)", false, {0,0,0,0,0,0}, "14terminal_roundILb1EE", 256, 24, 8328, 0, 6,
+      "the pool chain's shared list costs 132 B and no block: still warp-capped at 6" },
+    { "arena_link",            false, {0,0,0,0,0,0}, "10arena_linkE",      256,  12,     0,  0, 6,
+      "threads the overflow pool onto per-bucket chains between rounds; 256 blocks" },
     // recover's 64 B of stack is a genuine local array, not a spill: ptxas -v reports
     // "64 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads". Its grid is at
     // most (1024+63)/64 = 17 blocks over 66 SMs, so occupancy is not a lever here and
@@ -388,13 +422,14 @@ std::vector<Measured> parse_res_usage(const std::string& out, bool& sawArch) {
             const Kernel& c = kContract[i];
             bool hit;
             if (c.templated)
-                hit = k.targs.size() >= 17 &&
+                hit = k.targs.size() >= 18 &&
                       k.targs[0] == c.id[0] && k.targs[1] == c.id[1] &&
                       k.targs[2] == c.id[2] && k.targs[3] == c.id[3] &&
                       k.targs[9] == c.id[4] && k.targs[10] == c.id[5] &&
                       k.targs[14] == c.id[6] &&    // COBLOCKS variant is its own row
                       k.targs[15] == c.id[7] &&    // so is the match-first variant
-                      k.targs[16] == c.id[8];      // and the implicit-bits record
+                      k.targs[16] == c.id[8] &&    // the implicit-bits record
+                      k.targs[17] == c.id[9];      // and the dense-cap / arena rungs
             else
                 hit = k.targs.empty() && k.mangled.find(c.token) != std::string::npos;
             if (hit) { k.match = i; break; }

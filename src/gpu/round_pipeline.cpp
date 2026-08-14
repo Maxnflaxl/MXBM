@@ -291,6 +291,9 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     for (int i = 0; i < n; ++i)
         if (rungs[i].bb == g.bb && rungs[i].sm == g.sm && rungs[i].quad == g.quad) { start = i; break; }
     for (int i = start; i < n; ++i) {
+        // The dense-cap rungs are CUDA-only (no arena kernels here), and retrying one
+        // would re-try the row above it at the same size under a different name.
+        if (rungs[i].arena) continue;
         try {
             try_alloc_rowbucket(rt, p, rungs[i].bb, rungs[i].sm, rungs[i].quad);
             if (i != start)

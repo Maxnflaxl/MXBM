@@ -96,12 +96,15 @@ constexpr uint32_t kFCap    = (uint32_t)MXBM_FCAP;
 #define MXBM_SPILL 1
 #endif
 
-// MXBM_ARENA: dense per-bucket caps backed by ONE global overflow pool per element
-// set. A bucket that overflows its cap appends to the pool instead of dropping, and
-// each consumer block stages its bucket's few pool entries from a per-bucket chain
-// (arena_link builds it between rounds). The pool replaces the per-bucket tail
-// reserve, which is the largest slack term in the row-bucket footprint; the pool
-// itself is megabytes. Off by default; the shipping build is unchanged.
+// The ARENA template parameter: dense per-bucket caps backed by ONE global overflow
+// pool per element set. A bucket that overflows its cap appends to the pool instead of
+// dropping, and each consumer block stages its bucket's few pool entries from a
+// per-bucket chain (arena_link builds it between rounds). The pool replaces the
+// per-bucket tail reserve, which is the largest slack term in the row-bucket footprint;
+// the pool itself is megabytes. Both variants are instantiated and CudaSolver picks per
+// rung -- the mechanism costs a fixed few per cent, so it is what a card takes when the
+// alternative is the quad record or a refusal. MXBM_ARENA sets only the DEFAULT, for
+// single-config probe builds.
 #ifndef MXBM_ARENA
 #define MXBM_ARENA 0
 #endif
@@ -367,14 +370,14 @@ constexpr int kAblMix = MXBM_ABL_MIX == 1 ? LM_SEED : MXBM_ABL_MIX == 2 ? LM_RD2
 // The entry pass, as a device function so the standalone entry_scatter kernel and the
 // co-tenant path below run byte-identical code.
 __device__ __forceinline__
+// The arena pointers are runtime rather than a template parameter here: with actr null
+// an overflowing element takes the same drop it always did, and entry is 98 % SM-bound,
+// so the extra branch is free where a second instantiation would not be.
 void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_bits,
                 uint32_t bucket_cap, uint32_t* __restrict__ counts,
-                uint64_t* __restrict__ belem, uint32_t* __restrict__ drops
-#if MXBM_ARENA
-              , uint32_t* __restrict__ actr = nullptr
-              , uint32_t* __restrict__ atag = nullptr
-#endif
-                ) {
+                uint64_t* __restrict__ belem, uint32_t* __restrict__ drops,
+                uint32_t* __restrict__ actr = nullptr,
+                uint32_t* __restrict__ atag = nullptr) {
     uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
     bh3::Elem e; bh3::seed_element(pp, idx, e);
     uint32_t t1[1] = { idx };
@@ -383,7 +386,6 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
     const uint32_t b = key >> (24u - bucket_bits);
     const uint32_t pos = atomicAdd(&counts[b], 1u);
     size_t slot = (size_t)b*bucket_cap + pos;
-#if MXBM_ARENA
     if (pos >= bucket_cap) {
         const uint32_t a = actr ? atomicAdd(actr, 1u) : kArenaCap;
         if (a >= kArenaCap) { atomicAdd(&drops[1], 1u); return; }
@@ -391,10 +393,6 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
         slot = ((size_t)1u << bucket_bits)*bucket_cap + a;
     }
     belem[slot] = ((uint64_t)idx << 32) | key;
-#else
-    if (pos < bucket_cap) belem[slot] = ((uint64_t)idx << 32) | key;
-    else atomicAdd(&drops[1], 1u);
-#endif
 }
 
 // COTENANT: host the NEXT nonce's entry pass inside this round's blocks.
@@ -431,7 +429,7 @@ struct RoundArgs {
 // order and sizes are exactly the arrays fused_round declared individually before this
 // existed; test_cuda_resources pins the totals against cuobjdump.
 template<int INW, int LEAFW, int LMODE, uint32_t FCAP, bool SUBPASS,
-         bool MFIRST = (MXBM_MATCH_FIRST != 0)>
+         bool MFIRST = (MXBM_MATCH_FIRST != 0), bool ARENA = (MXBM_ARENA != 0)>
 struct RoundShared {
     static constexpr bool kNeedLead = (LMODE == LM_USE);
     static constexpr bool kNarrow6 =
@@ -451,10 +449,11 @@ struct RoundShared {
     uint32_t gcount;
     uint32_t cnt8[MXBM_SPILL ? 8 : 1];
     uint8_t  skey[SUBPASS ? kSKey : 1];
-#if MXBM_ARENA
-    uint16_t aidx[kAMax];              // this bucket's pool entries, chain-walked once
-    uint32_t acnt;
-#endif
+    // This bucket's pool entries, chain-walked once. Zero-length off the arena rungs so
+    // a non-arena kernel's shared total is byte-for-byte what it was -- round 1 sits
+    // 448 B under a resident-block cliff, which a few bytes here would cost it.
+    uint16_t aidx[ARENA ? kAMax : 0];
+    uint32_t acnt[ARENA ? 1 : 0];
 };
 
 // The round body, extracted so a kernel can run DIFFERENT rounds in different blocks of
@@ -467,9 +466,11 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          bool MFIRST = (MXBM_MATCH_FIRST != 0),
          // 0 = plain record; else the count of address-implied key bits the pack
          // drops (16 for (16,1), 17 for (17,0)) -- every shift derives from it.
-         uint32_t IMPB = (MXBM_IMPBITS ? kImpDB : 0u)>
+         uint32_t IMPB = (MXBM_IMPBITS ? kImpDB : 0u),
+         bool ARENA = (MXBM_ARENA != 0)>
 __device__ __forceinline__
-void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm, uint32_t bid,
+void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA>& shm,
+                 uint32_t bid,
                  uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
                  const uint32_t* __restrict__ in_counts,
@@ -480,14 +481,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
                  uint32_t* __restrict__ all_right,
                  uint32_t* __restrict__ gi_counter,
                  uint32_t* __restrict__ drops,
-                 const uint64_t* __restrict__ pp4
-#if MXBM_ARENA
-               , const uint32_t* __restrict__ in_ahead = nullptr
-               , const uint32_t* __restrict__ in_anext = nullptr
-               , uint32_t* __restrict__ out_actr = nullptr
-               , uint32_t* __restrict__ out_atag = nullptr
-#endif
-                 ) {
+                 const uint64_t* __restrict__ pp4,
+                 const uint32_t* __restrict__ in_ahead = nullptr,
+                 const uint32_t* __restrict__ in_anext = nullptr,
+                 uint32_t* __restrict__ out_actr = nullptr,
+                 uint32_t* __restrict__ out_atag = nullptr) {
     static_assert(!IMPB || MXBM_PERFECT_TAB,
                   "IMPB: bits 23..8 of a packed rec0 are work bits, so a full-key "
                   "compare would reject true partners");
@@ -565,8 +563,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
     // regions and every store below is unchanged; only the plane offset moves.
     const size_t nbcap_in  = ((size_t)1u << bucket_bits) * in_bucket_cap;
     const size_t nbcap_out = ((size_t)1u << bucket_bits) * out_bucket_cap;
-    [[maybe_unused]] const size_t side_in  = (nbcap_in  + (MXBM_ARENA ? kArenaCap : 0u)) * INSTR;
-    [[maybe_unused]] const size_t side_out = (nbcap_out + (MXBM_ARENA ? kArenaCap : 0u)) * OUTSTR;
+    [[maybe_unused]] const size_t side_in  = (nbcap_in  + (ARENA ? kArenaCap : 0u)) * INSTR;
+    [[maybe_unused]] const size_t side_out = (nbcap_out + (ARENA ? kArenaCap : 0u)) * OUTSTR;
     // The 9-word record needs INW work words + 2 meta, so a stride of INW+1 means the
     // last one is in the plane and anything wider means it is still inline. Reader and
     // writer must agree, and only the stride tells them apart -- MXBM_R2_FULL's LM_RAW
@@ -593,25 +591,23 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
         __syncthreads();
     }
 
-#if MXBM_ARENA
     // This bucket's pool entries, chain-walked ONCE into shared. ~95 % of buckets
     // have an empty chain at the dense cap, so the walk is one global load; a chain
     // past kAMax loses elements, which drops[1] makes loud rather than silent.
-    auto& aidx = shm.aidx;
-    if (lId == 0) {
-        uint32_t n_ = 0;
-        if (in_ahead)
-            for (uint32_t a_ = in_ahead[bucket]; a_ != 0xFFFFFFFFu; a_ = in_anext[a_]) {
-                if (n_ >= kAMax) { atomicAdd(&drops[1], 1u); break; }
-                aidx[n_++] = (uint16_t)a_;
-            }
-        shm.acnt = n_;
+    uint32_t acnt = 0u;
+    if constexpr (ARENA) {
+        if (lId == 0) {
+            uint32_t n_ = 0;
+            if (in_ahead)
+                for (uint32_t a_ = in_ahead[bucket]; a_ != 0xFFFFFFFFu; a_ = in_anext[a_]) {
+                    if (n_ >= kAMax) { atomicAdd(&drops[1], 1u); break; }
+                    shm.aidx[n_++] = (uint16_t)a_;
+                }
+            shm.acnt[0] = n_;
+        }
+        __syncthreads();
+        acnt = shm.acnt[0];
     }
-    __syncthreads();
-    const uint32_t acnt = shm.acnt;
-#else
-    constexpr uint32_t acnt = 0u;
-#endif
 
   for (uint32_t sweep = 0; sweep < nsweep; ++sweep) {
     const uint32_t mask_s = SUBPASS ? sweep : mask0;
@@ -627,19 +623,14 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
     // STAGE. Sub-mask filtered, so only ~1/2^submask_bits of the lanes survive: keep this
     // loop cheap and defer anything expensive to the all-lanes loop below.
     for (uint32_t p = lId; p < cnt + acnt; p += kWG) {
-#if MXBM_ARENA
-        const bool ar_ = p >= cnt;
-#else
-        constexpr bool ar_ = false;
-#endif
+        const bool ar_ = ARENA && p >= cnt;
         // The filter now costs a shared byte, not a global word. The full record is still
         // read exactly once across the whole sweep, by whichever sweep claims it.
         if constexpr (SUBPASS)
             if (!ar_ && (skey[p] & ((1u << sbits) - 1u)) != mask) continue;
         size_t idx_ = base + p;
-#if MXBM_ARENA
-        if (ar_) idx_ = nbcap_in + aidx[p - cnt];
-#endif
+        if constexpr (ARENA)
+            if (ar_) idx_ = nbcap_in + shm.aidx[p - cnt];
         const size_t d = idx_ * INSTR;
         uint64_t rec0;
         [[maybe_unused]] uint64_t rec1 = 0;
@@ -653,11 +644,9 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
         const uint32_t key = (uint32_t)(rec0 & 0xFFFFFFu);
         if constexpr (!SUBPASS)
             if ((key & ((1u << sbits) - 1u)) != mask) continue;
-#if MXBM_ARENA
         // Pool entries bypass the skey prepass, so under SUBPASS they filter here.
-        if constexpr (SUBPASS)
+        if constexpr (ARENA && SUBPASS)
             if (ar_ && (key & ((1u << sbits) - 1u)) != mask) continue;
-#endif
         const uint32_t pos = atomicAdd(&gcount, 1u);
         // Keep counting past FCAP: gcount is what decides whether to split.
         if (pos >= FCAP) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
@@ -947,16 +936,13 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
                 const uint32_t cb   = ckey >> (24u - bucket_bits);
                 const uint32_t cpos = atomicAdd(&out_counts[cb], 1u);
                 size_t oslot = (size_t)cb * out_bucket_cap + cpos;
-#if MXBM_ARENA
-                if (cpos >= out_bucket_cap) {
-                    const uint32_t a_ = out_actr ? atomicAdd(out_actr, 1u) : kArenaCap;
-                    if (a_ < kArenaCap) { out_atag[a_] = cb; oslot = nbcap_out + a_; }
-                    else oslot = ~(size_t)0;
-                }
-                if (oslot != ~(size_t)0) {
-#else
-                if (cpos < out_bucket_cap) {
-#endif
+                if constexpr (ARENA)
+                    if (cpos >= out_bucket_cap) {
+                        const uint32_t a_ = out_actr ? atomicAdd(out_actr, 1u) : kArenaCap;
+                        if (a_ < kArenaCap) { out_atag[a_] = cb; oslot = nbcap_out + a_; }
+                        else oslot = ~(size_t)0;
+                    }
+                if (ARENA ? oslot != ~(size_t)0 : cpos < out_bucket_cap) {
                     const uint32_t cgi = gi_alloc(gi_counter);
                     const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == kAblEmit) {
@@ -1101,6 +1087,9 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          // spelled-out 0 would silently drop an MXBM_MB_* probe budget.
          bool MFIRST = (MXBM_MATCH_FIRST != 0),
          uint32_t IMPB = (MXBM_IMPBITS ? kImpDB : 0u),
+         // Dense per-bucket caps plus a global overflow pool -- the fit-ladder rung, see
+         // MXBM_ARENA above. Also before MINBLOCKS, for the same reason.
+         bool ARENA = (MXBM_ARENA != 0),
          int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
                         : LMODE == LM_RD2  ? MXBM_MB_RD2
                         : LMODE == LM_EMIT ? MXBM_MB_EMIT : 0)>
@@ -1116,12 +1105,10 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t* __restrict__ gi_counter,
                  uint32_t* __restrict__ drops,
                  const uint64_t* __restrict__ pp4,
-#if MXBM_ARENA
                  const uint32_t* __restrict__ in_ahead = nullptr,
                  const uint32_t* __restrict__ in_anext = nullptr,
                  uint32_t* __restrict__ out_actr = nullptr,
                  uint32_t* __restrict__ out_atag = nullptr,
-#endif
                  // co-tenant entry pass for the NEXT nonce; ignored unless COTENANT
                  const uint64_t* __restrict__ co_pp4 = nullptr,
                  uint32_t co_count = 0, uint32_t co_bucket_cap = 0,
@@ -1162,16 +1149,12 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         bid -= bid / co_stride;                             // rank among round blocks
     }
 
-    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST> shm;
+    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA> shm;
     fused_round_body<INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD,
-                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB>(
+                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB, ARENA>(
         shm, bid, bucket_bits, submask_bits, in_bucket_cap, out_bucket_cap, out_off,
         in_counts, in_belem, out_counts, out_belem, all_left, all_right, gi_counter,
-        drops, pp4
-#if MXBM_ARENA
-      , in_ahead, in_anext, out_actr, out_atag
-#endif
-        );
+        drops, pp4, in_ahead, in_anext, out_actr, out_atag);
 
     // Co-tenant: the next nonce's entry pass, in THIS launch. Grid-strided rather than
     // one-element-per-thread, so it stays correct if the geometry or kWG ever makes
