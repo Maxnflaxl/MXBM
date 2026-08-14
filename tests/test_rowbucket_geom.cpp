@@ -349,6 +349,11 @@ int main() {
                "the arena floor is quad (14,3) at 4.03 GiB");
         check(!pick(4.35, false).viable,
                "without it the floor is quad (14,3) at 4.40 -- 0.37 GiB higher");
+        // In card terms, through CUDA's availability rule: total VRAM less a fixed
+        // 640 MiB driver-plus-context allowance (cuda_solver.cu). A 5 GB card clears the
+        // floor and a 4 GB one does not, which is where reach now stops.
+        check( pick(4.70 - 0.625, true).viable, "a 5 GB card clears the arena floor");
+        check(!pick(3.70 - 0.625, true).viable, "a 4 GB card does not");
     }
 
     section("invariants the kernels depend on");

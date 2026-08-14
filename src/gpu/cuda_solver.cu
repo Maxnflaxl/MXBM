@@ -81,8 +81,19 @@ bool impb_allowed() {
     return !off;
 }
 
+// What availability holds back from TOTAL VRAM. The enumeration callers cannot ask
+// cudaMemGetInfo without creating a context on every device, so they size against total
+// and subtract this. It is a measured quantity, not a round number: on the reference card
+// the driver holds 408 MB of 16376 with nothing running, and this process's own context
+// costs 214 MB on top -- both roughly fixed, neither scaling with VRAM. The flat 1 GiB
+// this replaced carried ~0.4 GiB of pure margin, which on a 5 GB card is the difference
+// between an offered device and a refused one. Being optimistic here is safe: the
+// constructor re-asks against FREE memory, steps down the ladder on a real allocation
+// failure, and main.cpp reports a throw per-GPU and falls back to the OpenCL path.
+constexpr uint64_t kAvailSlackBytes = 640ull << 20;
+
 RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
-                         uint64_t slack = (uint64_t)1 << 30) {
+                         uint64_t slack = kAvailSlackBytes) {
     // allow_quad: costs +14 % time and buys no watts at any cap (measured), so the
     // ladder only reaches for it when a card cannot host a packed rung -- which is
     // exactly what takes the CUDA path below 6.5 GiB. (Both backends carry the quad
