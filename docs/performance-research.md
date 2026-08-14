@@ -25,7 +25,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
 | [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
-| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB, the plane had no writer but was still reserved) and the overflow arena ported from probe flag to fit-ladder rung (dense caps + a 65 K-slot pool per set, +1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**; with the availability allowance re-derived from what the driver and our own context actually hold (1 GiB → 640 MiB, measured) that is a 5 GB card that runs where nothing on the ladder used to fit; and **the octo record** takes it to **2.17 GiB** for +36 % — round 3's output as its eight leaves, which also makes three of the five back-reference rows dead (recovery reads the leaves instead of walking down to them, and no gi-to-slot map is needed once round 4 names its parents by slot). That clears BeamHash III's stated 3 GB minimum and the card class behind it, verified by simulation |
+| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB, the plane had no writer but was still reserved) and the overflow arena ported from probe flag to fit-ladder rung (dense caps + a 65 K-slot pool per set, +1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**; with the availability allowance re-derived from what the driver and our own context actually hold (1 GiB → 640 MiB, measured) that is a 5 GB card that runs where nothing on the ladder used to fit; and **the octo record** takes it to **2.17 GiB** for +36 % — round 3's output as its eight leaves, which also makes three of the five back-reference rows dead (recovery reads the leaves instead of walking down to them, and no gi-to-slot map is needed once round 4 names its parents by slot). With those rows gone nothing reads a round-2 element's `gi` either, so that record drops 3 u64 to 2 and round 2's atomic is not issued: **1.90 GiB**, which is 6 u64 per slot with no field nothing reads, and clears BeamHash III's stated 3 GB minimum and the card class behind it |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -4864,11 +4864,11 @@ dense caps, because a card that can host the packed record has no use for them:
 
 | rung | footprint | ms/solve |
 |---|---|---|
-| quad (16,1) + dense caps + octo | 2.33 GiB | 55.4 |
-| quad (15,2) + dense caps + octo | 2.23 GiB | 57.4 |
-| quad (14,3) + dense caps + octo | **2.17 GiB** | 61.1 |
+| quad (16,1) + dense caps + octo | 2.04 GiB | 54.9 |
+| quad (15,2) + dense caps + octo | 1.95 GiB | 57.0 |
+| quad (14,3) + dense caps + octo | **1.90 GiB** | 60.6 |
 
-**2.17 GiB clears BeamHash III's stated 3 GB minimum and the card class behind it**, from
+**1.90 GiB clears BeamHash III's stated 3 GB minimum and the card class behind it**, from
 2.4× over where this started. Verified on this card by simulation rather than by
 arithmetic alone: `--keepfree 13100` leaves 2868 MB usable, which is what a 3 GB card
 offers, and the ladder picks quad (16,1) + dense caps + octo unaided and mines at
@@ -4881,10 +4881,30 @@ the driver's carve-out is ALREADY excluded from the figure availability subtract
 and the only real cost is the 0.214 GiB context. The 640 MiB stands as margin; the
 arithmetic behind it did not.
 
-What is left is 1.91 GiB of records against 0.26 of references. The next named lever is
-retiring `gi` from the records: with rows 1–3 dead nothing reads a round-1, -2 or -3
-element's `gi` except the next round's left/right tiebreak, which the slot serves as well,
-and that takes the quad record from 3 u64 to 2 for −0.27 GiB.
+**And the reference rows were the last reader of `gi`.** With rows 1–3 dead, `gi_of` is
+called from exactly two places — the next round's left/right tiebreak, and `ref_of`, which
+round 4 no longer uses — so every record's `gi` is a tiebreak token and nothing more. The
+slot orders the staged elements just as well, and the consumer computes it anyway to load
+the record. Only one of the three records shrinks by dropping it (the pair record is 2 u64
+either way, the octo record 4), but the quad record's 24 + 4 × 25 = 124 bits fit 2 u64
+instead of 3 — and round 2's `gi_alloc` then has no consumer at all and is not issued,
+which is 33.5 M atomics a solve.
+
+| quad (14,3) + dense caps + octo | ms/solve | on the card |
+|---|---|---|
+| references in two rows | 61.1 | 2444 MiB |
+| + `gi` retired from round 2 | **60.6** | **2164 MiB** |
+
+−280 MiB is `nslots × 8 B` exactly. The tiebreak change is sound rather than proven by
+construction: it only fires when two elements share their first leaf, and their child then
+has a duplicate index and cannot be part of a solution — so valid solutions never see it,
+but the goldens are what confirm that.
+
+**1.90 GiB is this design's floor.** Six u64 per slot, and no record carries a field
+nothing reads: set 0 is round 4's output, which the terminal round needs whole, and set 1
+is round 3's eight leaves. Below this needs a structural change — the last reference rows
+off the card (0.26 GiB), or streaming / in-place layer reuse, which is the only lever that
+attacks holding two layers at once.
 
 </details>
 
