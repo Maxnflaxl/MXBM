@@ -358,6 +358,18 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 #ifndef LDS_ARENA
 #define LDS_ARENA 0
 #endif
+// OCTO RECORD. Round 3's output as the eight seed indices that determine it (32 B where
+// the packed record takes 64), round 4 rebuilding its work words, lead and leftContrib
+// with rd_elem4. Three things narrow at once: set 1 halves, reference rows 1-3 stop being
+// written because recovery reaches the leaves through round 3's surviving output instead
+// of walking to them, and round 2's record then loses the gi those rows were the last
+// reader of. Like the arena it is a build option, and for the same reason.
+#ifndef LDS_OCTO
+#define LDS_OCTO 0
+#endif
+#ifndef LDS_OCTO_CHECK
+#define LDS_OCTO_CHECK 0
+#endif
 #ifndef LDS_ARENA_CAP
 #define LDS_ARENA_CAP 65536u
 #endif
@@ -565,6 +577,7 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 #define LMODE_SEED 3   // RE-DERIVE from index; emit a 16 B PAIR record (r1)
 #define LMODE_RD2  4   // RE-DERIVE from that pair record                (r2)
 #define LMODE_RD3  5   // RE-DERIVE from a 24 B QUAD record              (r3)
+#define LMODE_RD4  6   // RE-DERIVE from a 32 B OCTO record              (r4, octo rungs)
 #define BH3_LMIX5  288u   // Lmix(5) -- the round the contrib is precomputed against
 
 // PAIR RECORD (round 1 -> round 2), 16 B instead of the 72 B packed element. A
@@ -575,7 +588,6 @@ __kernel void bw_copy(uint N, uint ew, __global const ulong* src, __global ulong
 // docs/performance.md). Seed indices are 25-bit (2^25 seeds); gi is 26-bit.
 //   word0 = key[0,24) | leftIdx  << 24
 //   word1 = rightIdx  | gi       << 25
-#define RD2_IDXMASK 0x1FFFFFFu
 inline uint  rd2_left (ulong w0) { return (uint)(w0 >> 24) & RD2_IDXMASK; }
 inline uint  rd2_right(ulong w1) { return (uint)(w1)       & RD2_IDXMASK; }
 inline uint  rd2_gi   (ulong w1) { return (uint)(w1 >> 25); }
@@ -610,6 +622,10 @@ inline uint  rd3_gi(ulong w2) { return (uint)(w2 >> 25); }
 inline ulong rd3_w1(uint i1, uint i2) { return (ulong)i1 | ((ulong)i2 << 25); }
 inline ulong rd3_w2(uint i3, uint gi) { return (ulong)i3 | ((ulong)gi << 25); }
 
+// The 16 B quad record and the 32 B octo record live in round.cl, not here: `recover`
+// reads the octo layout and is compiled without this file. Writers and reader share one
+// definition rather than two that can drift.
+
 // Rebuild a ROUND-2 element (the round-1 child of seeds li, ri) from scratch:
 // two seeds, each mixed at Lmix(1)=448, combined at Lout(1)=424, then mixed at
 // Lmix(2)=424 over the 2-leaf tree. This is the unit of re-derivation for both
@@ -620,6 +636,39 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
     bh3_seed_element(pp, ri, sb); t1[0] = ri; sb[0] = bh3_apply_mix(sb, t1, 1u, 448u);
     bh3_combine(sa, sb, 424u, out);
     t2[0] = li; t2[1] = ri; out[0] = bh3_apply_mix(out, t2, 2u, 424u);
+}
+
+// Rebuild a ROUND-2 OUTPUT element from its four leaves: two rd_elem2 calls, combined at
+// Lout(2)=400 and mixed at Lmix(3)=400. Fourteen siphash rounds against the 48 B it saves
+// reading. Round 3's expand had this inline; the octo rung needs it callable.
+inline void rd_elem3(const ulong pp[4], const uint l[4], ulong out[7]) {
+    ulong a[7], b[7];
+    rd_elem2(pp, l[0], l[1], a);
+    rd_elem2(pp, l[2], l[3], b);
+    bh3_combine(a, b, 400u, out);
+    uint t4[4] = { l[0], l[1], l[2], l[3] };
+    out[0] = bh3_apply_mix(out, t4, 4u, 400u);
+}
+
+// Rebuild a ROUND-3 OUTPUT element from its eight leaves: two rd_elem3 calls, combined at
+// Lout(3)=376 and mixed at Lmix(4)=376. The 6 is what apply_mix computes for itself at
+// Lmix=376 ((512-376+24)/25), so the tree length is not a second thing to keep in step.
+// Twenty-eight siphash rounds against the 32 B it saves reading, which is why the octo
+// record is a reach rung and never a default.
+inline void rd_elem4(const ulong pp[4], const uint l[8], ulong out[7]) {
+    ulong a[7], b[7];
+    uint lo4[4] = { l[0], l[1], l[2], l[3] }, hi4[4] = { l[4], l[5], l[6], l[7] };
+    rd_elem3(pp, lo4, a);
+    rd_elem3(pp, hi4, b);
+    bh3_combine(a, b, 376u, out);
+    out[0] = bh3_apply_mix(out, l, 6u, 376u);
+}
+
+// The leftContrib round 3 stored: a mix of the eight leaves ALONE over a zero element, so
+// it needs no work state. The cheap half of what the octo record gives up.
+inline ulong oc_contrib(const uint l[8]) {
+    ulong z[7]; for (uint w = 0; w < 7u; ++w) z[w] = 0ul;
+    return bh3_rotl64(bh3_apply_mix(z, l, 8u, BH3_LMIX5), 40);
 }
 
 // PACKED ELEMENT LAYOUT. Each element is ONE contiguous record instead of four
@@ -701,7 +750,12 @@ void NAME(                                                                      
        when the table is not a perfect hash. */                                       \
     __local ulong lwork[(INW) * (FCAP)];                                              \
     __local uint  lgi[((LMODE) == LMODE_SEED) ? 1 : (FCAP)];                          \
-    __local uint  llead[((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW) ? (FCAP) : 1]; \
+    __local uint  llead[((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW ||               \
+                         (LMODE) == LMODE_RD4) ? (FCAP) : 1];                          \
+    /* Where each staged element was read from. LMODE_RD4 only: its references name a   \
+       parent by SLOT rather than by gi, because recovery has to reach that parent's    \
+       octo record to read the eight leaves out of it, and a gi does not locate one. */ \
+    __local uint  lslot[((LMODE) == LMODE_RD4) ? (FCAP) : 1];                          \
     __local uint  lleaf[(LEAFW) * (FCAP)];                                            \
     __local uint  lkey[(PERFECT) ? 1 : (FCAP)];                                       \
     __local uint  lchain[(FCAP)];                                                     \
@@ -792,6 +846,18 @@ void NAME(                                                                      
                 lgi[pos] = rd2_gi(rec1);                                              \
                 if (!(PERFECT)) lkey[pos] = key;                                      \
                 lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
+            } else if ((LMODE) == LMODE_RD3 && (INSTR) == 2u) {                       \
+                /* 16 B QUAD record, octo rungs: the same four leaves with the gi      \
+                   packed out. Nothing indexes a round-2 element by gi there, and the  \
+                   only other reader was this round's tiebreak -- which the staged     \
+                   SLOT serves just as well, being unique and ordered the same way. */ \
+                ulong w1 = in_belem[d + 1u];                                           \
+                lgi[pos] = (uint)sl_;                                                  \
+                if (!(PERFECT)) lkey[pos] = key;                                       \
+                lleaf[pos*(LEAFW) + 0] = q16_l0(rec0);                                 \
+                lleaf[pos*(LEAFW) + 1] = q16_l1(rec0, w1);                             \
+                lleaf[pos*(LEAFW) + 2] = q16_l2(w1);                                   \
+                lleaf[pos*(LEAFW) + 3] = q16_l3(w1);                                   \
             } else if ((LMODE) == LMODE_RD3) {                                        \
                 /* 24 B QUAD record: key, four leaves, gi -- no work words. Three     \
                    scalar loads where LMODE_EMIT below reads nine. Field extraction    \
@@ -803,6 +869,33 @@ void NAME(                                                                      
                 lleaf[pos*(LEAFW) + 1] = rd3_i1(w1);                                   \
                 lleaf[pos*(LEAFW) + 2] = rd3_i2(w1);                                   \
                 lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                   \
+            } else if ((LMODE) == LMODE_RD4) {                                        \
+                /* 32 B OCTO record: key, eight leaves, gi. Two 16 B loads where the   \
+                   packed round-4 input takes two; the work words, the lead and the    \
+                   leftContrib are all rebuilt in the expand loop from these leaves.   \
+                   lslot is kept because this round's references name parents by slot. */ \
+                uint l8[8];                                                            \
+                if (LDS_V2) {                                                          \
+                    __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
+                    ulong2 q0 = v[0], q1 = v[1];                                       \
+                    oc_leaves(q0.x, q0.y, q1.x, q1.y, l8);                             \
+                    lgi[pos] = (uint)(q1.y >> 32);                                     \
+                } else {                                                               \
+                    ulong w1 = in_belem[d + 1u], w2 = in_belem[d + 2u],                \
+                          w3 = in_belem[d + 3u];                                       \
+                    oc_leaves(rec0, w1, w2, w3, l8);                                   \
+                    lgi[pos] = (uint)(w3 >> 32);                                       \
+                }                                                                      \
+                lslot[pos] = (uint)sl_;                                                \
+                if (LDS_OCTO_CHECK) {                                                  \
+                /* The record's eight leaves must re-derive the element the record IS:  \
+                   rebuild it and check the key that produces against the stored one. */ \
+                  ulong pp_[4] = { pp4[0], pp4[1], pp4[2], pp4[3] }; ulong cc_[7];     \
+                  rd_elem4(pp_, l8, cc_);                                              \
+                  if ((uint)(cc_[0] & 0xFFFFFFu) != key) atomic_inc(&drops[3]);        \
+                }                                                                      \
+                if (!(PERFECT)) lkey[pos] = key;                                       \
+                for (uint i = 0; i < 8u; ++i) lleaf[pos*(LEAFW) + i] = l8[i];          \
             } else if ((LMODE) == LMODE_EMIT) {                                       \
                 /* Stride-8 r2 record [work0..6 | p0], p1 in the side plane: 4 x 16 B \
                    loads where 9 scalars were (CUDA: the MIO-queue win, 41.5->35.3). \
@@ -928,6 +1021,25 @@ void NAME(                                                                      
             cc[0] = bh3_apply_mix(cc, t4, 4u, 400u);                                   \
             for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
         }                                                                             \
+        if (!ABL_HIT(2, LMODE) && (LMODE) == LMODE_RD4) {                             \
+            /* DEFERRED EXPAND, round 4: two round-3 rebuilds, combined at Lout(3)=376 \
+               and mixed at Lmix(4)=376 -- twenty-eight siphash rounds, the deepest    \
+               re-derivation on the ladder. The lead and the leftContrib come out of   \
+               the same eight leaves, and are written into the locals LMODE_USE's emit \
+               already reads, so the child mix below is shared with the packed round 4 \
+               rather than duplicated. Leaves 0 and 1 are spent doing it: leaf 0 is the \
+               lead and survives in llead, and nothing downstream reads the rest. */   \
+            ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
+            uint t8[8];                                                                \
+            for (uint i = 0; i < 8u; ++i) t8[i] = lleaf[pos*(LEAFW) + i];             \
+            ulong cc[7];                                                               \
+            rd_elem4(pp, t8, cc);                                                      \
+            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
+            ulong lc = oc_contrib(t8);                                                 \
+            llead[pos] = t8[0];                                                        \
+            lleaf[pos*(LEAFW) + 0] = (uint)lc;                                         \
+            lleaf[pos*(LEAFW) + 1] = (uint)(lc >> 32);                                 \
+        }                                                                             \
         /* lwork[pos*INW] is word 0, whose low 24 bits ARE the key in every mode --   \
            and it is filled by this point (the derive modes fill it just above). */   \
         uint hkk = (PERFECT) ? (uint)(lwork[pos*(INW)] & 0xFFFFFFu) : lkey[pos];      \
@@ -942,10 +1054,10 @@ void NAME(                                                                      
             if (++walk > 64u) { atomic_inc(&drops[3]); break; }                      \
             /* Perfect table => same chain means same full key; the compare folds. */ \
             if (!ABL_HIT(4, LMODE) && ((PERFECT) || lkey[oth] == key)) {              \
-                uint la = ((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW)              \
-                              ? llead[pos] : lleaf[pos*(LEAFW)];                      \
-                uint lb = ((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW)              \
-                              ? llead[oth] : lleaf[oth*(LEAFW)];                      \
+                uint la = ((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW ||           \
+                           (LMODE) == LMODE_RD4) ? llead[pos] : lleaf[pos*(LEAFW)];   \
+                uint lb = ((LMODE) == LMODE_USE || (LMODE) == LMODE_RAW ||            \
+                           (LMODE) == LMODE_RD4) ? llead[oth] : lleaf[oth*(LEAFW)];   \
                 uint ga = ((LMODE) == LMODE_SEED) ? lleaf[pos*(LEAFW)] : lgi[pos];    \
                 uint gb = ((LMODE) == LMODE_SEED) ? lleaf[oth*(LEAFW)] : lgi[oth];    \
                 uint leftPos = pos, rightPos = oth;                                   \
@@ -958,7 +1070,7 @@ void NAME(                                                                      
                 else bh3_combine(a, b, (LOUT), c);                                    \
                 uint ctree[9]; ulong contribOut = 0ul;                                \
                 if (ABL_HIT(16, LMODE)) { ctree[0] = llead[leftPos]; }                \
-                else if ((LMODE) == LMODE_USE) {                                      \
+                else if ((LMODE) == LMODE_USE || (LMODE) == LMODE_RD4) {              \
                     for (uint i = 0; i < 8u; ++i) ctree[i] = 0u;                      \
                     ctree[8] = llead[rightPos];                                        \
                     ulong lc = ((ulong)lleaf[leftPos*(LEAFW)+1] << 32)                 \
@@ -976,6 +1088,18 @@ void NAME(                                                                      
                         ulong zw[7]; for (uint w = 0; w < 7u; ++w) zw[w] = 0ul;        \
                         contribOut = bh3_rotl64(                                       \
                             bh3_apply_mix(zw, ctree, 8u, BH3_LMIX5), 40);              \
+                        /* The octo rung recomputes this from the same eight leaves    \
+                           in round 4; the two formulas must agree exactly. */         \
+                        if (LDS_OCTO_CHECK && contribOut != oc_contrib(ctree))         \
+                            atomic_inc(&drops[3]);                                     \
+                        /* And the whole composite: the eight leaves must re-derive     \
+                           every work word this round is about to store. */             \
+                        if (LDS_OCTO_CHECK) {                                           \
+                            ulong pq[4] = { pp4[0], pp4[1], pp4[2], pp4[3] }, ck[7];   \
+                            rd_elem4(pq, ctree, ck);                                    \
+                            for (uint w = 0; w < (OUTW); ++w)                           \
+                                if (ck[w] != c[w]) { atomic_inc(&drops[3]); break; }    \
+                        }                                                               \
                     }                                                                 \
                 }                                                                     \
                 uint ckey = (uint)(c[0] & 0xFFFFFFu);                                 \
@@ -1004,7 +1128,12 @@ void NAME(                                                                      
                        back-ref writes below coalesce across a warp, while slots       \
                        scatter them over a 190 MB row. Same reason the per-bucket      \
                        atomic_inc beats a computed slot. Do not retry. */              \
-                    uint cgi = ABL_HIT(64, LMODE) ? pos : atomic_inc(gi_counter);     \
+                    /* No consumer, no atomic: on an octo build round 2's record has  \
+                       no gi field and its reference row is not allocated, so the       \
+                       counter is not touched at all for that round. */                 \
+                    const bool needGi = !(LDS_OCTO) || (LMODE) != LMODE_RD2;           \
+                    uint cgi = ABL_HIT(64, LMODE) ? pos                                \
+                             : (needGi ? atomic_inc(gi_counter) : 0u);                 \
                     /* One predictable select per child; free (measured 2026-08-01). */ \
                     __global ulong* restrict out_belem =                              \
                         (cb < out_half) ? out_lo : out_hi;                            \
@@ -1022,6 +1151,12 @@ void NAME(                                                                      
                             out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);              \
                             out_belem[od + 1u] = rd2_w1(ctree[1], cgi);               \
                         }                                                             \
+                    } else if ((LMODE) == LMODE_RD2 && (OUTSTR) == 2u) {              \
+                        /* QUAD RECORD WITHOUT gi, octo rungs: the same four leaves in \
+                           2 u64. cgi is not even allocated for this record -- see the \
+                           gi guard at the top of the emit. */                          \
+                        out_belem[od + 0u] = q16_w0(ckey, ctree[0], ctree[1]);         \
+                        out_belem[od + 1u] = q16_w1(ctree[1], ctree[2], ctree[3]);     \
                     } else if ((LMODE) == LMODE_RD2 && (OUTSTR) == 3u) {              \
                         /* QUAD RECORD: key, four leaves, gi in 3 u64 where the packed \
                            record below takes 9. The work words are dropped entirely;  \
@@ -1047,13 +1182,24 @@ void NAME(                                                                      
                         }                                                             \
                         side_out[(size_t)cb * outcap_ + cpos] =                \
                             r3_p1(ctree[2], ctree[3], cgi);                           \
+                    } else if ((LMODE) == LMODE_RD3 && (OUTSTR) == 4u) {              \
+                        /* OCTO RECORD: the eight leaves that determine this child, its \
+                           key and its gi, in 4 u64 where the packed round-3 output    \
+                           takes 8. The six work words, the lead and the leftContrib   \
+                           are all rebuilt by round 4 from these leaves. */             \
+                        __global ulong2* v = (__global ulong2*)(out_belem + od);       \
+                        v[0] = (ulong2)(oc_w0(ckey, ctree[0], ctree[1]),               \
+                                        oc_w1(ctree[1], ctree[2], ctree[3], ctree[4])); \
+                        v[1] = (ulong2)(oc_w2(ctree[4], ctree[5], ctree[6]),           \
+                                        oc_w3(ctree[6], ctree[7], cgi));               \
                     } else if ((LDS_V2) && ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3)) { \
                         __global ulong2* v = (__global ulong2*)(out_belem + od);      \
                         v[0] = (ulong2)(c[0], c[1]);                                  \
                         v[1] = (ulong2)(c[2], c[3]);                                  \
                         v[2] = (ulong2)(c[4], c[5]);                                  \
                         v[3] = (ulong2)(((ulong)cgi << 32) | (ulong)ctree[0], contribOut); \
-                    } else if ((LDS_V2) && (LMODE) == LMODE_USE) {                    \
+                    } else if ((LDS_V2) && ((LMODE) == LMODE_USE ||                   \
+                                             (LMODE) == LMODE_RD4)) {                  \
                         *((__global ulong2*)(out_belem + od)) =                       \
                             (ulong2)(c[0], ((ulong)cgi << 32) | (ulong)ctree[0]);     \
                     } else {                                                          \
@@ -1069,11 +1215,21 @@ void NAME(                                                                      
                             }                                                         \
                         }                                                             \
                     }                                                                 \
-                    if (!ABL_HIT(8, LMODE)) {                                         \
-                      all_left[out_off + cgi]  = ((LMODE) == LMODE_SEED)              \
-                          ? lleaf[leftPos*(LEAFW)]  : lgi[leftPos];                   \
-                      all_right[out_off + cgi] = ((LMODE) == LMODE_SEED)              \
-                          ? lleaf[rightPos*(LEAFW)] : lgi[rightPos];                  \
+                    /* Reference rows. On an octo build rows 1-3 are never read: a    \
+                       level-3 element IS its eight leaves and set 1 survives to        \
+                       recovery, so the walk starts at row 4 and stops two levels deep. \
+                       Round 4's row names its parents by SLOT, which is what locates   \
+                       the octo record those leaves have to be read out of. */          \
+                    if (!ABL_HIT(8, LMODE) &&                                          \
+                        (!(LDS_OCTO) || (LMODE) == LMODE_RD4)) {                       \
+                      all_left[out_off + cgi]  = ((LMODE) == LMODE_RD4)                \
+                          ? lslot[leftPos]                                             \
+                          : (((LMODE) == LMODE_SEED) ? lleaf[leftPos*(LEAFW)]          \
+                                                     : lgi[leftPos]);                  \
+                      all_right[out_off + cgi] = ((LMODE) == LMODE_RD4)                \
+                          ? lslot[rightPos]                                            \
+                          : (((LMODE) == LMODE_SEED) ? lleaf[rightPos*(LEAFW)]         \
+                                                     : lgi[rightPos]);                 \
                     }                                                                 \
                 } else atomic_inc(&drops[2]);                                         \
             }                                                                        \
@@ -1115,6 +1271,17 @@ FUSED_LDS(round_fused_rd2q, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 3u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r2: emits the 24 B quad record
 FUSED_LDS(round_fused_rd3,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 3u, 8u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r3: rebuilds from it
+// The octo rungs' round 2 and round 3: the same modes with a narrower output record --
+// 2 u64 instead of 3 for the quad, 4 instead of 8 for round 3's -- and round 4 reading
+// the octo record it leaves behind. Keyed on OUTSTR/INSTR rather than on modes of their
+// own wherever the staging is unchanged, so the two record widths cannot drift apart.
+FUSED_LDS(round_fused_rd2q16, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 2u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
+FUSED_LDS(round_fused_rd3o,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 2u, 4u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
+FUSED_LDS(round_fused_rd4,   6, 1, 8, LMODE_RD4, 288u, 9u, 2u, 0u, 0u, 4u, 2u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
+
 FUSED_LDS(round_fused_6_5,  6, 1, 2, LMODE_USE, 288u, 9u, 2u, 0u, 0u, 8u, 2u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)     // r4: stages contrib, no leaf emit
 

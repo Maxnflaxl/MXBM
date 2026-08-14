@@ -88,6 +88,13 @@ struct PipelineBuffers {
                                // access is 16 B aligned. Empty under quad.
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
+    // OCTO RECORD (fb_octo true). Round 3's output as the eight seed indices that
+    // determine it, 32 B where the packed record takes 64, with round 4 rebuilding its
+    // work words, lead and leftContrib. Reference rows 1-3 are then neither written nor
+    // allocated -- recovery reaches the leaves through round 3's surviving output -- so
+    // left/right hold row 4 at offset 0 and row 5 at `capacity`, and round 2's record
+    // loses the gi those rows were the last reader of.
+    bool fb_octo = false;
     // OVERFLOW ARENA (fb_arena true). Per-bucket capacities fall from a mean + 8 sigma
     // tail bound to mean + 2 sigma, and a bucket that fills appends to a pool that lives
     // BEHIND the bucket records inside fb_elem itself -- so no separate record buffer

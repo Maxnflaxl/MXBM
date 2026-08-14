@@ -289,17 +289,95 @@ __kernel void survivor_scan_s(uint N, uint stride, __global const ulong* work,
     uint oi = atomic_inc(&counters[3]);
     if (oi < cap) out_slots[oi] = g;
 }
+// Seed indices are 25-bit (2^25 seeds); every record below packs them at that width,
+// and so do the pair/quad records in lds.cl, which is compiled after this file.
+#define RD2_IDXMASK 0x1FFFFFFu
+
+// QUAD RECORD WITHOUT gi, 16 B, for the octo rungs only. Nothing reads a round-2
+// element's gi there: the reference rows it would index are not allocated, and round 3's
+// left/right tiebreak takes the staged slot instead. That leaves key 24 + 4 x 25 = 124
+// bits, which fits 2 u64 where the record above needs 3.
+//   w0 = key | l0<<24 | l1<<49        w1 = l1>>15 | l2<<10 | l3<<35
+inline ulong q16_w0(uint key, uint l0, uint l1) {
+    return (ulong)key | ((ulong)l0 << 24) | ((ulong)l1 << 49);
+}
+inline ulong q16_w1(uint l1, uint l2, uint l3) {
+    return ((ulong)l1 >> 15) | ((ulong)l2 << 10) | ((ulong)l3 << 35);
+}
+inline uint q16_l0(ulong w0)           { return (uint)(w0 >> 24) & RD2_IDXMASK; }
+inline uint q16_l1(ulong w0, ulong w1) { return (uint)(((w0 >> 49) | (w1 << 15)) & RD2_IDXMASK); }
+inline uint q16_l2(ulong w1)           { return (uint)(w1 >> 10) & RD2_IDXMASK; }
+inline uint q16_l3(ulong w1)           { return (uint)(w1 >> 35) & RD2_IDXMASK; }
+
+// OCTO RECORD (round 3 -> round 4), 32 B instead of 64. The quad argument one round
+// further down: a round-3 OUTPUT element combines two round-3 inputs, each determined by
+// four seed indices, so eight indices determine it and those eight ARE its leaves. Its
+// six work words, its lead (= leaf 0) and its leftContrib (a mix of the eight leaves over
+// a zero element) are then all derivable, and round 4 rebuilds them with rd_elem4.
+//
+// key 24 + 8 x 25 + gi 26 = 250 bits of the 256 that 4 u64 give, so three leaves straddle
+// a word boundary and no layout avoids it. w0's low 24 bits are the key, as in every
+// other record, so the staging loop's extraction is shared.
+//   w0 = key    | l0<<24 | l1<<49
+//   w1 = l1>>15 | l2<<10 | l3<<35 | l4<<60
+//   w2 = l4>>4  | l5<<21 | l6<<46
+//   w3 = l6>>18 | l7<<7  | gi<<32
+inline ulong oc_w0(uint key, uint l0, uint l1) {
+    return (ulong)key | ((ulong)l0 << 24) | ((ulong)l1 << 49);
+}
+inline ulong oc_w1(uint l1, uint l2, uint l3, uint l4) {
+    return ((ulong)l1 >> 15) | ((ulong)l2 << 10) | ((ulong)l3 << 35) | ((ulong)l4 << 60);
+}
+inline ulong oc_w2(uint l4, uint l5, uint l6) {
+    return ((ulong)l4 >> 4) | ((ulong)l5 << 21) | ((ulong)l6 << 46);
+}
+inline ulong oc_w3(uint l6, uint l7, uint gi) {
+    return ((ulong)l6 >> 18) | ((ulong)l7 << 7) | ((ulong)gi << 32);
+}
+inline void oc_leaves(ulong w0, ulong w1, ulong w2, ulong w3, uint l[8]) {
+    l[0] = (uint)(w0 >> 24) & RD2_IDXMASK;
+    l[1] = (uint)(((w0 >> 49) | (w1 << 15)) & RD2_IDXMASK);
+    l[2] = (uint)(w1 >> 10) & RD2_IDXMASK;
+    l[3] = (uint)(w1 >> 35) & RD2_IDXMASK;
+    l[4] = (uint)(((w1 >> 60) | (w2 << 4)) & RD2_IDXMASK);
+    l[5] = (uint)(w2 >> 21) & RD2_IDXMASK;
+    l[6] = (uint)(((w2 >> 46) | (w3 << 18)) & RD2_IDXMASK);
+    l[7] = (uint)(w3 >> 7) & RD2_IDXMASK;
+}
+
 // recover: one work-item per survivor. Walk the consolidated back-refs from the
 // round-5 survivor (slot in work[0], back-ref at row 4 = (5-1)*capacity) down to
 // round 1 (row 0, whose left/right entries ARE leaf indices), collecting all 32
 // leaves in tree order (pre-order: left subtree fully, then right -- the same
 // order round_mix's DFS uses and the verifier expects). No apply_mix.
+// OCTO: only rows 4 and 5 exist, row 4 at offset 0 and row 5 at `capacity`. Row 4 names
+// its parents by SLOT in round 3's output set, and each of those records carries the
+// eight seed indices below it -- in the same left-to-right order this walk would have
+// produced, because round 3 built its leaf tree and its references from the same
+// leftPos/rightPos. So the walk is two levels deep instead of five, and rows 1-3 are
+// never allocated. r3_elem/r3_stride bind that set; off an octo build they are unread.
 __kernel void recover(uint nSurv, __global const uint* surv_slots, uint capacity,
                       __global const uint* all_left, __global const uint* all_right,
-                      __global uint* out /* [nSurv*32] */) {
+                      __global uint* out /* [nSurv*32] */,
+                      __global const ulong* r3_elem, uint r3_stride) {
     uint i = (uint)get_global_id(0);
     if (i >= nSurv) return;
     uint got = 0u;
+#if LDS_OCTO
+    uint s5 = surv_slots[i];
+    uint g4[2] = { all_left[capacity + s5], all_right[capacity + s5] };
+    for (int k = 0; k < 2; ++k) {
+        uint sl[2] = { all_left[g4[k]], all_right[g4[k]] };
+        for (int j = 0; j < 2; ++j) {
+            __global const ulong* r = r3_elem + (size_t)sl[j] * r3_stride;
+            uint l[8];
+            oc_leaves(r[0], r[1], r[2], r[3], l);
+            for (int t = 0; t < 8 && got < 32u; ++t)
+                out[(size_t)i*32u + got++] = l[t];
+        }
+    }
+    return;
+#endif
     uint lvl[8], slt[8]; int sp = 0;
     lvl[0] = 5u; slt[0] = surv_slots[i]; sp = 1;
     while (sp > 0 && got < 32u) {
