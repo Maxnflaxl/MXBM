@@ -817,9 +817,9 @@ back as core clock. Measured: **−14.3 % at 100 W, −14.4 % at 120, −10.8 % 
 peak, with draw saturating at ~230 W under a 285 W cap).
 
 **The efficiency-optimal operating point moved onto the rung: 160 W + 5001 MHz gives
-3.70 J/solution** (2026-08-14, after the low-power kernel pair below; 120 s pairs in
-mirrored order — the 2026-07-31 sweep read 3.79 there, and the table below keeps that
-sweep's figures). Guidance for capped rigs: below ~170 W, always
+3.70 J/solution** (2026-08-14, 120 s pairs in mirrored order — the 2026-07-31 sweep read
+3.79 there). The gain at this cap is the implicit-bits record shipped 2026-08-13, not the
+low-power pair: that gate fires only below 130 W. Guidance for capped rigs: below ~170 W, always
 pair the cap with the rung — `sudo mxbm ... --pl <cap> --mclk 5001` (both restored on
 exit), or `sudo nvidia-smi -pl <cap> -lmc 5001,5001` once at boot on rigs that mine
 unprivileged. At or above ~180 W, never.
@@ -863,7 +863,9 @@ Three floor levers landed since the sweep above: match-first × (17,0) behind th
 the (17,0) pack ([the mechanism and A/Bs](performance-research.md#measured-results-2026-08-14)).
 The miner's own benchmark, headless, 5001 rung, two 120 s runs per point in mirrored
 cap order (arms agree within 1.5 % everywhere), against the sweep table's lolMiner
-best-per-cap column:
+best-per-cap column. **The 130 W gate splits this table**: 100 and 120 W run match-first
+× packed (17,0) and carry all three levers; 140 and 160 W run (16,1) packed and carry
+only the stock-geometry record, so they are unchanged by the 08-14 ship.
 
 | cap | MXBM ms/solve | sol/s | J/sol | lolMiner best | gap |
 |---|---|---|---|---|---|
