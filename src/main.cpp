@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <exception>
 #include <memory>
 #include <string>
@@ -17,6 +18,7 @@
 #include "config/config.h"
 #include "miner/stats.h"
 #include "ui/console.h"
+#include "ui/keys.h"
 #include "ui/ticker.h"
 #include "pow/difficulty.h"
 #include "sha256/sha256.h"   // vendored: void sha256(const uint8_t* d, size_t n, uint8_t out[32]);
@@ -212,6 +214,10 @@ int main(int argc, char** argv) {
     // Declared before `stats` so it outlives the telemetry callback below, which
     // reads it: destruction is reverse declaration order.
     miner::Thermal thermal;
+
+    // The console 'p' key. Read wherever thermal.paused() is: the engines'
+    // pause predicate, the watchdog, and the statistics table's paused column.
+    std::atomic<bool> user_paused{false};
 
     miner::Stats stats;
 
@@ -765,7 +771,8 @@ int main(int argc, char** argv) {
         auto pl_noticed = std::make_shared<std::atomic<bool>>(false);
         const unsigned long long mem0 = dev_mem;
         const unsigned pl0 = startup_pl_w;
-        stats.set_telemetry_source([nvml_index, watch_pl, pl_noticed, mem0, pl0, &thermal]
+        stats.set_telemetry_source([nvml_index, watch_pl, pl_noticed, mem0, pl0, &thermal,
+                                    &user_paused]
                                    (unsigned row, miner::Stats::Device& d) {
             const unsigned idx = row < nvml_index.size() ? nvml_index[row] : row;
             const gpu::Telemetry t = gpu::nvml_sample(idx);
@@ -775,7 +782,7 @@ int main(int argc, char** argv) {
             d.has_temp = t.have_temp;           d.temp_c        = t.temp_c;
             d.has_fan = t.have_fan;             d.fan_pct       = t.fan_pct;
             d.has_util = t.have_util;           d.util_pct      = t.util_pct;
-            d.paused = thermal.paused(row);
+            d.paused = thermal.paused(row) || user_paused.load(std::memory_order_relaxed);
             if (row == 0 && watch_pl && !pl_noticed->load(std::memory_order_relaxed)) {
                 const gpu::PowerLimit now = gpu::nvml_power_limit(nvml_index[0]);
                 if (now.valid && now.current_w != pl0) {
@@ -1257,10 +1264,6 @@ int main(int argc, char** argv) {
             ui::console::info("GPU " + std::to_string(dev) + ": resuming at "
                               + std::to_string(temp) + " C (--tstart).");
         };
-        for (size_t k = 0; k < engines.size(); ++k) {
-            const unsigned idx = (unsigned)k;
-            engines[k]->paused = [&thermal, idx] { return thermal.paused(idx); };
-        }
         thermal.start();
         char note[160];
         std::snprintf(note, sizeof note,
@@ -1269,6 +1272,16 @@ int main(int argc, char** argv) {
                       opts.tstart ? (std::to_string(opts.tstart) + " C").c_str() : "no restart temperature",
                       opts.tmode.c_str());
         ui::console::info(note);
+    }
+
+    // Every device holds while EITHER pause is on: thermal protection or the
+    // console 'p' key. Thermal::paused() is false for an unconfigured device,
+    // so without --tstop this reduces to the key alone.
+    for (size_t k = 0; k < engines.size(); ++k) {
+        const unsigned idx = (unsigned)k;
+        engines[k]->paused = [&thermal, &user_paused, idx] {
+            return user_paused.load(std::memory_order_relaxed) || thermal.paused(idx);
+        };
     }
 
     // Each engine spawns its own worker thread; they share one Stats and one
@@ -1298,9 +1311,12 @@ int main(int argc, char** argv) {
         // "Mining is expected" means a job has arrived. Before that, and while
         // the pool is down, every device is legitimately idle.
         watchdog.mining = [&stats] { return !stats.snapshot().last_job_id.empty(); };
-        // A thermally paused card stops advancing its counter on purpose; without
-        // this the first --tstop pause would exit(42) into a restart loop.
-        watchdog.device_paused = [&thermal](unsigned dev) { return thermal.paused(dev); };
+        // A paused card stops advancing its counter on purpose -- thermally or by
+        // the console 'p' key; without this the first pause would exit(42) into a
+        // restart loop.
+        watchdog.device_paused = [&thermal, &user_paused](unsigned dev) {
+            return user_paused.load(std::memory_order_relaxed) || thermal.paused(dev);
+        };
         const std::string script = opts.watchdog_script;
         watchdog.on_hung = [action, script](unsigned dev) {
             const std::string who = "GPU " + std::to_string(dev);
@@ -1332,6 +1348,86 @@ int main(int argc, char** argv) {
     // worker to mine it, and after the API/ticker so a fee round is reportable
     // the moment it can happen.
     if (devfee) devfee->start();
+
+    // Single-key console commands, on an interactive stdin only -- a piped or
+    // service stdin leaves the reader off and the terminal untouched. Every
+    // command prints through ui::console, so it lands in the transcript log
+    // and survives --silence: a key press is an explicit request.
+    ui::KeyReader keys;
+    {
+        // The ticker sets digits/api_port on its own copy of the layout; this
+        // handler renders the same table, so it needs the same two fields.
+        ui::StatsLayout klayout = layout;
+        klayout.digits = opts.digits;
+        klayout.api_port = http_api.bound_port();
+        const bool can_pause = !engines.empty();
+        const int digits = opts.digits;
+        const bool started = keys.start(
+            [&stats, &user_paused, klayout, can_pause, digits](ui::Key k) {
+            switch (k) {
+            case ui::Key::Speed:
+                ui::console::info(ui::format_speed_line(stats.snapshot(), digits));
+                break;
+            case ui::Key::StatsBlock: {
+                std::time_t t = std::time(nullptr);
+                std::tm tm_buf{};
+#ifdef _WIN32
+                localtime_s(&tm_buf, &t);
+#else
+                localtime_r(&t, &tm_buf);
+#endif
+                char clock[16];
+                std::snprintf(clock, sizeof clock, "%02d:%02d:%02d",
+                              tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec);
+                ui::console::stats_block(ui::format_stats_block(
+                    stats.snapshot(), mxbm::version(), clock, klayout));
+                break;
+            }
+            case ui::Key::Connection: {
+                const miner::Stats::Snapshot s = stats.snapshot();
+                if (s.pool.empty()) {
+                    ui::console::info("No pool connection");
+                    break;
+                }
+                std::string line = "Pool " + s.pool + " - uptime "
+                    + ui::format_uptime(s.uptime) + ", connected in "
+                    + std::to_string(s.connect_ms) + " ms, reconnects "
+                    + std::to_string((unsigned long long)s.reconnects);
+                if (!s.last_job_id.empty()) {
+                    char job[96];
+                    std::snprintf(job, sizeof job, ", last job %s (difficulty %.0f)",
+                                  s.last_job_id.c_str(), s.last_job_units);
+                    line += job;
+                }
+                if (s.last_latency_ms >= 0)
+                    line += ", share latency " + std::to_string(s.last_latency_ms) + " ms";
+                ui::console::info(line);
+                break;
+            }
+            case ui::Key::Pause:
+                if (!can_pause) {
+                    ui::console::info("Nothing to pause - no mining device is active");
+                } else if (user_paused.exchange(true)) {
+                    ui::console::info("Already paused - press r to resume");
+                } else {
+                    ui::console::info("Paused - devices idle after the solve in "
+                                      "flight; press r to resume");
+                }
+                break;
+            case ui::Key::Resume:
+                if (!can_pause) break;
+                if (user_paused.exchange(false)) ui::console::info("Resuming mining");
+                else                             ui::console::info("Not paused");
+                break;
+            case ui::Key::Help:
+                ui::console::info(ui::key_help_line());
+                break;
+            case ui::Key::None:
+                break;
+            }
+        });
+        if (started) ui::console::info(ui::key_help_line());
+    }
 
     client.run();   // blocks forever, reconnecting on drop; Ctrl+C exits
     return 0;

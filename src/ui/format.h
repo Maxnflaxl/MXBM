@@ -14,6 +14,9 @@ namespace mxbm { namespace ui {
 // rounded one, so 999999 prints "1000.0k".
 std::string format_units(double value);
 
+// "Xh Ym Zs" from a whole-second duration.
+std::string format_uptime(std::chrono::seconds uptime);
+
 // The "--shortstats" one-liner: "Average speed (15s): X.XX sol/s" from
 // snapshot.sol15. The "(15s)" is a fixed literal matching the default
 // --shortstats interval, NOT the caller's actual ticker interval.

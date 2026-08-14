@@ -9,9 +9,6 @@
 
 namespace mxbm { namespace ui {
 
-namespace {
-
-// "Xh Ym Zs" from a whole-second duration.
 std::string format_uptime(std::chrono::seconds uptime) {
     long long total = uptime.count();
     long long h = total / 3600;
@@ -21,6 +18,8 @@ std::string format_uptime(std::chrono::seconds uptime) {
     std::snprintf(buf, sizeof buf, "%lldh %lldm %llds", h, m, s);
     return buf;
 }
+
+namespace {
 
 // "A/S/R" packed accepted/stale/rejected triple, shared by every table row.
 std::string format_shares(uint64_t a, uint64_t st, uint64_t r) {

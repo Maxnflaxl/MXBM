@@ -16,6 +16,7 @@
 #include "check.h"
 #include "ui/console.h"
 #include "ui/format.h"
+#include "ui/keys.h"
 
 using namespace mxbm;
 
@@ -347,6 +348,33 @@ int main() {
         check(ui::console::take_accept_marks() == 2, "its accepts become marks too");
 
         ui::console::set_verbosity(0, false);
+    }
+
+    // -- single-key console commands --
+    // The mapping is what keeps arrow keys silent: a terminal sends ESC [ A..D
+    // for them, and any of those bytes firing a command would pause a rig on a
+    // brushed key.
+    {
+        check(ui::key_command('h') == ui::Key::Speed &&
+              ui::key_command('H') == ui::Key::Speed, "h is the speed line, either case");
+        check(ui::key_command('s') == ui::Key::StatsBlock, "s is the stats block");
+        check(ui::key_command('c') == ui::Key::Connection, "c is the connection line");
+        check(ui::key_command('p') == ui::Key::Pause &&
+              ui::key_command('r') == ui::Key::Resume, "p/r pause and resume");
+        check(ui::key_command('?') == ui::Key::Help, "? prints the key list");
+        check(ui::key_command('\033') == ui::Key::None &&
+              ui::key_command('[') == ui::Key::None &&
+              ui::key_command('A') == ui::Key::None &&
+              ui::key_command('D') == ui::Key::None,
+              "every byte of an arrow-key escape sequence is ignored");
+        check(ui::key_command('\n') == ui::Key::None &&
+              ui::key_command(' ') == ui::Key::None,
+              "Enter and space nudge nothing");
+
+        const std::string help = ui::key_help_line();
+        check(help.find("h ") != std::string::npos && help.find("p ") != std::string::npos
+              && help.find("r ") != std::string::npos,
+              "the help line names the keys it claims");
     }
 
     return summary("console");

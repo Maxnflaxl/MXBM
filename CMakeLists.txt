@@ -154,7 +154,8 @@ target_link_libraries(test_config PRIVATE mxbm_config mxbm_nvml mxbm_ui)
 target_compile_definitions(test_config PRIVATE MXBM_FIXTURES="${CMAKE_SOURCE_DIR}/tests/fixtures")
 add_test(NAME config COMMAND test_config)
 
-add_library(mxbm_ui STATIC src/ui/console.cpp src/ui/format.cpp src/ui/ticker.cpp)
+add_library(mxbm_ui STATIC src/ui/console.cpp src/ui/format.cpp src/ui/keys.cpp
+                           src/ui/ticker.cpp)
 target_include_directories(mxbm_ui PUBLIC src)
 target_link_libraries(mxbm_ui PUBLIC mxbm_miner mxbm_version)
 

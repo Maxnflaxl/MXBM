@@ -461,6 +461,32 @@ omitted rather than printing a meaningless ratio.
 
 Press Ctrl+C to stop.
 
+### Console keys
+
+While mining in an interactive terminal, single keys work as commands — no
+Enter needed:
+
+| Key | Action |
+|---|---|
+| `h` | Print the short speed line now. |
+| `s` | Print the full statistics block now. |
+| `c` | One connection line: pool, uptime, reconnects, last job, share latency. |
+| `p` | Pause mining. Devices go idle after the solve in flight; jobs are still tracked, so `r` resumes on the current work. |
+| `r` | Resume after `p`. |
+| `?` | List the keys. |
+
+Keys are case-insensitive, and every command's output goes through the normal
+console — timestamped into the `--log` transcript, and printed even under
+`--silence`, since a key press is an explicit request. A paused device shows
+as paused in the statistics table, and the watchdog knows the difference
+between paused and hung.
+
+The keys exist only when stdin is an interactive terminal. Under a pipe, a
+redirect, or a service manager the reader never starts and stdin is left
+untouched, so scripted and unattended runs behave exactly as before. For
+remote control of an unattended rig, use the [HTTP API](#dashboard-and-monitoring-api)
+instead.
+
 ### Quieting the console
 
 A rig with several cards prints a job line per job and two lines per share, which
