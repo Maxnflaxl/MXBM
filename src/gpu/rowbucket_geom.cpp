@@ -24,7 +24,10 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
     // Back-refs: rows 1-4 are gi-indexed (capacity each); row 5 is written only at
     // terminal-survivor indices, so it is sized by the 1024 survivor cap, not by
     // capacity. Must match the allocations in cuda_solver.cu / round_pipeline.cpp.
-    const size_t backrefs = ((size_t)4*capacity + 1024) * 4 * 2;
+    // Four capacity-sized rows and a survivor-sized one -- except under the octo record,
+    // where recovery reads its leaves out of round 3's surviving output and never walks
+    // below level 4, so rows 1-3 are neither written nor allocated.
+    const size_t backrefs = ((size_t)(octo ? 1u : 4u)*capacity + 1024) * 4 * 2;
     // Per record set the arena also carries a chain head per bucket and a next/tag pair
     // per pool slot -- ~1.5 MB at (16,1), against the ~1.5 GiB the dense cap gives back.
     const size_t arena_meta = arena ? 2 * ((size_t)nb*4 + 2*(size_t)kRbArenaSlots*4 + 4) : 0;
@@ -60,9 +63,9 @@ const RbRung* rb_rungs(int& n) {
         // leaves, which is the deepest re-derivation on the ladder. Only ever reached
         // when no row above fits, and only paired with quad and dense caps -- a card
         // that can host the packed record has no use for them.
-        { 16u, 1u, true,  true,  true  },   // 3.10      56.0
-        { 15u, 2u, true,  true,  true  },   // 3.00      58.0
-        { 14u, 3u, true,  true,  true  },   // 2.94      62.1  -- the floor
+        { 16u, 1u, true,  true,  true  },   // 2.33      55.4
+        { 15u, 2u, true,  true,  true  },   // 2.23      57.4
+        { 14u, 3u, true,  true,  true  },   // 2.17      61.1  -- the floor
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;
@@ -73,7 +76,7 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool im
     size_t total = 0, single = 0;
     rowbucket_bytes(capacity, bb, total, single, quad, impb, arena, octo);
     const size_t half = single / 2;                     // nb is even on every rung
-    const size_t backrefs = ((size_t)4 * capacity + 1024) * 4;  // left/right rows never split
+    const size_t backrefs = ((size_t)(octo ? 1u : 4u) * capacity + 1024) * 4;  // never split
     return half > backrefs ? half : backrefs;
 }
 

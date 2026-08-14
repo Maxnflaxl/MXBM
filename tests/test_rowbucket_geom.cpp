@@ -372,8 +372,11 @@ int main() {
         check(fb_set_stride(0, true, false, true) == fb_set_stride(0, true),
               "and leaves set 0 alone -- it is round 3's OUTPUT that changes");
 
+        // Two things at once, and the second is the larger: the record set halves, AND
+        // three of the four capacity-sized back-reference rows stop being allocated
+        // because recovery reads round 3's leaves instead of walking down to them.
         struct { uint32_t bb; double total; } want[] = {
-            { 16, 3.10 }, { 15, 3.00 }, { 14, 2.94 },
+            { 16, 2.33 }, { 15, 2.23 }, { 14, 2.17 },
         };
         for (const auto& w : want) {
             size_t total = 0, single = 0, was = 0, ignore = 0;
@@ -383,7 +386,18 @@ int main() {
             std::snprintf(msg, sizeof msg, "quad (%u,%u) + dense caps + octo is %.2f GiB "
                           "(expect %.2f)", w.bb, 17u - w.bb, total/GiB, w.total);
             check(total/GiB > w.total - 0.05 && total/GiB < w.total + 0.05, msg);
-            check((was - total)/GiB > 1.0, "octo is worth over a GiB at every rung");
+            check((was - total)/GiB > 1.8, "octo is worth over 1.8 GiB at every rung");
+        }
+        // The reference rows are the second half of that, to the byte.
+        {
+            size_t with = 0, without = 0, ignore = 0;
+            rowbucket_bytes(cap, 14, with, ignore, true, false, true, true);
+            rowbucket_bytes(cap, 14, without, ignore, true, false, true, false);
+            const double refs = 3.0 * cap * 4 * 2 / GiB;      // three rows, left and right
+            const double recs = 36683776.0 * 4 * 8 / GiB;     // four u64 per slot
+            check((without - with)/GiB > refs + recs - 0.02
+               && (without - with)/GiB < refs + recs + 0.02,
+                  "octo saves exactly four u64 per slot plus three back-reference rows");
         }
 
         auto pick = [&](double v, bool octo) {
@@ -393,12 +407,17 @@ int main() {
         };
         // The floor, either side of it, and what it means in cards: with CUDA's 640 MiB
         // allowance a device is offered when its TOTAL VRAM clears 2.94 + 0.63 = 3.57 GiB.
-        check( pick(2.96, true).viable && !pick(2.90, true).viable,
-               "the octo floor is quad (14,3) + dense caps at 2.94 GiB");
-        check( pick(3.70 - 0.625, true).viable,
-               "a 4 GB card clears it -- the first card class below the quad floor");
-        check(!pick(3.70 - 0.625, false).viable,
-               "and without octo a 4 GB card fits nothing at all");
+        check( pick(2.20, true).viable && !pick(2.15, true).viable,
+               "the octo floor is quad (14,3) + dense caps at 2.17 GiB");
+        // In card terms: CUDA reports 97.5 % of physical VRAM on this driver, and
+        // availability holds back 640 MiB of that (cuda_solver.cu).
+        check( pick(3.0 * 0.975 - 0.625, true).viable,
+               "a 3 GB card clears it -- BeamHash III's own stated minimum");
+        check(!pick(3.0 * 0.975 - 0.625, false).viable,
+               "and without octo a 3 GB card fits nothing at all");
+        check( pick(4.0 * 0.975 - 0.625, true).viable
+           && !pick(4.0 * 0.975 - 0.625, false).viable,
+               "so does a 4 GB card, which also fits nothing without it");
         // Never reached while anything above it fits.
         for (double v : {6.0, 5.0, 4.4, 4.1}) {
             const RbGeometry g = pick(v, true);

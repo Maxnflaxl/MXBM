@@ -459,6 +459,9 @@ struct RoundShared {
     // 448 B under a resident-block cliff, which a few bytes here would cost it.
     uint16_t aidx[ARENA ? kAMax : 0];
     uint32_t acnt[ARENA ? 1 : 0];
+    // Where each staged element was read from. LM_RD4 only: its back-references name a
+    // parent by slot rather than by gi -- see recover() in pipeline_kernels.cuh.
+    uint32_t lslot[LMODE == LM_RD4 ? FCAP : 0];
 };
 
 // The round body, extracted so a kernel can run DIFFERENT rounds in different blocks of
@@ -472,7 +475,10 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          // 0 = plain record; else the count of address-implied key bits the pack
          // drops (16 for (16,1), 17 for (17,0)) -- every shift derives from it.
          uint32_t IMPB = (MXBM_IMPBITS ? kImpDB : 0u),
-         bool ARENA = (MXBM_ARENA != 0)>
+         bool ARENA = (MXBM_ARENA != 0),
+         // Write the two back-reference rows. False on rounds 1-3 of an octo rung,
+         // whose rows recovery never reads and the host never allocates.
+         bool REFS = true>
 __device__ __forceinline__
 void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA>& shm,
                  uint32_t bid,
@@ -517,6 +523,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     auto& llead  = shm.llead;
     auto& lkey   = shm.lkey;
     auto& lchain = shm.lchain;
+    [[maybe_unused]] auto& lslot = shm.lslot;
     [[maybe_unused]] auto& mlist  = shm.mlist;
     [[maybe_unused]] auto& nmatch = shm.nmatch;
     auto& tab    = shm.tab;
@@ -528,6 +535,12 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     };
     auto gi_of = [&](uint32_t p) -> uint32_t {
         return kGiIsLead ? lleaf[p * LEAFW + 0] : lgi[p];
+    };
+    // What a back-reference names: a gi, except on the octo round 4, which names the slot
+    // its parent's record sits in so recovery can read the eight leaves straight out.
+    auto ref_of = [&](uint32_t p) -> uint32_t {
+        if constexpr (LMODE == LM_RD4) return lslot[p];
+        else                           return gi_of(p);
     };
     // The one place lwork's layout is spelled out; see MXBM_LWORK_SOA above.
     auto lwx = [&](uint32_t p, int w) -> uint32_t {
@@ -754,6 +767,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             stw(pos, 2, q1.x); stw(pos, 3, q1.y);
             lgi[pos]   = octo_gi(q1.y);
             llead[pos] = octo_lead(q0.x);          // leaf 0 IS the lead
+            lslot[pos] = (uint32_t)idx_;           // what this round's references name
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
             // INW-generic: this branch serves LM_USE (INW=6) and LM_RAW (INW=7), and
@@ -1092,8 +1106,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                               make_ulonglong2(c.w[0],
                                             ((uint64_t)cgi << 32) | (uint64_t)ctree[0]));
                     }
-                    st_em(all_left  + out_off + cgi, gi_of(leftPos));
-                    st_em(all_right + out_off + cgi, gi_of(rightPos));
+                    if constexpr (REFS) {
+                        st_em(all_left  + out_off + cgi, ref_of(leftPos));
+                        st_em(all_right + out_off + cgi, ref_of(rightPos));
+                    }
                 } else atomicAdd(&drops[2], 1u);
             }
             oth = lchain[oth];
@@ -1138,6 +1154,8 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          // Dense per-bucket caps plus a global overflow pool -- the fit-ladder rung, see
          // MXBM_ARENA above. Also before MINBLOCKS, for the same reason.
          bool ARENA = (MXBM_ARENA != 0),
+         // See fused_round_body: rounds 1-3 of an octo rung write no references.
+         bool REFS = true,
          int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
                         : LMODE == LM_RD2  ? MXBM_MB_RD2
                         : LMODE == LM_EMIT ? MXBM_MB_EMIT : 0)>
@@ -1199,7 +1217,7 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
 
     __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA> shm;
     fused_round_body<INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD,
-                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB, ARENA>(
+                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB, ARENA, REFS>(
         shm, bid, bucket_bits, submask_bits, in_bucket_cap, out_bucket_cap, out_off,
         in_counts, in_belem, out_counts, out_belem, all_left, all_right, gi_counter,
         drops, pp4, in_ahead, in_anext, out_actr, out_atag);

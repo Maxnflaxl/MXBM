@@ -145,11 +145,35 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
 // leaf indices. Right is pushed first so left pops first, which is what makes the leaves
 // come out in tree order -- get that backwards and the indices are a valid-looking
 // permutation that fails verification.
+// OCTO: only rows 4 and 5 exist, row 4 at offset 0 and row 5 at `capacity`. Row 4 names
+// its parents by SLOT in round 3's output set, and each of those records carries the eight
+// seed indices below it -- in the same left-to-right order this walk would have produced,
+// because round 3 built its leaf tree and its references from the same leftPos/rightPos.
+// So the walk is two levels deep instead of five, and rows 1-3 are never allocated.
+template<bool OCTO = false>
 __global__ void recover(uint32_t nSurv, const uint32_t* __restrict__ surv_slots,
                         uint32_t capacity, const uint32_t* __restrict__ all_left,
-                        const uint32_t* __restrict__ all_right, uint32_t* __restrict__ out) {
+                        const uint32_t* __restrict__ all_right, uint32_t* __restrict__ out,
+                        const uint64_t* __restrict__ r3_elem = nullptr,
+                        uint32_t r3_stride = 0) {
     const uint32_t i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i >= nSurv) return;
+    if constexpr (OCTO) {
+        const uint32_t s5 = surv_slots[i];
+        const uint32_t g4[2] = { all_left[capacity + s5], all_right[capacity + s5] };
+        uint32_t got = 0;
+        for (int k = 0; k < 2; ++k) {
+            const uint32_t sl[2] = { all_left[g4[k]], all_right[g4[k]] };
+            for (int j = 0; j < 2; ++j) {
+                const uint64_t* r = r3_elem + (size_t)sl[j] * r3_stride;
+                uint32_t l[8];
+                octo_leaves(r[0], r[1], r[2], r[3], l);
+                for (int t = 0; t < 8 && got < 32u; ++t)
+                    out[(size_t)i*32u + got++] = l[t];
+            }
+        }
+        return;
+    }
     uint32_t got = 0, lvl[8], slt[8]; int sp = 0;
     lvl[0] = 5u; slt[0] = surv_slots[i]; sp = 1;
     while (sp > 0 && got < 32u) {
