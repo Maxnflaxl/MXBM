@@ -12,8 +12,8 @@ leads. This page links into it throughout; that page is the one to read before
 proposing a new lever, because most of them have already been tried.
 
 **Target:** lolMiner does **~53 sol/s** on an RTX 4070 Ti SUPER at **stock clocks, no
-special configuration** (user-measured). BeamHash III yields ~1.9 solutions per solve,
-so 53 sol/s ÷ 1.9 ≈ **28 solve/s ≈ 36 ms/solve**. That is the bar.
+special configuration** (user-measured). BeamHash III yields **2.006** solutions per
+solve, so 53 sol/s ÷ 2.006 ≈ **26.4 solve/s ≈ 37.9 ms/solve**. That is the bar.
 
 ## Progress log
 
@@ -117,11 +117,11 @@ flag voids a run. Pool validation: **62.32 ± 1.99 sol/s** over 80 minutes.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
 > and only the first factor is a property of the solver. The second is a property of
-> BeamHash III (~1.98) that a short run estimates badly: across four runs of this same
-> build, ms/solve held at 34.9–35.1 while the measured solutions/solve wandered
-> 1.99–2.04, moving the headline by more than a full sol/s. Runs under a few thousand
-> solves read **high**. Anything quoted here as a speed *change* is an ms/solve
-> comparison for that reason.
+> BeamHash III — **2.006, pinned over 28,305 solves** (2026-08-14), against a theoretical
+> C(2²⁵,2)/2⁴⁸ = 2 — that a short run estimates noisily rather than wrongly: the standard
+> error of the mean is 0.033 at 1,900 solves and 0.008 at 28,000, so a benchmark of a few
+> thousand moves the headline by about a full sol/s in either direction. Anything quoted
+> here as a speed *change* is an ms/solve comparison for that reason.
 
 **Confirmed by live mining**, 2026-07-31: a 20-minute HeroMiners session on the shipping
 binary at stock 285 W — a separate measurement from the benchmark, through the stratum
@@ -174,8 +174,8 @@ whole run for both windows and for power, clocks and temperature — see
 
 </details>
 
-*sol/s is the number miners and pools report. BeamHash III yields ~1.9 solutions per
-solve, so sol/s ≈ 1900 / (ms per solve).*
+*sol/s is the number miners and pools report. BeamHash III yields 2.006 solutions per
+solve, so sol/s ≈ 2006 / (ms per solve).*
 
 ---
 
@@ -1131,7 +1131,7 @@ no direct equivalent.
 Both are noisy at the ~1 ms level, so single samples are not meaningful — quote a median
 of at least 5. `MXBM_NO_ROWBUCKET=1` forces the fallback sort path.
 
-sol/s ≈ 1900 / ms, since BeamHash III yields ~1.9 solutions per solve.
+sol/s ≈ 2006 / ms, since BeamHash III yields 2.006 solutions per solve.
 
 ---
 

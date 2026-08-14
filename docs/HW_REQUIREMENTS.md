@@ -7,7 +7,7 @@ and where the current implementation falls short.
 All figures are computed from the allocator in `src/gpu/round_pipeline.cpp` and
 `src/gpu/budget.cpp`, and cross-checked against measurements on the reference card.
 Throughput is quoted in **sol/s** (solutions per second), the figure miners and pools
-report; BeamHash III yields ~1.9 solutions per solve.
+report; BeamHash III yields 2.006 solutions per solve.
 
 ---
 
@@ -273,7 +273,7 @@ below that band — by 6–12 % once both miners run their best low-power config
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces. BeamHash III yields
-~1.98 *verified* solutions per solve, measured independently on both backends.
+2.006 *verified* solutions per solve, pinned over 28,305 of them.
 `./build/bench_rounds 20` reports the pipeline-only median instead, which is the controlled
 number used to make optimization decisions.
 
