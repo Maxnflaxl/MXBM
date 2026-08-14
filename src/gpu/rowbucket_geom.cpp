@@ -9,11 +9,11 @@ uint32_t fb_cap_for(uint32_t mean) {
 }
 
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
-                     bool quad) {
+                     bool quad, bool impb) {
     const uint32_t nb = 1u << bb;
     const uint32_t cap = fb_cap_for(capacity / nb);
     const size_t nslots = (size_t)nb * cap;
-    const uint32_t s0 = fb_set_stride(0, quad), s1 = fb_set_stride(1, quad);
+    const uint32_t s0 = fb_set_stride(0, quad, impb), s1 = fb_set_stride(1, quad, impb);
     // Under the quad record set 0 (3 u64) is no longer the larger of the two, so the
     // largest single allocation becomes set 1. Taking max() rather than assuming set 0
     // is what keeps the OpenCL single-allocation ceiling honest for both formats.
@@ -27,26 +27,26 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 }
 
 // Ordered by MEASURED time, fastest first -- NOT by footprint, which disagrees:
-// quad (16,1) at 5.28 GiB / 38.39 ms is both smaller and faster than packed (14,3) at
-// 6.50 / 40.02, so a footprint-sorted ladder would hand a card the slower rung. packed
+// quad (16,1) at 5.02 GiB / 38.39 ms is both smaller and faster than packed (14,3) at
+// 6.24 / 40.02, so a footprint-sorted ladder would hand a card the slower rung. packed
 // (14,3) stays in the list after it because its single allocation is smaller (2.76 GiB
 // against 2.90), so a max_alloc-bound backend can still want it.
 const RbRung* rb_rungs(int& n) {
     static const RbRung kRungs[] = {
-        { 16u, 1u, false },   // 7.46 GiB  33.67 ms
-        { 15u, 2u, false },   // 6.88      36.01
-        { 16u, 1u, true  },   // 5.28      38.39
-        { 14u, 3u, false },   // 6.50      40.02   -- kept for max_alloc-bound backends
-        { 15u, 2u, true  },   // 4.91      40.65
-        { 14u, 3u, true  },   // 4.66      44.75
+        { 16u, 1u, false },   // 7.20 GiB  33.67 ms   (6.84 with the implicit-bits pack)
+        { 15u, 2u, false },   // 6.62      36.01
+        { 16u, 1u, true  },   // 5.02      38.39
+        { 14u, 3u, false },   // 6.24      40.02   -- kept for max_alloc-bound backends
+        { 15u, 2u, true  },   // 4.65      40.65
+        { 14u, 3u, true  },   // 4.40      44.75
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;
 }
 
-size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad) {
+size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb) {
     size_t total = 0, single = 0;
-    rowbucket_bytes(capacity, bb, total, single, quad);
+    rowbucket_bytes(capacity, bb, total, single, quad, impb);
     const size_t half = single / 2;                     // nb is even on every rung
     const size_t backrefs = ((size_t)4 * capacity + 1024) * 4;  // left/right rows never split
     return half > backrefs ? half : backrefs;
@@ -54,7 +54,14 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad) {
 
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad, unsigned power_limit_w, bool allow_split,
-                           uint64_t slack_bytes) {
+                           uint64_t slack_bytes, bool allow_impb) {
+    // The implicit-bits record is not a rung, it is a NARROWER SET-0 STRIDE on the rungs
+    // that admit it -- so it is folded into each rung's footprint here rather than
+    // appearing in the ladder. A backend without it passes allow_impb false and every
+    // figure below is what it always was.
+    auto impb_at = [&](uint32_t bb, uint32_t sm, bool quad) {
+        return allow_impb && rb_impb_ok(bb, sm, quad);
+    };
     // The low-power exception to the ladder's order. (17,0) is NOT a rung: it loses
     // 10.9 % at stock, so it can only be reached by policy under a cap -- and the
     // policy is currently DISARMED (kRbLowPowerW == 0: the measured crossover failed
@@ -63,15 +70,16 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
     // The figure max_alloc binds on: the whole larger set, or -- when the backend
     // can split each set into two bucket-halves -- whatever rowbucket_single_split
     // says is the largest piece left.
-    auto binding_single = [&](uint32_t bb, bool quad, size_t single) {
+    auto binding_single = [&](uint32_t bb, bool quad, bool impb, size_t single) {
         if (!allow_split) return single;
-        const size_t s = rowbucket_single_split(capacity, bb, quad);
+        const size_t s = rowbucket_single_split(capacity, bb, quad, impb);
         return s < single ? s : single;
     };
     if (kRbLowPowerW != 0 && power_limit_w != 0 && power_limit_w < kRbLowPowerW) {
         size_t total = 0, single = 0;
-        rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false);
-        if ((!max_alloc || binding_single(17u, false, single) <= (size_t)max_alloc)
+        const bool im = impb_at(17u, 0u, false);
+        rowbucket_bytes(capacity, 17u, total, single, /*quad=*/false, im);
+        if ((!max_alloc || binding_single(17u, false, im, single) <= (size_t)max_alloc)
             && (!global_mem || total + (size_t)slack_bytes <= (size_t)global_mem))
             return { 17u, 0u, false, true };
     }
@@ -81,8 +89,9 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
         const RbRung& r = rungs[i];
         if (r.quad && !allow_quad) continue;
         size_t total = 0, single = 0;
-        rowbucket_bytes(capacity, r.bb, total, single, r.quad);
-        if (max_alloc && binding_single(r.bb, r.quad, single) > (size_t)max_alloc) continue;
+        const bool im = impb_at(r.bb, r.sm, r.quad);
+        rowbucket_bytes(capacity, r.bb, total, single, r.quad, im);
+        if (max_alloc && binding_single(r.bb, r.quad, im, single) > (size_t)max_alloc) continue;
         if (global_mem && total + (size_t)slack_bytes > (size_t)global_mem) continue;
         return { r.bb, r.sm, r.quad, true };
     }

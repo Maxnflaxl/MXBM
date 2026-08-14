@@ -19,14 +19,31 @@ constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 2u };
 // key + four leaves + gi in 3 u64 instead of the 72 B packed record, and round 3 rebuilds
 // the work words from those leaves. Set 0's width is then round 2's record and nothing
 // else -- round 4 writes 2 -- so 9 u64 becomes 3, which is where the ~2.1 GiB goes.
-constexpr uint32_t fb_round_stride(int r, bool quad) {
-    return (quad && r == 2) ? 3u : kFbStride[r + 1];
+//
+// The IMPLICIT-BITS pack is the third format for the same round: the bucket-address key
+// bits are packed out, the 400 - bb work bits fit 6 u64, and the 9th-word plane has no
+// writer at all -- so set 0 is 8 u64 per slot rather than 9. CUDA only, and only on the
+// rungs rb_impb_ok admits.
+constexpr uint32_t fb_round_stride(int r, bool quad, bool impb = false) {
+    if (r == 2) return quad ? 3u : (impb ? 8u : 9u);
+    return kFbStride[r + 1];
 }
-constexpr uint32_t fb_set_stride(int set, bool quad = false) {
+constexpr uint32_t fb_set_stride(int set, bool quad = false, bool impb = false) {
     uint32_t m = (set == 0) ? kFbStride[1] : 0u;          // entry writes set 0
     for (int r = 1; r <= 4; ++r)
-        if ((r & 1) == set && fb_round_stride(r, quad) > m) m = fb_round_stride(r, quad);
+        if ((r & 1) == set && fb_round_stride(r, quad, impb) > m)
+            m = fb_round_stride(r, quad, impb);
     return m;
+}
+
+// Where the implicit-bits record applies. Two conditions, both about bits: the 400 - bb
+// work bits must fit 6 u64 (bb >= 16), and the kept low 24 - bb key bits must still cover
+// the sub-mask plus the 7 the chain table hashes. That admits (16,1) and (17,0) and
+// nothing else on the bb + sm = 17 line; (15,2) would need canonical-order leaf packing.
+// Shared so the footprint arithmetic and the solver cannot disagree about which rungs are
+// sized 8 u64 wide.
+constexpr bool rb_impb_ok(uint32_t bb, uint32_t sm, bool quad) {
+    return !quad && bb >= 16u && bb <= 17u && (24u - bb) >= (7u + sm);
 }
 
 // Bucket capacity. Child keys come out of apply_mix and are effectively uniform, so
@@ -52,7 +69,7 @@ uint32_t fb_cap_for(uint32_t mean);
 // allocation}. The single figure is what OpenCL's CL_DEVICE_MAX_MEM_ALLOC_SIZE caps,
 // and is what binds below 12 GB.
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
-                     bool quad = false);
+                     bool quad = false, bool impb = false);
 
 // The shipping element capacity: the 2^25 seed layer plus the 1/32 growth slack every
 // round is budgeted against. Each backend keeps its own kCapacity for kernel arithmetic
@@ -88,9 +105,9 @@ constexpr unsigned kSpecMinPowerW = 130;
 // zero at every step:
 //
 //            CUDA                          OpenCL
-//   (16,1)   7.46 GiB   35.1 ms            3.27 GiB single   40.4 ms
-//   (15,2)   6.88 GiB   37.8 ms            2.96 GiB single   42.6 ms
-//   (14,3)   6.50 GiB   42.8 ms            2.76 GiB single   47.5 ms
+//   (16,1)   7.20 GiB   35.1 ms            3.27 GiB single   40.4 ms
+//   (15,2)   6.62 GiB   37.8 ms            2.96 GiB single   42.6 ms
+//   (14,3)   6.24 GiB   42.8 ms            2.76 GiB single   47.5 ms
 //
 // A card that cannot host (16,1) drops one step -- 8-14 % slower -- rather than falling
 // back to the sort path, which measures 215 ms.
@@ -98,9 +115,12 @@ constexpr unsigned kSpecMinPowerW = 130;
 // THE QUAD RECORD IS A SECOND AXIS, not a finer geometry, and the ladder is ordered by
 // MEASURED time rather than by footprint because the two disagree. On the reference card:
 //
-//   packed (16,1)  7.46 GiB  33.67 ms      quad (16,1)  5.28 GiB  38.39 ms
-//   packed (15,2)  6.88 GiB  36.01 ms      quad (15,2)  4.91 GiB  40.65 ms
-//   packed (14,3)  6.50 GiB  40.02 ms      quad (14,3)  4.66 GiB  44.75 ms
+//   packed (16,1)  7.20 GiB  33.67 ms      quad (16,1)  5.02 GiB  38.39 ms
+//   packed (15,2)  6.62 GiB  36.01 ms      quad (15,2)  4.65 GiB  40.65 ms
+//   packed (14,3)  6.24 GiB  40.02 ms      quad (14,3)  4.40 GiB  44.75 ms
+//
+// The implicit-bits pack (rb_impb_ok) narrows the packed rungs it admits without moving
+// them: (16,1) 7.20 -> 6.84 GiB, (17,0) 8.09 -> 7.67, and it is faster there too.
 //
 // So quad (16,1) is BOTH smaller and faster than packed (14,3): a coarser geometry pays
 // in scatter locality what the quad record pays in re-derivation arithmetic, and the
@@ -135,15 +155,19 @@ struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; };
 //               about what is free; a caller that already sized against the
 //               driver's free figure passes 0, since the reserve is applied
 //               there (gpu/budget.h).
+//   allow_impb : the backend carries the implicit-bits record, so a rung rb_impb_ok
+//               admits is sized 8 u64 wide instead of 9. CUDA passes true; OpenCL
+//               and Metal have no such record and keep the default.
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad = false, unsigned power_limit_w = 0,
                            bool allow_split = false,
-                           uint64_t slack_bytes = (uint64_t)1 << 30);
+                           uint64_t slack_bytes = (uint64_t)1 << 30,
+                           bool allow_impb = false);
 
 // Largest single allocation when each record set may split into two bucket-halves:
 // half the larger set, or the never-split back-ref rows if bigger. The arithmetic
 // behind allow_split, exposed so viability and the tests ask the same question.
-size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad);
+size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb = false);
 
 // The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
 // backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said

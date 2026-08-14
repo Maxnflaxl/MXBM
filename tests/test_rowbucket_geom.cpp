@@ -68,6 +68,54 @@ int main() {
         check(q16 < p14, "quad (16,1) is SMALLER than packed (14,3) -- and it is also faster");
     }
 
+    section("the implicit-bits record's footprint");
+    {
+        // Not a rung -- a narrower set 0 on the rungs that admit it. The bucket address
+        // already carries bb of the 24 collision bits, so 400 - bb work bits fit 6 u64
+        // and the 9th-word plane has no writer: 9 u64 per slot becomes 8.
+        check( rb_impb_ok(16, 1, false) &&  rb_impb_ok(17, 0, false),
+               "(16,1) and (17,0) admit the pack");
+        check(!rb_impb_ok(15, 2, false) && !rb_impb_ok(14, 3, false),
+               "coarser rungs do not: 400 - bb overflows 6 u64");
+        check(!rb_impb_ok(16, 1, true), "the quad record has no plane to delete");
+
+        struct { uint32_t bb, sm; double total, single; } want[] = {
+            { 17, 0, 7.67, 3.32 }, { 16, 1, 6.84, 2.90 },
+        };
+        for (const auto& w : want) {
+            size_t total = 0, single = 0, was = 0, ignore = 0;
+            rowbucket_bytes(cap, w.bb, total, single, /*quad=*/false, /*impb=*/true);
+            rowbucket_bytes(cap, w.bb, was, ignore);
+            char msg[160];
+            std::snprintf(msg, sizeof msg,
+                          "implicit-bits (%u,%u) total %.2f GiB (expect %.2f), single %.2f (expect %.2f)",
+                          w.bb, w.sm, total/GiB, w.total, single/GiB, w.single);
+            check(total/GiB > w.total - 0.05 && total/GiB < w.total + 0.05
+               && single/GiB > w.single - 0.05 && single/GiB < w.single + 0.05, msg);
+            check((was - total)/GiB > 0.35, "the deleted plane is worth at least 0.36 GiB");
+        }
+
+        // What it buys the ladder: the finest geometry's requirement drops by exactly the
+        // deleted plane, so a card with 6.84-7.20 GiB usable runs (16,1) instead of
+        // stepping down to (15,2) -- 33.67 ms against 36.01. It does NOT move the floor:
+        // the rungs a small card lands on are quad, which has no plane to delete.
+        auto pick = [&](double v, bool impb) {
+            return rb_geometry_for(cap, 0, gib(v), /*allow_quad=*/true, 0,
+                                   /*allow_split=*/false, /*slack=*/0, impb);
+        };
+        const RbGeometry with = pick(7.0, true), without = pick(7.0, false);
+        check(with.bb == 16 && !with.quad && without.bb == 15 && !without.quad,
+              "7.0 GiB usable: implicit bits keep (16,1) where the ladder stepped to (15,2)");
+        check(pick(6.83, true).bb == 15 && pick(7.21, false).bb == 16,
+              "and the band it wins is exactly the 0.36 GiB the plane took");
+        // It never changes a rung it does not apply to, floor included.
+        for (double v : {6.20, 5.70, 5.30, 4.45}) {
+            const RbGeometry a = pick(v, true), b = pick(v, false);
+            check(a.bb == b.bb && a.quad == b.quad && a.viable == b.viable,
+                  "the quad rungs are sized identically with and without the pack");
+        }
+    }
+
     section("CUDA reaches cards OpenCL cannot");
     {
         // max_alloc = 0 means "no per-allocation limit", which is the honest CUDA value;
@@ -257,6 +305,11 @@ int main() {
               "quad set widths are 3 and 8 u64");
         check(fb_round_stride(2, true) == 3u && fb_round_stride(2, false) == 9u,
               "only round 2's output stride differs between the formats");
+        // The implicit-bits pack is the third format for the same round: the record is
+        // still 8 u64, but there is no plane behind it, so set 0 is the record alone.
+        check(fb_round_stride(2, false, true) == 8u && fb_set_stride(0, false, true) == 8u
+           && fb_set_stride(1, false, true) == 8u,
+              "implicit-bits set widths are 8 and 8 u64");
         check(fb_round_stride(3, true) == fb_round_stride(3, false)
            && fb_round_stride(4, true) == fb_round_stride(4, false),
               "rounds 3 and 4 write the same record either way");

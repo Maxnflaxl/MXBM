@@ -55,11 +55,15 @@ constexpr uint32_t kQuadStride = 3u;
 #define MXBM_R3Q_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap
 static_assert(kSetStride[0] == fb_set_stride(0) && kSetStride[1] == fb_set_stride(1),
               "CUDA record widths must match the shared footprint arithmetic");
+// Under the implicit-bits pack the 9th word has no writer, so set 0 is the record and
+// nothing else. The allocation and the ladder both take this from fb_set_stride.
+static_assert(fb_set_stride(0, false, true) == kR2RecStride,
+              "implicit-bits set 0 is the record alone -- the plane has no writer");
 static_assert(kQuadStride == fb_round_stride(2, true) &&
               fb_set_stride(0, true) == kQuadStride && fb_set_stride(1, true) == 8u,
               "quad record widths must match the shared footprint arithmetic");
 
-// Was hardcoded (16,1), so a card that could not host 7.46 GiB was refused outright --
+// Was hardcoded (16,1), so a card that could not host the finest rung was refused outright --
 // even though the same kernels run unchanged at 6.50 GiB. bb and sm are kernel
 // ARGUMENTS, and everything compile-time is invariant along the bb + sm = 17 line: the
 // grid is 2^17 blocks, the staged group is capacity / 2^17 = 264, and the 128-entry
@@ -67,6 +71,14 @@ static_assert(kQuadStride == fb_round_stride(2, true) &&
 // max_alloc = 0: CUDA has no per-allocation limit (see rowbucket_geom.h).
 // power_limit_w = 0 (the availability/enumeration callers): viability must not depend
 // on the cap -- (17,0) is a preference among geometries that fit, never a requirement.
+// The implicit-bits record is decided WITH the geometry, not after it: it narrows set 0
+// from 9 u64 to 8, so the ladder's arithmetic and the allocator have to answer the same
+// question. MXBM_NO_IMPB turns it off on both sides at once.
+bool impb_allowed() {
+    static const bool off = std::getenv("MXBM_NO_IMPB") != nullptr;
+    return !off;
+}
+
 RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
                          uint64_t slack = (uint64_t)1 << 30) {
     // allow_quad: costs +14 % time and buys no watts at any cap (measured), so the
@@ -75,7 +87,8 @@ RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
     // kernels since 2026-07-28; each caller states its capability itself.)
     RbGeometry g = rb_geometry_for(kCapacity, /*max_alloc=*/0, usable_mem,
                                    /*allow_quad=*/true, power_limit_w,
-                                   /*allow_split=*/false, slack);
+                                   /*allow_split=*/false, slack,
+                                   /*allow_impb=*/impb_allowed());
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
                                                  g.viable = true; }
     if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
@@ -88,9 +101,10 @@ struct CudaSolver::Impl {
     uint32_t bb = 16, sm = 1, nb = 1u << 16;
     bool quad = false;                  // 24 B round-2 record; see rowbucket_geom.h
     bool impb = false;                  // 64 B round-2 record with address-implied key
-                                        // bits packed out and the side plane deleted;
-                                        // bucket_bits == 16 only (the pack shifts are
-                                        // hardwired). Figures: docs/performance-research.md.
+                                        // bits packed out and the side plane deleted.
+                                        // Set with the geometry (rb_impb_ok), because it
+                                        // is also what set 0 is sized against.
+                                        // Figures: docs/performance-research.md.
     uint32_t cap = 0; size_t nslots = 0;
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
@@ -125,13 +139,15 @@ struct CudaSolver::Impl {
         for (auto*& q : elem)   { cudaFree(q); q = nullptr; }
         for (auto*& q : counts) { cudaFree(q); q = nullptr; }
         bb = bb_; sm = sm_; nb = 1u << bb_; quad = quad_;
+        impb   = impb_allowed() && rb_impb_ok(bb, sm, quad);
         cap    = fb_cap_for(kCapacity / nb);
         nslots = (size_t)nb * cap;
-        // Set 0 is 9 u64 for the packed record and 3 for the quad one -- taken from the
-        // shared helper rather than a local constant so the allocation cannot disagree
-        // with what rb_geometry_for sized the ladder against.
-        elem[0] = dalloc<uint64_t>(nslots*fb_set_stride(0, quad));
-        elem[1] = dalloc<uint64_t>(nslots*fb_set_stride(1, quad));
+        // Set 0 is 9 u64 for the packed record, 8 once the implicit-bits pack deletes the
+        // plane, and 3 for the quad one -- taken from the shared helper rather than a
+        // local constant so the allocation cannot disagree with what rb_geometry_for
+        // sized the ladder against.
+        elem[0] = dalloc<uint64_t>(nslots*fb_set_stride(0, quad, impb));
+        elem[1] = dalloc<uint64_t>(nslots*fb_set_stride(1, quad, impb));
         counts[0] = dalloc<uint32_t>(nb); counts[1] = dalloc<uint32_t>(nb);
         return elem[0] && elem[1] && counts[0] && counts[1];
     }
@@ -318,14 +334,6 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     // fifth block. That trade loses at stock and wins once the rebuild bills at full
     // issue rate. Both variants are instantiated; MXBM_MATCH_FIRST=1 forces it on.
     p_->matchFirst = specLowPower || (MXBM_MATCH_FIRST != 0);
-    // The implicit-bits record wins time at every operating point and is free to
-    // carry, so it is on wherever its geometry precondition holds: the kept low
-    // key bits (24 - bb) must still cover the sub-mask and the 7 tab-hash bits.
-    // That is (16,1) and the low-power (17,0), each with its own compiled pack.
-    // The set is still allocated at the 9-u64 stride: the footprint reclaim ships
-    // with the small-card ladder work, not here.
-    p_->impb = !p_->quad && (p_->bb == 16u || p_->bb == 17u)
-            && (24u - p_->bb >= 7u + p_->sm) && !std::getenv("MXBM_NO_IMPB");
     if (specLowPower)
         std::fprintf(stderr, "CUDA: ... and match-first rebuild skipping on\n");
     if (!std::getenv("MXBM_NO_SPEC") && !specLowPower) {
