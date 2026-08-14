@@ -135,7 +135,12 @@ bool compact_active();   // defined below; gates the compacted sort path
 // knob: it changes the record format, hence the strides, hence the allocation.
 struct RbGeom { uint32_t bb, sm; bool quad; };
 
-static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
+// `usable` is the budget's free-derived figure (driver free less gpu/budget.h's
+// reserve), which is what rowbucket_viable checks against; the ladder has to answer
+// against the same number or the two disagree and the caller falls back to the sort
+// path. The slack goes to 0 with it -- the reserve has already come off, and a flat
+// gigabyte on top would be held back twice. 0 means the caller has no free figure.
+static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity, uint64_t usable) {
     if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM")) {
         // MXBM_BB alone used to leave sm at its default of 1, putting the geometry OFF
         // the bb + sm == 17 line every compile-time kernel constant assumes -- and the
@@ -155,8 +160,11 @@ static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity) {
     // falling back to the ~5x slower sort path.
     // allow_split: sets over CL_DEVICE_MAX_MEM_ALLOC_SIZE go in as bucket-halves
     // (fb_elem_hi) -- what took the OpenCL floor from 11 GB to CUDA's ~5.7 GiB.
-    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, d.global_mem,
-                                         /*allow_quad=*/true, 0, /*allow_split=*/true);
+    const uint64_t mem   = usable ? usable : (uint64_t)d.global_mem;
+    const uint64_t slack = usable ? 0ull   : ((uint64_t)1 << 30);
+    const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, mem,
+                                         /*allow_quad=*/true, 0, /*allow_split=*/true,
+                                         slack);
     // MXBM_QUAD forces the record format on a card that would not otherwise need it,
     // which is the only way to exercise this path on a 16 GB device.
     return { g.bb, g.sm, g.quad || std::getenv("MXBM_QUAD") != nullptr };
@@ -173,7 +181,7 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (capacity == 0) return false;
     const DeviceInfo& d = rt.device();
     if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
-    const RbGeom g = rb_pick_geometry(rt, capacity);
+    const RbGeom g = rb_pick_geometry(rt, capacity, b.usable);
     size_t total = 0, single = 0;
     rowbucket_bytes(capacity, g.bb, total, single, g.quad);
     // max_alloc binds on the split figure when smaller. Checked here too, not just
@@ -277,7 +285,7 @@ static void alloc_spec_entry(Runtime& rt, PipelineBuffers& p) {
 }
 
 static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
-    const RbGeom g = rb_pick_geometry(rt, p.capacity);
+    const RbGeom g = rb_pick_geometry(rt, p.capacity, b.usable);
     // An explicit MXBM_BB/MXBM_SM geometry is the user's choice: never stepped down.
     if (std::getenv("MXBM_BB") || std::getenv("MXBM_SM")) {
         try_alloc_rowbucket(rt, p, g.bb, g.sm, g.quad);
@@ -291,9 +299,10 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
     for (int i = 0; i < n; ++i)
         if (rungs[i].bb == g.bb && rungs[i].sm == g.sm && rungs[i].quad == g.quad) { start = i; break; }
     for (int i = start; i < n; ++i) {
-        // The dense-cap rungs are CUDA-only (no arena kernels here), and retrying one
-        // would re-try the row above it at the same size under a different name.
-        if (rungs[i].arena) continue;
+        // Rungs whose record or bucket machinery this backend does not carry. Skipped
+        // by capability rather than by position, so a ladder row added above them
+        // cannot be walked into by accident.
+        if (rungs[i].arena || rungs[i].octo) continue;
         try {
             try_alloc_rowbucket(rt, p, rungs[i].bb, rungs[i].sm, rungs[i].quad);
             if (i != start)
@@ -301,6 +310,16 @@ static void alloc_rowbucket(Runtime& rt, const Budget& b, PipelineBuffers& p) {
                              "allocator; stepped down to (%u,%u)%s\n",
                              rungs[start].bb, rungs[start].sm, rungs[start].quad ? " quad" : "",
                              rungs[i].bb, rungs[i].sm, rungs[i].quad ? " quad" : "");
+            // Silent on the top rung, which is what every large card takes; below it
+            // the rung is what decides the card's speed.
+            else if (i != 0) {
+                size_t tot = 0, sng = 0;
+                rowbucket_bytes(p.capacity, rungs[i].bb, tot, sng, rungs[i].quad);
+                std::fprintf(stderr, "[mxbm] row-bucket rung (%u,%u)%s -- %.2f GiB, "
+                             "chosen for %.2f GiB of usable VRAM\n",
+                             rungs[i].bb, rungs[i].sm, rungs[i].quad ? " quad" : "",
+                             tot / 1073741824.0, (double)b.usable / 1073741824.0);
+            }
             return;
         } catch (const ClError&) {
             release_rowbucket(p);

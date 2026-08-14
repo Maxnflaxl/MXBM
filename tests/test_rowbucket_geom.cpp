@@ -249,31 +249,51 @@ int main() {
               "even the smallest rung's half-set still exceeds the back-ref row");
 
         // The NVIDIA-OpenCL decision (max_alloc = VRAM/4), quad + split allowed --
-        // what rb_pick_geometry actually asks since the split shipped. Every card
-        // class that used to be sort-path or refused now gets a fast-path rung,
-        // and the 11-12 GB class climbs to the FINEST geometry.
-        struct { const char* card; double vram; int bb; bool quad; bool viable; const char* why; } want[] = {
-            { "16 GB", 15.59, 16, false, true,  "16 GB: finest packed, split never engages" },
-            { "12 GB", 11.60, 16, false, true,  "12 GB: (16,1) via split -- was (14,3), two rungs finer" },
-            { "11 GB", 10.60, 16, false, true,  "11 GB: (16,1) via split -- was quad (15,2)" },
-            { "8 GB",   8.00, 15, false, true,  "8 GB: packed (15,2), same rung CUDA picks -- was REFUSED" },
-            { "6 GB",   6.00, 15, true,  true,  "6 GB: quad (15,2) -- was refused" },
-            { "5.7 GB", 5.70, 15, true,  true,  "5.7 GiB: quad (15,2) -- a rung up since row 5 shrank" },
-            { "5 GB",   5.00,  0, false, false, "5.0 GiB: below the floor either way" },
+        // what rb_pick_geometry actually asks. The figure it passes is the budget's
+        // USABLE VRAM (driver free less gpu/budget.h's reserve) with slack 0, not the
+        // card's total: the reserve has already come off, and a flat gigabyte on top
+        // would be held back twice. So the vram column here is usable, ~97.5 % of the
+        // nameplate less the 64 MiB headless reserve, and the slack argument is 0 --
+        // state the contract the same way the caller does or this table pins a
+        // decision nothing makes.
+        // Two different figures, and mixing them up moves the answer a whole rung:
+        // CL_DEVICE_MAX_MEM_ALLOC_SIZE is a quarter of the card's REPORTED total and
+        // does not move with occupancy, while the footprint is checked against what is
+        // free. So each row carries both.
+        auto pick_ocl = [&](double reported_gib, double usable_gib, bool split = true) {
+            return rb_geometry_for(cap, gib(reported_gib)/4, gib(usable_gib),
+                                   /*allow_quad=*/true, 0, split, /*slack_bytes=*/0);
+        };
+        struct { const char* card; double rep, use; int bb; bool quad; bool viable; const char* why; } want[] = {
+            { "16 GB", 15.60, 15.54, 16, false, true,  "16 GB: finest packed, split never engages" },
+            { "12 GB", 10.90, 10.83, 16, false, true,  "12 GB: (16,1) via split" },
+            { "11 GB",  9.99,  9.93, 16, false, true,  "11 GB: (16,1) via split" },
+            { "8 GB",   7.26,  7.20, 16, false, true,  "8 GB: (16,1), and only just -- it needs 7.20 of 7.20" },
+            { "6 GB",   5.45,  5.39, 15, true,  true,  "6 GB: quad (15,2), its max_alloc missing (16,1) by 0.09 GiB" },
+            { "5 GB",   4.54,  4.48,  0, false, false, "5 GB: no rung this backend carries fits -- the arena rungs are the lever" },
+            { "4 GB",   3.63,  3.57,  0, false, false, "4 GB: below the floor until the octo rungs land too" },
         };
         for (const auto& w : want) {
-            const RbGeometry g = rb_geometry_for(cap, gib(w.vram)/4, gib(w.vram),
-                                                 /*allow_quad=*/true, 0, /*allow_split=*/true);
+            const RbGeometry g = pick_ocl(w.rep, w.use);
             check(g.viable == w.viable && (!w.viable || (g.bb == (uint32_t)w.bb && g.quad == w.quad)),
                   w.why);
         }
+        // The 8 GB row sits ON the boundary, so pin the measured point beside it: a card
+        // of that class with anything else resident takes the next rung down, which is
+        // the behaviour a step-down exists for, not a regression.
+        { const RbGeometry g = pick_ocl(7.26, 7.09);
+          check(g.viable && !g.quad && g.bb == 15u,
+                "8 GB with 0.11 GiB resident: packed (15,2), measured on the rig"); }
+        // The floor, either side of it. Below the bottom quad rung the backend has
+        // nothing left to offer and the caller falls back to the sort path.
+        check( pick_ocl(6.00, 4.41).viable, "4.41 GiB usable clears quad (14,3)");
+        check(!pick_ocl(6.00, 4.39).viable, "4.39 GiB does not -- 4.40 GiB is the OpenCL floor");
         // The claim stated as its two halves, so a regression is named:
-        check(!rb_geometry_for(cap, gib(8.0)/4, gib(8.0), true, 0, false).viable
-           &&  rb_geometry_for(cap, gib(8.0)/4, gib(8.0), true, 0, true ).viable,
+        check(!pick_ocl(7.26, 7.20, false).viable && pick_ocl(7.26, 7.20, true).viable,
               "8 GB: the split alone is what makes the card viable");
-        check(rb_geometry_for(cap, gib(10.60)/4, gib(10.60), true, 0, true).bb == 16u
-           && rb_geometry_for(cap, gib(10.60)/4, gib(10.60), true, 0, false).bb == 15u,
-              "11 GB: the split alone is what buys the finer rung");
+        check(pick_ocl(9.99, 9.93, true ).bb == 16u && !pick_ocl(9.99, 9.93, true ).quad
+           && pick_ocl(9.99, 9.93, false).bb == 14u &&  pick_ocl(9.99, 9.93, false).quad,
+              "11 GB: the split alone carries it from quad (14,3) to packed (16,1)");
     }
 
     section("the power-cap policy is ARMED below 130 W");
