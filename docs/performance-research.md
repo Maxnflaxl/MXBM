@@ -5247,6 +5247,116 @@ chain walk null pointers. The flag now brings the quad record and the arena with
 
 </details>
 
+## Measured results, 2026-08-15
+
+### The pipe census: r1 and r2 are 22 points under the ALU roofline, and it is warp supply
+<details>
+<summary>Details</summary>
+
+*(`ncu` executed-instruction counts per pipe and per-SASS stall attribution over
+`cuda/pipeline 1`, headless, shipping flags. The harness runs a KAT solve plus N nonces,
+so every figure is halved. Cross-instrument gate: the totals reproduce the stock census
+at 8423 M warp instructions against 8422 M.)*
+
+| per solve | entry | r1 | r2 | r3 | r4 |
+|---|---|---|---|---|---|
+| warp instructions (M) | 1083 | 1901 | 3331 | 1120 | 716 |
+| ALU pipe (M) | 892 | 1345 | 2476 | 570 | 340 |
+| FMA pipe (M) | 174 | 293 | 556 | 240 | 110 |
+| **ALU-pipe util** | **98.7 %** | 76.4 | 78.3 | 17.9 | 17.7 |
+| **issue util** | 57.7 % | 55.2 | 53.4 | 17.6 | 18.7 |
+
+**The census's ALU column is derivable from instruction counts alone.** An sm_89
+sub-partition has 16 INT32 lanes, so a warp ALU instruction holds the pipe two cycles, and
+`2 × alu / (sub-partitions × elapsed cycles)` returns r3's 17.9 % and r4's 17.7 % exactly.
+
+**Entry is ALU-pipe-bound, not issue-bound** — 98.7 % of the INT pipe with 42 % of its
+issue slots empty. This *re-scopes* the single-issue closure instead of contradicting it:
+on the ALU-bound stages the currency is ALU-pipe instructions specifically, and LSU and
+branch instructions issue in slots the INT pipe cannot use. Trading an XOR for a shared
+load pays there; the reverse does not. Entry's own work cannot leave the INT pipe — every
+SipRound operation is a carry-producing IADD3, a LOP3 or an SHF, none encodable as IMAD,
+which is the carry closure arrived at from the other side. Entry is also at its
+instruction floor: 1074 SASS instructions for 7 siphash calls, 153 per call against a
+hand-derived minimum of 155 (48 IADD3 + 48 LOP3 + 48 SHF, the two `rotl64(·,32)` free as
+register swaps), with `IADD3 165 + IMAD 173 = 338` matching the 336 predicted 64-bit adds.
+
+**r1 and r2 are bound by neither pipe nor issue.** Entry proves 98.7 % is reachable on
+this card; r1/r2 sit at 76.4 / 78.3 with issue only half full, so the gap is stall.
+Closing it is r1 5.08 → 3.93 ms and r2 9.30 → 7.38 ms, **−3.07 ms, −9.7 % of the solve.**
+
+The stated basis of the warp-specialization closure — *four resident blocks keep the SM
+issuing while one waits* — does not survive the warp-supply metric:
+
+| | entry | r1 | r2 | r3 | r4 |
+|---|---|---|---|---|---|
+| `warps_eligible.avg.per_cycle_active` | **5.45** | 2.53 | 2.18 | 0.27 | 0.29 |
+| resident warps / sub-partition | 12 | 10 | 8 | 6 | 8 |
+
+Entry's stalls are the healthy pair, math-pipe throttle 43.1 % and not-selected 43.4 % —
+surplus warps queued behind a saturated pipe. r1/r2 hold under half entry's eligible
+supply, so the four blocks cover the wait only partially and the wait does cost SM cycles.
+Per-SASS attribution over the shipped r2 gives barrier **35.9 %** of not-issued cycles,
+against math-pipe throttle 31.2 (the floor), long scoreboard 13.6 and wait 10.0.
+**Barrier stalls are booked against the instruction after `BAR.SYNC`**, so searching SASS
+for barrier opcodes finds 0.6 % and misses the effect; the cost lands on four sites, each
+executed once per warp.
+
+**The deficit is warp SUPPLY, and one resident block is worth 5.3 points of ALU pipe.**
+`MXBM_FCAP=352` drops r2 from four resident blocks to three and changes nothing else —
+the executed ALU count is 2475 M against the shipping 2476 M, so the perturbation is pure
+latency-hiding:
+
+| r2 | blocks/SM | eligible warps/cycle | ALU pipe | issue | ms |
+|---|---|---|---|---|---|
+| FCAP 320 *(ships)* | 4 | 2.18 | 78.3 % | 53.4 | 9.30 |
+| FCAP 352 | 3 | **1.55** | **73.0 %** | 50.1 | **9.56** |
+
+KAT 3/3 and drops 0 in both arms; the solve reads 32.24 → 32.79 ms. Removing a quarter of
+the warps costs 5.3 points of ALU pipe and 2.8 % of the round, and the barrier stall
+barely moves (27.9 → 28.8 %) — so the barrier is a *symptom* of thin warp supply, not the
+cause. Extrapolating the same slope, entry's 98.7 % would need roughly eight resident
+blocks.
+
+**That closes the warp-specialization family for a better reason than the ledger had.**
+Producer-consumer warps redistribute work among the warps a block already has; they do not
+add warps, so they cannot repair a warp-supply deficit. The same argument disposes of the
+barrier-skew mechanisms independently of their own nulls (kWG 288 at +0.4 %, MATCH_FIRST).
+What is left is occupancy, and occupancy is closed twice over — shared memory caps r2 at
+four blocks and the register file caps it again if kWG grows.
+
+**What the measurement leaves behind is an exchange rate for shared memory.** A fifth
+resident block in r2 needs its footprint under 20 KB against ~24.8 KB today — **4.8 KB,
+worth ~0.26 ms (0.8 % of the solve)**, and a sixth about the same again. That prices every
+future shared-memory narrowing in r1/r2, which previously had no exchange rate at all.
+It also says why the near misses do not pay: `lwork` is 320 × 7 × 8 B = 17.9 KB of the
+24.8, and even narrowing the staged element by a whole u64 — the shared-memory analogue of
+the implicit-bits record — frees only 2.5 KB and still lands on four blocks.
+
+</details>
+
+### Store-versus-derive is one exchange rate, and h=2 is a structural optimum
+<details>
+<summary>Details</summary>
+
+The h=1, quad, `R2_FULL` and w0-checkpoint nulls are four measurements of a single
+constant. From h=1's own attribution — r1's materialisation +5.4 ms against r2's rebuild
+−4.2 ms over 2^25 elements — **a siphash call costs 8.9 ps of solve time and a byte
+written and read back through a bucket scatter costs 4.35 ps.** A call is therefore worth
+about two bytes while producing eight: **re-deriving beats storing by ~3.9× on this card**,
+in whichever round the trade is made.
+
+One structural fact then fixes the switching height without further measurement: **an
+element is its own minimal checkpoint.** Rebuilding a level-k element requires its two
+level-(k−1) parents, which together carry more bits than the element does, so there is no
+cheaper intermediate to store. Deriving earlier (h=1) buys arithmetic that is 3.9× cheaper
+with scattered stores; deriving later (quad at r3, octo at r4) doubles the rebuild —
+7 → 14 → 28 siphash calls — against a byte saving that only falls linearly, which is why
+round 4's eight-leaf rebuild prices at a flat +16 ms. **h=2 is a true optimum rather than
+an empirical one**, and that is why both neighbours measured worse.
+
+</details>
+
 ---
 
 ## Established limits
