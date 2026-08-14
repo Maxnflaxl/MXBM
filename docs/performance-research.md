@@ -25,7 +25,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [What didn't work](#what-didnt-work) | the 18 measured and reverted |
 | [Measured results, 2026-07-26 to 2026-07-28](#measured-results-2026-07-26-to-2026-07-28) | the recent deep write-ups |
 | [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
-| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped) |
+| [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -4627,6 +4627,53 @@ arithmetic, as does a card whose sub-peak curve sags more.
 Residual fact: duty-cycling reaches average draws BELOW the driver's 100 W cap
 floor (~80 W at ~4.8 J/sol) where no continuous configuration exists — a niche
 capability, not an efficiency win.
+
+</details>
+
+### The stall structure offers no lever the shipped knobs do not already hold
+<details>
+<summary>Details</summary>
+
+Two leads the hardware census armed, both closed by measuring the thing that would
+decide them before building either.
+
+**r3's idle lanes are the sub-mask filter, and its removal is already a shipped knob.**
+The census reported r3 running 12.6 of 32 threads per warp. The source is the staging
+loop's sub-mask filter: at sm=1 each bucket is swept by two blocks and each discards
+about half of what it examines. A fresh profile of the packed build shows the matching
+memory signature — r3 and r4 loads use **12.0 of 32 bytes per sector**, which is the
+8 B word-0 scan striding over 64 B records. Deleting that filter and its scan is
+precisely what geometry (17,0) does, and that is measured at **−1.0 to −1.5 % under a
+cap**, shipping under the ≤130 W gate. A partitioned-emit variant at (16,1) — one slot
+counter per sub-mask value, so each sweep reads a dense partition — would buy the same
+package without (17,0)'s doubled bucket count, so its prize is bounded by that same
+one-and-a-half percent rather than by the 61 % the lane figure suggests.
+
+**Scattered stores using half of each sector is the hardware floor, not waste.** Every
+round writes 16.2–16.7 of the 32 bytes per store sector, which the profiler bills as a
+20–24 % opportunity. It is not one: 16 B is the widest store the ISA offers, so a
+scattered 64 B record necessarily touches each 32 B sector twice. Merging across lanes
+is separately closed — the emit is write-only, so a two-level reorder needs >780 GB/s
+coalesced to break even. The one sector figure that did move is r2's, from 117 M
+excessive to 94 M, which is the implicit-bits record deleting the side plane and an
+independent confirmation of that mechanism.
+
+**Warp specialization is blocked by r1's shared budget.** At `-lgc 800`, the regime
+that matters, the CTA barrier is the top stall in r1 (5.6 cycles, 31.3 %, unchanged
+from stock) and in *no other round* — r2, r3 and r4 all sit on long-scoreboard memory
+dependencies (14.7–18.1 cycles, ~45 %), which producer/consumer warps do not address.
+In r1 the barrier is required by the algorithm rather than by convenience: a chain
+cannot be walked until every element hashing to its slot has been inserted, and
+insertion order across a bucket is arbitrary, so consumers cannot trail producers
+within a bucket. Overlap therefore needs double buffering across buckets — a second
+staging area of ~19 KB — against r1's **448 B** of shared headroom at five blocks per
+SM, on a round where 640 B of match-first bookkeeping already costs the fifth block.
+And the imbalance the barrier exposes is what match-first's compaction already
+addresses, at a measured −1 % under a cap.
+
+Scope for both: this round shape and this card's 100 KB of shared memory per SM. A
+part with a larger shared budget, or a round that stages less, reopens the
+double-buffer arm.
 
 </details>
 
