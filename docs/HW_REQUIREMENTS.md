@@ -16,8 +16,8 @@ report; BeamHash III yields ~1.9 solutions per solve.
 | | Requirement |
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
-| **VRAM** | **3 GB on CUDA** — BeamHash III's own stated minimum (needs > 2.6 GiB *reported*) — and **6 GB on OpenCL** (> 5.7 GiB). 8 GB and up get the fastest geometry on CUDA; below that [the ladder](#the-vram-ladder) steps down, 2–81 % slower |
-| **VRAM — what a full search occupies** | CUDA **6.84 GiB** at the fastest geometry, down to **1.90 GiB** at the coarsest. OpenCL 7.20 down to 4.40 — it carries none of the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena), the dense-cap rungs or the octo record, only the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) |
+| **VRAM** | **3 GB on CUDA** — BeamHash III's own stated minimum (needs > 2.6 GiB *reported*) — and **5 GB on OpenCL** (> 4.04 GiB usable). 8 GB and up get the fastest geometry on CUDA; below that [the ladder](#the-vram-ladder) steps down, 2–81 % slower |
+| **VRAM — what a full search occupies** | CUDA **6.84 GiB** at the fastest geometry, down to **1.90 GiB** at the coarsest. OpenCL 7.20 down to **4.04** — it carries the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) and the [dense-cap rungs](performance-research.md#the-overflow-arena-ported-36--for-a-404-gib-floor), but neither the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) nor the octo record |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — met: MXBM's floor is **1.90 GiB**, so a 3 GB card lands on the octo rungs with room |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -52,7 +52,7 @@ On top of that come the leaf/back-reference payloads needed to reconstruct a sol
 | Row-bucket, CUDA default | **6.84 GiB** | 219 B | 2.90 GiB |
 | Row-bucket, OpenCL default | **7.20 GiB** | 231 B | 3.27 GiB |
 | Row-bucket, quad record (both backends) | **5.02 GiB** | 161 B | 2.90 GiB |
-| Row-bucket, quad record + dense caps (CUDA) | **4.03 GiB** | 129 B | 2.42 GiB |
+| Row-bucket, quad record + dense caps (both backends) | **4.03 GiB** | 129 B | 2.42 GiB |
 | Row-bucket, quad + dense caps + octo (CUDA) | **1.90 GiB** | 60 B | 1.35 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
@@ -86,7 +86,7 @@ absolutes:
 | **quad (16,1)** | **5.02 GiB** | 38.4 | ≥ 6.1 |
 | packed (14,3) | 6.24 GiB | 40.0 | only when a single-allocation ceiling binds |
 | **quad (15,2)** | **4.65 GiB** | 40.7 | ≥ 5.7 |
-| **quad (14,3)** | **4.40 GiB** | 44.8 | ≥ 5.4 — the OpenCL floor |
+| **quad (14,3)** | **4.40 GiB** | 44.8 | ≥ 5.4 |
 
 The row that matters is the third. **quad (16,1) is both smaller and faster than packed
 (14,3)** — 5.02 GiB at 38.4 ms against 6.24 at 40.0 — because a coarser geometry pays in
@@ -95,18 +95,19 @@ is cheaper. A ladder sorted by footprint would hand those cards the slower rung.
 (14,3) is kept below it only because its *single* allocation is smaller (2.76 GiB against
 2.90), which a `max_alloc`-bound backend can still need.
 
-**The CUDA backend narrows every row of that table, and adds a row between each pair.**
-Two mechanisms, neither of which the OpenCL kernels carry:
+**Three mechanisms narrow every row of that table and add a row between each pair.** The
+dense caps are on both backends; the other two are CUDA-only:
 
-- The **implicit-bits record** drops the key bits the bucket address already encodes, so
+- The **implicit-bits record** (CUDA only) drops the key bits the bucket address already encodes, so
   round 2's 9th-word plane has no writer and set 0 is 8 u64 per slot instead of 9. It fits
   (16,1) and (17,0) only. Worth −0.36 GiB, and it is also ~3 % *faster* there.
-- **Dense caps** replace the per-bucket tail reserve with one overflow pool per record
-  set: a bucket that fills appends to the pool instead of dropping, so the cap falls from
+- **Dense caps** (both backends) replace the per-bucket tail reserve with one overflow
+  pool per record set: a bucket that fills appends to the pool instead of dropping, so the cap falls from
   mean + 8σ to mean + 2σ and ~22 % of the record slots go away. Zero drops becomes a
   pool-full check against 65,536 slots — measured spill is ~56 elements per solve. The
   mechanism costs a fixed few per cent, so it is a rung, never a default.
-- The **octo record** does to round 3's output what the quad record does to round 2's:
+- The **octo record** (CUDA only) does to round 3's output what the quad record does to
+  round 2's:
   eight seed indices determine the element, so its six work words, its lead and its
   leftContrib are all derivable and only the leaves are stored. 32 B instead of 64, which
   halves the second record set. It also **deletes three of the five back-reference rows**,
@@ -129,6 +130,25 @@ Two mechanisms, neither of which the OpenCL kernels carry:
 
 (The (15,2) and packed-(14,3) rows are still in the list, for the `max_alloc`-bound
 backend; on CUDA a card that fits them fits a faster row first.)
+
+**OpenCL reaches the same dense-cap rungs**, without the two records that need a repack.
+Its own times, measured on the reference card by simulating each class with `--keepfree`,
+so they are not comparable with the CUDA column above:
+
+| OpenCL rung | footprint | ms/solve | runs when usable VRAM is |
+|---|---|---|---|
+| packed (16,1) | 7.20 GiB | 33.4 | ≥ 7.2 GiB |
+| packed (15,2) | 6.62 GiB | 34.9 | ≥ 6.7 |
+| quad (16,1) | 5.02 GiB | 39.0 | ≥ 5.1 |
+| quad (14,3) | 4.40 GiB | 43.5 | ≥ 4.4 |
+| quad (16,1) + dense caps | **4.29 GiB** | 39.9 | ≥ 4.3 |
+| **quad (14,3) + dense caps** | **4.04 GiB** | 45.9 | ≥ 4.1 — the OpenCL floor |
+
+The dense-cap rung is where the ladder's ordering earns itself: at 4.45 GiB a card takes
+quad (16,1) + dense caps at 39.9 ms instead of quad (14,3) at 43.5, so it uses **less**
+memory and runs **8.3 % faster**. An arena rung also turns speculative entry off — that
+set has no pool region — so the delivered cost of the mechanism there is nearer 5 % than
+the 3.6 % an interleaved A/B measures for the caps alone.
 
 **Two stages, two different numbers, and it matters which one is quoted.** A device is
 *offered* when its TOTAL VRAM clears the floor plus the 640 MiB allowance — 4.66 GiB

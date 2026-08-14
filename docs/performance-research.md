@@ -4912,6 +4912,94 @@ attacks holding two layers at once.
 
 </details>
 
+### The OpenCL ladder was answering against the wrong number
+<details>
+<summary>Details</summary>
+
+**A ladder is only as good as the figure it is asked about.** `rb_pick_geometry` passed
+the card's TOTAL VRAM with a flat 1 GiB slack; `rowbucket_viable` then checked the rung it
+returned against the budget's USABLE figure — driver free, less the reserve. On anything
+but a large card the two disagree by construction: the ladder replied packed (16,1),
+viability refused it at 7.20 GiB, and the budget fell through to the sort-path divisor,
+which cannot host a full seed layer. The device was then dropped with "too little memory".
+
+So the practical floor was **~8.9 GiB usable — an 11–12 GB card** — while the arithmetic,
+the tests and this document all said 4.40 GiB. The reach work of 2026-08-01 (ladder-
+authoritative budget, bucket-half split, allocator step-down) was correct and had been
+correct for a fortnight; nothing fed it the right number. The lesson is the one this
+document keeps relearning one level up: the geometry test pinned `rb_geometry_for` and
+passed, because it called the pure function directly with figures the caller never used.
+
+Passing `b.usable` with slack 0 — `rowbucket_geom.h`'s own stated contract for a caller
+that has already taken the reserve off — is the whole fix. Measured by simulating each
+class with `--keepfree`, ~2.0 CPU-verified solutions per solve at every rung:
+
+| usable VRAM | before | after |
+|---|---|---|
+| 7.09 GiB (8 GB class) | refused | packed (15,2), 34.9 ms |
+| 5.18 GiB (6 GB class) | refused | quad (16,1), 39.0 ms |
+| 4.45 GiB | refused | quad (14,3), 43.5 ms |
+| 4.30 GiB | refused | refused |
+
+**The 8 GB class sits ON the boundary**: (16,1) needs 7.20 GiB of the 7.20 such a card
+reports free, so anything else resident takes it a rung down. That is what the step-down
+is for, not a regression — but it is why the class is quoted as packed rather than as a
+particular rung.
+
+</details>
+
+### The overflow arena, ported: +3.6 % for a 4.04 GiB floor
+<details>
+<summary>Details</summary>
+
+The mechanism is CUDA's (see *the reach composition* above): per-bucket capacities fall
+from a mean + 8σ tail bound to mean + 2σ, and a bucket that fills appends to a pool behind
+the bucket records instead of dropping. What differs here is the split. A record set over
+`CL_DEVICE_MAX_MEM_ALLOC_SIZE` arrives as two bucket-halves, so each half carries its own
+pool and its own cursor, the two summing to the pool the footprint arithmetic budgets —
+CUDA, with no allocation ceiling, needs none of that.
+
+It is a **build option, not a kernel parameter**. The row-bucket program is already
+compiled after the ladder settles (the same reason `GEO_BAKED` works), so an arena rung
+compiles the pool paths in and every other rung compiles the kernels it always had. The
+earlier note here — that OpenCL's lack of templates would force a second program build or
+a runtime flag paid in local memory — priced a problem that the existing compile ordering
+had already solved.
+
+Two pairings are **refused rather than mis-indexed**, and both are about a buffer with no
+pool region behind it: the packed r2→r3 side plane (so the arena requires the quad record)
+and the speculative-entry set (so speculation is off on an arena rung). The first throws;
+the second silently declines, since speculation is already best-effort.
+
+Cost, interleaved ABBA at quad (14,3) with speculation off in **both** arms — the first
+attempt had it on in one, which priced the arena and the lost speculation as one number:
+
+| | ms/solve |
+|---|---|
+| arena off | 44.2, 44.3 |
+| arena on | 45.8, 45.9 |
+| | **+3.6 %** |
+
+against CUDA's +1.70 % at (16,1). A card that takes an arena rung also gives up
+speculative entry, so the delivered cost there is nearer 5 %.
+
+The gate was 3/3 goldens and zero drops on all three counters, plus the **positive
+control that matters**: the pool spilled 92 elements per solve at (16,1). An arena that
+never spills reads exactly like one that works, and would have measured the plain rung
+under another name.
+
+| usable VRAM | without the arena | with it |
+|---|---|---|
+| 4.45 GiB | quad (14,3), 43.5 ms | **quad (16,1) + arena, 39.9 ms** |
+| 4.11 GiB | refused | **quad (14,3) + arena, 45.9 ms** |
+
+So the floor goes **4.40 → 4.04 GiB**, and — because the freed slots buy a *finer*
+geometry rather than a coarser one — a card at 4.45 GiB gets **8.3 % faster** while using
+less memory. That inverts the usual direction of a reach lever and is the reason the
+ladder is ordered by measured time rather than by footprint.
+
+</details>
+
 ---
 
 ## Established limits

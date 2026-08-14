@@ -142,6 +142,10 @@ The CUDA backend is **~6 % past the target** and OpenCL 1.07× short — read
 beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **8.36 →
 6.84 GiB** at the fastest geometry (268 → 219 B/element), and **1.90 GiB** at the CUDA
 floor, which clears BeamHash III's stated 3 GB minimum and the card class behind it.
+OpenCL floors at **4.04 GiB** — a 5 GB card — since it gained the dense-cap rungs and
+stopped [sizing its ladder against total VRAM instead of
+free](performance-research.md#the-opencl-ladder-was-answering-against-the-wrong-number),
+which had been refusing every card under ~8.9 GiB usable.
 
 <details>
 <summary>The earlier 2.5-hour session, and why a peak must never be quoted</summary>
