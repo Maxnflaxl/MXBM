@@ -74,9 +74,15 @@ fallback sort path.
 
 An absolute figure is only as good as the conditions it was taken under, and the same
 binaries here once measured 34.15 ms and 35.60 ms hours apart. `benchmarks/headline.sh`
-refuses to start if another process holds VRAM, discards a 240 s warmup and reports the
-residual temperature slope, repeats the run, and records NVML telemetry per run — SM
-clock, memory clock, watts, temperature, and the `clocks_event_reasons` bitmask.
+refuses to run if another process holds more than 256 MiB of VRAM, discards a 240 s
+warmup and reports the residual temperature slope, repeats the run, and records NVML
+telemetry per run — SM clock, memory clock, watts, temperature, and the
+`clocks_event_reasons` bitmask.
+
+**That co-tenant check runs between every arm, not only before the first.** As a
+precondition alone it cannot see something started during the twelve minutes of timed
+runs, which is a wrong number rather than a noisy one — and the arms are far enough
+apart that the check is only ever asked while the miner itself is off the card.
 
 The telemetry is what makes a failure diagnosable: the original measurement recorded a
 number and nothing else, so when it failed to reproduce there was nothing to diff. The

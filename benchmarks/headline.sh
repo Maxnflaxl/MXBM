@@ -74,17 +74,21 @@ mkdir -p "$OUT"
 # Anything else on the card invalidates the whole run, so this is a hard stop
 # rather than a warning. A few hundred MiB of desktop compositing is tolerated;
 # a co-tenant with a real allocation is not.
-APPS=$(nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader 2>/dev/null)
-if [ -n "$APPS" ]; then
+# Called between runs as well as before the first, so it is only ever asked while our own
+# miner is NOT on the card. `$1` says which moment failed.
+check_cotenants() {
+    local when=$1 apps big
+    apps=$(nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv,noheader 2>/dev/null)
+    [ -n "$apps" ] || return 0
     echo "processes currently on the GPU:"
-    echo "$APPS" | sed 's/^/    /'
-    BIG=$(echo "$APPS" | awk -F, '{gsub(/[^0-9]/,"",$2); if ($2+0 > 256) print}')
-    if [ -n "$BIG" ]; then
-        echo "ABORT: a process is holding more than 256 MiB of VRAM. Stop it first --"
-        echo "a co-tenant on the card does not add noise, it moves the number."
-        exit 1
-    fi
-fi
+    echo "$apps" | sed 's/^/    /'
+    big=$(echo "$apps" | awk -F, '{gsub(/[^0-9]/,"",$2); if ($2+0 > 256) print}')
+    [ -n "$big" ] || return 0
+    echo "ABORT ($when): a process is holding more than 256 MiB of VRAM. Stop it first --"
+    echo "a co-tenant on the card does not add noise, it moves the number."
+    exit 1
+}
+check_cotenants "before starting" 
 LOAD=$(cut -d' ' -f1 /proc/loadavg)
 echo "host load average (1 min): $LOAD"
 awk -v l="$LOAD" 'BEGIN{ if (l+0 > 1.0) print "  WARNING: the host is busy; solve() verifies on the CPU" }'
@@ -233,7 +237,12 @@ i=0
 while [ "$i" -lt "$RUNS" ]; do
     i=$((i + 1))
     sleep "$SETTLE"
+    # Between runs, not only at the start: the precondition above cannot see something
+    # that arrives during the six timed arms, and one contaminated arm is a wrong number
+    # rather than a noisy one.
+    check_cotenants "between runs"
     R=$(run_one "run$i" "$SECS") || exit 1
+    check_cotenants "after run$i"
     echo "$R" >> "$OUT/rows.txt"
     echo "$R" | awk '{ printf "%-9s %8s %8s %8s %8s %7s %6s %6s %6s %5s   %s\n", \
                         $1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $13 }'
