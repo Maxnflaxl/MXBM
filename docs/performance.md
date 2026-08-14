@@ -383,27 +383,32 @@ inside the binary; the sampled-watts identity remains the fallback):
 
     t_s = (T_N - T_1) / (N-1)        E_s = (J_N - J_1) / (N-1)        P_s = E_s / t_s
 
-Re-measured 2026-07-31 on the current kernels, 8 reps, 45 s per stage:
+Re-measured 2026-08-14 on the current kernels, 8 reps, 45 s per stage:
 
 | stage | ms | % of solve | power | J/solve | % of energy |
 |---|---|---|---|---|---|
-| `entry_scatter` | 2.68 | 7.9 | 283.8 W | 0.76 | 8.0 |
-| round 1 | 5.14 | 15.2 | 284.6 W | 1.46 | 15.3 |
-| round 2 | 10.24 | 30.2 | 283.2 W | 2.90 | 30.4 |
-| round 3 | 9.48 | 28.0 | **275.4 W** | 2.61 | 27.4 |
-| round 4 | 5.46 | 16.1 | 283.7 W | 1.55 | 16.2 |
-| terminal | 0.94 | 2.8 | 280.2 W | 0.26 | 2.8 |
-| **sum** | **33.93** | **100.1 %** | 281.3 W | **9.55** | |
+| `entry_scatter` | 2.65 | 8.2 | 284.9 W | 0.76 | 8.2 |
+| round 1 | 5.08 | 15.8 | 284.9 W | 1.45 | 15.8 |
+| round 2 | 9.30 | 28.9 | 283.0 W | 2.63 | 28.7 |
+| round 3 | 8.96 | 27.8 | **281.5 W** | 2.52 | 27.5 |
+| round 4 | 5.41 | 16.8 | 283.4 W | 1.53 | 16.7 |
+| terminal | 0.98 | 3.0 | 285.7 W | 0.28 | 3.1 |
+| **sum** | **32.39** | **100.7 %** | 283.2 W | **9.17** | |
 
-Solve is 33.90 ms in the harness, so the stages account for 100.1 % of it, and
-their summed energy lands within 0.8 % of the counter's own whole-solve figure
-(9.63 J) — both closures bound anything unattributed (memsets, launch gaps,
-readback, CPU verify) at essentially zero. 9.63 J per solve ÷ 1.96 verified
-solutions = **4.91 J per solution** at stock.
+Solve is 32.18 ms in the harness, so the stages account for 100.7 % of it, and
+their summed energy lands within 0.4 % of the counter's own whole-solve figure
+(9.13 J) — both closures bound anything unattributed (memsets, launch gaps,
+readback, CPU verify) at essentially zero. 9.13 J per solve ÷ 1.95 verified
+solutions = **4.68 J per solution** at stock.
+
+The implicit-bits record is where the 1.5 ms since the 2026-07-31 profile went,
+and it went exactly where its mechanism says: round 2 −0.94 ms and round 3
+−0.52, the round that writes the narrowed record and the round that reads it.
+No other stage moved by more than 0.06 ms.
 
 Every stage draws the cap. There is no power-hog kernel to fix: the workload
 saturates the board limit from `entry_scatter` through the terminal round, and
-the driver pulls the core clock down (2610–2745 MHz) to hold 285 W. Only round 3
+the driver pulls the core clock down (2595–2745 MHz) to hold 285 W. Only round 3
 sits measurably below it — and it runs the highest clock of any stage — because
 round 3 is the DRAM-bound round: moving bytes costs this board less than working
 the SM does, so the freed power comes back as core clock.
@@ -415,7 +420,8 @@ Two consequences, and they matter more than the table:
    optimization of the same size, and no amount of watt-shaving *inside* the
    workload is available independently of it — there is no slack kernel to
    quieten. Matching lolMiner's 0.223 sol/s/W while still drawing
-   285 W would need **63.5 sol/s**. Moving the cap itself is the other lever, and
+   285 W would need **63.5 sol/s**, against 62.4 measured — 1.8 % away, and only
+   reachable through ms/solve. Moving the cap itself is the other lever, and
    it turns out to be the cheap one.
 2. **The published comparison is between two different operating points.** The
    lolMiner draws 238.7 W with σ 4.05: it is *not* at the cap, and leaves
