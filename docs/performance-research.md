@@ -5000,6 +5000,46 @@ ladder is ordered by measured time rather than by footprint.
 
 </details>
 
+### The octo record on OpenCL: the record is proven, round 4 is not
+<details>
+<summary>Details</summary>
+
+**Not shipping.** `rb_pick_geometry` passes `allow_octo=false`, so the ladder cannot
+reach these rungs; `MXBM_OCTO=1` is the only way in. Recorded here because the parts that
+are settled are the expensive ones to rediscover, and because the failure is localised
+far enough to be worth stating.
+
+Settled, by positive controls that ran over a full solve and reported zero mismatches
+(`-DLDS_OCTO_CHECK=1`, compiled out by default):
+
+- `rd_elem4` applied to a record's eight leaves reproduces **every work word** round 3
+  stored for that child — checked against round 3's own `c[0..5]` in the packed build,
+  where both sides are available.
+- `oc_contrib` reproduces the leftContrib round 3 stored, from the same eight leaves.
+- The octo record round-trips: the leaves it carries re-derive the key it carries.
+- Rounds 1–3 emit **key multisets identical to the packed build's**, bucket for bucket,
+  so the 16 B quad record and the octo record are both being written and read correctly.
+
+Not settled: round 4 places **~21 % of its children in a bucket whose index does not
+match the child's own key** — 111,146 of 525,283 in a 1024-bucket sample — and the
+terminal round then reads ~18,000 spurious survivors against the true 3. The stored
+record and the address it was stored at disagree, which makes it a store-address fault
+rather than an arithmetic one, and the arithmetic checks above say the same.
+
+Three explanations are already excluded, each by measurement:
+
+| candidate | why not |
+|---|---|
+| the lead tiebreak resolving differently (gi order is not build-stable) | `LEADTIE_PROBE` counts **17** ties in an entire solve |
+| the overflow pool | 92 elements spill per solve, and the affected slots are ordinary bucket slots |
+| nondeterminism | the packed build reproduces its own round-4 output **exactly** across runs |
+
+The one structural difference left unexplored: under octo, set 0's stride is 2, so round 2
+and round 4 write the same addresses, where in every shipping configuration they do not
+(3 against 2). Nothing has yet shown that to be the mechanism.
+
+</details>
+
 ---
 
 ## Established limits
