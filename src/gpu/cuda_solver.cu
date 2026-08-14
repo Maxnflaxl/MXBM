@@ -131,6 +131,12 @@ RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
     if (const char* e = std::getenv("MXBM_QUAD")) { g.quad = atoi(e) != 0; g.viable = true; }
     if (const char* e = std::getenv("MXBM_ARENA")) { g.arena = atoi(e) != 0; g.viable = true; }
     if (const char* e = std::getenv("MXBM_OCTO")) { g.octo = atoi(e) != 0; g.viable = true; }
+    // The octo record is offered on quad dense-cap rungs and nowhere else, so a forced
+    // octo has to bring both: round 3's dispatch emits the octo form from the QUAD input,
+    // and rounds 1-3 go through ROUND_NR, which instantiates the dense-cap kernels only.
+    // Without this a forced MXBM_OCTO writes 16 B records into a set sized for 64 and
+    // hands the chain walk null pointers.
+    if (g.octo) { g.quad = true; g.arena = true; }
     return g;
 }
 } // namespace
