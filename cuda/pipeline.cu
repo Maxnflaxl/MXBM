@@ -158,7 +158,7 @@ struct CudaSolver {
             MXBM_R2_FULL ? 10u : (MXBM_R3_QUAD ? 3u : (MXBM_IMPBITS ? 8u : 9u)),
             MXBM_R2_FULL ? 10u : 8u };
 #if MXBM_IMPBITS
-        if (bb != 16u) { printf("FAIL: MXBM_IMPBITS is hardwired to bb=16\n"); return false; }
+        if (bb != kImpDB) { printf("FAIL: MXBM_IMPBITS pack is compiled for bb=%u\n", kImpDB); return false; }
 #endif
         elem[0] = dalloc<uint64_t>((nslots + ACAP)*setStride[0]);
         elem[1] = dalloc<uint64_t>((nslots + ACAP)*setStride[1]);

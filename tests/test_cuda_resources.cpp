@@ -241,12 +241,19 @@ const Kernel kContract[] = {
       "the fifth block is GONE (5 -> 4): mlist's 640 B crosses r1's 19456 B line, and "
       "registers go 48 -> 64 with it" },
     { "r2 match-first",         true, {7,7,2,4,2,8,0,1}, nullptr,         256,  64, 24248,  0, 4, "" },
-    { "r2 implicit-bits",       true, {7,7,2,4,2,8,0,0,1}, nullptr,       256,  64, 23616,  0, 4,
+    { "r2 implicit-bits",       true, {7,7,2,4,2,8,0,0,16}, nullptr,       256,  64, 23616,  0, 4,
       "the packed stores fold the repack; resources identical to the base record, "
       "still exactly on the 64-register cliff" },
-    { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,1}, nullptr,       256,  64, 24248,  0, 4, "" },
-    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,1}, nullptr,       256,  56, 26176,  0, 3, "" },
-    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,1}, nullptr,       256,  56, 26808,  0, 3, "" },
+    { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,16}, nullptr,       256,  64, 24248,  0, 4, "" },
+    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,16}, nullptr,       256,  56, 26176,  0, 3, "" },
+    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,16}, nullptr,       256,  56, 26808,  0, 3, "" },
+    // The (17,0) pack: same code with 17 address-implied bits, selected under the
+    // low-power gate. Resources identical to the 16-bit pack on every variant --
+    // r2 stays exactly on the 64-register cliff.
+    { "r2 implicit-bits 17",    true, {7,7,2,4,2,8,0,0,17}, nullptr,       256,  64, 23616,  0, 4, "" },
+    { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17}, nullptr,       256,  64, 24248,  0, 4, "" },
+    { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17}, nullptr,       256,  56, 26176,  0, 3, "" },
+    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17}, nullptr,       256,  56, 26808,  0, 3, "" },
     { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1}, nullptr,         256,  64, 24248,  0, 4, "" },
     { "r3 match-first",         true, {7,6,4,1,8,8,0,1}, nullptr,         256,  56, 26808,  0, 3, "" },
     { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1}, nullptr,         256,  80, 26808,  0, 3, "" },

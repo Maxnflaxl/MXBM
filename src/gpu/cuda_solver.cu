@@ -281,10 +281,23 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
                                           cudaSharedmemCarveoutMaxShared)
     CARVE((fused_round<MXBM_R1_ARGS>)); CARVE((fused_round<MXBM_R2_ARGS>));
     CARVE((fused_round<MXBM_R3_ARGS>)); CARVE((fused_round<MXBM_R4_ARGS>));
-    // Both record formats are instantiated; the carveout has to reach the pair that
-    // actually runs, and applying it to a kernel that never launches is what the
-    // MXBM_Rn_ARGS naming exists to prevent (see the drift bug in cad8fde).
+    // Every record format and rebuild variant that can launch is instantiated; the
+    // carveout has to reach the pair that actually runs, and applying it to a
+    // kernel that never launches is what the MXBM_Rn_ARGS naming exists to prevent
+    // (see the drift bug in cad8fde). The packed pairs and the match-first
+    // variants launch in the shipping configs -- (16,1) packed at stock, match-
+    // first x packed-17 under the low-power gate -- and each needs its own line.
     CARVE((fused_round<MXBM_R2Q_ARGS>)); CARVE((fused_round<MXBM_R3Q_ARGS>));
+    CARVE((fused_round<MXBM_R2_ARGS, false, false, false, false, 16u>));
+    CARVE((fused_round<MXBM_R3_ARGS, false, false, false, false, 16u>));
+    CARVE((fused_round<MXBM_R2_ARGS, false, false, false, true, 16u>));
+    CARVE((fused_round<MXBM_R3_ARGS, false, false, false, true, 16u>));
+    CARVE((fused_round<MXBM_R2_ARGS, false, false, false, true, 17u>));
+    CARVE((fused_round<MXBM_R3_ARGS, false, false, false, true, 17u>));
+    CARVE((fused_round<MXBM_R2_ARGS, false, false, false, false, 17u>));
+    CARVE((fused_round<MXBM_R3_ARGS, false, false, false, false, 17u>));
+    CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true, 0u>));
+    CARVE((fused_round<MXBM_R4_ARGS, false, false, false, true>));
     // The round-4 variant that hosts the next nonce's entry as co-blocks.
     CARVE((fused_round<MXBM_R4_ARGS, false, false, true>));
     CARVE(terminal_round);
@@ -306,10 +319,13 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     // issue rate. Both variants are instantiated; MXBM_MATCH_FIRST=1 forces it on.
     p_->matchFirst = specLowPower || (MXBM_MATCH_FIRST != 0);
     // The implicit-bits record wins time at every operating point and is free to
-    // carry, so it is on wherever its geometry precondition holds. The set is still
-    // allocated at the 9-u64 stride: the footprint reclaim ships with the
-    // small-card ladder work, not here.
-    p_->impb = !p_->quad && p_->bb == 16u && !std::getenv("MXBM_NO_IMPB");
+    // carry, so it is on wherever its geometry precondition holds: the kept low
+    // key bits (24 - bb) must still cover the sub-mask and the 7 tab-hash bits.
+    // That is (16,1) and the low-power (17,0), each with its own compiled pack.
+    // The set is still allocated at the 9-u64 stride: the footprint reclaim ships
+    // with the small-card ladder work, not here.
+    p_->impb = !p_->quad && (p_->bb == 16u || p_->bb == 17u)
+            && (24u - p_->bb >= 7u + p_->sm) && !std::getenv("MXBM_NO_IMPB");
     if (specLowPower)
         std::fprintf(stderr, "CUDA: ... and match-first rebuild skipping on\n");
     if (!std::getenv("MXBM_NO_SPEC") && !specLowPower) {
@@ -401,13 +417,17 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
           inSet = o; }
     // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
     #define ROUND_X(...) ROUND(__VA_ARGS__)
-    ROUND_X(1, false, MXBM_R1_ARGS)
+    ROUND_X(1, 0u, MXBM_R1_ARGS)
     // Rounds 2 and 3 come in a matched pair -- r2's OUTSTR is r3's INSTR -- so they
     // switch together or the second reads a record the first never wrote. The
-    // implicit-bits pair is the same strides with the pack folded into the stores.
-    if (I.quad)      { ROUND_X(2, false, MXBM_R2Q_ARGS) ROUND_X(3, false, MXBM_R3Q_ARGS) }
-    else if (I.impb) { ROUND_X(2, true,  MXBM_R2_ARGS)  ROUND_X(3, true,  MXBM_R3_ARGS)  }
-    else             { ROUND_X(2, false, MXBM_R2_ARGS)  ROUND_X(3, false, MXBM_R3_ARGS)  }
+    // implicit-bits pairs are the same strides with the pack folded into the
+    // stores; the IMPB value is the bucket-bit count the pack drops, so each
+    // geometry needs its own instantiation.
+    if (I.quad)          { ROUND_X(2, 0u,  MXBM_R2Q_ARGS) ROUND_X(3, 0u,  MXBM_R3Q_ARGS) }
+    else if (I.impb && I.bb == 17u)
+                         { ROUND_X(2, 17u, MXBM_R2_ARGS)  ROUND_X(3, 17u, MXBM_R3_ARGS)  }
+    else if (I.impb)     { ROUND_X(2, 16u, MXBM_R2_ARGS)  ROUND_X(3, 16u, MXBM_R3_ARGS)  }
+    else                 { ROUND_X(2, 0u,  MXBM_R2_ARGS)  ROUND_X(3, 0u,  MXBM_R3_ARGS)  }
     #undef ROUND_X
     #undef ROUND
     // Round 4, outside the macro so the co-blocks variant is instantiated for this

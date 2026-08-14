@@ -121,6 +121,17 @@ constexpr uint32_t kAMax     = 64;     // staged pool entries per bucket (shared
 #endif
 // (Guarded per instantiation in fused_round_body: IMPB needs the perfect-tab
 // compare and cannot ride the cp.async raw copy.)
+//
+// The dropped-bit count rides the IMPB template parameter (0 = plain record,
+// else bucket_bits): the packed record carries 400-IMPB bits in 6 u64 — 384
+// exactly at 16, 383 with a spare bit at 17 — and every pack/unpack shift
+// derives from it at compile time. The kept low 24-IMPB key bits must still
+// cover the sub-mask and the 7 tab-hash bits, which holds on (16,1) and (17,0).
+// MXBM_IMPDB sets only the DEFAULT, for single-config probe builds.
+#ifndef MXBM_IMPDB
+#define MXBM_IMPDB 16
+#endif
+constexpr uint32_t kImpDB = (uint32_t)MXBM_IMPDB;
 
 // MXBM_NARROW6: round 3 stages its 7th work word in 2 bytes instead of 8.
 //
@@ -453,7 +464,10 @@ struct RoundShared {
 template<int INW, int OUTW, int LEAFW, int LMODE,
          uint32_t LOUT, uint32_t PADN, uint32_t SIN, uint32_t SOUT, uint32_t SBUILD,
          uint32_t INSTR, uint32_t OUTSTR, uint32_t FCAP, bool SUBPASS = false,
-         bool MFIRST = (MXBM_MATCH_FIRST != 0), bool IMPB = (MXBM_IMPBITS != 0)>
+         bool MFIRST = (MXBM_MATCH_FIRST != 0),
+         // 0 = plain record; else the count of address-implied key bits the pack
+         // drops (16 for (16,1), 17 for (17,0)) -- every shift derives from it.
+         uint32_t IMPB = (MXBM_IMPBITS ? kImpDB : 0u)>
 __device__ __forceinline__
 void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm, uint32_t bid,
                  uint32_t bucket_bits, uint32_t submask_bits,
@@ -706,16 +720,18 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
             ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
             uint64_t p0, p1;
             if constexpr (IMPB) {
-                // Unpack the 384-bit record, reinserting the 16 address bits from
-                // the block's own bucket index. Inverse of the LM_RD2 emit's pack.
-                stw(pos,0,(q0.x & 0xFFull) | ((uint64_t)bucket << 8)
-                          | (((q0.x >> 8) & 0xFFFFFFFFFFull) << 24));
-                stw(pos,1,(q0.x >> 48) | (q0.y << 16));
-                stw(pos,2,(q0.y >> 48) | (q1.x << 16));
-                stw(pos,3,(q1.x >> 48) | (q1.y << 16));
-                stw(pos,4,(q1.y >> 48) | (q2.x << 16));
-                stw(pos,5,(q2.x >> 48) | (q2.y << 16));
-                stw(pos,6,(q2.y >> 48) & 0xFFFFull);
+                // Unpack the packed record, reinserting the IMPB address bits
+                // from the block's own bucket index. Inverse of the LM_RD2 pack.
+                constexpr uint32_t impKB = 24u - IMPB;
+                constexpr uint64_t impM  = (1ull << impKB) - 1u;
+                stw(pos,0,(q0.x & impM) | ((uint64_t)bucket << impKB)
+                          | (((q0.x >> impKB) & 0xFFFFFFFFFFull) << 24));
+                stw(pos,1,(q0.x >> (64 - IMPB)) | (q0.y << IMPB));
+                stw(pos,2,(q0.y >> (64 - IMPB)) | (q1.x << IMPB));
+                stw(pos,3,(q1.x >> (64 - IMPB)) | (q1.y << IMPB));
+                stw(pos,4,(q1.y >> (64 - IMPB)) | (q2.x << IMPB));
+                stw(pos,5,(q2.x >> (64 - IMPB)) | (q2.y << IMPB));
+                stw(pos,6,(q2.y >> (64 - IMPB)) & 0xFFFFull);
                 p0 = q3.x; p1 = q3.y;
             } else {
                 stw(pos,0,q0.x); stw(pos,1,q0.y);
@@ -983,20 +999,25 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST>& shm
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
                         if constexpr (IMPB && LMODE == LM_RD2) {
-                            // Pack out bits 23..8 of w0 (they ARE cb at bucket_bits
-                            // 16): w0' = low8 | bits63..24 at 8 | w1 low16 at 48;
-                            // then wi' = wi>>16 | w(i+1)<<48. p1 rides inline where
-                            // the dropped word was, so the side plane has no writer.
+                            // Pack out the IMPB key bits above the kept low bits
+                            // (they ARE cb): w0' = low kept bits | w0 bits 63..24
+                            // at impKB | w1's low bits on top; then
+                            // wi' = wi>>IMPB | w(i+1)<<(64-IMPB). p1 rides inline
+                            // where the dropped word was, so the side plane has no
+                            // writer.
                             static_assert(OUTW == 7 || !IMPB, "pack is 400-bit");
+                            constexpr uint32_t impKB = 24u - IMPB;
+                            constexpr uint64_t impM  = (1ull << impKB) - 1u;
                             st_em(v + 0, make_ulonglong2(
-                                (c.w[0] & 0xFFull) | ((c.w[0] >> 24) << 8) | (c.w[1] << 48),
-                                (c.w[1] >> 16) | (c.w[2] << 48)));
+                                (c.w[0] & impM) | ((c.w[0] >> 24) << impKB)
+                                                | (c.w[1] << (impKB + 40)),
+                                (c.w[1] >> IMPB) | (c.w[2] << (64 - IMPB))));
                             st_em(v + 1, make_ulonglong2(
-                                (c.w[2] >> 16) | (c.w[3] << 48),
-                                (c.w[3] >> 16) | (c.w[4] << 48)));
+                                (c.w[2] >> IMPB) | (c.w[3] << (64 - IMPB)),
+                                (c.w[3] >> IMPB) | (c.w[4] << (64 - IMPB))));
                             st_em(v + 2, make_ulonglong2(
-                                (c.w[4] >> 16) | (c.w[5] << 48),
-                                (c.w[5] >> 16) | (c.w[6] << 48)));
+                                (c.w[4] >> IMPB) | (c.w[5] << (64 - IMPB)),
+                                (c.w[5] >> IMPB) | (c.w[6] << (64 - IMPB))));
                             st_em(v + 3, make_ulonglong2(r3_p0(ctree[0], ctree[1], ctree[2]),
                                                          r3_p1(ctree[2], ctree[3], cgi)));
                         } else {
@@ -1079,7 +1100,7 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          // naming it at a launch site keeps MINBLOCKS's per-round default -- a
          // spelled-out 0 would silently drop an MXBM_MB_* probe budget.
          bool MFIRST = (MXBM_MATCH_FIRST != 0),
-         bool IMPB = (MXBM_IMPBITS != 0),
+         uint32_t IMPB = (MXBM_IMPBITS ? kImpDB : 0u),
          int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
                         : LMODE == LM_RD2  ? MXBM_MB_RD2
                         : LMODE == LM_EMIT ? MXBM_MB_EMIT : 0)>
