@@ -316,7 +316,9 @@ struct CudaSolver {
                                 actr2[o], atag2[o], ahead2[o], anext2[o], spillTot);
 #else
         #define ARN_RESET(o)
-        #define ARN_IO(R,o)
+        // The four arena parameters are defaulted, but only a call that STOPS there can
+        // omit them -- the co-tenant launches pass positionally past them.
+        #define ARN_IO(R,o) , nullptr, nullptr, nullptr, nullptr
         #define ARN_LINK(o)
 #endif
         // R==1 reads entry's dedicated stride-1 buffer instead of elem[0]; every later
