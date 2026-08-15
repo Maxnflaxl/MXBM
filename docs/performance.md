@@ -111,11 +111,12 @@ the derived one.
 | 2026-07-31 | **Speculative entry co-scheduling** — r4's launch hosts the next nonce's entry as interleaved co-blocks | 33.85 | 33.4 | **59.5** | −0.45 | −1.3 % | [Co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), [ships](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms) | [pipe2 1:1, split host, r2/r3 hosts](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms), [register-forced occupancy](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
 | 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07; a bare point — this run's solve count was not recorded, so `1/√N` cannot be formed for it)* | — |
 | 2026-08-13 | **Implicit-bits record** — the packed r2 record stops storing the key bits its bucket address encodes; the side plane loses its writer and reader | 33.2 | 32.0 | **62.7 ± 0.3** | −1.2 | −3.6 % | [address-redundant bits](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) *(± is `1/√N` over the headline run's 45,135 solutions; the live-pool session's window spreads are quoted with the validation below)* | — |
+| 2026-08-15 | **The w0-checkpoint pair record** — round 1 stores the child's post-mix work word 0, so round 2 derives only the linear lane (12 siphashes, no mixes); the record stays 16 B because the address-implied key bits pay for word 0 | 32.0 | 31.3 | **64.2 ± 0.3** | −0.7 | −2.2 % | [w0 checkpoint](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24) *(−0.76 ms measured ABBA-interleaved; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 46,290 solutions)* | [the 24 B form of the same record, +3.8 %](performance-research.md#measured-results-2026-08-12) |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 59.4 | 33.5 | fallback / `--solver opencl` — 2026-08-02, [lineage](performance-research.md#speculative-entry-ported-to-opencl-the-entry-pass-hides-inside-round-4-035-ms); 1.012× of same-session CUDA |
-| **CUDA** | **62.7**[^drift] | **32.0**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **64.2**[^drift] | **31.3**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
 The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-13, commit
@@ -211,9 +212,10 @@ sessions. One 2026-07-26 event at +5.5 % remains on record, unexplained and neve
 recurred. Deltas are unaffected: every A/B here was interleaved.
 
 Under a locked clock the rig reproduces **to the digit across days** (0.0 % spread over
-six runs, on each of three pins), so use `LGC=2600 LMC=10251 benchmarks/headline.sh` to
-regression-test builds and the stock figure to describe what a user gets. The pin stands
-at **32.00 ms** since 2026-08-13, taken with the compute GPU headless — a condition of
+six runs on each of the five pins that measured an unchanged build, and 0.3 % on the one
+that measured a changed one), so use `LGC=2600 LMC=10251 benchmarks/headline.sh` to
+regression-test builds and the stock figure to describe what a user gets. The pin
+stands at **31.30 ms** as of 2026-08-15, taken with the compute GPU headless — a condition of
 the number, since a compositor on the card costs a measured 0.20 ms and ~6 W, and one
 that follows the HDMI cable per login, so it is verified from the miner's own banner
 each session.
@@ -352,8 +354,8 @@ T.Limit Temp: N/A`. A GeForce restriction, not a driver or API-surface problem.
 </details>
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — **32.00 ms / 62.70 sol/s** at stock 285 W, headless, locked LGC=2600
-LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-08-15, `04a9e9c`; see
+attached — **31.30 ms / 64.20 sol/s** at stock 285 W, headless, locked LGC=2600
+LMC=10251, six runs at 0.3 % spread (most recently re-pinned 2026-08-15, `e302388`; see
 the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
 cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline
 from a short run: see the note on solutions/solve under the progress table.
@@ -403,28 +405,34 @@ inside the binary; the sampled-watts identity remains the fallback):
 
     t_s = (T_N - T_1) / (N-1)        E_s = (J_N - J_1) / (N-1)        P_s = E_s / t_s
 
-Re-measured 2026-08-14 on the current kernels, 8 reps, 45 s per stage:
+Re-measured 2026-08-15 on the current kernels, 8 reps, 45 s per stage:
 
 | stage | ms | % of solve | power | J/solve | % of energy |
 |---|---|---|---|---|---|
-| `entry_scatter` | 2.65 | 8.2 | 284.9 W | 0.76 | 8.2 |
-| round 1 | 5.08 | 15.8 | 284.9 W | 1.45 | 15.8 |
-| round 2 | 9.30 | 28.9 | 283.0 W | 2.63 | 28.7 |
-| round 3 | 8.96 | 27.8 | **281.5 W** | 2.52 | 27.5 |
-| round 4 | 5.41 | 16.8 | 283.4 W | 1.53 | 16.7 |
-| terminal | 0.98 | 3.0 | 285.7 W | 0.28 | 3.1 |
-| **sum** | **32.39** | **100.7 %** | 283.2 W | **9.17** | |
+| `entry_scatter` | 2.67 | 8.5 | 284.0 W | 0.76 | 8.5 |
+| round 1 | 5.16 | 16.4 | 284.8 W | 1.47 | 16.4 |
+| round 2 | 8.50 | 27.0 | 282.6 W | 2.40 | 26.8 |
+| round 3 | 8.96 | 28.5 | **281.2 W** | 2.52 | 28.1 |
+| round 4 | 5.41 | 17.2 | 284.0 W | 1.54 | 17.2 |
+| terminal | 0.98 | 3.1 | 285.6 W | 0.28 | 3.1 |
+| **sum** | **31.67** | **100.7 %** | 283.0 W | **8.96** | |
 
-Solve is 32.18 ms in the harness, so the stages account for 100.7 % of it, and
+Solve is 31.46 ms in the harness, so the stages account for 100.7 % of it, and
 their summed energy lands within 0.4 % of the counter's own whole-solve figure
-(9.13 J) — both closures bound anything unattributed (memsets, launch gaps,
-readback, CPU verify) at essentially zero. 9.13 J per solve ÷ 1.95 verified
-solutions = **4.68 J per solution** at stock.
+(8.92 J) — both closures bound anything unattributed (memsets, launch gaps,
+readback, CPU verify) at essentially zero. 8.92 J per solve ÷ 2.010 verified
+solutions = **4.44 J per solution** at stock. (Both halves of that ratio moved
+since the previous profile: energy per solve fell 9.13 → 8.92 J, and the divisor
+is now the pinned 2.010 multiplier rather than the 1.95 this page used to carry —
+see the note on solutions/solve under the progress table.)
 
-The implicit-bits record is where the 1.5 ms since the 2026-07-31 profile went,
-and it went exactly where its mechanism says: round 2 −0.94 ms and round 3
-−0.52, the round that writes the narrowed record and the round that reads it.
-No other stage moved by more than 0.06 ms.
+Each of the last two record changes is visible here as its own mechanism and
+nothing else's. The **w0-checkpoint record** is round 2 **−0.80 ms** against round
+1 **+0.08** for the pack, with rounds 3, 4 and terminal identical to the digit —
+the round that stopped deriving, and the round that pays to store. Before it, the
+**implicit-bits record** was round 2 −0.94 and round 3 −0.52, the round that
+writes the narrowed record and the round that reads it, with no other stage moving
+past 0.06 ms.
 
 Every stage draws the cap. There is no power-hog kernel to fix: the workload
 saturates the board limit from `entry_scatter` through the terminal round, and

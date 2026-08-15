@@ -110,15 +110,15 @@ sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh
 ```
 
 Reference values on the reference card (RTX 4070 Ti SUPER, driver 610.43.03,
-re-measured 2026-08-14 on the reach build, six 120 s runs, **compute GPU
+re-measured 2026-08-15 on the w0-checkpoint build, six 120 s runs, **compute GPU
 headless**):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **32.00** — all six runs, to the digit (spread 0.0 %) | a build change is real past ±0.5 % |
-| sol/s | **62.70** — all six runs (spread 0.0 %) | derived from the above; quoted because the pin is what the headline cites |
+| ms/solve median | **31.30** — five of six runs, 31.20 on the other (spread 0.3 %) | a build change is real past ±0.5 % |
+| sol/s | **64.20** — five of six runs, 64.30 on the other (spread 0.2 %) | derived from the above; quoted because the pin is what the headline cites |
 | SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
-| board draw | **272.9 W** (spread 0.3 %) | context, not a gate — it has read 273–281 W across five sessions at identical clocks, times and solve counts, the last two agreeing to the decimal |
+| board draw | **271.9 W** (spread 0.4 %) | context, not a gate — it has read 273–281 W across five sessions at identical clocks, times and solve counts, the last two agreeing to the decimal |
 | `clocks_event_reasons` | none, or `sw_power_cap` on any fraction of samples | any **other** flag voids the run. The fraction has read 0 %, 0–3 %, 14–18 % and 0 % again on four sessions that agreed on ms/solve to the digit, so it is not predictive and is not a gate |
 | display on the compute GPU | **no** — monitor on the motherboard iGPU | a compositor on this card costs **0.20 ms and ~6 W** (measured) |
 
@@ -134,6 +134,7 @@ Lineage, most recent first — the number belongs to a build *and* a rig, the
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
+| 2026-08-15 `e302388` | **31.30** | 271.9 W | **the w0-checkpoint pair record** ([ledger](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24)) — round 1 stores the child's post-mix work word 0 and round 2 derives only the linear lane. First pin to move since 2026-08-13: **−0.70 ms, 62.70 → 64.20 sol/s**, against −0.76 ms measured ABBA-interleaved the same session, which agree inside this instrument's 0.1 ms print resolution. Spread 0.3 % rather than the 0.0 % of the five pins before it — five runs at 31.30 and one at 31.20, i.e. one bin of the resolution, not a regime change. Throttle reasons `none` on five runs and `sw_power_cap:0 %` on the other, which is zero samples. Verified solutions/solve **2.010** on every run, so the multiplier the sol/s figure is derived through is unchanged |
 | 2026-08-15 `7143ea5` | **32.00** | 272.1 W | **nothing at all** — no kernel shipped; this is a campaign's session baseline, taken because absolute figures carry a ~2.5 % cross-session band and no A/B may be diffed against another day's number. Fifth consecutive 32.00 / 62.70 at 0.0 % spread, and the first spanning two calendar days, so the pin is now reproducible *across* sessions rather than only within one. Throttle reasons `none` on all six runs. Per-run draw recorded rather than medianed — 276.0 / 272.5 / 272.1 / 271.9 / 272.0 W: the outlier is run 1, the first after warmup, which is the expected direction for a thermal transient and not the unexplained regime the draw column exists to catch |
 | 2026-08-14 `6338600` | **32.00** | 272.9 W | **nothing at stock** — the day's last two kernel changes (three back-reference rows retired, `gi` dropped from round 2's record) are both selected only on the octo rungs, which the stock config does not pick. Fourth pin of the day, fourth 32.00 / 62.70 with 0.0 % spread. The draw reproduces the previous pin **to the decimal** at identical clocks and identical work — the first time two sessions have agreed on it, which is what the draw column is for |
 | 2026-08-14 `4882613` | **32.00** | 272.9 W | **nothing at stock** — the octo record adds kernel instantiations that only the bottom three rungs launch, and the occupancy contract reports no drift on any shipping kernel. Third pin of the day, third 32.00 / 62.70 with 0.0 % spread. Fourth distinct draw reading at identical work (273 W, `sw_power_cap` absent), which is why the gate row no longer names a fraction |

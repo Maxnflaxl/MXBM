@@ -13,7 +13,7 @@ and the energy go", and those are two quantities a stacked bar can only show one
 of. Plotting board power against cumulative solve time gives all of it in one
 set of marks, because energy IS power times time:
 
-    segment WIDTH  = that stage's share of the 35 ms solve
+    segment WIDTH  = that stage's share of the solve
     segment HEIGHT = the power the board draws during it
     segment AREA   = the energy that stage costs
 
@@ -26,11 +26,11 @@ chart starts lying about the thing it exists to show. The cost is that a 285 W
 block and a 271 W block look nearly identical -- which is why round 3's dip is
 called out in text rather than left to the eye.
 
-ON THE TOTAL. The six stages sum to 32.38 ms against the 32.39 ms the table's own
-total row reports, a rounding residual from replaying one stage at a time inside
-a real solve. The chart uses the sum, because the segments have to add up to the
-axis they sit on, and says so underneath rather than quietly scaling the stages
-to fit.
+ON THE TOTAL. The six stages sum to very nearly the table's own total row -- the
+residual is rounding, from replaying one stage at a time inside a real solve. The
+chart uses the sum, because the segments have to add up to the axis they sit on,
+and prints both figures underneath rather than quietly scaling the stages to fit.
+Both come from the table; neither is hardcoded here.
 """
 import os
 import re
@@ -83,6 +83,20 @@ def parse():
     if len(rows) < 2:
         sys.exit("parsed %d stage rows from %s -- has the table changed?" % (len(rows), SRC))
     return rows
+
+
+def measured_total():
+    """The table's own total row -- the figure the stages are attributed against.
+
+    Read rather than hardcoded, so a re-measurement moves the residual with the
+    table instead of leaving the footnote quoting an older solve.
+    """
+    lines = cl.section(cl.read_lines(SRC), SECTION)
+    for cells in cl.table_rows(lines, lambda c: len(c) >= 2 and "total" in c[0].lower()):
+        ms = cl.num(cells[1])
+        if ms is not None:
+            return ms
+    sys.exit("no total row in %s's stage table -- the residual cannot be formed" % SRC)
 
 
 def board_limit():
@@ -186,11 +200,12 @@ def render(rows):
            "Every stage draws the board limit — there is no single kernel to fix for "
            "power. The one dip is %s at %.1f W, the most bandwidth-bound stage (%.2f GB)."
            % (lo["stage"], lo["w"], lo["gb"]), 10, cl.INK_2)
+    meas = measured_total()
     c.text(L, H - 14,
            "Per-stage figures from benchmarks/stage_power.sh, which replays one stage "
-           "many times inside a real solve; they sum to %.1f ms against a %.1f ms "
-           "measured total, a %.1f %% attribution residual." % (
-               total_ms, 35.0, 100 * (total_ms - 35.0) / 35.0), 10, cl.MUTED)
+           "many times inside a real solve; they sum to %.2f ms against the table's "
+           "%.2f ms total, a %+.1f %% attribution residual." % (
+               total_ms, meas, 100 * (total_ms - meas) / meas), 10, cl.MUTED)
     return c.render()
 
 

@@ -45,7 +45,11 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
 **62.32 sol/s**, its 15 s windows spread σ = 1.99 (a spread of the reading — the
 uncertainty on that mean is ±0.11), and the controlled benchmark the same day
-reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). lolMiner's
+reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). **That column
+predates the w0-checkpoint record**, which took the controlled figure to
+**64.2 sol/s at 31.30 ms** on 2026-08-15 (+2.4 %); the table is left at what was
+actually measured side by side rather than restated from a figure the head-to-head
+session never ran, so read every margin in it as a floor on the current one. lolMiner's
 column is the 2026-07 head-to-head session; its binary is unchanged.
 
 **Read that efficiency row carefully — it compares two different operating points.** MXBM
@@ -134,7 +138,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 62.7).
+(both on the build of 2026-07-25; the current one is 64.2).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
 observed.
@@ -202,17 +206,22 @@ The chart is the table below, drawn as a timeline: width is time, height is powe
 each block's **area** is the energy that stage costs. Generated from the table by
 `python3 docs/tools/plot_stages.py`, so the two cannot drift.
 
-Re-measured 2026-08-14 on the current kernels, 8 reps, 45 s per stage:
+Re-measured 2026-08-15 on the current kernels, 8 reps, 45 s per stage:
 
 | stage | ms | % of solve | power | DRAM traffic | bound by |
 |---|---|---|---|---|---|
-| `entry_scatter` | 2.65 | 8.2 % | 284.9 W | 0.26 GB | compute (SipHash) |
-| round 1 | 5.08 | 15.8 % | 284.9 W | 1.07 GB | latency |
-| round 2 | 9.30 | 28.9 % | 283.0 W | 2.94 GB | latency |
-| round 3 | 8.96 | 27.8 % | **281.5 W** | 4.55 GB | **DRAM** |
-| round 4 | 5.41 | 16.8 % | 283.4 W | 2.95 GB | **DRAM** |
-| terminal | 0.98 | 3.0 % | 285.7 W | 0.54 GB | DRAM |
-| **total** | **32.39** | 100.7 % | 283.2 W | **12.30 GB** | |
+| `entry_scatter` | 2.67 | 8.5 % | 284.0 W | 0.26 GB | compute (SipHash) |
+| round 1 | 5.16 | 16.4 % | 284.8 W | 1.07 GB | latency |
+| round 2 | 8.50 | 27.0 % | 282.6 W | 2.94 GB | latency |
+| round 3 | 8.96 | 28.5 % | **281.2 W** | 4.55 GB | **DRAM** |
+| round 4 | 5.41 | 17.2 % | 284.0 W | 2.95 GB | **DRAM** |
+| terminal | 0.98 | 3.1 % | 285.6 W | 0.54 GB | DRAM |
+| **total** | **31.67** | 100.7 % | 283.0 W | **12.30 GB** | |
+
+The w0-checkpoint record is visible in this table as its own mechanism and nothing
+else's: **round 2 −0.80 ms, round 1 +0.08 ms for the pack, and rounds 3, 4 and terminal
+identical to the digit.** The DRAM column does not move because the change moves no
+bytes — the record is the same 16 B it was.
 
 Every stage draws the board limit, which is why there is no single kernel to "fix" for
 power. Total DRAM traffic is within **0.7 %** of the compulsory minimum for the record
@@ -234,12 +243,13 @@ Build first — see [building.md](building.md).
 
 | What | Command | Needs root |
 |---|---|---|
-| Throughput | `mxbm --benchmark BEAM-III --benchmark-seconds 120` | no |
+| Throughput (and the A/B number for a CUDA change) | `mxbm --benchmark BEAM-III --benchmark-seconds 120` | no |
 | Throughput + power + J/sol | `benchmarks/power_bench.sh 120 myrun -- --solver cuda` | no |
 | Power/speed curve | `benchmarks/power_sweep.sh` | yes (`nvidia-smi -pl`) |
 | Per-stage time and power | `benchmarks/stage_power.sh` | no |
 | Kernel counters (DRAM bytes, stalls) | `sudo ./cuda/profile.sh` | yes (Nsight) |
 | Pipeline A/B for a code change | `./cuda/pipeline 700` | no |
+| **Correctness gate for a CUDA change** | `./build/tests/test_cuda_solver` — 3/3 goldens on 15 geometries | no |
 | Any rung of the VRAM ladder, on any card | `MXBM_BB=14 MXBM_QUAD=1 MXBM_ARENA=1 mxbm --benchmark BEAM-III` | no |
 | Drop counters and the arena's spill total | prefix any run with `MXBM_DROP_STATS=1` | no |
 

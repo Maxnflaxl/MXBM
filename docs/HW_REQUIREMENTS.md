@@ -247,13 +247,16 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **62.7 sol/s** | 59.4 sol/s |
-| End-to-end solve | **32.00 ms** | 33.5 ms |
-| Board power | 281 W — near the card's 285 W limit, `sw_power_cap` intermittently active | — |
-| Efficiency | 0.221 sol/s/W stock, **0.259 at 220 W** (its optimum on the stock memory clock), best measured **0.271** at 160 W with `--mclk 5001` | — |
+| Throughput | **64.2 sol/s** | 59.4 sol/s |
+| End-to-end solve | **31.30 ms** | 33.5 ms |
+| Board power | 271.9 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
+| Efficiency | **0.236 sol/s/W** stock, **0.259 at 220 W** (its optimum on the stock memory clock), best measured **0.271** at 160 W with `--mclk 5001` | — |
 
-*(CUDA column: the locked-clock pin, re-confirmed 2026-08-14, and the 2026-08-14
-rung measurements.
+*(CUDA column: the locked-clock pin, re-taken 2026-08-15 after the w0-checkpoint record
+shipped, and the 2026-08-14 rung measurements. Stock efficiency is that pin's own
+throughput over its own board draw. **The capped figures were not re-measured against
+the new kernel** — under a cap the binding currency is different, so their sign there is
+unknown rather than assumed.
 The OpenCL column is its own 2026-08-02 headline and has not been re-measured since.)*
 
 The two backends are within **1.012×** of each other, measured in the same session
