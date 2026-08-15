@@ -352,9 +352,10 @@ T.Limit Temp: N/A`. A GeForce restriction, not a driver or API-surface problem.
 </details>
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — 33.3 ms / 59.8 sol/s at stock 285 W, 2670 MHz, 69 °C (2026-07-31, with
-speculative entry) — and carry the ~2.5 % cross-session band (narrowed 2026-07-31; see
-above). Do not re-derive a headline
+attached — **32.00 ms / 62.70 sol/s** at stock 285 W, headless, locked LGC=2600
+LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-08-15, `04a9e9c`; see
+the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
+cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline
 from a short run: see the note on solutions/solve under the progress table.
 
 ---

@@ -202,21 +202,29 @@ The chart is the table below, drawn as a timeline: width is time, height is powe
 each block's **area** is the energy that stage costs. Generated from the table by
 `python3 docs/tools/plot_stages.py`, so the two cannot drift.
 
+Re-measured 2026-08-14 on the current kernels, 8 reps, 45 s per stage:
+
 | stage | ms | % of solve | power | DRAM traffic | bound by |
 |---|---|---|---|---|---|
-| `entry_scatter` | 2.68 | 7.7 % | 284.0 W | 0.26 GB | compute (BLAKE2b) |
-| round 1 | 5.79 | 16.5 % | 284.5 W | 1.07 GB | latency |
-| round 2 | 10.68 | 30.5 % | 283.6 W | 3.35 GB | latency |
-| round 3 | 9.54 | 27.2 % | **270.9 W** | 4.83 GB | **DRAM** |
-| round 4 | 5.65 | 16.1 % | 282.9 W | 2.95 GB | **DRAM** |
-| terminal | 1.05 | 3.0 % | 284.1 W | 0.54 GB | DRAM |
-| **total** | **35.0** | | 284 W | **13.0 GB** | |
+| `entry_scatter` | 2.65 | 8.2 % | 284.9 W | 0.26 GB | compute (SipHash) |
+| round 1 | 5.08 | 15.8 % | 284.9 W | 1.07 GB | latency |
+| round 2 | 9.30 | 28.9 % | 283.0 W | 2.94 GB | latency |
+| round 3 | 8.96 | 27.8 % | **281.5 W** | 4.55 GB | **DRAM** |
+| round 4 | 5.41 | 16.8 % | 283.4 W | 2.95 GB | **DRAM** |
+| terminal | 0.98 | 3.0 % | 285.7 W | 0.54 GB | DRAM |
+| **total** | **32.39** | 100.7 % | 283.2 W | **12.30 GB** | |
 
 Every stage draws the board limit, which is why there is no single kernel to "fix" for
-power. Total DRAM traffic is within **1 %** of the compulsory minimum for the record
+power. Total DRAM traffic is within **0.7 %** of the compulsory minimum for the record
 widths — there is no waste to reclaim, only records to narrow, which is the same problem
 as the footprint. Full analysis in
 [performance.md](performance.md#power-and-efficiency).
+
+Note what "compulsory" does and does not claim: it fixes the **byte count**, not the rate
+those bytes move at. Narrowing this path is priced in memory instructions and sectors,
+never in bytes — halving round 3's write sectors buys 4 % of the round, an implied
+~3000 GB/s against a 656 GB/s bus. See
+[the dead word](performance-research.md#round-3-stores-a-work-word-round-4-never-reads--worth-268-mb-and-nothing-in-time).
 
 ---
 

@@ -26,11 +26,11 @@ chart starts lying about the thing it exists to show. The cost is that a 285 W
 block and a 271 W block look nearly identical -- which is why round 3's dip is
 called out in text rather than left to the eye.
 
-ON THE TOTAL. The six stages sum to 35.4 ms against the 35.0 ms the table's own
-total row reports, a 1.1 % attribution residual from replaying one stage at a
-time inside a real solve. The chart uses the sum, because the segments have to
-add up to the axis they sit on, and says so underneath rather than quietly
-scaling the stages to fit.
+ON THE TOTAL. The six stages sum to 32.38 ms against the 32.39 ms the table's own
+total row reports, a rounding residual from replaying one stage at a time inside
+a real solve. The chart uses the sum, because the segments have to add up to the
+axis they sit on, and says so underneath rather than quietly scaling the stages
+to fit.
 """
 import os
 import re
