@@ -173,6 +173,9 @@ struct CudaSolver::Impl {
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
+    // Recovery by replay: the survivors' round-4 parents by slot, and the round-3
+    // ancestors replay_r4 derives from them.
+    uint32_t *survL4=nullptr, *l3Slots=nullptr;
     std::atomic<bool> abort_{false};
     DeviceInfo info;
     int device_index = 0;
@@ -206,13 +209,14 @@ struct CudaSolver::Impl {
             for (int k = 0; k < 2; ++k) { cudaFree(a[k]); a[k] = nullptr; }
         cudaFree(left); left = nullptr; cudaFree(right); right = nullptr;
         bb = bb_; sm = sm_; nb = 1u << bb_; quad = quad_; arena = arena_; octo = octo_;
-        // Back-refs: rows 1-4 are gi-indexed and need full capacity, row 5 is written
-        // only by the terminal round at survivor indices. An octo rung reads only rows 4
-        // and 5 (recover() explains why), so three of the four are not allocated. Sized
-        // here rather than beside the geometry-independent buffers because a step-down
-        // can cross onto an octo rung, and holding rows it will never read is 0.77 GiB
-        // withheld exactly where memory is tightest.
-        refRows = octo ? 1u : 4u;
+        // Back-refs: the surviving rows are gi-indexed and need full capacity. Rows 4 and
+        // 5 are not written at all off the octo rungs -- replay_r4 reconstructs round 4's
+        // pairing from the bucket the record carries -- so three rows are allocated, and
+        // an octo rung reads only rows 4 and 5 (recover() explains why) so it allocates
+        // one. Sized here rather than beside the geometry-independent buffers because a
+        // step-down can cross onto an octo rung, and holding rows it will never read is
+        // 0.77 GiB withheld exactly where memory is tightest.
+        refRows = octo ? 1u : (MXBM_R4_ROWS ? 4u : 3u);
         left  = dalloc<uint32_t>((size_t)refRows*kCapacity + kSurvCap);
         right = dalloc<uint32_t>((size_t)refRows*kCapacity + kSurvCap);
         if (!left || !right) return false;
@@ -245,7 +249,8 @@ struct CudaSolver::Impl {
     ~Impl() {
         for (auto* q : {elem[0], elem[1], dpp, specElem, specPp}) cudaFree(q);
         for (auto* q : {counts[0], counts[1], gictr, drops, spillTot,
-                        left, right, survSlots, survCount, dleaves, specCounts}) cudaFree(q);
+                        left, right, survSlots, survCount, dleaves, specCounts,
+                        survL4, l3Slots}) cudaFree(q);
         for (auto* a : {ahead, anext, atag, actr})
             for (int k = 0; k < 2; ++k) cudaFree(a[k]);
     }
@@ -322,6 +327,8 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     if (p_->spillTot) cudaMemset(p_->spillTot, 0, 4);
     p_->survSlots = dalloc<uint32_t>(kSurvCap); p_->survCount = dalloc<uint32_t>(1);
     p_->dleaves = dalloc<uint32_t>((size_t)kSurvCap*32);
+    p_->survL4  = dalloc<uint32_t>((size_t)kSurvCap*2);
+    p_->l3Slots = dalloc<uint32_t>((size_t)kSurvCap*4);
     p_->dpp = dalloc<uint64_t>(4);
     if (!p_->dpp || !p_->survSlots)
         throw std::runtime_error("CUDA allocation failed (device out of memory)");
@@ -698,15 +705,23 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
       #undef R4_ARENA_ARGS
       arenaLink(o);
       inSet = o; }
+    // Row 5 is written only where recovery reads it: an octo rung, or a build that keeps
+    // round 4's row as the replay's reference arm. Off those, the terminal names its two
+    // parents by slot in survL4 and the rows stop at three.
+    const bool r5 = I.octo || MXBM_R4_ROWS;
     if (I.arena)
         terminal_round<true><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
-                                        I.counts[inSet], I.elem[inSet], I.left, I.right,
+                                        I.counts[inSet], I.elem[inSet],
+                                        r5 ? I.left : nullptr, r5 ? I.right : nullptr,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
-                                        I.ahead[inSet], I.anext[inSet]);
+                                        I.ahead[inSet], I.anext[inSet],
+                                        I.octo ? nullptr : I.survL4);
     else
         terminal_round<false><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
-                                        I.counts[inSet], I.elem[inSet], I.left, I.right,
-                                        I.survSlots, I.survCount, kSurvCap, I.drops);
+                                        I.counts[inSet], I.elem[inSet],
+                                        r5 ? I.left : nullptr, r5 ? I.right : nullptr,
+                                        I.survSlots, I.survCount, kSurvCap, I.drops,
+                                        nullptr, nullptr, I.survL4);
 
     const cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) {
@@ -742,11 +757,35 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     if (I.octo)
         recover<true><<<(hs+63)/64, 64>>>(hs, I.survSlots, kCapacity, I.left, I.right,
                                           I.dleaves, I.elem[1], kOctoStride);
-    else
-        recover<false><<<(hs+63)/64, 64>>>(hs, I.survSlots, kCapacity, I.left, I.right,
-                                           I.dleaves);
+    else {
+        // Rows 4 and 5 are not written: replay_r4 re-runs round 4 over the one bucket of
+        // round 3's output the record names, and hands the walk its four round-3
+        // ancestors. Two blocks per survivor, ~4 in the whole grid.
+        cudaMemset(I.l3Slots, 0xFF, (size_t)hs*4*4);
+        replay_r4<<<2*hs, 256>>>(hs, I.survL4, I.elem[0], 2u, I.elem[1], 8u,
+                                 I.counts[1], I.cap, I.l3Slots, I.drops, I.bb,
+                                 I.arena ? I.ahead[1] : nullptr,
+                                 I.arena ? I.anext[1] : nullptr);
+        recover_from_l3<<<(hs+63)/64, 64>>>(hs, kCapacity, I.left, I.right, I.l3Slots,
+                                            I.elem[1], 8u, I.dleaves);
+    }
     std::vector<uint32_t> hl((size_t)hs*32);
     cudaMemcpy(hl.data(), I.dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost);
+#if MXBM_R4_ROWS
+    // The replay's gate: with the rows restored, the two paths must produce the same 32
+    // leaves for every survivor. Never on a shipping build -- the rows are the thing
+    // being deleted -- so this is a rebuild, not a runtime flag.
+    if (!I.octo && hs) {
+        recover<false><<<(hs+63)/64, 64>>>(hs, I.survSlots, kCapacity, I.left, I.right,
+                                           I.dleaves);
+        std::vector<uint32_t> h2((size_t)hs*32);
+        cudaMemcpy(h2.data(), I.dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost);
+        static uint64_t nOk = 0, nBad = 0;
+        if (h2 == hl) ++nOk; else ++nBad;
+        std::fprintf(stderr, "replay-check: %llu match, %llu differ\n",
+                     (unsigned long long)nOk, (unsigned long long)nBad);
+    }
+#endif
     // MXBM_VERIFY_STATS=1: classify every candidate's verify outcome instead of
     // only pass/fail, so the found-vs-verified gap is attributed by reject reason
     // (tallies print at exit). The mining path is unchanged when unset.

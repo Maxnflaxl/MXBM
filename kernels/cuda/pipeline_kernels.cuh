@@ -49,9 +49,14 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
                     uint32_t* __restrict__ surv_slots, uint32_t* __restrict__ surv_count,
                     uint32_t surv_cap, uint32_t* __restrict__ drops,
                     const uint32_t* __restrict__ in_ahead = nullptr,
-                    const uint32_t* __restrict__ in_anext = nullptr) {
+                    const uint32_t* __restrict__ in_anext = nullptr,
+                    // Where each survivor's two round-4 parents sit in round 4's output,
+                    // by SLOT rather than by gi: the replay reads their records to get
+                    // the bucket hint, and a slot is what addresses one.
+                    uint32_t* __restrict__ surv_l4 = nullptr) {
     __shared__ uint64_t lwork[kTCap];
     __shared__ uint32_t lgi[kTCap], llead[kTCap], lchain[kTCap], tab[kTabSize];
+    __shared__ uint32_t lslot[kTCap];
     // Same perfect-hash argument as the fused rounds (MXBM_PERFECT_TAB in
     // fused_round.cuh): on the bb + sm = 17 line only 7 key bits vary inside a
     // group and the 128-entry table covers them, so same chain <=> same full key
@@ -99,8 +104,9 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
         const uint32_t pos = atomicAdd(&gcount, 1u);
         if (pos >= kTCap) { atomicAdd(&drops[1], 1u); continue; }
         const uint64_t meta = in_belem[d + 1];
-        lwork[pos] = w0; lgi[pos] = (uint32_t)(meta >> 32);
-        llead[pos] = (uint32_t)meta;
+        // gi is 26 bits; bit 63 carries the replay's 17th bucket bit, so mask it off.
+        lwork[pos] = w0; lgi[pos] = (uint32_t)(meta >> 32) & 0x3FFFFFFu;
+        llead[pos] = (uint32_t)meta; lslot[pos] = (uint32_t)idx_;
         if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
     }
     __syncthreads();
@@ -130,12 +136,93 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
                 if (z == 0) {
                     const uint32_t si = atomicAdd(surv_count, 1u);
                     if (si < surv_cap) {
-                        all_left[out_off + si] = lgi[L]; all_right[out_off + si] = lgi[R];
+                        // Null off the reference rows: the replay path names the two
+                        // round-4 parents by slot instead, and rows 4 and 5 do not exist.
+                        if (all_left) {
+                            all_left[out_off + si] = lgi[L]; all_right[out_off + si] = lgi[R];
+                        }
                         surv_slots[si] = si;
+                        if (surv_l4) { surv_l4[2u*si] = lslot[L]; surv_l4[2u*si + 1u] = lslot[R]; }
                     } else atomicAdd(&drops[2], 1u);
                 }
             }
             oth = lchain[oth];
+        }
+    }
+}
+
+// ---- replay_r4: rebuild one survivor-ancestor's round-4 pairing from its bucket -----
+// Round 4's back-reference row names its parents for all 33.5 M children and is read for
+// four. Instead the child's record carries the emitting block's input bucket, and this
+// kernel re-runs round 4 over that ONE bucket of round 3's output, identifying the pair by
+// the 48 bits of word 0 the terminal round consumes. Slot assignment is nondeterministic
+// run to run and this does not depend on it: the pair is found by content, and left/right
+// is the same (lead, gi) rule the round applied. Two blocks per survivor.
+__global__ __launch_bounds__(256)
+void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
+               const uint64_t* __restrict__ r4_elem, uint32_t r4_stride,
+               const uint64_t* __restrict__ r3_elem, uint32_t r3_stride,
+               const uint32_t* __restrict__ r3_counts, uint32_t r3_cap,
+               uint32_t* __restrict__ out_slots, uint32_t* __restrict__ drops,
+               uint32_t bucket_bits = 0u,
+               const uint32_t* __restrict__ r3_ahead = nullptr,
+               const uint32_t* __restrict__ r3_anext = nullptr) {
+    // The whole bucket, not one (bucket, sub-mask) group: elements in different sub-masks
+    // have different keys and can never pair, so the hint stays 17 bits. kMaxN covers the
+    // widest rung -- bb = 14 caps a bucket near 2400 -- and excess is counted, not dropped.
+    constexpr uint32_t kMaxN = 4096;
+    __shared__ uint32_t skey[kMaxN];
+    __shared__ uint32_t apool[kAMax];
+    __shared__ uint32_t ntot;
+    if (blockIdx.x >= 2u*nSurv) return;
+    const uint32_t slot4 = surv_l4[blockIdx.x];
+    const uint64_t rec   = r4_elem[(size_t)slot4 * r4_stride];
+    const uint64_t target = rec & 0xFFFFFFFFFFFFull;
+    const uint32_t b3 = (uint32_t)(rec >> 48)
+                      | (uint32_t)((r4_elem[(size_t)slot4 * r4_stride + 1] >> 63) << 16);
+    uint32_t cnt = r3_counts[b3];
+    if (cnt > r3_cap) cnt = r3_cap;
+    if (cnt > kMaxN) { if (threadIdx.x == 0) atomicAdd(&drops[1], 1u); cnt = kMaxN; }
+    const size_t base  = (size_t)b3 * r3_cap;
+    const size_t nbcap = ((size_t)1u << bucket_bits) * r3_cap;
+    auto slot_of = [&](uint32_t p) -> size_t {
+        return p < cnt ? base + p : nbcap + apool[p - cnt];
+    };
+    if (threadIdx.x == 0) {
+        // The bucket's overflow-pool members, which the round staged after the dense ones.
+        uint32_t n_ = 0;
+        if (r3_ahead)
+            for (uint32_t a_ = r3_ahead[b3]; a_ != 0xFFFFFFFFu && n_ < kAMax;
+                 a_ = r3_anext[a_])
+                apool[n_++] = a_;
+        ntot = cnt + n_;
+    }
+    __syncthreads();
+    const uint32_t n = ntot;
+    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x)
+        skey[p] = (uint32_t)(r3_elem[slot_of(p) * r3_stride] & 0xFFFFFFu);
+    __syncthreads();
+    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x) {
+        for (uint32_t q = p + 1u; q < n; ++q) {
+            if (skey[q] != skey[p]) continue;
+            const size_t dp = slot_of(p) * r3_stride, dq = slot_of(q) * r3_stride;
+            const uint64_t mp = r3_elem[dp + 6], mq = r3_elem[dq + 6];
+            const uint32_t la = (uint32_t)mp, lb = (uint32_t)mq;
+            const uint32_t ga = (uint32_t)(mp >> 32), gb = (uint32_t)(mq >> 32);
+            const bool swap = (lb < la) || (lb == la && gb < ga);
+            const size_t dL = swap ? dq : dp, dR = swap ? dp : dq;
+            bh3::Elem a{}, b{}, c;
+            #pragma unroll
+            for (int w = 0; w < 6; ++w) { a.w[w] = r3_elem[dL + w]; b.w[w] = r3_elem[dR + w]; }
+            bh3::combine(a, b, 288u, c);
+            uint32_t ctree[9] = {0,0,0,0,0,0,0,0,0};
+            ctree[8] = (uint32_t)(swap ? mp : mq);          // lead of the right parent
+            bh3::apply_mix(c, ctree, 9u, 288u);
+            c.w[0] = bh3::rotl64(bh3::rotl64(c.w[0], 40) + r3_elem[dL + 7], 24);
+            if ((c.w[0] & 0xFFFFFFFFFFFFull) == target) {
+                out_slots[2u*blockIdx.x]      = (uint32_t)(dL / r3_stride);
+                out_slots[2u*blockIdx.x + 1u] = (uint32_t)(dR / r3_stride);
+            }
         }
     }
 }
@@ -187,6 +274,46 @@ __global__ void recover(uint32_t nSurv, const uint32_t* __restrict__ surv_slots,
         } else {
             lvl[sp] = lv - 1u; slt[sp] = R; ++sp;
             lvl[sp] = lv - 1u; slt[sp] = L; ++sp;
+        }
+    }
+}
+
+// The same walk entered two levels down: replay_r4 has already produced the survivor's
+// four round-3 ancestors as SLOTS, so rows 4 and 5 are not read. A round-3 record carries
+// its own gi in the meta word, which is what rows 1-3 are still indexed by.
+__global__ void recover_from_l3(uint32_t nSurv, uint32_t capacity,
+                                const uint32_t* __restrict__ all_left,
+                                const uint32_t* __restrict__ all_right,
+                                const uint32_t* __restrict__ l3_slots,
+                                const uint64_t* __restrict__ r3_elem, uint32_t r3_stride,
+                                uint32_t* __restrict__ out) {
+    const uint32_t i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= nSurv) return;
+    uint32_t got = 0, lvl[8], slt[8];
+    for (int k = 0; k < 4; ++k) {
+        const uint32_t sr = l3_slots[i*4u + k];
+        // A replay that found no pair leaves its sentinel here. Emitting zeros makes the
+        // candidate fail verification, which is what a lost solution should look like --
+        // dereferencing the sentinel would take the context down instead.
+        if (sr == 0xFFFFFFFFu) {
+            while (got < 8u*(uint32_t)(k+1) && got < 32u) out[(size_t)i*32u + got++] = 0u;
+            continue;
+        }
+        const size_t s = (size_t)sr;
+        int sp = 1;
+        lvl[0] = 3u; slt[0] = (uint32_t)(r3_elem[s * r3_stride + 6] >> 32);
+        while (sp > 0 && got < 32u) {
+            --sp;
+            const uint32_t lv = lvl[sp], sl = slt[sp];
+            const uint32_t off = (lv - 1u) * capacity;
+            const uint32_t L = all_left[off + sl], R = all_right[off + sl];
+            if (lv == 1u) {
+                out[(size_t)i*32u + got] = L; ++got;
+                if (got < 32u) { out[(size_t)i*32u + got] = R; ++got; }
+            } else {
+                lvl[sp] = lv - 1u; slt[sp] = R; ++sp;
+                lvl[sp] = lv - 1u; slt[sp] = L; ++sp;
+            }
         }
     }
 }

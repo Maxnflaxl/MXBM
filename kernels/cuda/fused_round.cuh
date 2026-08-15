@@ -187,6 +187,15 @@ constexpr uint32_t kImpDB = (uint32_t)MXBM_IMPDB;
 // inflates the next round's bucket counts and evicts real elements -- it shows up as
 // LOST goldens with a zero drop counter, not as an obvious failure.
 constexpr uint32_t kMaxSpill = 3;
+
+// MXBM_R4_ROWS: restore round 4's back-reference row and the terminal round's, so both
+// recovery paths run side by side and are required to agree leaf for leaf. A shipping
+// build writes neither -- replay_r4 reconstructs round 4's pairing from the input bucket
+// the record carries. Off the octo rungs only: octo's round 4 is LM_RD4 and keeps its
+// slot-indexed row.
+#ifndef MXBM_R4_ROWS
+#define MXBM_R4_ROWS 0
+#endif
 // terminal_round stages only word 0 + 4 meta u32 = 24 B/element, an eighth of a round
 // block, so its group cap was never what constrained occupancy and must not be dragged
 // down when kFCap is tuned for the rounds. It keeps the full tail cap.
@@ -1195,11 +1204,24 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                                                contribOut));
                     } else {
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+                        // Round 4's record carries the emitting block's INPUT bucket, so
+                        // recovery replays this round over that one bucket of round 3's
+                        // output instead of reading a row written for all 33.5 M children.
+                        // The terminal combines at Lout = 24, keeping only word 0's bits
+                        // 24..47, so 48..63 are dead there; bucket_bits reaches 17 and the
+                        // 17th bit goes above gi's 26 in the meta word.
+                        constexpr bool kBHint = (LMODE == LM_USE);
+                        const uint64_t w0o = kBHint
+                            ? ((c.w[0] & 0xFFFFFFFFFFFFull) | ((uint64_t)(bucket & 0xFFFFu) << 48))
+                            : c.w[0];
+                        const uint64_t m1o = ((uint64_t)cgi << 32) | (uint64_t)ctree[0]
+                                           | (kBHint ? ((uint64_t)(bucket >> 16) << 63) : 0ull);
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
-                              make_ulonglong2(c.w[0],
-                                            ((uint64_t)cgi << 32) | (uint64_t)ctree[0]));
+                              make_ulonglong2(w0o, m1o));
                     }
-                    if constexpr (REFS) {
+                    // LM_USE is round 4 off the octo rungs, whose row recovery replays
+                    // instead of reading; see MXBM_R4_ROWS.
+                    if constexpr (REFS && (MXBM_R4_ROWS || LMODE != LM_USE)) {
                         st_em(all_left  + out_off + cgi, ref_of(leftPos));
                         st_em(all_right + out_off + cgi, ref_of(rightPos));
                     }
