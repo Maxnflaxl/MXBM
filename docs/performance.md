@@ -119,8 +119,7 @@ the derived one.
 | **CUDA** | **64.2**[^drift] | **31.3**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-13, commit
-`5c93f0f`), 0.0 % spread, stock 285 W, headless, 240 s warmup discarded,
+The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-13), 0.0 % spread, stock 285 W, headless, 240 s warmup discarded,
 2610 MHz / 10251 MHz / 281.4 W / 67 °C. New standing condition: `sw_power_cap`
 intermittent (~20 % of samples) — the draw now reaches the board limit; any other
 flag voids a run. Pool validation: **62.32 sol/s** over 80 minutes, with window spreads of
@@ -302,13 +301,13 @@ The cross-day repeat this owed was paid on 2026-08-01: 33.50 ms, six runs, 0.0 %
 attributed: it is the rig, not the build.** Six runs, 0.0 % spread, 2610/10251, no
 throttle flags, 271.1 W. The monitor moved to the motherboard iGPU that day, so the
 compositor no longer holds a graphics context on the card; rebuilding the 08-01 pin's
-own commit (`553cac7`) and running it headless the same day reads **33.30 to the
+own build and running it headless the same day reads **33.30 to the
 digit at 270.4 W** — so the compositor was costing **0.20 ms and ~6 W**, and the
 intervening commits are time-neutral. The geometry is unchanged across the move —
 still `(16,1)`, the miner reporting `reserving 64 MB (headless)`. Full lineage:
 [benchmarking.md](benchmarking.md#the-named-reference-lgc-2600).
 
-**Re-pinned at 32.00 on 2026-08-13** (commit `5c93f0f`, the implicit-bits record):
+**Re-pinned at 32.00 on 2026-08-13** (the implicit-bits record):
 six runs, 0.0 % spread, 2610 / 10251, 281.4 W, 67 °C, headless. The draw now sits
 within 4 W of the board limit and `sw_power_cap` is intermittently active — a
 consequence of the busier binary, recorded as a standing condition of stock pins
@@ -355,7 +354,7 @@ T.Limit Temp: N/A`. A GeForce restriction, not a driver or API-surface problem.
 
 **How to quote a number from this page:** use the controlled figure with its conditions
 attached — **31.30 ms / 64.20 sol/s** at stock 285 W, headless, locked LGC=2600
-LMC=10251, six runs at 0.3 % spread (most recently re-pinned 2026-08-15, `e302388`; see
+LMC=10251, six runs at 0.3 % spread (most recently re-pinned 2026-08-15; see
 the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
 cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline
 from a short run: see the note on solutions/solve under the progress table.
@@ -529,14 +528,14 @@ its ramp and reads ~20 W low. Two repeats per cell; the spread within a cell is 
 floor. The table below is that second session; the reproducibility check against the
 first is the subsection that follows.
 
-*(MXBM columns re-measured 2026-08-13 on commit `5c93f0f` — `benchmarks/power_sweep.sh`,
+*(MXBM columns re-measured 2026-08-13 on the implicit-bits build — `benchmarks/power_sweep.sh`,
 60 s points, single-miner session, stock memory clock, headless. The lolMiner columns
 are the 2026-07-30 measurement; its binary is unchanged. The two sessions carry the
 documented ±2.5 % cross-session band between them — the 210 W cells are a tie at that
 band, not a decided cross.)*
 
-> **This whole MXBM column predates the w0-checkpoint record** (2026-08-15, `e302388`,
-> −2.4 % at stock) and has not been re-swept: that stint was scoped to stock CUDA only.
+> **This whole MXBM column predates the [w0-checkpoint record](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24)**
+> (2026-08-15, −2.4 % at stock) and has not been re-swept: that stint was scoped to stock CUDA only.
 > Every figure derived from it below — the interpolated crossings, the per-cap margins,
 > the 285 W row's 62.8 sol/s — describes the previous kernel. **Do not extrapolate the
 > stock delta into it**: under a cap the binding currency is L2 sectors × core clock
