@@ -1015,23 +1015,22 @@ each round reading its input layer once and writing its output layer once:
 | stage | compulsory rd | wr | measured rd | wr | excess |
 |---|---|---|---|---|---|
 | entry | — | 268 MB | 0 | 257 MB | −4.1 % |
-| r1 | 268 | 537 | 271 | 797 → 529 | −0.6 % |
-| r2 | 537 | 2147 | 539 | 2399 → 2131 | −0.5 % |
-| r3 | 2147 | 2147 | 2148 | 2400 → 2132 | −0.3 % |
-| r4 | 2147 | 268 | 2149 | 802 → 266 | −0.1 % |
-| terminal | 268 | — | 539 → 270 | 2 | +0.7 % |
-| **total** | | | **10.73 GB** | | **−0.4 %** |
+| r1 | 268 | 537 | 271 | 525 | −1.4 % |
+| r2 | 537 | 2147 | 539 | 2130 | −0.5 % |
+| r3 | 2147 | 2147 | 2148 | 2131 | −0.4 % |
+| r4 | 2147 | 268 | 2149 | 267 | −0.1 % |
+| terminal | 268 | — | 270 | 2 | +0.7 % |
+| **total** | | | **10.69 GB** | | **−0.6 %** |
 
-Every line is within **0.7 %** of compulsory: no write amplification, no
-redundant re-reads, nothing left for the cache to save. The `→` in the measured
-columns is the previous kernel's Nsight figure and the same figure less what the
-deleted reference rows and the narrowed round-4 record stopped moving; **the Nsight
-run has not been re-taken since** — it needs root and a reboot on a card that drives
-a display — but the change deletes stores rather than adding any, so there is no
-mechanism by which amplification could have appeared. Entry's −4.1 % is not a saving — it is ~11 MB of
-its output still sitting dirty in a 48 MB L2 when the kernel ends, billed to the
-next one. The kernel times sum to **101 %** of the solve, which also rules out
-the fourth lead: there is no idle spin between rounds to reclaim.
+Every line is within **1.4 %** of compulsory: no write amplification, no
+redundant re-reads, nothing left for the cache to save. Nsight re-taken 2026-08-16
+on the shipping record, so these are measured rather than derived — the previous
+edition carried the reference rows' and the round-4 record's deletions as arithmetic
+on an older run, and the re-take lands within 1 MB of it on every line. Entry's
+−4.1 % is not a saving — it is ~11 MB of its output still sitting dirty in a 48 MB
+L2 when the kernel ends, billed to the next one. The kernel times sum to **101 %**
+of the solve, which also rules out the fourth lead: there is no idle spin between
+rounds to reclaim.
 
 `./cuda/profile.sh`, 2026-08-14. The total was 13.51 GB before
 [the pad was removed](performance-research.md#the-round-2-alignment-pad) and 13.00 GB

@@ -5077,6 +5077,54 @@ stage within 1–3 %.
 
 | | entry | r1 | r2 | r3 | r4 | term |
 |---|---|---|---|---|---|---|
+| duration (ms) | 2.48 | 4.82 | 7.70 | 8.44 | 4.16 | 0.77 |
+| achieved clock (MHz) | 2762 | 2768 | 2758 | 2759 | 2758 | 2753 |
+| **pipe ALU %** | **98.8** | **76.9** | **74.9** | 17.9 | 21.8 | 33.0 |
+| `sm__throughput` % | 98.7 | 76.8 | 74.8 | 21.5 | 25.8 | 51.4 |
+| DRAM rd / wr (MB) | 0 / 257 | 271 / 525 | 539 / 2130 | 2148 / 2131 | 2149 / 267 | 270 / 2 |
+| DRAM % of peak | 15.8 | 25.2 | 52.9 | **77.4** | **88.6** | 54.2 |
+| ld sectors/request | 1.00 | 3.30 | 5.39 | **17.10** | **17.10** | 6.06 |
+| bank conflicts (M) | 0.0 | 50.3 | 76.9 | 93.9 | 54.4 | 9.8 |
+| `no_instruction` % | 0.10 | 0.66 | 0.50 | 0.52 | 0.69 | 2.26 |
+| barrier stall % | 0.0 | **31.2** | **28.9** | 28.7 | 27.7 | 15.0 |
+| long scoreboard % | 2.3 | 10.7 | 15.0 | **46.4** | **43.3** | 35.6 |
+
+Re-taken 2026-08-16 on the shipping record at `--clock-control none`. **Three things
+about the previous edition were wrong, and all three came from how it was collected
+rather than from what it measured.**
+
+**It ran at base clock.** `cuda/profile.sh` passed no `--clock-control`, and ncu defaults
+to `base` — 2337 MHz against the 2758 the card actually holds. The correction is not
+uniform, which is the part that matters: at the higher clock entry, r1 and r2 shrink
+**~15 %** while r3 and r4 shrink **~3 %**, because a DRAM-bound round does not scale with
+core clock. So the old table systematically overstated the ALU-bound half — 57 % of the
+solve at base clock against **54 %** at the real one.
+
+**`sm__throughput` is the integer pipe only where the integer pipe is busy.** It agrees
+with `sm__pipe_alu_cycles_active` to a tenth on entry, r1 and r2, and diverges by 4, 4 and
+**18 points** on r3, r4 and the terminal round — where the composite is reporting the LSU
+sub-unit instead. Every ALU figure quoted for a DRAM-bound round came from the composite.
+
+**The profiled binary was not the shipping one.** `MXBM_IMPBITS` defaults to 0, so the
+standalone bench ran the 9-u64 set-0 stride with its side plane and wrote reference rows
+for rounds 1–3. Built with `-DMXBM_IMPBITS=1` its per-round DRAM traffic lands within 1 MB
+of the compulsory table on every line, which is the direct confirmation that deleting the
+rows and narrowing round 4's record reached DRAM rather than just L2.
+
+Two claims the re-take settles against their proposers. **The instruction cache is not a
+currency**: the collected `imc_miss` metric is the *immediate constant* cache, and the
+instruction-fetch stall `no_instruction` — never collected before — reads **0.10–0.69 %**
+on every shipping round against a predicted 2–6 %, so there is no −0.7 ms behind a
+code-size reduction and the dead `SOUT` template parameter has no speed case. And
+**round 4 is at 88.6 % of DRAM peak**, four points past the 83.9 % that was being quoted
+as this card's achievable ceiling; that figure was the *old* terminal round's, and the
+terminal round now sits at 54.2 % because an 8 B record left it 272 MB to move.
+
+<details>
+<summary>The previous edition, at base clock on the pre-implicit-bits bench</summary>
+
+| | entry | r1 | r2 | r3 | r4 | term |
+|---|---|---|---|---|---|---|
 | duration (ms) | 2.57 | 5.01 | 8.98 | 9.07 | 5.45 | 0.98 |
 | instructions (M) | 1083 | 1901 | **3330** | 1120 | 716 | 272 |
 | issue slots busy % | 59.9 | 55.2 | 53.4 | 18.2 | 19.7 | 43.1 |
@@ -5087,6 +5135,8 @@ stage within 1–3 %.
 | threads/warp | 32.0 | 23.4 | 24.8 | 12.7 | 14.1 | 19.2 |
 | eligible warps/sched | 5.45 | 2.53 | 2.18 | 0.27 | 0.29 | 0.66 |
 | top stall | math 43 % | barrier 31 % | barrier 28 % | long sb 45 % | long sb 45 % | long sb 39 % |
+
+</details>
 
 **`sm__throughput` IS the integer pipe.** For every round the SM-throughput figure and the
 ALU-pipe figure are the same number to two decimals (78.29 for round 2). On Ada a
@@ -5969,7 +6019,9 @@ existing arithmetic compile down properly, not from moving fewer bytes.
 `kFCap` 320 change.)*
 
 **The per-round picture is obtainable without a profiler**, which matters because Nsight
-needs root and a reboot on a card that drives a display. `MXBM_ROUND_REPS="R:N"` replays
+needs no sudo on this rig (NVreg_RestrictProfilingToAdminUsers=0 is installed; check
+`RmProfilingAdminOnly` in /proc/driver/nvidia/params), and takes `CLOCKS=none|base` and
+`TARGET=pipeline|miner`. `MXBM_ROUND_REPS="R:N"` replays
 round *R* in place *N* times, so `(t_N − t_1)/(N−1)` is that round's marginal cost; the
 traffic is exact from the stride table (`kFbStride`, plus 8 B/element for the sub-mask
 rescan and 8 B for back-refs). Over 60 nonces, against the card's true 672 GB/s:
