@@ -619,7 +619,7 @@ higher maximum throughput that lolMiner cannot reach at any setting.
 
 *(These comparisons are stock memory on both sides. Each miner's best configuration —
 MXBM on the 5001 rung with the low-power kernels — is [the low-band table
-below](#the-low-band-after-the-2026-08-1314-kernel-ships).)*
+below](#the-low-band-on-the-current-kernel).)*
 
 ### The sweep reproduces across sessions
 
@@ -872,7 +872,7 @@ not bind. `benchmarks/mclk_rung.sh` reproduces this; its `MEM_MHz` column exists
 so the null cannot be mistaken for a measurement of the rung. What was measured is that
 the lever cannot be applied, not that it does not pay.
 
-### Below stock the OTHER rung pays: −8.5 to −14.4 % under caps below ~173 W, and a new efficiency record
+### Below stock the OTHER rung pays: +8.5 to +16 % under caps below ~165 W
 
 The down-rung is the up-rung's mirror, and it is honored: `-lmc 5001,5001` held in
 every arm of an 18-arm ABBA-bracketed sweep (2026-07-31, miner loop, energy-counter
@@ -925,31 +925,63 @@ already pin would be arms spent on a foregone answer.*
 
 ![Both miners at both memory rungs: speed and MXBM's J/solution against the cap](tools/mclk-curve.svg)
 
-### The low band after the 2026-08-13/14 kernel ships
+### The low band on the current kernel
 
-Three floor levers landed since the sweep above: match-first × (17,0) behind the
-~130 W gate, the implicit-bits record at stock, and the same record generalized to
-the (17,0) pack ([the mechanism and A/Bs](performance-research.md#measured-results-2026-08-14)).
-The miner's own benchmark, headless, 5001 rung, two 120 s runs per point in mirrored
-cap order (arms agree within 1.5 % everywhere), against the sweep table's lolMiner
-best-per-cap column. **The 130 W gate splits this table**: 100 and 120 W run match-first
-× packed (17,0) and carry all three levers; 140 and 160 W run (16,1) packed and carry
-only the stock-geometry record, so they are unchanged by the 08-14 ship.
+Re-swept 2026-08-15 on the w0-checkpoint build: `-lmc 5001,5001` held across
+`power_sweep.sh`, run forward 100→160 W and then reversed, 120 s points. The two arms
+agree to 1.6 % at 100 W and 0.2–0.9 % elsewhere; the table is their mean. The lolMiner
+column is its own best-per-cap from the 07-30 sweep. **The ~130 W gate splits this
+table**: 100 and 120 W run match-first × packed (17,0), 140 and 160 W run (16,1).
 
-| cap | MXBM ms/solve | sol/s | J/sol | lolMiner best | gap |
-|---|---|---|---|---|---|
-| 100 W | 78.8 | 25.5 | 3.94 | 28.85 | −11.6 % |
-| 120 W | 63.0 | 31.9 | 3.76 | 34.05 | −6.3 % |
-| 140 W | 54.3 | 37.0 | 3.79 | 39.75 | −6.9 % |
-| 160 W | 46.6 | 43.2 | 3.70 | 47.85 | −9.7 % |
+| cap | ms/solve | sol/s | J/sol | sol/s/W | vs stock memory | lolMiner best | gap |
+|---|---|---|---|---|---|---|---|
+| 100 W | 79.5 | 25.1 | 3.98 | 0.251 | +16.2 % | 28.85 | −13.0 % |
+| 120 W | 61.5 | 32.7 | 3.68 | 0.272 | +16.2 % | 34.05 | −4.1 % |
+| 140 W | 53.4 | 37.6 | 3.73 | 0.268 | +12.6 % | 39.75 | −5.4 % |
+| **160 W** | 45.7 | **44.0** | **3.63** | **0.276** | +8.5 % | 47.85 | −8.2 % |
 
-The 120–160 W gap that the rung halved to ~11–16 % is now single-digit across the
-band, and the 100 W floor — ~24 % after the rung, ~32 % before it — stands at
-~12 %. The efficiency curve is nearly flat from 120 to 160 W (3.70–3.79 J/sol).
+**The rung's margin over stock memory has not moved.** The 2026-07-31 ABBA measured it at
++16.7 / +16.8 / +12.1 / +9.3 % across these four caps; this same-day pair reads +16.2 /
++16.2 / +12.6 / +8.5 %. Two independently controlled comparisons, a fortnight and several
+kernels apart, agreeing to under a point.
 
-*(Measured 2026-08-14, the one table on this page still on the pre-w0-checkpoint kernel.
-Stock memory at these same caps gained 11–14 % when that record shipped, so the rung's
-margin over stock memory is the number that has moved, not the rung itself.)*
+**Whether the w0-checkpoint record helped the rung is open.** Against the 08-14 rung table
+these points moved −1.6 % to +2.4 %, where stock memory at the same caps moved 11–14 % —
+which would say the lever does not transfer, and there is a mechanism for that: it deletes
+arithmetic, and on a rung with half the memory clock bandwidth binds rather than
+arithmetic. But that −1.6 % to +2.4 % is a cross-session difference inside the ±2.5 %
+band, and it sits against a margin that did *not* shrink, which points the other way.
+The tables cannot settle it. The flag A/B can, and has not been run:
+`MXBM_PAIR_W0=0` against `1` at 160 W with the rung held, ABBA.
+
+**The efficiency optimum is now a tie, and the tie favours stock memory.** 3.63
+J/solution at 160 W + rung against 3.642 at 220 W on stock memory is a **0.3 % gap**,
+inside this measurement's own arm spread. At that tie the 220 W point delivers **60.3
+sol/s against 44.0 — 37 % more throughput for the same energy per solution.** The rung is
+therefore not an efficiency recommendation any more; it is a recommendation for rigs that
+genuinely cannot supply more than ~160 W. Above ~165 W stock memory wins outright, because
+the rung plateaus near 44 sol/s whatever the cap. What changed here is not the rung — it
+is that stock memory's own optimum improved and moved to 220 W.
+
+**One anomaly, and the obvious explanation is measured wrong.** 140 W is *less* efficient
+than 120 W — 3.73 against 3.68 J/sol, both arms agreeing — the only non-monotonic point in
+either sweep. 140 W is also the first cap above the ~130 W geometry gate, so it is the
+first to run (16,1) rather than (17,0), and (16,1)'s sub-mask rescan reads each record
+twice, which on a bandwidth-bound rung looks like the wrong trade. It is not:
+
+| 5001 rung | (16,1), shipping | (17,0), forced | |
+|---|---|---|---|
+| 140 W | 37.9 / 37.6 → **37.75** | 37.7 / 37.6 → **37.65** | −0.3 %, null |
+| 160 W | 43.8 / 43.7 → **43.75** | 40.5 / 40.5 → **40.50** | **−7.4 %** |
+
+**The gate is in the right place.** The two geometries tie at 140 W and (16,1) wins
+clearly by 160 W, so the crossover sits just above the gate rather than well above it. The
+160 W arm is also this experiment's positive control: the same `MXBM_BB=17` that changes
+nothing at 140 W moves 160 W by 7.4 % with both arms identical to 0.1 sol/s, so the null
+is a null and not an environment variable that never took. The 140 W dip has some other
+cause — the core clock jumps 1440 → 2100 MHz between those two caps on the rung, which is
+the next thing to look at.
+
 
 ### The memory traffic is compulsory
 
@@ -1238,7 +1270,7 @@ curve's shape and its own efficiency peak are what transfer.
 ### The memory rung's crossover is a property of the card, not of the algorithm
 
 The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER
-([the record](#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record)).
+([the record](#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w)).
 On the 4070 SUPER it pays only below **~121 W**, and above that it is expensive:
 
 | cap W | draw W | sol/s | ms/solve | sol/s/W |

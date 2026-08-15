@@ -28,8 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 SRC = os.path.join(REPO, "docs", "performance.md")
 OUT = os.path.join(HERE, "mclk-curve.svg")
-SECTION = ("### Below stock the OTHER rung pays: −8.5 to −14.4 % "
-           "under caps below ~173 W, and a new efficiency record")
+SECTION = "### Below stock the OTHER rung pays: +8.5 to +16 % under caps below ~165 W"
 
 W, H = 1000, 640
 L, R = 74, 34

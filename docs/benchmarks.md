@@ -175,28 +175,35 @@ for bandwidth nothing is using. Dropping it to the **5001 MHz rung** returns tho
 core clock, and below ~130 W MXBM also switches to a different geometry and rebuild
 variant. Together that is MXBM's best configuration at each cap.
 
-Measured 2026-08-14, headless, two 120 s runs per point in mirrored cap order (the two
-arms agree within 1.5 % everywhere) — one kernel behind the rest of this page:
+Measured 2026-08-15 on the current build, headless, `power_sweep.sh` under
+`-lmc 5001,5001` run forward and then reversed (arms agree to 1.6 % at 100 W, 0.2–0.9 %
+elsewhere; the table is their mean):
 
-| cap | ms/solve | sol/s | J/solution | sol/s/W | lolMiner at its own best |
-|---|---|---|---|---|---|
-| 100 W | 78.8 | 25.5 | 3.94 | 0.255 | 28.85 sol/s |
-| 120 W | 63.0 | 31.9 | 3.76 | 0.266 | 34.05 |
-| 140 W | 54.3 | 37.0 | 3.79 | 0.264 | 39.75 |
-| **160 W** | 46.6 | 43.2 | **3.70** | **0.271** | 47.85 |
+| cap | ms/solve | sol/s | J/solution | sol/s/W | vs stock memory | lolMiner at its own best |
+|---|---|---|---|---|---|---|
+| 100 W | 79.5 | 25.1 | 3.98 | 0.251 | +16.2 % | 28.85 sol/s |
+| 120 W | 61.5 | 32.7 | 3.68 | 0.272 | +16.2 % | 34.05 |
+| 140 W | 53.4 | 37.6 | 3.73 | 0.268 | +12.6 % | 39.75 |
+| **160 W** | 45.7 | **44.0** | **3.63** | **0.276** | +8.5 % | 47.85 |
 
-**160 W + the rung gives 3.70 J/solution** and the curve is nearly flat from 120 to
-160 W. lolMiner is still ahead in this band, by **6–12 %** against the rung. On stock
-memory and the current kernel the same caps run 6.7–21 % behind, and 220 W gives 3.642
-J/sol — so which configuration holds MXBM's efficiency optimum is open until this table
-is re-taken. The mechanism, the A/Bs behind each step and lolMiner's own rung sweep are in
-[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
+**Take the rung only if you are hard-limited to ~160 W or below.** It is worth +8.5 % at
+160 W and +16 % at 100–120 W, and lolMiner still leads the band by 4–13 %. What it is no
+longer is an efficiency setting: 3.63 J/solution at 160 W ties 220 W's 3.642 on stock
+memory to within 0.3 %, and at that tie 220 W does **60.3 sol/s against 44.0** — 37 % more
+work for the same energy per solution.
+
+The rung's margin over stock memory is unchanged: the 2026-07-31 ABBA read
++16.7/+16.8/+12.1/+9.3 % across these caps and this same-day pair reads
++16.2/+16.2/+12.6/+8.5 %. Whether the w0-checkpoint record helped the rung is
+[an open question](performance.md#the-low-band-on-the-current-kernel) — the tables are
+cross-session and disagree; the flag A/B settles it and has not been run. The mechanism, the A/Bs behind each step and lolMiner's own rung sweep are in
+[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w).
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 ```
 
-Both settings are restored on exit. Above ~173 W the rung is a wall — do not use it there.
+Both settings are restored on exit. Above ~165 W the rung is a wall — do not use it there.
 
 ---
 

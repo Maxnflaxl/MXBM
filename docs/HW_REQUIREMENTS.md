@@ -250,7 +250,7 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 | Throughput | **64.2 sol/s** | 59.4 sol/s |
 | End-to-end solve | **31.30 ms** | 33.5 ms |
 | Board power | 271.9 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
-| Efficiency | **0.236 sol/s/W** stock, **0.259 at 220 W** (its optimum on the stock memory clock), best measured **0.271** at 160 W with `--mclk 5001` | — |
+| Efficiency | **0.228 sol/s/W** stock, **0.275 at 220 W** (its optimum on the stock memory clock), matched but not beaten by **0.276** at 160 W with `--mclk 5001` | — |
 
 *(CUDA column: the locked-clock pin, re-taken 2026-08-15 after the w0-checkpoint record
 shipped, and the 2026-08-14 rung measurements. Stock efficiency is that pin's own
@@ -267,12 +267,14 @@ backend's own controlled headline.
 The card is power-limited, not thermally limited, in every kernel, so the board power
 limit is the most valuable knob on it: **at 220 W the solver does 60.3 sol/s for 219.6 W,
 against 64.9 at 284 W** — 7 % of the speed for 23 % of the power, and 220 W is also where
-efficiency peaks (**3.642 J/solution**). Below ~170 W the memory clock is the second knob:
-`--mclk 5001` is worth 8.5–14.4 % there. Against an *equally capped* lolMiner, MXBM wins on
+efficiency peaks (**3.642 J/solution**). Below ~165 W the memory clock is the second knob:
+`--mclk 5001` is worth +8.5 % at 160 W rising to +16 % at 100–120 W, though on energy per
+solution it ties stock memory's 220 W point rather than beating it. Against an *equally
+capped* lolMiner, MXBM wins on
 both speed and efficiency from ~200 W to the 285 W stock limit, and loses below that band —
 worst at 140 W (−21 %), narrowing to −6.7 % at the 100 W floor. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
-[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
+[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w).
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces. BeamHash III yields

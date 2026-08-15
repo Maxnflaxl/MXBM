@@ -595,9 +595,9 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 
 On a rig that doesn't run the miner as root, set the card once instead
 (`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. At
-180 W and above the rung *loses* — badly at stock — so this is strictly a low-cap
-pairing. Details in
-[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
+165 W and above the rung *loses* — badly at stock — so this is strictly a low-cap
+pairing, and it ties rather than beats 220 W on energy per solution. Details in
+[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w).
 
 ```
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
