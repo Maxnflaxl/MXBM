@@ -18,6 +18,64 @@ __device__ __forceinline__ uint32_t pair_gi   (uint64_t w1) { return (uint32_t)(
 __device__ __forceinline__ uint64_t pair_w0(uint32_t key, uint32_t i0) { return (uint64_t)key | ((uint64_t)i0 << 24); }
 __device__ __forceinline__ uint64_t pair_w1(uint32_t i1, uint32_t gi)  { return (uint64_t)i1  | ((uint64_t)gi << 25); }
 
+// r1 -> r2, W0-CHECKPOINT RECORD (MXBM_PAIR_W0): the same 16 B, carrying the child's
+// post-mix work word 0 where the plain record carries only its 24-bit key. apply_mix
+// writes word 0 alone and combine is XOR-plus-shift, so words 1..6 of a round-2 element
+// are linear in the parents' SEED words 1..6: storing word 0 lets round 2 skip both
+// parent mixes, the child mix and two of the fourteen siphashes -- see rebuild_r2_lane.
+//
+// Word 0's extra 24 bits come out of the bucket ADDRESS, the same resource the r2 -> r3
+// pack spends: IMPB of the key's 24 bits ARE the bucket index, so word 0 is stored with
+// them removed and the consumer reinserts them from its own bucket. The kept low
+// 24-IMPB key bits stay at the bottom of word 0, so the staging loop's sub-mask filter
+// and tab hash read them where they always were -- which is why this needs IMPB, and
+// with it the perfect-tab compare.
+//   w0 = key low (24-IMPB) | word-0 bits 63..24 | gi bits 25..14
+//   w1 = li | ri<<25 | (gi low 14)<<50
+// 48 + 25 + 25 + 26 = 124 bits of 128 at IMPB=16, 123 at 17. gi is 26 bits for the same
+// reason it is in r3_p1: a round emits ~2^25 children and kCapacity is 34,603,008.
+//
+// CUDA only -- unlike the records above, this one has no counterpart in lds.cl. The two
+// backends never read each other's buffers, so they may differ here; OpenCL has no
+// implicit-bits pack and so no address bits to spend.
+template<uint32_t IMPB>
+__device__ __forceinline__ uint64_t pw0_w0(uint64_t w0, uint32_t gi) {
+    constexpr uint32_t impKB = 24u - IMPB;              // kept key bits
+    return (w0 & ((1ull << impKB) - 1u)) | ((w0 >> 24) << impKB)
+         | ((uint64_t)(gi >> 14) << (64u - IMPB));
+}
+__device__ __forceinline__ uint64_t pw0_w1(uint32_t li, uint32_t ri, uint32_t gi) {
+    return (uint64_t)li | ((uint64_t)ri << 25) | ((uint64_t)(gi & 0x3FFFu) << 50);
+}
+// Inverse: word 0 whole again, with the block's bucket back in the dropped bits.
+template<uint32_t IMPB>
+__device__ __forceinline__ uint64_t pw0_word0(uint64_t r0, uint32_t bucket) {
+    constexpr uint32_t impKB = 24u - IMPB;
+    return (r0 & ((1ull << impKB) - 1u)) | ((uint64_t)bucket << impKB)
+         | (((r0 >> impKB) & 0xFFFFFFFFFFull) << 24);
+}
+__device__ __forceinline__ uint32_t pw0_left (uint64_t r1) { return (uint32_t)(r1)       & kIdxMask; }
+__device__ __forceinline__ uint32_t pw0_right(uint64_t r1) { return (uint32_t)(r1 >> 25) & kIdxMask; }
+template<uint32_t IMPB>
+__device__ __forceinline__ uint32_t pw0_gi(uint64_t r0, uint64_t r1) {
+    return (uint32_t)(r1 >> 50) | ((((uint32_t)(r0 >> (64u - IMPB))) & 0xFFFu) << 14);
+}
+
+// The linear lane: words 1..6 of a round-2 element from 12 siphashes (k = 1..6 per
+// parent) and the combine's shift-XOR, masked at Lout(1) = 424. Word 0 is not written --
+// the caller stages the stored checkpoint there.
+__device__ __forceinline__ void rebuild_r2_lane(const uint64_t pp[4], uint32_t li, uint32_t ri,
+                                                uint64_t* w16 /* w16[1..6] written */) {
+    uint64_t x[7];
+    #pragma unroll
+    for (int k = 1; k < 7; ++k)
+        x[k] = bh3::siphash24(pp[0], pp[1], pp[2], pp[3], ((uint64_t)li << 3) + (uint64_t)k)
+             ^ bh3::siphash24(pp[0], pp[1], pp[2], pp[3], ((uint64_t)ri << 3) + (uint64_t)k);
+    #pragma unroll
+    for (int i = 1; i < 6; ++i) w16[i] = (x[i] >> 24) | (x[i + 1] << 40);
+    w16[6] = (x[6] >> 24) & ((1ull << 40) - 1);        // Lout(1) = 424: word 6 keeps 40 bits
+}
+
 // r2 -> r3: 72 B = 7 work words + 4 leaves and gi bit-packed into 2 u64. `lead` is not
 // stored: it IS leaf 0, and storing it again cost a whole u64 (see "the redundant lead
 // field" in docs/performance.md).

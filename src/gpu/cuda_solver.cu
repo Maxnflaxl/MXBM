@@ -27,6 +27,11 @@ constexpr uint32_t kCapacity = kElems + kElems/32;      // 34,603,008
 static_assert(kCapacity == kRbCapacity,
               "main.cpp's restart notice asks geometry questions with kRbCapacity; "
               "the two must be the same number");
+// Every record that bit-packs a gi gives it 26 bits (r3_p1, and the w0-checkpoint pair
+// record). A round emits at most one child per output slot, so the capacity bounds it.
+static_assert(kCapacity < (1u << 26),
+              "the packed records give gi 26 bits; a larger capacity silently truncates "
+              "the back-reference a solution is recovered through");
 constexpr uint32_t kSurvCap = 1024;
 // set 0 carries the round-2 and round-4 outputs, set 1 the round-1 and round-3 outputs.
 // Round 2's record is 9 u64: an 8-u64 record at a 16 B-aligned stride, plus a 9th-word
@@ -400,6 +405,14 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     CARVE((fused_round<MXBM_R2_ARGS, false, false, false, false, 17u>));
     CARVE((fused_round<MXBM_R3_ARGS, false, false, false, false, 17u>));
     CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true, 0u>));
+#if MXBM_PAIR_W0
+    // Round 1 writing the w0-checkpoint record: its IMPB follows round 2's, so the
+    // packed instantiations are the ones that launch at stock.
+    CARVE((fused_round<MXBM_R1_ARGS, false, false, false, false, 16u>));
+    CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true,  16u>));
+    CARVE((fused_round<MXBM_R1_ARGS, false, false, false, false, 17u>));
+    CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true,  17u>));
+#endif
     CARVE((fused_round<MXBM_R4_ARGS, false, false, false, true>));
     // The round-4 variant that hosts the next nonce's entry as co-blocks.
     CARVE((fused_round<MXBM_R4_ARGS, false, false, true>));
@@ -409,6 +422,12 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     if (p_->arena) {
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 0u, true>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  0u, true>));
+#if MXBM_PAIR_W0
+        CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 16u, true>));
+        CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  16u, true>));
+        CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 17u, true>));
+        CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  17u, true>));
+#endif
         CARVE((fused_round<MXBM_R4_ARGS,  false, false, false, false, 0u, true>));
         CARVE((fused_round<MXBM_R4_ARGS,  false, false, false, true,  0u, true>));
         CARVE((fused_round<MXBM_R2Q_ARGS, false, false, false, false, 0u, true>));
@@ -595,8 +614,20 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
     #define ROUND_X(...) ROUND(__VA_ARGS__)
     #define ROUND_XNR(...) ROUND_NR(__VA_ARGS__)
+#if MXBM_PAIR_W0
+    // The w0-checkpoint pair record: round 1 writes it and round 2 reads it, so both are
+    // given the SAME implied-bit count, derived from the condition round 2's own arm
+    // below tests. Zero everywhere the packed r2 -> r3 record is off -- the address bits
+    // are what pay for word 0, so without them the record does not fit 16 B.
+    const uint32_t pw0b = (!I.octo && !I.quad && I.impb) ? (I.bb == 17u ? 17u : 16u) : 0u;
+    if (I.octo)           ROUND_XNR(1, 0u,  MXBM_R1_ARGS)
+    else if (pw0b == 17u) ROUND_X(1, 17u, MXBM_R1_ARGS)
+    else if (pw0b == 16u) ROUND_X(1, 16u, MXBM_R1_ARGS)
+    else                  ROUND_X(1, 0u,  MXBM_R1_ARGS)
+#else
     if (I.octo) ROUND_XNR(1, 0u, MXBM_R1_ARGS)
     else        ROUND_X(1, 0u, MXBM_R1_ARGS)
+#endif
     // Rounds 2 and 3 come in a matched pair -- r2's OUTSTR is r3's INSTR -- so they
     // switch together or the second reads a record the first never wrote. The
     // implicit-bits pairs are the same strides with the pack folded into the

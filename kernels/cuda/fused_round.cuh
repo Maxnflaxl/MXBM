@@ -136,6 +136,21 @@ constexpr uint32_t kAMax     = 64;     // staged pool entries per bucket (shared
 #endif
 constexpr uint32_t kImpDB = (uint32_t)MXBM_IMPDB;
 
+// MXBM_PAIR_W0: the r1 -> r2 record carries the child's post-mix work word 0, so round 2
+// derives only words 1..6 -- 12 siphashes and no mixes, against 14 siphashes and 3 mixes.
+// See the w0-checkpoint record in bh3_records.cuh for the algebra and the bit layout.
+//
+// The record stays 16 B: word 0's extra 24 bits are paid for out of the bucket address,
+// which is why this rides IMPB and is off wherever the packed r2 -> r3 record is off.
+// Carrying it in a WIDER record instead costs more than the arithmetic it removes.
+// r1's emit and r2's staging must be given the same IMPB or they disagree about the
+// format; the launcher derives both from one condition.
+// Worth -0.76 ms (-2.4 %) at stock, with r1's and r2's registers, shared memory and
+// blocks/SM all unchanged. Set to 0 for the A/B.
+#ifndef MXBM_PAIR_W0
+#define MXBM_PAIR_W0 1
+#endif
+
 // MXBM_NARROW6: round 3 stages its 7th work word in 2 bytes instead of 8.
 //
 // r3's input is r2's output, which combine() masked to LOUT = 400 bits -- so word 6
@@ -516,6 +531,13 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                   "IMPB's unpack is a fixed 4 x ulonglong2, so the record it reads must "
                   "have been written at stride 8. A wider one (MXBM_R2_FULL) compiles "
                   "and then fails the KAT");
+    // The w0-checkpoint pair record (MXBM_PAIR_W0). It spends the address-implied key
+    // bits, so it exists only where IMPB does -- and both sides of the r1/r2 boundary
+    // read the same IMPB, which is what keeps writer and reader on one layout.
+    constexpr bool PW0 = (MXBM_PAIR_W0 != 0) && IMPB != 0;
+    static_assert(!PW0 || LMODE != LM_RD2 || INSTR == 2,
+                  "the w0-checkpoint record is 2 u64; a wider input stride is a "
+                  "different format");
     // `lead` is leaf 0 of the element's own prefix, so for every mode that stages real
     // leaves it is already in lleaf and a separate array is pure waste. LM_USE is the
     // exception: its leaf payload is the packed leftContrib, not leaves -- and LM_RD4
@@ -694,10 +716,19 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else if constexpr (LMODE == LM_RD2) {
             if constexpr (!MXBM_PAIR128) rec1 = in_belem[d + 1];
-            const uint32_t li = pair_left(rec0), ri = pair_right(rec1);
-            lgi[pos] = pair_gi(rec1);
+            if constexpr (PW0) {
+                // Word 0 is read, not derived: stage it here with the bucket's key bits
+                // put back, and the all-lanes loop below rebuilds the linear lane only.
+                stw(pos, 0, pw0_word0<IMPB>(rec0, bucket));
+                lgi[pos] = pw0_gi<IMPB>(rec0, rec1);
+                lleaf[pos*LEAFW + 0] = pw0_left(rec1);              // leaf 0 IS the lead
+                lleaf[pos*LEAFW + 1] = pw0_right(rec1);
+            } else {
+                const uint32_t li = pair_left(rec0), ri = pair_right(rec1);
+                lgi[pos] = pair_gi(rec1);
+                lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;  // leaf 0 IS the lead
+            }
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
-            lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;   // leaf 0 IS the lead
         } else if constexpr (LMODE == LM_RD3 && INSTR == 2) {
             // 16 B quad record, one LD.128. No gi in it: on an octo rung the only thing
             // that would read one is this round's own tiebreak, and the slot orders the
@@ -916,6 +947,21 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                 bh3::apply_mix(e, t1, 1u, 448u);
             }
             for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+        } else if constexpr (LMODE == LM_RD2 && PW0) {
+            // Word 0 came out of the record, so only the linear lane is derived. Every
+            // word here is the one rebuild_r2 would have produced; word 0 is left alone.
+            MXBM_PP_LOAD(pp);
+            uint64_t w16[7];
+            if constexpr (MXBM_ABL_DERIVE & 2) {
+                bh3::Elem e;
+                abl_spread(lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], e);
+                #pragma unroll
+                for (int w = 1; w < INW; ++w) w16[w] = e.w[w];
+            } else {
+                rebuild_r2_lane(pp, lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1], w16);
+            }
+            #pragma unroll
+            for (int w = 1; w < INW; ++w) lwork[lwx(pos, w)] = w16[w];
         } else if constexpr (LMODE == LM_RD2) {
             MXBM_PP_LOAD(pp);
             bh3::Elem e;
@@ -1045,8 +1091,14 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                               make_ulonglong2(f, (uint64_t)cgi));
                     } else if constexpr (LMODE == LM_SEED) {
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
-                        st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
-                              make_ulonglong2(pair_w0(ckey, ctree[0]), pair_w1(ctree[1], cgi)));
+                        if constexpr (PW0)
+                            st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
+                                  make_ulonglong2(pw0_w0<IMPB>(c.w[0], cgi),
+                                                  pw0_w1(ctree[0], ctree[1], cgi)));
+                        else
+                            st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
+                                  make_ulonglong2(pair_w0(ckey, ctree[0]),
+                                                  pair_w1(ctree[1], cgi)));
                     } else if constexpr (LMODE == LM_RD2 && OUTSTR == 2) {
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
                               make_ulonglong2(quad16_w0(ckey, ctree), quad16_w1(ctree)));

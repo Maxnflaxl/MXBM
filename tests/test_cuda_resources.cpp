@@ -216,6 +216,13 @@ struct Kernel {
 // every kernel and registers unchanged or lower (r4 47 -> 46). Re-baselined again
 // 2026-08-14 when the arena and LM_RD4 scratch joined that convention: +8 B on the 34
 // rows where their mode is off, registers, stack and blocks/SM unchanged on all of them.
+// Mirrors the default in kernels/cuda/fused_round.cuh, which this file cannot include.
+// An A/B build must set it on BOTH the CXX and the CUDA flags, or the contract and the
+// library disagree about which kernels exist and the build fails on that instead.
+#ifndef MXBM_PAIR_W0
+#define MXBM_PAIR_W0 1
+#endif
+
 const Kernel kContract[] = {
     // name                    tmpl   INW OUT LEAF LM IN OUT   token                wg  reg   smem stk min
     { "entry_scatter",         false, {0,0,0,0,0,0}, "13entry_scatterE",  256,  40,     0,  0, 6,
@@ -256,6 +263,23 @@ const Kernel kContract[] = {
     { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
     { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17,0,1}, nullptr,       256,  56, 26184,  0, 3, "" },
     { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17,0,1}, nullptr,       256,  56, 26816,  0, 3, "" },
+#if MXBM_PAIR_W0
+    // The w0-checkpoint pair record. Round 1 emits it, so round 1 is instantiated at the
+    // same IMPB as rounds 2 and 3; word 0 is already in a register at the emit and the
+    // pack is shifts, so every variant matches its IMPB=0 twin exactly -- r1 keeps both
+    // of its cliffs. Round 2 reads it and is unchanged above: same template arguments,
+    // one branch swapped inside.
+    { "r1 pair-w0",             true, {7,7,1,3,1,2,0,0,16,0,1}, nullptr,       256,  48, 19016,  0, 5,
+      "STILL ON TWO CLIFFS: 48 registers of 48, 19016 B of 19456 -- the checkpoint is "
+      "packed from registers the emit already holds" },
+    { "r1 pair-w0 mf",          true, {7,7,1,3,1,2,0,1,16,0,1}, nullptr,       256,  64, 19592,  0, 4, "" },
+    { "r1 pair-w0 17",          true, {7,7,1,3,1,2,0,0,17,0,1}, nullptr,       256,  48, 19016,  0, 5, "" },
+    { "r1 pair-w0 17 mf",       true, {7,7,1,3,1,2,0,1,17,0,1}, nullptr,       256,  64, 19592,  0, 4, "" },
+    { "r1 pair-w0 arena",       true, {7,7,1,3,1,2,0,0,16,1,1}, nullptr,       256,  48, 19144,  0, 5, "" },
+    { "r1 pair-w0 mf arena",    true, {7,7,1,3,1,2,0,1,16,1,1}, nullptr,       256,  64, 19720,  0, 4, "" },
+    { "r1 pair-w0 17 arena",    true, {7,7,1,3,1,2,0,0,17,1,1}, nullptr,       256,  48, 19144,  0, 5, "" },
+    { "r1 pair-w0 17 mf arena", true, {7,7,1,3,1,2,0,1,17,1,1}, nullptr,       256,  64, 19720,  0, 4, "" },
+#endif
     { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1,0,0,1}, nullptr,         256,  64, 24256,  0, 4, "" },
     { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  56, 26816,  0, 3, "" },
     { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1,0,0,1}, nullptr,         256,  80, 26816,  0, 3, "" },
