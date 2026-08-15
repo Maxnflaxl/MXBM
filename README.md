@@ -25,7 +25,8 @@ auditable alternative to the closed-source miners in the ecosystem.
 >
 > **MXBM has the higher ceiling — now 62.8 sol/s against ~54.0, which lolMiner cannot
 > reach at any setting — and it leads on both speed and efficiency between roughly
-> 210 W and 277 W.** (The table is the 2026-07-30 sweep; the kernels have moved since.)
+> 210 W and the 285 W stock limit.** (lolMiner's column is the 2026-07-30 sweep; MXBM's
+> 240 W and up were re-swept 2026-08-15, the rest not yet.)
 > Below that window lolMiner is still ahead, but the gap has been driven to single
 > digits across 100–160 W — −6 to −12 % best-config-vs-best-config as of
 > [2026-08-14](docs/performance.md#the-low-band-after-the-2026-08-1314-kernel-ships) —

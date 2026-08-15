@@ -534,15 +534,26 @@ are the 2026-07-30 measurement; its binary is unchanged. The two sessions carry 
 documented ±2.5 % cross-session band between them — the 210 W cells are a tie at that
 band, not a decided cross.)*
 
-> **This whole MXBM column predates the [w0-checkpoint record](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24)**
-> (2026-08-15, −2.4 % at stock) and has not been re-swept: that stint was scoped to stock CUDA only.
-> Every figure derived from it below — the interpolated crossings, the per-cap margins,
-> the 285 W row's 62.8 sol/s — describes the previous kernel. **Do not extrapolate the
-> stock delta into it**: under a cap the binding currency is L2 sectors × core clock
-> rather than the arithmetic this lever removes, and this repo has shipped stock wins
-> that were losses at 120 W. The three curve charts are generated from this table, so
-> they redraw it faithfully and report no drift — which is not evidence the curve is
-> current. `sudo -v && benchmarks/power_sweep.sh` is what settles it.
+> **The 100–220 W rows still predate the
+> [w0-checkpoint record](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24)**
+> and have not been re-swept — `power_sweep.sh` defaults to its top four caps, so the
+> 2026-08-15 run covered 240 W and up only. Every figure this section derives across the
+> whole range — above all the interpolated crossings — still mixes two kernels.
+> **Do not extrapolate into the unswept rows**: under a cap the binding currency is L2
+> sectors × core clock rather than the arithmetic this lever removes, and this repo has
+> shipped stock wins that were losses at 120 W. The three curve charts are generated from
+> this table, so they redraw whatever is in it and report no drift — which is not evidence
+> the curve is current. Only a sweep over the full `LIMITS` list settles it.
+>
+> **Where it has been re-swept the lever pays slightly more under a cap, not less** —
+> +4.0 % at 240 W and +3.9 % at 255 against +3.3 % at 285. (The same run added a 270 W
+> point, 64.3 sol/s at 269.2 W for 0.2388 sol/s/W; it is not in the table because
+> lolMiner was never measured at that cap and this one is a head-to-head.) Those are differences against a
+> column measured 2026-08-13, so they carry the ~2.5 % cross-session band and are
+> consistent with the stock −2.4 % rather than independent evidence of a larger capped
+> win; what they do establish is that the sign does not flip on the way down to 240 W.
+> **Efficiency at 240 W is now 0.2614 sol/s/W against lolMiner's 0.223 — +17 %**, at
+> essentially equal draw.
 
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|
@@ -557,9 +568,9 @@ band, not a decided cross.)*
 | 200 W | 50.4 | 199.7 | 0.2523 | **54.00** | 199.6 | **0.2706** |
 | 210 W | 53.8 | 209.6 | 0.2567 | 53.90 | 209.6 | 0.2572 |
 | 220 W | **56.9** | 219.6 | **0.2592** | 54.35 | 219.4 | 0.2477 |
-| 240 W | **60.2** | 239.6 | **0.2512** | 53.75 | 236.6 | 0.2272 |
-| 255 W | **61.1** | 254.4 | **0.2402** | 53.90 | 237.5 | 0.2269 |
-| 285 W | **62.8** | 284.2 | 0.2210 | 53.65 | 237.4 | **0.2259** |
+| 240 W | **62.6** | 239.4 | **0.2614** | 53.75 | 236.6 | 0.2272 |
+| 255 W | **63.5** | 254.5 | **0.2495** | 53.90 | 237.5 | 0.2269 |
+| 285 W | **64.9** | 284.1 | **0.2284** | 53.65 | 237.4 | 0.2259 |
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
@@ -569,11 +580,14 @@ band, not a decided cross.)*
   until the very bottom, where it does not.** At 180 W it does 52.35 sol/s to MXBM's
   44.1 (**+18.7 %**); at 160 W, 47.60 to 37.8 (**+25.9 %**); at 120 W, 33.40 to 25.3
   (**+32.0 %**). Then at 100 W the gap *narrows* to **+19.4 %** — see the floor below.
-- **Between ~210 W and ~277 W, MXBM wins on both** — by 4.7 % speed and 4.6 % efficiency
-  at 220 W, widening to 12.0 % and 10.6 % at 240 W. (Band computed on a fine grid by
-  `docs/tools/plot_power.py`, which reads this same table: 210.5–276.9 W.)
-- **Above ~277 W, MXBM is faster and lolMiner is more efficient**, which is what the
-  stock-versus-stock comparison always showed.
+- **From ~210 W to the 285 W stock limit, MXBM wins on both** — by 4.7 % speed and 4.6 %
+  efficiency at 220 W, widening to 16.5 % and 15.1 % at 240 W. (Band computed on a fine
+  grid by `docs/tools/plot_power.py`, which reads this same table: 210.5–285.0 W.)
+- **The upper crossing is gone.** It sat at ~277 W until the w0-checkpoint record: MXBM
+  used to be faster but less efficient at the top, and at 285 W it is now ahead on both
+  (0.2284 against 0.2259). Note the two ends of this band rest on different vintages —
+  the 240 W and up rows are 2026-08-15, the rest 2026-08-13 — so the crossing itself is
+  the figure most in need of the full re-sweep.
 
 Three facts that reframe the whole comparison:
 
@@ -768,7 +782,7 @@ Two other candidates died in the same week:
 **The practical conclusion, and what has since moved.** MXBM's advantage is a band:
 lolMiner below the crossing, MXBM between the crossings, and MXBM alone above the upper
 one at a ceiling lolMiner cannot reach at any setting. That shape still holds; the figures
-in it do not. On the current kernels the band is **~210 W to ~277 W** and the ceiling
+in it do not. On the current kernels the band is **~210 W to the 285 W stock limit** and the ceiling
 **62.8 sol/s against ~54.0** — see
 [both miners under the same cap](#both-miners-under-the-same-cap), which is the live
 table. The low-end verdict has moved furthest: "not supportable below 210 W" was true of

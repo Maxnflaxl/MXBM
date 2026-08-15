@@ -269,7 +269,7 @@ limit is the most valuable knob on it: **at 220 W the solver does 56.9 sol/s for
 against 62.8 at 284 W** — 9 % of the speed for 23 % of the power. Below ~170 W the memory
 clock is the second knob: `--mclk 5001` is worth 8.5–14.4 % there and puts the efficiency
 optimum at 160 W (**3.70 J/solution**, against ~4.8 at stock). Against an *equally capped*
-lolMiner, MXBM wins on both speed and efficiency between ~210 W and ~277 W, and loses
+lolMiner, MXBM wins on both speed and efficiency from ~210 W to the 285 W stock limit, and loses
 below that band — by 6–12 % once both miners run their best low-power configuration. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
 [the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
