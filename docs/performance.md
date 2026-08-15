@@ -535,6 +535,16 @@ are the 2026-07-30 measurement; its binary is unchanged. The two sessions carry 
 documented ±2.5 % cross-session band between them — the 210 W cells are a tie at that
 band, not a decided cross.)*
 
+> **This whole MXBM column predates the w0-checkpoint record** (2026-08-15, `e302388`,
+> −2.4 % at stock) and has not been re-swept: that stint was scoped to stock CUDA only.
+> Every figure derived from it below — the interpolated crossings, the per-cap margins,
+> the 285 W row's 62.8 sol/s — describes the previous kernel. **Do not extrapolate the
+> stock delta into it**: under a cap the binding currency is L2 sectors × core clock
+> rather than the arithmetic this lever removes, and this repo has shipped stock wins
+> that were losses at 120 W. The three curve charts are generated from this table, so
+> they redraw it faithfully and report no drift — which is not evidence the curve is
+> current. `sudo -v && benchmarks/power_sweep.sh` is what settles it.
+
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|
 | 100 W | 19.3 | 99.4 | 0.1942 | **23.05** | 99.3 | **0.2320** |
