@@ -1626,16 +1626,16 @@ access pattern — so 60 MHz and 210 MHz are the size of the prize, not a foreca
 change that could ship. **Nothing measured today priced the cost side**, and until
 something does, "narrow the records" is a lead with a known ceiling and an unknown floor.
 
-**What it makes worth re-testing: the round-3 quad record.** `b360695` had round 3
-re-derive from a **24 B** record instead of storing 72 B of work state; `2584518` retired
-it at *"a genuine −3.6 ms at 86.8 ms is a +2.2 ms loss at 56."* The record it removes is
+**What it makes worth re-testing: the round-3 quad record.** An earlier OpenCL build had
+round 3 re-derive from a **24 B** record instead of storing 72 B of work state, and it was
+retired at *"a genuine −3.6 ms at 86.8 ms is a +2.2 ms loss at 56."* The record it removes is
 written by round 2 and read by round 3, ~5.1 GB of the solve's 13.0, so at 24 B it takes
 out roughly **26 % of all traffic** — about 1.6× the lever measured above. It is the only
 existing implementation of the byte/arithmetic trade, which makes sweeping it the cheapest
 way to learn what the cost side is worth.
 
 > **Correction (2026-07-28).** An earlier version of this section, and the commit message
-> of `5960fd4`, said that trade was made "on a metric that did not price watts". **That is
+> that shipped it, said that trade was made "on a metric that did not price watts". **That is
 > wrong.** The +2.2 ms was end-to-end wall time on a card that is `sw_power_cap`-limited
 > ~100 % of the time, so it already included whatever clock the freed watts bought — a
 > wall-clock A/B on a capped card prices the power effect implicitly, without anyone
@@ -1925,8 +1925,7 @@ Round 2 emits a **24 B quad record** — key, four leaves, `gi` — instead of t
 record, and round 3 rebuilds the seven work words from those leaves (`LM_RD3`,
 `rebuild_r3`: two `rebuild_r2` calls, combined at Lout(2)=400 and mixed at Lmix(3)=400).
 The information is identical; only the bytes differ. It is the same trick `LM_RD2` already
-plays one round higher, and it existed once on the OpenCL path (`b360695`, retired in
-`2584518`).
+plays one round higher, and it existed once on the OpenCL path before being retired.
 
 Gate green at every geometry — KAT 3/3 survivors, goldens byte-identical, `bucketDrops`
 and `pairDrops` zero:
