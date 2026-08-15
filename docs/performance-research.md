@@ -220,8 +220,12 @@ other two axes of the CUDA ladder — the quad record and the dense-cap/overflow
 and `MXBM_NO_IMPB=1` turns the implicit-bits record off in the kernels *and* in the
 allocation, so an A/B with it never sizes against a record it is not using.
 `MXBM_DROP_STATS=1` prints the four drop counters and the arena's run-long spill total
-after every solve: on an arena arm the gate is `drops == 0` **and** `spills != 0`, since
-a pool that never filled means the overflow path never ran and the arm measured nothing.
+after every solve — one counter per capacity, **entry / stage / out / walk**: on an arena
+arm the gate is `drops == 0` **and** `spills != 0`, since a pool that never filled means
+the overflow path never ran and the arm measured nothing.
+`MXBM_CAP_SIGMA=S` forces the bucket reservation's tail bound for every caller at once
+(footprint arithmetic and allocation alike, so the two cannot disagree); negative values
+undershoot the mean and are the positive control that makes each drop channel fire.
 `MXBM_OCC` prints the worst bucket occupancy
 in units of the reservation's sigma, `MXBM_ROUND_REPS="R:N"` and `MXBM_ENTRY_REPS=N` replay
 one stage in place for per-round attribution. Build flags: `-DMXBM_STCS=1` (streaming
@@ -5484,12 +5488,58 @@ cliff for four blocks, so freeing shared memory alone leaves it at four. The two
 never been moved together — `MXBM_MB_RD2` measured null *because shared capped it at four
 anyway*, and the `MXBM_FCAP` sweep never went low enough to clear 19456 B.
 
-**`drops[0]` has no writer.** Every device increment in `fused_round.cuh` and
-`pipeline_kernels.cuh` targets `drops[1..3]`; only the standalone probes write `drops[0]`.
-It is allocated, zeroed and printed as `pair=`. **Every `drops == 0` gate stated as four
-counters has been three.** This does not disturb the 2.006 multiplier, which is measured by
-verification rather than by counters, but it must be fixed before any deliberately-lossy
-arm is judged.
+**`drops[0]` had no writer, and the entry pass was reporting into the wrong counter.**
+Every device increment targeted `drops[1..3]`, so the allocated, zeroed, `pair=`-printed
+first counter was structurally always zero and **every `drops == 0` gate stated as four
+counters was three**. The cause was not a missing increment but a misdirected one: entry's
+scatter overflow incremented `drops[1]`, where it was indistinguishable from a group-cap
+or terminal-staging overflow — three different capacities, one counter.
+
+Fixed: one counter per capacity, **entry / stage / out / walk**, with the print relabelled
+to match (it read `pair / bucket / gi / walk`, and two of those four names were wrong).
+`cuda/pipeline`'s drop gate was ORing three of the four and now ORs all four.
+
+**The positive control is `MXBM_CAP_SIGMA`**, which forces the tail bound in `fb_cap_for`
+for every caller at once — it is read there rather than at the call sites because the
+footprint arithmetic and the allocation both come through that function, and reserving one
+cap while indexing another would corrupt rather than drop. A negative value undershoots the
+mean, which is what makes each channel reachable:
+
+| `MXBM_CAP_SIGMA` | entry | stage | out | walk |
+|---|---|---|---|---|
+| unset (8.0) | 0 | 0 | 0 | 0 |
+| 0 | 9 289 | 0 | 30 074 | 0 |
+| −6 | 5 898 240 | 0 | 2 | 0 |
+
+The graded response is the point: entry and out move independently while stage stays zero,
+which is the demonstration that the three capacities are now separately observable. KAT 3/3
+on all fifteen geometries; the shipping path is byte-identical because the counter it
+increments is zero either way.
+
+This does not disturb the 2.006 multiplier, which is measured by verification rather than
+by counters. What it unblocks is the yield axis, whose every arm is a deliberate loss that
+could not previously be told from a bug.
+
+**The knob also settles a standing question about the tail.** `cap = mean + 8√mean + 32`
+budgets 8σ against a Poisson assumption, and the objection is that a round's input is not a
+fresh Poisson draw but a sum of pair counts over parent buckets, so its variance should
+scale with the fourth moment of the parent count — putting the real margin at 5–6.5σ.
+`MXBM_OCC` over 41 solves × 65536 buckets (2.69 M draws per stage) says otherwise:
+
+| stage | max occupancy | in Poisson σ |
+|---|---|---|
+| entry | 622 | 4.09 |
+| r1 | 628 | 4.35 |
+| r2 | 636 | 4.70 |
+| r3 | 629 | 4.40 |
+| r4 | 641 | **4.92** |
+
+A Gaussian tail over 2.69 M draws predicts a maximum at **4.95σ** and Poisson's right tail
+at λ = 528 is lighter still, so every stage sits at or below the prediction. Over-dispersion
+of 1.2× would read 5.9 and 1.6× would read 7.9 — excluded at every round, and least of all
+present in round 4 where the pair-count argument says it should be worst. **The 8σ margin
+is a genuine 8σ**, and a Gaussian estimate of the spill rate at a tighter cap is
+trustworthy, which is what the singleton-eviction family needs to price itself.
 
 ### The w0-checkpoint pair record, repriced by the address bits: −0.76 ms (−2.4 %)
 

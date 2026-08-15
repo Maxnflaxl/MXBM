@@ -272,7 +272,8 @@ Build first — see [building.md](building.md).
 | Pipeline A/B for a code change | `./cuda/pipeline 700` | no |
 | **Correctness gate for a CUDA change** | `./build/tests/test_cuda_solver` — 3/3 goldens on 15 geometries | no |
 | Any rung of the VRAM ladder, on any card | `MXBM_BB=14 MXBM_QUAD=1 MXBM_ARENA=1 mxbm --benchmark BEAM-III` | no |
-| Drop counters and the arena's spill total | prefix any run with `MXBM_DROP_STATS=1` | no |
+| Drop counters (entry/stage/out/walk) and the arena's spill total | prefix any run with `MXBM_DROP_STATS=1` | no |
+| Positive control for those counters | `MXBM_CAP_SIGMA=-6` undershoots the bucket reservation and makes `entry` fill | no |
 
 Run on an **idle GPU**. A benchmark taken while something else is using the card measures
 contention, not the miner — a lolMiner run taken while MXBM was mining read 25–27 sol/s

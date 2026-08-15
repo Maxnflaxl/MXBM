@@ -66,12 +66,14 @@ recorded solve count stay bare points rather than being given a fabricated bar.
 **It is an uncertainty on the figure, never a window σ.** A per-window standard deviation
 answers a different question — how far a one-minute reading bounces — and does not shrink
 as the run lengthens, so putting one in this column would make a well-sampled build look as
-uncertain as a short one. The two differ by about 8× on identical data: the 80-minute
-2026-08-13 pool session carries a 60 s-window σ of 0.90 against a `1/√N` uncertainty of
-0.11. Window spreads are reported with the live-mining sessions below, as spreads.
+uncertain as a short one. The two differ by 6–8× on identical data, and the gap widens with
+run length because only one of them shrinks: the 80-minute 2026-08-13 pool session carries
+a 60 s-window σ of 0.90 against a `1/√N` uncertainty of 0.11, and the 31-minute 2026-08-16
+one carries 1.09 against 0.19. Window spreads are reported with the live-mining sessions
+below, as spreads.
 
 **The bar sits on the sol/s column, and what it measures is BeamHash III rather than the
-solver.** Across the 60 s windows of a live session the sol/s spread runs ~1.4 %, nearly
+solver.** Across the 60 s windows of a live session the sol/s spread runs 1.4–1.6 %, nearly
 all of it the solutions-per-solve sampling noise above; the solves/s factor behind it moves
 by less than the miner's own display step, so a log cannot resolve the solver's timing
 spread at all. It is the same asymmetry that makes ms/solve the quoted quantity and sol/s
@@ -123,9 +125,10 @@ the derived one.
 The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-15), 0.3 % spread on
 ms/solve and 0.0 % on sol/s, stock 285 W, headless, 240 s warmup discarded,
 2610 MHz / 10251 MHz / 271.1 W / 67 °C, throttle reasons `none` on all six runs.
-Pool validation is one build behind: **62.32 sol/s** over 80 minutes at the 32.0 ms pin,
-with window spreads of σ = 0.90 over 60 s and 1.99 over 15 s — dispersions of the reading,
-not uncertainty on the mean, which is the Poisson ±0.11 over ~303,000 solutions.
+Pool validation is on the same build: **68.52 sol/s** over 31 minutes, a 15 s median of
+**68.60** against the benchmark's 68.6, with window spreads of σ = 1.09 over 60 s and 2.21
+over 15 s — dispersions of the reading, not uncertainty on the mean, which is the Poisson
+±0.19 over 127,449 solutions.
 
 [^drift]: Absolute figures carry a ~2.5 % cross-session band ([how far they
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions));
@@ -141,21 +144,25 @@ not uncertainty on the mean, which is the Poisson ±0.11 over ~303,000 solutions
 > thousand moves the headline by about a full sol/s in either direction. Anything quoted
 > here as a speed *change* is an ms/solve comparison for that reason.
 
-**Confirmed by live mining**, 2026-07-31: a 20-minute HeroMiners session on the shipping
-binary at stock 285 W — a separate measurement from the benchmark, through the stratum
-path on real jobs.
+**Confirmed by live mining**, 2026-08-16: a 31-minute HeroMiners session on the shipping
+binary at stock 285 W, clocks unlocked — a separate measurement from the benchmark,
+through the stratum path on real jobs.
 
 | window | samples | median | mean | σ | min | max |
 |---|---|---|---|---|---|---|
-| 60 s | 20 | **59.35** | 59.57 | **0.82** | 58.6 | 61.7 |
-| 15 s | 83 | **59.60** | 59.51 | 1.93 | 54.2 | 63.9 |
+| 60 s | 31 | **68.52** | 68.52 | **1.09** | 66.4 | 70.5 |
+| 15 s | 125 | **68.60** | 68.52 | 2.21 | 62.5 | 73.2 |
 
-Both medians agree with the benchmark figure (59.7) to under 1 %, shares ran **47
-accepted / 0 stale / 0 rejected**, and the card held 284 W / 2595–2685 MHz / 66–68 °C.
-The 0.82 above is a spread of the reading, not an uncertainty on the figure; the
-uncertainty on this session's own mean is the Poisson one (~71,000 solutions → ±0.2
-sol/s). The progress row stays a bare point because the benchmark run behind its 59.7
-left no recorded solve count.
+The 15 s median reproduces the benchmark figure exactly and the 60 s one is 0.1 % under
+it, on a path that shares no code with the benchmark harness. Shares ran **92 accepted /
+0 stale / 0 rejected**, and the card held 284–285 W / 2610–2670 MHz / 64–68 °C with the
+memory clock pinned at 10251 by the P-state.
+
+The 1.09 is a spread of the reading, not an uncertainty on the figure: this session's own
+mean carries the Poisson ±0.19 over 127,449 solutions, which is **2.6× the solution count
+behind the benchmark row's ±0.3** and is why the two figures agreeing to 0.1 % is worth
+something. The progress row keeps its own `1/√N`, because a bar belongs to the run behind
+the row and this is a different measurement, not more of the same one.
 
 The CUDA backend is **~29 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as
@@ -168,9 +175,17 @@ free](performance-research.md#the-opencl-ladder-was-answering-against-the-wrong-
 which had been refusing every card under ~8.9 GiB usable.
 
 <details>
-<summary>The earlier 2.5-hour session, and why a peak must never be quoted</summary>
+<summary>The earlier sessions, and why a peak must never be quoted</summary>
 
-An earlier 2.5-hour session on the 2026-07-25 build:
+The same shape on the two builds before it. 2026-07-31, twenty minutes on the 59.7 ms
+build, medians agreeing to under 1 % and shares 47/0/0:
+
+| window | samples | median | mean | σ | min | max |
+|---|---|---|---|---|---|---|
+| 60 s | 20 | **59.35** | 59.57 | **0.82** | 58.6 | 61.7 |
+| 15 s | 83 | **59.60** | 59.51 | 1.93 | 54.2 | 63.9 |
+
+And a 2.5-hour session on the 2026-07-25 build:
 
 | window | samples | median | mean | σ | min | max |
 |---|---|---|---|---|---|---|
