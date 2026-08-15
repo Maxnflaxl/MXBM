@@ -42,18 +42,21 @@ the work words alone are:
 2 layers × 33.5 M elements × 56 B  =  3.61 GiB
 ```
 
-On top of that come the leaf/back-reference payloads needed to reconstruct a solution's
-32 indices, and per-bucket capacity slack so no bucket overflows.
+On top of that come the leaf payloads needed to reconstruct a solution's 32 indices, and
+per-bucket capacity slack so no bucket overflows. CUDA stores no back-reference rows at
+all: recovery re-runs rounds 3 and 4 on the buckets along a survivor's path and reads the
+leaves out of round 2's record. OpenCL and Metal still store all five rows, which is where
+the two backends' figures separate.
 
 ### Current footprint (full 2^25 search)
 
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
-| Row-bucket, CUDA default | **6.84 GiB** | 219 B | 2.90 GiB |
-| Row-bucket, OpenCL default | **7.20 GiB** | 231 B | 3.27 GiB |
-| Row-bucket, quad record (both backends) | **5.02 GiB** | 161 B | 2.90 GiB |
-| Row-bucket, quad record + dense caps (both backends) | **4.03 GiB** | 129 B | 2.42 GiB |
-| Row-bucket, quad + dense caps + octo (CUDA) | **1.90 GiB** | 60 B | 1.35 GiB |
+| Row-bucket, CUDA default | **6.17 GiB** | 197 B | 2.90 GiB |
+| Row-bucket, OpenCL default | **7.20 GiB** | 230 B | 3.27 GiB |
+| Row-bucket, quad record — CUDA / OpenCL | **4.76 / 5.02 GiB** | 152 / 161 B | 2.90 GiB |
+| Row-bucket, quad + dense caps — CUDA / OpenCL | **4.03 / 4.29 GiB** | 129 / 137 B | 2.42 GiB |
+| Row-bucket, quad + dense caps + octo (CUDA) | **1.90 GiB** | 61 B | 1.35 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
 The largest single allocation is listed because OpenCL caps it: NVIDIA reports
@@ -118,11 +121,11 @@ dense caps are on both backends; the other two are CUDA-only:
 
 | CUDA rung | footprint | ms/solve | runs when free VRAM is |
 |---|---|---|---|
-| packed (16,1) | **6.84 GiB** | 33.7 | ≥ 6.9 GiB |
-| packed (16,1) + dense caps | **5.77 GiB** | ~34.4 | ≥ 5.9 |
-| quad (16,1) | 5.02 GiB | 38.4 | ≥ 5.1 |
-| quad (16,1) + dense caps | **4.29 GiB** | ~39 | ≥ 4.4 |
-| quad (15,2) + dense caps | **4.13 GiB** | ~41 | ≥ 4.2 |
+| packed (16,1) | **6.17 GiB** | 33.7 | ≥ 6.2 GiB |
+| packed (16,1) + dense caps | **5.03 GiB** | ~34.4 | ≥ 5.1 |
+| quad (16,1) | 4.76 GiB | 38.4 | ≥ 4.8 |
+| quad (16,1) + dense caps | **4.03 GiB** | ~39 | ≥ 4.1 |
+| quad (15,2) + dense caps | **3.87 GiB** | ~41 | ≥ 3.9 |
 | quad (14,3) + dense caps | **4.03 GiB** | 45.0 | ≥ 4.1 |
 | quad (16,1) + dense caps + octo | **2.04 GiB** | 54.9 | ≥ 2.1 |
 | quad (15,2) + dense caps + octo | **1.95 GiB** | 57.0 | ≥ 2.0 |
@@ -183,22 +186,23 @@ was within 0.36 GiB of the next rung up (implicit bits) or 1.07 GiB (dense caps)
 cards that is depends on how much of the card the desktop is holding, since construction
 sizes against *free* memory — so the concrete cases are worth naming:
 
-- **3, 4 and 5 GB gain reach.** 4.70 GiB reported clears the 4.03 GiB dense-cap floor,
+- **3, 4 and 5 GB gain reach.** 4.70 GiB reported clears the 3.78 GiB dense-cap floor,
   and 2.93 GiB clears the 1.90 GiB octo floor; before, nothing on the ladder fit any of
   them and none of those devices was offered at all. The reported figure is ~97.5 % of
   physical VRAM on this driver — `totalGlobalMem` reads 15.598 GiB where nvidia-smi says
   15.99 — and availability holds back 640 MiB of it.
 - **8 GB gains speed when it is also driving a desktop.** Idle and headless it already
   cleared 7.20 GiB and ran (16,1); with a compositor holding ~0.5 GiB it did not, and
-  stepped to (15,2) at 36.0 ms. 6.84 GiB clears that case too — 33.7 ms, ~6 % back.
+  stepped to (15,2) at 36.0 ms. 6.17 GiB clears that case too — 33.7 ms, ~6 % back.
 - **6 GB is unchanged at rest** — it was already on quad (16,1) through the free-memory
   path. What the dense-cap rungs add there is the same desktop fallback: quad (16,1) +
   dense caps at ~39 ms where it used to drop to quad (15,2) at 40.7.
 
 2 GB is out of reach, and is not a target — see [what is left](#what-is-left-below-it).
 
-The back-ref rows (0.64 GiB) never split; they bind only below ~2.6 GiB of VRAM, which is
-under the floor anyway.
+The back-ref rows never split. On CUDA they no longer exist off the octo rungs, where
+they are 0.13 GiB; on OpenCL they are 0.64 GiB and bind only below ~2.6 GiB of VRAM, which
+is under that backend's floor anyway.
 
 **The prediction is checked against the allocator, not trusted.** `rb_geometry_for()`
 sizes against *total* VRAM and a desktop compositor can be holding a gigabyte of it, so
@@ -247,8 +251,8 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **64.2 sol/s** | 59.4 sol/s |
-| End-to-end solve | **31.30 ms** | 33.5 ms |
+| Throughput | **68.6 sol/s** | 59.4 sol/s |
+| End-to-end solve | **29.30 ms** | 33.5 ms |
 | Board power | 271.9 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
 | Efficiency | **0.228 sol/s/W** stock, **0.275 at 220 W** (its optimum on the stock memory clock), matched but not beaten by **0.276** at 160 W with `--mclk 5001` | — |
 
@@ -265,16 +269,16 @@ that is the only comparison that means anything; the column figures above are ea
 backend's own controlled headline.
 
 The card is power-limited, not thermally limited, in every kernel, so the board power
-limit is the most valuable knob on it: **at 220 W the solver does 60.3 sol/s for 219.6 W,
-against 64.9 at 284 W** — 7 % of the speed for 23 % of the power, and 220 W is also where
-efficiency peaks (**3.642 J/solution**). Below ~165 W the memory clock is the second knob:
-`--mclk 5001` is worth +8.5 % at 160 W rising to +16 % at 100–120 W, though on energy per
-solution it ties stock memory's 220 W point rather than beating it. Against an *equally
-capped* lolMiner, MXBM wins on
-both speed and efficiency from ~200 W to the 285 W stock limit, and loses below that band —
-worst at 140 W (−21 %), narrowing to −6.7 % at the 100 W floor. The full curves are in
+limit is the most valuable knob on it: **at 220 W the solver does 65.2 sol/s for 219.7 W,
+against 69.2 at 284 W** — 6 % of the speed for 23 % of the power, and 220 W is also where
+efficiency peaks (**3.369 J/solution**). Below ~165 W the memory clock is the second knob:
+`--mclk 5001` is worth +8 % at 160 W rising to +20 % at 100 W, though on energy per
+solution it only ties stock memory's 220 W point (3.368 J against 3.369) at a third less
+throughput. Against an *equally capped* lolMiner, MXBM wins on
+both speed and efficiency from ~183 W to the 285 W stock limit, and loses below that band —
+worst at 140 W (−11 %), narrowing to −2.0 % at the 100 W floor. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
-[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w).
+[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces. BeamHash III yields
@@ -304,7 +308,10 @@ which clears the stated figure and the card class behind it with room — down f
 over, which is what the quad record, the survivor-sized back-ref row, the implicit-bits
 record, the dense-cap rungs, the octo record, the reference rows it made dead and the
 `gi` field those rows were the last reader of together bought. A 3 GB card reports
-~2.93 GiB and the ladder lands it on the octo rungs.
+~2.93 GiB and the ladder lands it on the octo rungs. The replay that deleted the
+reference rows is worth another 0.26 GiB on every rung above those and 0.45 more where the
+implicit-bits record admits it, but it does not move the floor: the octo rungs had already
+deleted three of the five rows by carrying eight leaves in the record.
 
 #### What is left below it
 
@@ -313,7 +320,7 @@ At the floor the 1.90 GiB is two things and nothing else:
 | | GiB | what it is |
 |---|---|---|
 | record sets | 1.64 | 36.6 M slots × (16 B round-2 record + 32 B round-3 record) |
-| back-ref rows | 0.26 | one gi-indexed row pair plus a survivor-sized one |
+| back-ref rows | 0.26 | one gi-indexed row pair plus a survivor-sized one — the octo rungs' round 4 is the one round still storing references |
 
 **Both are now at what the design can carry.** Every record is its own seed indices plus
 the key, with no field nothing reads: 6 u64 per slot, and the only two records that could
@@ -337,12 +344,12 @@ move at all.
 1 to 4 can take its input as seed indices and rebuild — 8 B, 16 B, 24 B and 32 B records
 against 8, 72, 24 and 64 — and what stops that being the default is time, not information:
 rebuild cost doubles per round while the record it replaces shrinks, so the quad record
-costs +14 % and the octo record +38 %. Both are therefore rungs. Round 5's input is
-already 16 B and has nothing to give.
+costs +14 % and the octo record +38 %. Both are therefore rungs.
 
 **Traffic is the separate quantity, and it is the efficiency lever.** A solve moves
-**13.0 GB** of DRAM traffic, within **1 %** of the compulsory minimum for these record
-widths — there is no waste left to reclaim, only records to narrow. That the narrowing
+**10.73 GB** of DRAM traffic, the compulsory minimum for these record widths to within the
+1 % the last Nsight run measured — there is no waste left to reclaim, only records to
+narrow. Round 5's input is the most recent to narrow, 16 B → 8. That the narrowing
 pays is measured, not assumed: cutting round 2's record 72 B → 16 B, so the solve moves
 16 % fewer bytes, raises the clock the card sustains at a fixed 285 W by **60 MHz**, with a
 positive control at ±0 MHz ([details](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz)).

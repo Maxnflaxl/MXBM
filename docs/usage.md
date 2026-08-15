@@ -558,23 +558,23 @@ measured:
 
 | `--pl` | sol/s | draw | sol/s/W |
 |---|---|---|---|
-| 180 | 46.1 | 180.0 W | 0.256 |
-| 190 | 48.8 | 189.9 W | 0.257 |
-| 200 | 52.2 | 199.8 W | **0.261** — MXBM's own efficiency peak |
-| 210 | 54.2 | 209.6 W | 0.258 |
-| **220** | **55.4** | **219.5 W** | 0.252 — recommended |
-| 240 | 57.2 | 239.4 W | 0.239 |
-| 255 | 58.0 | 254.2 W | 0.228 |
-| 285 (stock) | 59.2 | 284.2 W | 0.208 — fastest |
+| 180 | 51.4 | 179.9 W | 0.286 |
+| 190 | 55.0 | 189.8 W | 0.290 |
+| 200 | 58.3 | 199.8 W | 0.292 |
+| 210 | 61.9 | 209.7 W | 0.295 |
+| **220** | **65.2** | **219.7 W** | **0.297** — the efficiency peak, and recommended |
+| 240 | 66.9 | 239.6 W | 0.279 |
+| 255 | 67.8 | 254.5 W | 0.266 |
+| 285 (stock) | 69.2 | 284.4 W | 0.243 — fastest |
 
 Dropping the limit from 285 W to 220 W costs 6 % of throughput and saves 23 % of the
-power. Going below ~200 W makes things *worse* on both counts, because by then the core
+power. Going below 220 W makes things *worse* on both counts, because by then the core
 clock has fallen far enough that the parts of the board which do not scale with it are
 being paid for out of less work.
 
-**220 is recommended over MXBM's own 200 W efficiency peak**, and deliberately: below
-~212 W lolMiner is ahead of MXBM on speed *and* efficiency, so 200 W is where MXBM looks
-best against itself and worst against the alternative. The full curve, and both miners
+**220 W is both MXBM's own efficiency peak and comfortably inside the window where it
+beats the alternative**; the crossing where lolMiner takes over on speed and efficiency
+is at ~183 W. The full curve, and both miners
 swept against each other at the same caps, is in
 [performance.md](performance.md#both-miners-under-the-same-cap).
 
@@ -597,7 +597,7 @@ On a rig that doesn't run the miner as root, set the card once instead
 (`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. At
 165 W and above the rung *loses* — badly at stock — so this is strictly a low-cap
 pairing, and it ties rather than beats 220 W on energy per solution. Details in
-[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w).
+[performance.md](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
 
 ```
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
@@ -733,7 +733,7 @@ a desktop machine. And the free figure is a snapshot taken at startup: something
 launched afterwards competes for what is left, whatever was reserved.
 
 On a small card the usable figure decides which **geometry** MXBM runs, not
-whether it runs at all: the solver walks a ladder of rungs from 6.84 GiB down to
+whether it runs at all: the solver walks a ladder of rungs from 6.17 GiB down to
 4.03 and takes the fastest that fits, so `--keepfree` is also the knob that
 trades a rung for desktop headroom. The rungs and what each card class gets are
 in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-vram-ladder).

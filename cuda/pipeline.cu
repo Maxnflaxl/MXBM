@@ -5,8 +5,6 @@
 //
 // The gate is the same one the OpenCL path uses and is non-negotiable: survivors == 3 on
 // the KAT prePow, bucketDrops == 0, pairDrops == 0.
-// The standalone bench keeps round 4's reference row and the five-level recover.
-#define MXBM_R4_ROWS 1
 #include "pipeline_kernels.cuh"
 #ifndef MXBM_ABL_DERIVE
 #define MXBM_ABL_DERIVE 0
@@ -61,7 +59,9 @@ using namespace mxbm::cuda;
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,8u,kFCap
 #define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 8u,8u,kFCap
 #endif
-#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u,kFCap
+// Round 4's output is 8 B (t5_rec): the terminal round reads 48 bits of word 0 and
+// nothing else, and recovery replays the pairing rather than reading a row.
+#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,1u,kFCap
 
 
 #define CK(x) do{ cudaError_t e=(x); if(e){ printf("CUDA %s @%d\n",cudaGetErrorString(e),__LINE__); return 1; } }while(0)
@@ -115,6 +115,12 @@ struct CudaSolver {
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
+    // Recovery by replay: rounds 4 and 5 write no reference row, so the terminal names
+    // its two parents by slot and replay_r4 rebuilds the pairing from the record's bucket.
+    uint32_t *survL4=nullptr, *l3Slots=nullptr, *l4Lead=nullptr, *l2Slots=nullptr;
+    // Round 4's own output plane, so round 2's survives to recovery -- 8 B a slot, and
+    // it is what lets rounds 1-3 stop writing reference rows on the implicit-bits build.
+    uint64_t *elem4=nullptr; uint32_t *counts4=nullptr;
 
     // --- phase-overlap experiment (docs/performance.md lead 5) ---------------
     // entry_scatter writes ONE u64 per element, densely (idx<<32|key), so its output
@@ -180,6 +186,11 @@ struct CudaSolver {
         left  = dalloc<uint32_t>((size_t)5*capacity);
         right = dalloc<uint32_t>((size_t)5*capacity);
         survSlots = dalloc<uint32_t>(survCap); survCount = dalloc<uint32_t>(1);
+        survL4 = dalloc<uint32_t>((size_t)survCap*2);
+        l3Slots = dalloc<uint32_t>((size_t)survCap*4);
+        l4Lead = dalloc<uint32_t>((size_t)survCap*2);
+        l2Slots = dalloc<uint32_t>((size_t)survCap*8);
+        elem4 = dalloc<uint64_t>(nslots + ACAP); counts4 = dalloc<uint32_t>(nb);
         dleaves = dalloc<uint32_t>((size_t)survCap*32);
         dpp = dalloc<uint64_t>(4);
         occmax = dalloc<uint32_t>(5); cudaMemset(occmax, 0, 20);
@@ -201,7 +212,7 @@ struct CudaSolver {
         CARVE((fused_round<MXBM_R3_ARGS>)); CARVE((fused_round<MXBM_R4_ARGS>));
         CARVE((terminal_round<>));
         #undef CARVE
-        return elem[0] && elem[1] && left && right && dpp
+        return elem[0] && elem[1] && left && right && dpp && elem4 && counts4
             && entryOut[0] && entryOut[1] && entryCounts[0] && entryCounts[1];
     }
 
@@ -329,15 +340,17 @@ struct CudaSolver {
             { const int o = inSet ^ 1;                                                   \
               const uint32_t* inC = ((R)==1) ? entryCounts[slot] : counts[inSet];        \
               const uint64_t* inE = ((R)==1) ? entryOut[slot]    : elem[inSet];          \
+              uint32_t* const oC  = ((R)==4) ? counts4 : counts[o];                      \
+              uint64_t* const oE  = ((R)==4) ? elem4   : elem[o];                        \
               const int reps = (rep_round() == (R)) ? rep_count() : 1;                   \
               for (int rp = 0; rp < reps; ++rp) {                                         \
-                cudaMemsetAsync(counts[o], 0, (size_t)nb*4, st);                         \
+                cudaMemsetAsync(oC, 0, (size_t)nb*4, st);                                \
                 cudaMemsetAsync(gictr, 0, 4, st);                                        \
                 ARN_RESET(o)                                                             \
                 if (MXBM_SUBPASS)                                                        \
                   fused_round<__VA_ARGS__,false,true>\
                     <<<nb, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,   \
-                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        (uint32_t*)inC, (uint64_t*)inE, oC, oE,                            \
                         left, right, gictr, drops, dpp ARN_IO(R,o));                      \
                 else if (coNonce && co_hosts(R) && cob_s()) {                            \
                   uint32_t cb_ = 0, cc_ = 0; co_slice((R), elems, cb_, cc_);             \
@@ -345,26 +358,26 @@ struct CudaSolver {
                   fused_round<__VA_ARGS__,false,false,true>\
                     <<<(nb << sm) + (nb << sm)/(cob_s()-1u), kWG, 0, st>>>(               \
                         bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,                    \
-                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        (uint32_t*)inC, (uint64_t*)inE, oC, oE,                            \
                         left, right, gictr, drops, dpp ARN_IO(R,o),                      \
                         dpp2[coSlot], cc_, cap, entryCounts[coSlot], entryOut[coSlot],   \
                         cob_s(), cb_); }                                                 \
                 else if (coNonce && (R) == co_round())                                   \
                   fused_round<__VA_ARGS__,true>\
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
-                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        (uint32_t*)inC, (uint64_t*)inE, oC, oE,                            \
                         left, right, gictr, drops, dpp ARN_IO(R,o),                      \
                         dpp2[coSlot], elems, cap, entryCounts[coSlot], entryOut[coSlot]); \
                 else                                                                     \
                   fused_round<__VA_ARGS__>                                                 \
                     <<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap, (uint32_t)((R)-1)*capacity,\
-                        (uint32_t*)inC, (uint64_t*)inE, counts[o], elem[o],               \
+                        (uint32_t*)inC, (uint64_t*)inE, oC, oE,                            \
                         left, right, gictr, drops, dpp ARN_IO(R,o)); }                    \
               ARN_LINK(o)                                                                \
               if (occ_on())                                                             \
-                occ_reduce<<<(nb+255)/256,256,0,st>>>(counts[o], nb, occmax + (R));      \
+                occ_reduce<<<(nb+255)/256,256,0,st>>>(oC, nb, occmax + (R));             \
               if (pop_dir()) { char t_[8]; snprintf(t_, sizeof t_, "r%d", (R));          \
-                               pop_dump(t_, counts[o], nb, st); }                        \
+                               pop_dump(t_, oC, nb, st); }                               \
               if ((R)==1) { cudaEventRecord(r1Done[slot], st); r1Ever[slot] = true;       \
                             after_r1(); }                                                \
               inSet = o; }
@@ -387,13 +400,15 @@ struct CudaSolver {
         #undef ARN_LINK
         for (int rp = 0, treps = (rep_round() == 5) ? rep_count() : 1; rp < treps; ++rp) {
             cudaMemsetAsync(survCount, 0, 4, st);
-            terminal_round<><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[inSet],
-                                              elem[inSet], left, right, survSlots, survCount,
+            terminal_round<><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts4,
+                                              elem4, nullptr, nullptr, survSlots, survCount,
                                               survCap, drops
 #if MXBM_ARENA
                                             , ahead2[inSet], anext2[inSet]
+#else
+                                            , nullptr, nullptr
 #endif
-                                              );
+                                            , survL4);
         }
 
         cudaError_t le = cudaGetLastError();
@@ -412,7 +427,19 @@ struct CudaSolver {
         if (dropOut) *dropOut = hd[1] | hd[2] | hd[3];
         if (hs == 0) return out;
 
-        recover<<<(hs+63)/64, 64, 0, st>>>(hs, survSlots, capacity, left, right, dleaves);
+        cudaMemsetAsync(l3Slots, 0xFF, (size_t)hs*4*4, st);
+        replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], 8u, counts[1], cap,
+                                        l3Slots, l4Lead, drops, bb);
+#if MXBM_IMPBITS
+        cudaMemsetAsync(l2Slots, 0xFF, (size_t)hs*8*4, st);
+        replay_r3<<<4*hs, 256, 0, st>>>(hs, l3Slots, elem[1], 8u, elem[0], 8u, kImpDB,
+                                        counts[0], cap, l2Slots, drops, bb);
+        recover_from_l2<<<(hs+63)/64, 64, 0, st>>>(hs, l2Slots, l4Lead, elem[0], 8u,
+                                                   dleaves);
+#else
+        recover_from_l3<<<(hs+63)/64, 64, 0, st>>>(hs, capacity, left, right, l3Slots,
+                                                   l4Lead, elem[1], 8u, dleaves);
+#endif
         std::vector<uint32_t> hl((size_t)hs*32);
         cudaMemcpyAsync(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
@@ -500,7 +527,7 @@ struct CudaSolver {
             cudaMemsetAsync(pairCounts[p^1], 0, (size_t)nb*4, st);
             cudaMemsetAsync(gictrB, 0, 4, st);
             RoundArgs A{bb, sm, cap, cap, 3u*capacity, counts[1], elem[1],
-                        counts[0], elem[0], brL(p), brR(p), gictr, drops, dpp};
+                        counts4, elem4, brL(p), brR(p), gictr, drops, dpp};
             RoundArgs B{bb, sm, cap, cap, 0u, entryCounts[p^1], entryOut[p^1],
                         pairCounts[p^1], pairOut[p^1], brL(p^1), brR(p^1), gictrB, drops,
                         dpp2[p^1]};
@@ -514,11 +541,12 @@ struct CudaSolver {
                     <<<2u*(nb << sm), kWG, 0, st>>>(A, B, 2u);
         } else {
             fused_round<MXBM_R4_ARGS><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, cap,
-                3u*capacity, counts[1], elem[1], counts[0], elem[0],
+                3u*capacity, counts[1], elem[1], counts4, elem4,
                 brL(p), brR(p), gictr, drops, dpp);
         }
-        terminal_round<><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts[0],
-            elem[0], brL(p), brR(p), survSlots, survCount, survCap, drops);
+        terminal_round<><<<nb << sm, kWG, 0, st>>>(bb, sm, cap, 4u*capacity, counts4,
+            elem4, nullptr, nullptr, survSlots, survCount, survCap, drops,
+            nullptr, nullptr, survL4);
 
         cudaError_t le = cudaGetLastError();
         if (le != cudaSuccess) {
@@ -532,7 +560,19 @@ struct CudaSolver {
         if (hs > survCap) hs = survCap;
         if (dropOut) *dropOut = hd[1] | hd[2] | hd[3];
         if (hs == 0) return out;
-        recover<<<(hs+63)/64, 64, 0, st>>>(hs, survSlots, capacity, brL(p), brR(p), dleaves);
+        cudaMemsetAsync(l3Slots, 0xFF, (size_t)hs*4*4, st);
+        replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], 8u, counts[1], cap,
+                                        l3Slots, l4Lead, drops, bb);
+#if MXBM_IMPBITS
+        cudaMemsetAsync(l2Slots, 0xFF, (size_t)hs*8*4, st);
+        replay_r3<<<4*hs, 256, 0, st>>>(hs, l3Slots, elem[1], 8u, elem[0], 8u, kImpDB,
+                                        counts[0], cap, l2Slots, drops, bb);
+        recover_from_l2<<<(hs+63)/64, 64, 0, st>>>(hs, l2Slots, l4Lead, elem[0], 8u,
+                                                   dleaves);
+#else
+        recover_from_l3<<<(hs+63)/64, 64, 0, st>>>(hs, capacity, brL(p), brR(p), l3Slots,
+                                                   l4Lead, elem[1], 8u, dleaves);
+#endif
         std::vector<uint32_t> hl((size_t)hs*32);
         cudaMemcpyAsync(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
@@ -579,7 +619,7 @@ int main(int argc, char** argv) {
     // is printed rather than asserted from a comment.
     printf("footprint: %.2f GiB\n",
            ((double)(s.nslots + CudaSolver::ACAP)*(MXBM_R2_FULL ? 20 : (MXBM_R3_QUAD ? 11 : (MXBM_IMPBITS ? 16 : 17)))*8
-            + (double)5*s.capacity*4*2)/(double)(1u<<30));
+            + (double)3*s.capacity*4*2)/(double)(1u<<30));
 
     // Why a second stream cannot overlap these kernels: concurrent execution needs the
     // FIRST kernel to run out of blocks before the work distributor will schedule the

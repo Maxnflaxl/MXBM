@@ -62,8 +62,8 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
     __shared__ uint64_t lwork[kTCap];
     __shared__ uint32_t lchain[kTCap], tab[kTabSize], lslot[kTCap];
     // Only the reference-row arm orders left from right here; the 8 B record carries
-    // neither field and the order is settled in recover_from_l3, off the lead replay_r4
-    // reads out of the left parent's record.
+    // neither field and the order is settled in recovery, off the lead replay_r4 reads
+    // out of the left parent's record.
     __shared__ uint32_t lgi[STRIDE == 2 ? kTCap : 1];
     __shared__ uint32_t llead[STRIDE == 2 ? kTCap : 1];
     // Same perfect-hash argument as the fused rounds (MXBM_PERFECT_TAB in

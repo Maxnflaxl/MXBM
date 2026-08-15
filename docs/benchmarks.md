@@ -40,16 +40,17 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 | Core clock | 2610 MHz | 2745 MHz | |
 | Memory clock | 10251 MHz | 10251 MHz | |
 | Temperature | 67 °C | 60 °C | |
-| VRAM for a full search | 6.84 GiB[^4g] | ~4 GiB | |
+| VRAM for a full search | 6.17 GiB[^4g] | ~4 GiB | |
 
 MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
 **62.32 sol/s**, its 15 s windows spread σ = 1.99 (a spread of the reading — the
 uncertainty on that mean is ±0.11), and the controlled benchmark the same day
 reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). **That column
-predates the w0-checkpoint record**, which took the controlled figure to
-**64.2 sol/s at 31.30 ms** on 2026-08-15 (+2.4 %); the table is left at what was
-actually measured side by side rather than restated from a figure the head-to-head
-session never ran, so read every margin in it as a floor on the current one. lolMiner's
+predates the w0-checkpoint record and the replayed recovery**, which together took the
+controlled figure to **68.6 sol/s at 29.30 ms** on 2026-08-15 (+9.4 %); the table is left
+at what was actually measured side by side rather than restated from a figure the
+head-to-head session never ran, so read every margin in it as a floor on the current
+one. lolMiner's
 column is the 2026-07 head-to-head session; its binary is unchanged.
 
 **Read that efficiency row carefully — it compares two different operating points.** MXBM
@@ -63,15 +64,15 @@ to 220 W:
 
 | | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
-| Throughput | **60.3 sol/s** | 54.4 sol/s | **+11.0 %** |
-| Board power | 219.6 W | 219.4 W | — |
-| Efficiency | **0.275 sol/s/W** | 0.248 sol/s/W | **+10.9 %** |
+| Throughput | **65.2 sol/s** | 54.4 sol/s | **+19.8 %** |
+| Board power | 219.7 W | 219.4 W | — |
+| Efficiency | **0.297 sol/s/W** | 0.248 sol/s/W | **+19.8 %** |
 
-MXBM is ahead on both from roughly **200 W to the 285 W stock limit** (200 itself is a
-tie at the cross-session band). Below that lolMiner is ahead on both — at 180 W by about
-10 %, peaking at 21 % around 140 W and narrowing to 6.7 % at the 100 W floor. The upper
-crossing at ~277 W closed with the w0-checkpoint record: MXBM is now ahead on efficiency
-at 285 W too, 0.2284 against 0.2259.
+MXBM is ahead on both from roughly **183 W to the 285 W stock limit**. Below that
+lolMiner is ahead on both — at 180 W by about 2 %, peaking at 11 % around 140 W and
+narrowing to 2.0 % at the 100 W floor. The upper crossing at ~277 W closed with the
+w0-checkpoint record: MXBM is now ahead on efficiency at 285 W too, 0.2433 against
+0.2260.
 
 **Both curves are measured.** lolMiner was swept across the same caps as MXBM rather than
 sampled once at its own uncapped draw, which is what makes the window above a comparison
@@ -113,16 +114,16 @@ a great deal. Swept against each other at identical caps:
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
-**Where each one wins.** Below ~200 W lolMiner is ahead on speed *and* efficiency, by
-about 10 % at 180 W. From ~200 W to the 285 W stock limit MXBM is ahead on both, by 11 %
-at 220 W and 16 % at 240 W. The upper crossing at ~277 W closed with the w0-checkpoint
+**Where each one wins.** Below ~183 W lolMiner is ahead on speed *and* efficiency, by
+about 2 % at 180 W. From ~183 W to the 285 W stock limit MXBM is ahead on both, by 17 %
+at 220 W and 20 % at 240 W. The upper crossing at ~277 W closed with the w0-checkpoint
 record.
 lolMiner barely responds to a cap at all — it gives up 2.4 % of its speed for 24 % less
-power, and above ~237 W the cap does nothing — so its best efficiency (0.2991 sol/s/W at
-175 W) still beats MXBM's best, now **0.2746 sol/s/W at 220 W on stock memory** — 3.642
-J/solution — but by 8.9 % rather than the 15.4 % of the previous kernel. On the memory
-rung MXBM's best is 3.70 J/sol at 160 W, measured a kernel earlier; see the next section.
-What MXBM has is the ceiling: 64.9 sol/s against ~54.0, which lolMiner cannot reach at
+power, and above ~237 W the cap does nothing. Its best efficiency (0.2991 sol/s/W at
+175 W) is now matched: MXBM's best is **0.2968 sol/s/W at 220 W on stock memory** —
+3.369 J/solution — a **0.8 %** gap where it was 8.9 % on the previous kernel and 15.4 %
+the one before, and at that tie MXBM does 65.2 sol/s against 52.25.
+What MXBM has is the ceiling: 69.2 sol/s against ~54.0, which lolMiner cannot reach at
 any setting.
 
 The July sweep was run twice, two days apart, and **reproduced within ~1 %** at every
@@ -142,7 +143,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 64.2).
+(both on the build of 2026-07-25; the current one is 68.6).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
 observed.
@@ -175,29 +176,30 @@ for bandwidth nothing is using. Dropping it to the **5001 MHz rung** returns tho
 core clock, and below ~130 W MXBM also switches to a different geometry and rebuild
 variant. Together that is MXBM's best configuration at each cap.
 
-Measured 2026-08-15 on the current build, headless, `power_sweep.sh` under
-`-lmc 5001,5001` run forward and then reversed (arms agree to 1.6 % at 100 W, 0.2–0.9 %
+Measured 2026-08-16 on the current build, headless, `power_sweep.sh` under
+`-lmc 5001,5001` run forward and then reversed (arms agree to 2.9 % at 100 W, 0.0–1.1 %
 elsewhere; the table is their mean):
 
 | cap | ms/solve | sol/s | J/solution | sol/s/W | vs stock memory | lolMiner at its own best |
 |---|---|---|---|---|---|---|
-| 100 W | 79.5 | 25.1 | 3.98 | 0.251 | +16.2 % | 28.85 sol/s |
-| 120 W | 61.5 | 32.7 | 3.68 | 0.272 | +16.2 % | 34.05 |
-| 140 W | 53.4 | 37.6 | 3.73 | 0.268 | +12.6 % | 39.75 |
-| **160 W** | 45.7 | **44.0** | **3.63** | **0.276** | +8.5 % | 47.85 |
+| 100 W | 73.1 | 27.2 | 3.674 | 0.272 | +20.4 % | 28.85 sol/s |
+| 120 W | 57.2 | 35.1 | 3.419 | 0.293 | +13.2 % | 34.05 |
+| 140 W | 49.4 | 40.8 | 3.434 | 0.291 | +12.4 % | 39.75 |
+| **160 W** | 42.5 | **47.4** | **3.368** | **0.297** | +8.2 % | 47.85 |
 
-**Take the rung only if you are hard-limited to ~160 W or below.** It is worth +8.5 % at
-160 W and +16 % at 100–120 W, and lolMiner still leads the band by 4–13 %. What it is no
-longer is an efficiency setting: 3.63 J/solution at 160 W ties 220 W's 3.642 on stock
-memory to within 0.3 %, and at that tie 220 W does **60.3 sol/s against 44.0** — 37 % more
+**Take the rung only if you are hard-limited to ~160 W or below.** It is worth +8 % at
+160 W rising to +20 % at 100 W — and with each miner at its own best configuration MXBM
+now *leads* the band at 120 and 140 W, ties at 160, and trails only at the 100 W floor.
+What it is not is an efficiency setting: 3.368 J/solution at 160 W ties 220 W's 3.369 on
+stock memory to 0.03 %, and at that tie 220 W does **65.2 sol/s against 47.4** — 38 % more
 work for the same energy per solution.
 
-The rung's margin over stock memory is unchanged: the 2026-07-31 ABBA read
-+16.7/+16.8/+12.1/+9.3 % across these caps and this same-day pair reads
-+16.2/+16.2/+12.6/+8.5 %. Whether the w0-checkpoint record helped the rung is
-[an open question](performance.md#the-low-band-on-the-current-kernel) — the tables are
-cross-session and disagree; the flag A/B settles it and has not been run. The mechanism, the A/Bs behind each step and lolMiner's own rung sweep are in
-[performance.md](performance.md#below-stock-the-other-rung-pays-85-to-16--under-caps-below-165-w).
+The rung's margin over stock memory is unchanged where it is best measured: the
+2026-07-31 ABBA read +16.7/+16.8/+12.1/+9.3 % across these caps and this pair reads
++20.4/+13.2/+12.4/+8.2 %, the two middle caps agreeing to a point and the ends moving by
+about the arm spread there. The mechanism, the A/Bs behind each step and lolMiner's own
+rung sweep are in
+[performance.md](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
@@ -218,22 +220,29 @@ The chart is the table below, drawn as a timeline: width is time, height is powe
 each block's **area** is the energy that stage costs. Generated from the table by
 `python3 docs/tools/plot_stages.py`, so the two cannot drift.
 
-Re-measured 2026-08-15 on the current kernels, 8 reps, 45 s per stage:
+Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage, baseline
+29.23 ms/solve, drops 0:
 
 | stage | ms | % of solve | power | DRAM traffic | bound by |
 |---|---|---|---|---|---|
-| `entry_scatter` | 2.67 | 8.5 % | 284.0 W | 0.26 GB | compute (SipHash) |
-| round 1 | 5.16 | 16.4 % | 284.8 W | 1.07 GB | latency |
-| round 2 | 8.50 | 27.0 % | 282.6 W | 2.94 GB | latency |
-| round 3 | 8.96 | 28.5 % | **281.2 W** | 4.55 GB | **DRAM** |
-| round 4 | 5.41 | 17.2 % | 284.0 W | 2.95 GB | **DRAM** |
-| terminal | 0.98 | 3.1 % | 285.6 W | 0.54 GB | DRAM |
-| **total** | **31.67** | 100.7 % | 283.0 W | **12.30 GB** | |
+| `entry_scatter` | 2.66 | 9.1 % | 282.9 W | 0.27 GB | compute (SipHash) |
+| round 1 | 5.02 | 17.2 % | 285.1 W | 0.81 GB | latency |
+| round 2 | 8.21 | 28.1 % | 282.8 W | 2.68 GB | latency |
+| round 3 | 8.42 | 28.8 % | **281.0 W** | 4.29 GB | **DRAM** |
+| round 4 | 4.20 | 14.4 % | 283.5 W | 2.42 GB | **DRAM** |
+| terminal | 0.78 | 2.7 % | 285.3 W | 0.27 GB | DRAM |
+| **total** | **29.30** | 100.2 % | 282.8 W | **10.73 GB** | |
 
-The w0-checkpoint record is visible in this table as its own mechanism and nothing
-else's: **round 2 −0.80 ms, round 1 +0.08 ms for the pack, and rounds 3, 4 and terminal
-identical to the digit.** The DRAM column does not move because the change moves no
-bytes — the record is the same 16 B it was.
+Deleting the reference rows is visible here as its own mechanism: **round 4 −1.21 ms**
+(its row and half its output record), **round 3 −0.54**, **round 2 −0.29**, **round 1
+−0.14**, **terminal −0.20**, and entry unmoved. Round 4 carries more than half the win
+because it lost the most: a row for every child *and* a record that went 16 B to 8. The
+DRAM column falls 12.30 → 10.73 GB, all of it the four rows (0.27 GB each) plus round
+4's narrowed record on both the write and the terminal's read; it is the compulsory figure
+from the stride table, which the previous kernel's Nsight measurement matched to 0.7 %.
+
+The stage sum runs 0.2 % over the baseline it is measured against, so read the per-stage
+deltas as attribution and the interleaved **−2.029 ms** as the number.
 
 Every stage draws the board limit, which is why there is no single kernel to "fix" for
 power. Total DRAM traffic is within **0.7 %** of the compulsory minimum for the record

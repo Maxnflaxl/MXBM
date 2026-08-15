@@ -110,16 +110,16 @@ sudo -v && LGC=2600 LMC=10251 benchmarks/headline.sh
 ```
 
 Reference values on the reference card (RTX 4070 Ti SUPER, driver 610.43.03,
-re-measured 2026-08-15 on the w0-checkpoint build, six 120 s runs, **compute GPU
+re-measured 2026-08-15 on the replayed-recovery build, six 120 s runs, **compute GPU
 headless**):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **31.30** — five of six runs, 31.20 on the other (spread 0.3 %) | a build change is real past ±0.5 % |
-| sol/s | **64.20** — five of six runs, 64.30 on the other (spread 0.2 %) | derived from the above; quoted because the pin is what the headline cites |
+| ms/solve median | **29.30** — five of six runs, 29.20 on the other (spread 0.3 %) | a build change is real past ±0.5 % |
+| sol/s | **68.60** — all six runs (spread 0.0 %) | derived from the above; quoted because the pin is what the headline cites |
 | SM / mem clock | 2610 / 10251 MHz | must match, or the run measured a different V/f point |
-| board draw | **271.9 W** (spread 0.4 %) | context, not a gate — it has read 273–281 W across five sessions at identical clocks, times and solve counts, the last two agreeing to the decimal |
-| `clocks_event_reasons` | none, or `sw_power_cap` on any fraction of samples | any **other** flag voids the run. The fraction has read 0 %, 0–3 %, 14–18 % and 0 % again on four sessions that agreed on ms/solve to the digit, so it is not predictive and is not a gate |
+| board draw | **271.1 W** (spread 2.1 %) | context, not a gate — it has read 271–281 W across six sessions at identical clocks, times and solve counts. The 2.1 % here is one run of six at 276.1 W against five within 1.1 W |
+| `clocks_event_reasons` | none, or `sw_power_cap` on any fraction of samples | any **other** flag voids the run. The fraction has read 0 %, 0–3 %, 14–18 % and 0 % again on sessions that agreed on ms/solve to the digit, so it is not predictive and is not a gate |
 | display on the compute GPU | **no** — monitor on the motherboard iGPU | a compositor on this card costs **0.20 ms and ~6 W** (measured) |
 
 The last row is a condition of the pin, not decoration — it is worth 0.6 % of the
@@ -139,6 +139,7 @@ stable name for a change, and it is where the mechanism lives anyway.
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
+| 2026-08-15 | **29.30** | 271.1 W | **the reference rows came out** ([ledger](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib)) — recovery replays rounds 3 and 4 over one bucket each instead of reading a row written for every child, and round 4's record is 8 B rather than 16. **−2.00 ms, 64.20 → 68.60 sol/s**, against −2.029 ms measured ABBA-interleaved over three increments the same session, which agree inside this instrument's 0.1 ms print resolution. Spread 0.3 % on ms/solve (five runs at 29.30, one at 29.20) and 0.0 % on sol/s. Throttle reasons `none` on all six runs, where the last four pins have shown `sw_power_cap` on some fraction of samples — the draw is 271.1 W against a 285 W limit, and the quieter binary is the expected direction for 688 MiB less memory in flight. Verified solutions/solve **2.01**, unchanged |
 | 2026-08-15 | **31.30** | 271.9 W | **the w0-checkpoint pair record** ([ledger](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24)) — round 1 stores the child's post-mix work word 0 and round 2 derives only the linear lane. First pin to move since 2026-08-13: **−0.70 ms, 62.70 → 64.20 sol/s**, against −0.76 ms measured ABBA-interleaved the same session, which agree inside this instrument's 0.1 ms print resolution. Spread 0.3 % rather than the 0.0 % of the five pins before it — five runs at 31.30 and one at 31.20, i.e. one bin of the resolution, not a regime change. Throttle reasons `none` on five runs and `sw_power_cap:0 %` on the other, which is zero samples. Verified solutions/solve **2.010** on every run, so the multiplier the sol/s figure is derived through is unchanged |
 | 2026-08-15 | **32.00** | 272.1 W | **nothing at all** — no kernel shipped; this is a campaign's session baseline, taken because absolute figures carry a ~2.5 % cross-session band and no A/B may be diffed against another day's number. Fifth consecutive 32.00 / 62.70 at 0.0 % spread, and the first spanning two calendar days, so the pin is now reproducible *across* sessions rather than only within one. Throttle reasons `none` on all six runs. Per-run draw recorded rather than medianed — 276.0 / 272.5 / 272.1 / 271.9 / 272.0 W: the outlier is run 1, the first after warmup, which is the expected direction for a thermal transient and not the unexplained regime the draw column exists to catch |
 | 2026-08-14 | **32.00** | 272.9 W | **nothing at stock** — the day's last two kernel changes (three back-reference rows retired, `gi` dropped from round 2's record) are both selected only on the octo rungs, which the stock config does not pick. Fourth pin of the day, fourth 32.00 / 62.70 with 0.0 % spread. The draw reproduces the previous pin **to the decimal** at identical clocks and identical work — the first time two sessions have agreed on it, which is what the draw column is for |
