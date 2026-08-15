@@ -5677,6 +5677,65 @@ measured to be occupancy-insensitive.
 
 </details>
 
+### Splitting the terminal record into two planes costs 11 %: sectors, for the third time
+
+<details>
+<summary>Details</summary>
+
+*(2026-08-15. A built and measured null. Patch archived, not in the tree.)*
+
+Round 5 consults **32 bits** of the 128-bit record round 4 writes it: `combine` at
+Lout = 24 yields `((a ^ b) >> 24) & 0xFFFFFF`, so only w0's bits 24..47 decide acceptance,
+the low 24 are the key of which the bucket address supplies all but 8, and bits 48..63 are
+dead. `gi` and `lead` are needed only inside the accept branch — **`combine` is symmetric,
+so the left/right ordering never reaches the collision test** — and that branch fires
+about twice per solve.
+
+So the record was split into a **4 B hot plane** streamed by every terminal lane and an
+**8 B cold plane** read only for a pair that collides, both inside the record set already
+allocated. Round 4 writes 12 B instead of 16; the terminal streams 4 B per element instead
+of 8 B for all plus 8 B for the half clearing the sub-mask.
+
+**It loses 3.51 ms — +11.2 %.** ABBA, clocks locked, arms non-overlapping (shipping
+31.984 solves/s across five arms, split-plane 28.760 across five, no spread at all on the
+B side).
+
+| | shipping | split-plane |
+|---|---|---|
+| ms/solve | 31.266 | **34.771** |
+
+The mechanism is the one this project keeps rediscovering. Round 4's emit scatters to a
+bucket chosen by the child's key, and consecutive slots within a bucket are filled by
+different blocks at different times, so nothing write-combines. **Each store dirties its
+own 32 B sector regardless of how few bytes it carries**, so splitting one 16 B store into
+a 4 B store and an 8 B store does not cut write traffic — it *doubles the sector count*:
+
+| r4 emit | sector traffic |
+|---|---|
+| one 16 B store per element | 1.07 GB |
+| 4 B + 8 B, two stores | **2.15 GB** |
+
+That is the same currency that killed [the h=1 pipeline](#the-h1-pipeline-built-and-killed-the-caps-currency-is-l2-sectors-not-dram-bytes)
+and M2a's keys-only staging. Third instance, and the first where the amplification is on
+the *write* side.
+
+**What it corrects about the idea it came from.** The narrowing is real and the bit budget
+is right, but the prize is much smaller than a byte count suggests, and it has a hard
+shape requirement: **the record must stay one store.** An 8 B single-plane record touches
+exactly the same 32 B sector as today's 16 B one, so the write side gains nothing at all;
+the entire prize is the terminal's *read*, which becomes a contiguous 8 B/element stream
+instead of a 16 B-strided one — worth about **−0.5 ms**, not the −1.4 ms a byte-rate
+estimate gives. And 8 B is only reachable if `gi` leaves the record, because
+key 8 + sig 24 + gi 26 + lead 25 = **83 bits**; without `gi` it is 57. So slot-indexed
+reference rows are a hard prerequisite, not the optional half.
+
+Gates on the measured variant, for the record: CUDA KAT **3/3 on all 15 geometries**, the
+occupancy contract holding blocks/SM at 6 while shared fell 8196 → 5124 B, and an
+**element-dependent poison of the hot plane collapsing the KAT to 92 failures**, which is
+what proves the new path was live rather than silently bypassed.
+
+</details>
+
 ### Two instruments that returned false greens, and why
 
 Both were caught this session, both had already produced a passing gate on a change they
