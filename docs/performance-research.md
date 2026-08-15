@@ -27,6 +27,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
 | [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0) and shipped under the low-power gate** — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the live floor curve moves to 3.70 J/sol at 160 W (new efficiency record) and 3.76 at 120 W; a carveout drift fixed (the CARVE list had named the unpacked pair since the pack shipped); **duty-cycled average power closed with mechanism** — the concave-hull arbitrage is real (solves track duty exactly) but a resident context idles the card at 41–47 W in P2/P3, never decaying, and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288 null (the barrier bill is the wait, not the pass count); PRMT rotates null by audit (already 2-SHF funnel pairs, placement is not a currency); uniform-datapath offload null by arithmetic (r2 is shared-capped, not register-capped); **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, whose removal is (17,0)'s already-measured −1.0/−1.5 %, half-used store sectors are the 16 B-store hardware floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB, the plane had no writer but was still reserved) and the overflow arena ported from probe flag to fit-ladder rung (dense caps + a 65 K-slot pool per set, +1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**; with the availability allowance re-derived from what the driver and our own context actually hold (1 GiB → 640 MiB, measured) that is a 5 GB card that runs where nothing on the ladder used to fit; and **the octo record takes it to 1.90 GiB for +35 %** — round 3's output as its eight leaves, which cascades twice: three of the five back-reference rows go dead (recovery reads the leaves instead of walking down to them, and no gi-to-slot map is needed once round 4 names its parents by slot), and with those rows gone nothing reads a round-2 element's `gi` either, so that record drops 3 u64 to 2 and round 2's atomic is not issued. Six u64 per slot with no field nothing reads — this design's floor — and it clears BeamHash III's stated 3 GB minimum and the card class behind it; **the stock per-stage profile re-taken on the shipping kernels** — 32.39 ms attributed, and the implicit-bits record's 1.5 ms lands where its mechanism says (r2 −0.94, r3 −0.52, nothing else past 0.06); and **the octo record's two halves priced apart** — round 4's rebuild is a flat **+16 ms** whether round 3 hands it the packed record or the quad one, so the bundled +38 % and the packed-input +49 % are one constant over two baselines: a reach lever that can never be a speed lever; and **the solutions-per-solve multiplier is the algorithm's, not the solver's** — nothing is dropped (all four counters zero over 1,892 consecutive solves, the chain walk's 64-step cap included), nothing invalid is produced (56,781 of 56,783 candidates verify over 28,305 solves, the 2 being inherent duplicate-index), and `bb + sm + 7 = 24` makes the partition incapable of separating a colliding pair. Pinned at **2.006 ± 0.008** against a theoretical 2, which corrects the 1.98 this ledger quoted and moves the reference miner's solve time from 36 to **37.9 ms**; and **the stock census re-taken on the shipping kernels** — `sm__throughput` turns out to BE the integer pipe (identical to two decimals in every round), so the currency is ALU-pipe slots on a half-width INT32 unit: entry is at 98.7 % of it, r1+r2 at 76–78 % with issue slots only half busy, r3+r4 at 76.5/82.7 % of DRAM peak with traffic now exactly compulsory (12.30 GB, every line within 0.7 %). The barrier is top stall in round 2 as well as round 1, which falsifies the earlier census's premise for the warp-specialization closure without changing its verdict — four resident blocks keep the SM issuing while one waits; and the two leads the census pointed at are both **zero** — **wider LOP3 LUT fusion** (680 of r2's 794 LOP3s are 2-input, but a dataflow pass finds no fusable pair anywhere, because SipHash's XORs are irreducibly 2-input — which empties the single-issue closure's exemption list) and **lane density in r3/r4 at stock** (those rounds are memory-bound with compulsory traffic and an 18 %-idle ALU pipe, so filling lanes recovers nothing; the (17,0) that would delete the filter costs ~23 % at stock) |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
+| [Measured results, 2026-08-15](#measured-results-2026-08-15) | the pipe census — r1/r2 are 22 points under the ALU roofline and it is warp supply; store-versus-derive collapses to one exchange rate with h=2 a structural optimum; **round 3 stores a work word round 4 provably never reads** (identity test + whole-pipeline poisoning, both positive-controlled) — worth 268 MB and **nothing in time**, because halving r3's write sectors buys only 4 % of the round, an implied ~3000 GB/s against a 656 GB/s bus: *price narrowings in memory instructions and sectors, never in bytes*; three corrections — the warp-supply target is **unreachable** (8 blocks × 256 threads is 64 warps, sm_89 allows 48) and worth ≈ −0.66 ms not −3.07, a fifth r2 block needs **≤48 registers as well as ≤19456 B shared**, and **`drops[0]` has no writer** so every four-counter gate has been three |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -248,7 +249,11 @@ co-scheduling for A/Bs — on **either** backend since the OpenCL port
 backend and prints tallies at exit
 ([the found-vs-verified section](#the-found-vs-verified-gap-is-gone-0-of-3935-candidates-rejected)).
 
-**CUDA attribution builds** — `-DMXBM_ABL_EMIT=R` (narrow round *R*'s payload to 16 B),
+**CUDA attribution builds** — `-DMXBM_POISON_W=N` poisons work word *N−1* of the r3→r4
+record at round 3's emit and reads the answer off the KAT, which is how
+[the dead word](#round-3-stores-a-work-word-round-4-never-reads--worth-268-mb-and-nothing-in-time)
+was established; N is 1-based, so the dead word is N=6 and N=4/5 are its positive controls.
+`-DMXBM_ABL_EMIT=R` (narrow round *R*'s payload to 16 B),
 `-DMXBM_ABL_DERIVE=1|2|3` (round 1's seed / round 2's rebuild), `-DMXBM_ABL_MIX=R` (skip
 `apply_mix`), `-DMXBM_CO_NOSCATTER=1` (co-tenant computes but stores nothing, and
 `--fuse` then keeps launching the real entry so the co-tenant is purely additive).
@@ -5285,6 +5290,11 @@ register swaps), with `IADD3 165 + IMAD 173 = 338` matching the 336 predicted 64
 this card; r1/r2 sit at 76.4 / 78.3 with issue only half full, so the gap is stall.
 Closing it is r1 5.08 → 3.93 ms and r2 9.30 → 7.38 ms, **−3.07 ms, −9.7 % of the solve.**
 
+> **That is the distance, not a target.** The mechanism this section goes on to name —
+> resident blocks — tops out at **≈ −0.66 ms** on this card: it would need ~8 blocks and
+> sm_89 allows 48 warps/SM, i.e. 6 at 256 threads, with entry already there. See
+> [the corrections](#three-corrections-to-figures-this-ledger-quotes).
+
 The stated basis of the warp-specialization closure — *four resident blocks keep the SM
 issuing while one waits* — does not survive the warp-supply metric:
 
@@ -5316,7 +5326,12 @@ KAT 3/3 and drops 0 in both arms; the solve reads 32.24 → 32.79 ms. Removing a
 the warps costs 5.3 points of ALU pipe and 2.8 % of the round, and the barrier stall
 barely moves (27.9 → 28.8 %) — so the barrier is a *symptom* of thin warp supply, not the
 cause. Extrapolating the same slope, entry's 98.7 % would need roughly eight resident
-blocks.
+blocks — **which this card cannot provide**: eight 256-thread blocks is 64 warps/SM
+against sm_89's 48. Six is the ceiling, entry already sits there, and the reachable move is
++2 blocks in r2 and +1 in r1. Note also that this perturbation's cycle cost (7.2 %,
+implied by the ALU-utilisation change at constant executed ALU) and its time cost (2.8 %)
+differ, because the 285 W cap hands back clock when occupancy falls: a block is worth
+**2.8 % of the round in time**, and the ALU-points slope overstates what is cashable.
 
 **That closes the warp-specialization family for a better reason than the ledger had.**
 Producer-consumer warps redistribute work among the warps a block already has; they do not
@@ -5327,7 +5342,10 @@ four blocks and the register file caps it again if kWG grows.
 
 **What the measurement leaves behind is an exchange rate for shared memory.** A fifth
 resident block in r2 needs its footprint under 20 KB against ~24.8 KB today — **4.8 KB,
-worth ~0.26 ms (0.8 % of the solve)**, and a sixth about the same again. That prices every
+worth ~0.26 ms (0.8 % of the solve)**, and a sixth about the same again. **Shared memory is
+necessary and not sufficient**: r2 also uses 64 registers, exactly the four-block cliff, so
+a fifth block needs **≤ 48 registers as well as ≤ 19456 B shared** and a sixth ≤ 40 and
+≤ 16000 B. Freeing the 4.8 KB alone leaves the register file returning four. That prices every
 future shared-memory narrowing in r1/r2, which previously had no exchange rate at all.
 It also says why the near misses do not pay: `lwork` is 320 × 7 × 8 B = 17.9 KB of the
 24.8, and even narrowing the staged element by a whole u64 — the shared-memory analogue of
@@ -5354,6 +5372,108 @@ with scattered stores; deriving later (quad at r3, octo at r4) doubles the rebui
 7 → 14 → 28 siphash calls — against a byte saving that only falls linearly, which is why
 round 4's eight-leaf rebuild prices at a flat +16 ms. **h=2 is a true optimum rather than
 an empirical one**, and that is why both neighbours measured worse.
+
+</details>
+
+### Round 3 stores a work word round 4 never reads — worth 268 MB, and nothing in time
+<details>
+<summary>Details</summary>
+
+`Lout(4)` is **288**, not 352 — round 4 is the spec's deliberate 88-bit drop. In
+`combine`, `out.w[4]` is masked to its low 32 bits, which deletes the only term `x[5]`
+contributes (`x[5] << 40` lands in bits 40–63), and `out.w[5]` is zeroed outright. **Work
+word 5 of the 64 B r3→r4 record cannot reach round 4's output.**
+
+Two independent tests, each with a positive control.
+
+**The identity test** (`campaign/2026-08-15-structural/probes/deadword.cpp`): 200 000
+randomized trials per word, perturbing one word in *both* parents so the collision
+structure is preserved, at every round's real `(Lmix, Lout)`. r1, r2 and r3 have all seven
+input words live; **r4's word 5 is dead**; r5's words 1–4 are dead. The r5 row is the
+control — it independently rediscovers the terminal round's dead work words, which the
+2-u64 thin record already ships, so the zeros are measurements rather than silence.
+
+**The pipeline test**, `MXBM_POISON_W=N`, which replaces work word `N−1` of the r3→r4
+record with `0xDEADBEEFDEADBEEF` at round 3's emit — poison rather than zero, so a reader
+must corrupt rather than coincide:
+
+| poisons | KAT |
+|---|---|
+| work word 3 | survivors 2, verified 0, **goldens 0/3** |
+| work word 4 | survivors 2, verified 0, **goldens 0/3** |
+| **work word 5** | survivors 3, verified 3, **goldens 3/3**, drops 0 |
+
+So the word is unread by the whole downstream pipeline, not merely by `combine`.
+
+**It is not a speed lever.** The prize was priced by assuming time scales with bytes on a
+round at 76.5 % of DRAM peak. That assumption is false on this stream. `MXBM_ABL_EMIT=3`
+narrows round 3's emit 64 B → 16 B — halving its write *sectors*, ~1.07 GB/solve — with
+the stride, the bucket distribution and the read side untouched, and r3's own marginal read
+by in-place replay (`MXBM_ROUND_REPS="3:9"`) so the corrupted downstream cannot contaminate
+it. ABBA, 10 solves/point, patch asserted by `STG.E.128` falling 45 → 33:
+
+| arm | r3 marginal |
+|---|---|
+| baseline | 8.968 ms |
+| emit → 16 B | 8.613 ms |
+| | **−0.355 ms, −3.96 % of the round** (6.8× the bracket spread) |
+
+Removing ~1.07 GB of sector traffic bought 0.355 ms — an implied **~3000 GB/s, about 4.6×
+the card's 656 GB/s peak.** A stream cannot beat the bus, so r3's writes are not on the
+critical path at anything like the roofline rate: **half a round's write sectors are worth
+4 % of its time.**
+
+Dropping the dead word narrows the stride 64 → 56 B, which is −12.5 % of write sectors,
+not −50 %. Scaling the measured slope: **≈ −0.089 ms**, a quarter of the instrument floor,
+and a 7-u64 stride would also forfeit the 128-bit accesses (`slot × 7 × 8` is 8 B-aligned).
+The word is worth **268 MB of record set** and is a reach lever only.
+
+This is the same result as [bytes are nearly free](#bytes-are-nearly-free-per-element-work-is-not),
+arrived at from the write side, and it explains why the implicit-bits record won for
+deleting a memory *instruction* rather than for deleting bytes. **Price any narrowing on
+this path in memory instructions and sectors, never in bytes.** On that basis a 48 B
+r3→r4 record is still worth pricing — 6 u64 is 16 B-aligned and needs 3×LD.128 against
+today's 4 — but its case is the instruction, not the byte. It needs 384 bits for 435 bits
+of live content; w0's 17 address-implied key bits and w4's dead top 8 bits (live only to
+bit 55) give 25, leaving it **26 bits short** unless `cgi` is retired from the record.
+
+</details>
+
+### Three corrections to figures this ledger quotes
+<details>
+<summary>Details</summary>
+
+**The warp-supply target is not reachable, and it is not −3.07 ms.** The
+[pipe census](#the-pipe-census-r1-and-r2-are-22-points-under-the-alu-roofline-and-it-is-warp-supply)
+extrapolates that entry's 98.7 % ALU utilisation "would need roughly eight resident
+blocks". Eight 256-thread blocks is 64 warps per SM; **sm_89 allows 48** —
+`cudaGetDeviceProperties` on this card reports `maxThreadsPerMultiProcessor` 1536. Six
+blocks is the ceiling at this block size and `entry_scatter` already sits there, so the
+reachable move is **+2 blocks for r2 and +1 for r1**.
+
+The census's own two figures for the `MXBM_FCAP=352` perturbation are also inconsistent
+under `time ∝ 1/ALU%`: with executed ALU held constant it reports **7.2 % more cycles but
+only 2.8 % more time**. Cycles and time can only diverge if the clock moved, and every
+stage draws the 285 W board cap, so three blocks draw less power and the governor returns
+~4 % of clock. Priced on the directly measured *time* slope, the whole route is
+r2 +2 blocks × 2.8 % of 9.30 ms and r1 +1 × 2.8 % of 5.08 ms = **≈ −0.66 ms, 2.1 % of the
+solve** — an upper bound, since the slope is sublinear near the top and entry's eligible
+warps come from having no barrier and no memory dependency rather than from warp count
+alone.
+
+**A fifth block in r2 needs registers as well as shared memory.** A fifth block needs
+**≤ 48 registers and ≤ 19456 B shared**; a sixth needs ≤ 40 and ≤ 16000 B. r2 uses **64
+registers**, which by the occupancy model in `tests/test_cuda_resources.cpp` is exactly the
+cliff for four blocks, so freeing shared memory alone leaves it at four. The two knobs have
+never been moved together — `MXBM_MB_RD2` measured null *because shared capped it at four
+anyway*, and the `MXBM_FCAP` sweep never went low enough to clear 19456 B.
+
+**`drops[0]` has no writer.** Every device increment in `fused_round.cuh` and
+`pipeline_kernels.cuh` targets `drops[1..3]`; only the standalone probes write `drops[0]`.
+It is allocated, zeroed and printed as `pair=`. **Every `drops == 0` gate stated as four
+counters has been three.** This does not disturb the 2.006 multiplier, which is measured by
+verification rather than by counters, but it must be fixed before any deliberately-lossy
+arm is judged.
 
 </details>
 

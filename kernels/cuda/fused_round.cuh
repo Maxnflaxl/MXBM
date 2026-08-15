@@ -282,6 +282,15 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #define MXBM_MB_EMIT 0
 #endif
 
+// MXBM_POISON_W=N poisons work word N-1 of the r3->r4 record at round 3's emit; the KAT
+// is the readout. N is 1-based over a 0-based array, so the dead word round 4 cannot
+// reach (Lout(4)=288 masks c.w[4] to 32 bits, deleting w5's only term) is N=6, and N=5
+// and N=4 are its positive controls. An attribution instrument: results are
+// intentionally wrong for any N a consumer reaches. 0 = off.
+#ifndef MXBM_POISON_W
+#define MXBM_POISON_W 0
+#endif
+
 // MXBM_PAIR128: round 2 stages its 16 B pair record with one LD.128 instead of two
 // LD.64 (INSTR is 2, so d*8 is 16 B aligned -- same argument as the record loads in
 // LM_EMIT). The rescan lanes that fail the sub-mask filter fetch 16 B where they used
@@ -1118,9 +1127,18 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         // round 3 writes for round 4 is byte-identical either way.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
+#if MXBM_POISON_W
+                        // Poison rather than zero: a reader must corrupt, not coincide.
+                        uint64_t cw[7]; for (int q = 0; q < 7; ++q) cw[q] = c.w[q];
+                        cw[MXBM_POISON_W - 1] = 0xDEADBEEFDEADBEEFull;
+                        st_em(v + 0, make_ulonglong2(cw[0], cw[1]));
+                        st_em(v + 1, make_ulonglong2(cw[2], cw[3]));
+                        st_em(v + 2, make_ulonglong2(cw[4], cw[5]));
+#else
                         st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));
                         st_em(v + 1, make_ulonglong2(c.w[2], c.w[3]));
                         st_em(v + 2, make_ulonglong2(c.w[4], c.w[5]));
+#endif
                         st_em(v + 3, make_ulonglong2(((uint64_t)cgi << 32) | (uint64_t)ctree[0],
                                                contribOut));
                     } else {
