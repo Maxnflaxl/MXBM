@@ -1,11 +1,19 @@
 #include "gpu/rowbucket_geom.h"
 #include <cmath>
+#include <cstdlib>
 
 namespace mxbm { namespace gpu {
 
 uint32_t fb_cap_for(uint32_t mean, double sigma) {
+    // MXBM_CAP_SIGMA forces the tail bound. Read here, not at the call sites, because the
+    // footprint arithmetic and the allocation both come through this function and
+    // reserving one cap while indexing another would corrupt rather than drop. Negative
+    // values undershoot the mean, which is how the drop counters get a positive control.
+    static const char* const kEnv = std::getenv("MXBM_CAP_SIGMA");
+    static const double kForced = kEnv ? std::atof(kEnv) : 0.0;
     const double sd = std::sqrt((double)mean);
-    return mean + (uint32_t)(sigma * sd) + 32u;
+    const double cap = (double)mean + (kEnv ? kForced : sigma) * sd + 32.0;
+    return cap < 1.0 ? 1u : (uint32_t)cap;
 }
 
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,

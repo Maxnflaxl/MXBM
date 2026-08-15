@@ -1,10 +1,10 @@
 // CUDA row-bucket pipeline, gated on the KAT. Standalone: builds with nvcc, not wired
 // into CMake, so an incomplete backend cannot destabilise the shipping OpenCL path.
-//
-//   nvcc -O3 -arch=sm_89 -I src -I kernels/cuda -I tests cuda/pipeline.cu -o cuda/pipeline
+// Build line in cuda/README.md -- it needs the blake2b and verifier sources, so a copy
+// here drifts into one that does not link.
 //
 // The gate is the same one the OpenCL path uses and is non-negotiable: survivors == 3 on
-// the KAT prePow, bucketDrops == 0, pairDrops == 0.
+// the KAT prePow and all four drop counters zero.
 #include "pipeline_kernels.cuh"
 #ifndef MXBM_ABL_DERIVE
 #define MXBM_ABL_DERIVE 0
@@ -424,7 +424,8 @@ struct CudaSolver {
         cudaStreamSynchronize(st);
         if (hs > survCap) hs = survCap;
         if (survOut) *survOut = hs;
-        if (dropOut) *dropOut = hd[1] | hd[2] | hd[3];
+        // All four; hd[0] is entry's scatter overflow.
+        if (dropOut) *dropOut = hd[0] | hd[1] | hd[2] | hd[3];
         if (hs == 0) return out;
 
         cudaMemsetAsync(l3Slots, 0xFF, (size_t)hs*4*4, st);
@@ -558,7 +559,7 @@ struct CudaSolver {
         cudaMemcpyAsync(hd, drops, 16, cudaMemcpyDeviceToHost, st);
         cudaStreamSynchronize(st);
         if (hs > survCap) hs = survCap;
-        if (dropOut) *dropOut = hd[1] | hd[2] | hd[3];
+        if (dropOut) *dropOut = hd[0] | hd[1] | hd[2] | hd[3];
         if (hs == 0) return out;
         cudaMemsetAsync(l3Slots, 0xFF, (size_t)hs*4*4, st);
         replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], 8u, counts[1], cap,

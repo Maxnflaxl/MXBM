@@ -426,7 +426,9 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
     size_t slot = (size_t)b*bucket_cap + pos;
     if (pos >= bucket_cap) {
         const uint32_t a = actr ? atomicAdd(actr, 1u) : kArenaCap;
-        if (a >= kArenaCap) { atomicAdd(&drops[1], 1u); return; }
+        // One counter per capacity -- [0] entry scatter, [1] shared staging, [2] output
+        // bucket, [3] chain cap -- so a nonzero one names which reservation was short.
+        if (a >= kArenaCap) { atomicAdd(&drops[0], 1u); return; }
         atag[a] = b;
         slot = ((size_t)1u << bucket_bits)*bucket_cap + a;
     }

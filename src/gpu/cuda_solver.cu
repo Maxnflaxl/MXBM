@@ -792,7 +792,9 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         uint32_t d[4] = {0,0,0,0}, sp = 0;
         cudaMemcpy(d, I.drops, 16, cudaMemcpyDeviceToHost);
         if (I.spillTot) cudaMemcpy(&sp, I.spillTot, 4, cudaMemcpyDeviceToHost);
-        std::fprintf(stderr, "drops pair=%u bucket=%u gi=%u walk=%u | spills=%u\n",
+        // One capacity per field: entry's scatter, shared staging (group cap, arena
+        // chain, terminal stage), output bucket or survivor cap, and the chain walk.
+        std::fprintf(stderr, "drops entry=%u stage=%u out=%u walk=%u | spills=%u\n",
                      d[0], d[1], d[2], d[3], sp);
     }
     if (hs > kSurvCap) hs = kSurvCap;
