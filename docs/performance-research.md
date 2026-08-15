@@ -5736,6 +5736,56 @@ what proves the new path was live rather than silently bypassed.
 
 </details>
 
+### The back-reference rows cost 1.01 ms, and only a replay can reclaim them
+
+<details>
+<summary>Details</summary>
+
+*(2026-08-15. A prize measured before its mechanism was built — and the cheap mechanism
+turned out not to exist.)*
+
+`all_left`/`all_right` are written for **every** emitted child of rounds 1–4 — 134 M of
+them, 8 B each, 1.07 GB and 8.7 % of the solve's traffic — and read for the **two**
+survivors. `MXBM_ABL_REFS` as a per-round bitmask skips the two stores while keeping every
+instantiation, the `gi` atomic and the row allocations:
+
+| rows off | ms/solve | delta |
+|---|---|---|
+| none (ships) | 31.277 | — |
+| 1 + 2, written by r1 and r2 | 30.921 | **−0.355 ms** |
+| 3 + 4, written by r3 and r4 | 30.609 | **−0.668 ms** |
+| all four | 30.266 | **−1.011 ms** |
+
+Additive to 1.3 %. Controls: verified solutions/solve goes **1.99 → 0.00**, so the stores
+really went, and **shared memory is byte-identical in every kernel**, so no round gained a
+block.
+
+**Why this is worth four times what the record-write ablation was.** `MXBM_ABL_EMIT=3`
+removed a similar 1.07 GB of round 3's *record* writes for −0.355 ms. The difference is the
+access pattern: the record scatter is bucket-random, so each store dirties its own 32 B
+sector, while `gi` is warp-contiguous — ptxas aggregates the counter's atomic — so the
+reference rows are written **coalesced**. **Bytes are the right currency for a coalesced
+stream and sectors for a scattered one**, and that single distinction explains both this
+result and why [splitting the terminal record into two planes](#splitting-the-terminal-record-into-two-planes-costs-11--sectors-for-the-third-time)
+lost.
+
+**The cheap way to collect it does not exist.** The obvious route is the octo rung's trick:
+have a row name its parents by **slot** rather than by `gi`, then read the leaves straight
+out of the record sitting at that slot. It works at r3 → r4 and nowhere else, because the
+pipeline ping-pongs two record sets — round 2 writes `elem[0]` and **round 4 overwrites
+it**, so only round 3's output is still alive when recovery runs. That is exactly why the
+octo record is the one that carries eight leaves. Reordering does not help: with two sets,
+round 4 has nowhere to write that is not still-needed data or its own input, so a third set
+is required at about +2.5 GB — a non-starter on the rung whose entire purpose is footprint.
+
+So the rows are worth **−1.011 ms and −1.07 GiB**, and the only way to collect them is to
+reconstruct a survivor's ancestry by *replaying* the rounds on the buckets along its path
+— identifying children by content rather than by slot, which is what makes the replay
+sound despite nondeterministic slot assignment. That is a whole kernel, and it is now a
+lead with a measured price rather than an estimate.
+
+</details>
+
 ### Two instruments that returned false greens, and why
 
 Both were caught this session, both had already produced a passing gate on a change they
