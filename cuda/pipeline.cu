@@ -5,6 +5,8 @@
 //
 // The gate is the same one the OpenCL path uses and is non-negotiable: survivors == 3 on
 // the KAT prePow, bucketDrops == 0, pairDrops == 0.
+// The standalone bench keeps round 4's reference row and the five-level recover.
+#define MXBM_R4_ROWS 1
 #include "pipeline_kernels.cuh"
 #ifndef MXBM_ABL_DERIVE
 #define MXBM_ABL_DERIVE 0

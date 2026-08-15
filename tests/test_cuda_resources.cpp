@@ -241,9 +241,9 @@ const Kernel kContract[] = {
       "(docs/performance-research.md:1731-1745)" },
     { "r3 (quad record)",       true, {7,6,4,7,3,8,0,0,0,0,1}, nullptr,             256,  80, 26184,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
-    { "r4 (LM_USE)",            true, {6,1,2,2,8,2,0,0,0,0,1}, nullptr,             256,  48, 22336,  0, 4,
-      "one register more since the reference row went: the two stores were holding a\n"
-      "      register pair, and 47 of 64 leaves the 4-block line where it was" },
+    { "r4 (LM_USE)",            true, {6,1,2,2,8,1,0,0,0,0,1}, nullptr,             256,  47, 22336,  0, 4,
+      "47 of 64: the reference row and the gi atomic both went, and the 4-block line\n"
+      "      is where it was" },
     // The match-first variants: same rounds, chain built at staging so the rebuild can
     // skip the elements no walk reads. mlist costs ~640 B of shared per round, which is
     // what takes r1 off its fifth block -- the reason the variant is selected only in
@@ -285,8 +285,8 @@ const Kernel kContract[] = {
     { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1,0,0,1}, nullptr,         256,  64, 24256,  0, 4, "" },
     { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  56, 26816,  0, 3, "" },
     { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1,0,0,1}, nullptr,         256,  80, 26816,  0, 3, "" },
-    { "r4 match-first",         true, {6,1,2,2,8,2,0,1,0,0,1}, nullptr,         256,  48, 22976,  0, 4, "" },
-    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,2,1,0,0,0,1}, nullptr,           256,  64, 22336,  0, 4,
+    { "r4 match-first",         true, {6,1,2,2,8,1,0,1,0,0,1}, nullptr,         256,  47, 22976,  0, 4, "" },
+    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,1,1,0,0,0,1}, nullptr,           256,  64, 22336,  0, 4,
       "ON A CLIFF: hosting the speculative entry pass costs 18 registers (46 -> 64), "
       "landing EXACTLY on the 4-blocks/SM limit. One more and the whole launch -- the "
       "round AND the co-scheduled entry -- drops to 3 blocks" },
@@ -320,8 +320,8 @@ const Kernel kContract[] = {
     { "r3 quad arena",          true, {7,6,4,7,3,8,0,0,0,1,1}, nullptr,    256,  80, 26312,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
     { "r3 quad mf arena",       true, {7,6,4,7,3,8,0,1,0,1,1}, nullptr,    256,  80, 26944,  0, 3, "" },
-    { "r4 arena",               true, {6,1,2,2,8,2,0,0,0,1,1}, nullptr,    256,  48, 22464,  0, 4, "" },
-    { "r4 mf arena",            true, {6,1,2,2,8,2,0,1,0,1,1}, nullptr,    256,  48, 23104,  0, 4, "" },
+    { "r4 arena",               true, {6,1,2,2,8,1,0,0,0,1,1}, nullptr,    256,  47, 22464,  0, 4, "" },
+    { "r4 mf arena",            true, {6,1,2,2,8,1,0,1,0,1,1}, nullptr,    256,  47, 23104,  0, 4, "" },
     // The octo record. Round 3's side is free -- same kernel, a narrower store, and the
     // 80-register cliff it already sat on; its rows are all no-refs, below. Round 4's side is where it is paid: rebuilding
     // six work words from eight leaves costs 46 -> 128 registers, which is EXACTLY the
@@ -344,11 +344,13 @@ const Kernel kContract[] = {
     { "r2 quad16 mf arena no-refs", true, {7,7,2,4,2,2,0,1,0,1,0}, nullptr, 256, 64, 24384, 0, 4, "" },
     { "r3 quad16 octo no-refs", true, {7,6,4,7,2,4,0,0,0,1,0}, nullptr,  256,  80, 26312,  0, 3, "" },
     { "r3 quad16 octo mf no-refs", true, {7,6,4,7,2,4,0,1,0,1,0}, nullptr, 256, 80, 26944,  0, 3, "" },
-    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0EE", 256, 28, 9732, 0, 6,
-      "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound; lslot's\n"
-      "      1536 B leaves 6268 B of headroom at that cap" },
-    { "terminal_round (arena)", false, {0,0,0,0,0,0}, "14terminal_roundILb1EE", 256, 28, 9864, 0, 6,
+    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0ELj1EE", 256, 20, 6660, 0, 6,
+      "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound. Reading\n"
+      "      the 16 B record it staged gi and lead too, at 9732 B and 28 registers" },
+    { "terminal_round (arena)", false, {0,0,0,0,0,0}, "14terminal_roundILb1ELj1EE", 256, 24, 6792, 0, 6,
       "the pool chain's shared list costs 132 B and no block: still warp-capped at 6" },
+    { "terminal_round (octo)",  false, {0,0,0,0,0,0}, "14terminal_roundILb1ELj2EE", 256, 28, 9864, 0, 6,
+      "the 16 B arm: an octo round 4 keeps its reference row, so it keeps gi and lead" },
     { "arena_link",            false, {0,0,0,0,0,0}, "10arena_linkE",      256,  12,     0,  0, 6,
       "threads the overflow pool onto per-bucket chains between rounds; 256 blocks" },
     // recover's 64 B of stack is a genuine local array, not a spill: ptxas -v reports
@@ -360,9 +362,9 @@ const Kernel kContract[] = {
     { "recover (octo)",        false, {0,0,0,0,0,0}, "7recoverILb1EE",     64,  40,     0,  0, 24,
       "no stack at all: the octo walk is two levels deep and flat, so the explicit DFS "
       "stack the five-level form needs is gone" },
-    { "recover_from_l3",       false, {0,0,0,0,0,0}, "15recover_from_l3E",  64,  22,     0, 64, 24,
+    { "recover_from_l3",       false, {0,0,0,0,0,0}, "15recover_from_l3E",  64,  26,     0, 64, 24,
       "the same walk entered at level 3; same 64 B DFS stack, same <= 17-block grid" },
-    { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  47, 16644,  0, 5,
+    { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  48, 16644,  0, 5,
       "two blocks per survivor, so ~4 in the whole grid: occupancy is not a lever here,\n"
       "      and the 4096-key staging that costs the fifth block is what covers bb = 14" },
 };

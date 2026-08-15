@@ -1078,7 +1078,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                     // The gi this child is given. Dead on an octo rung's round 2: no
                     // reference row is indexed by it and the 16 B record does not carry
                     // it, so the atomic is not issued at all.
-                    constexpr bool kNeedGi = REFS || !(LMODE == LM_RD2 && OUTSTR == 2);
+                    // Round 4's 8 B record drops gi with everything else it stopped
+                    // needing, and no row is indexed by one there, so the atomic goes.
+                    constexpr bool kNeedGi = (LMODE == LM_USE && OUTSTR == 1)
+                                           ? false
+                                           : (REFS || !(LMODE == LM_RD2 && OUTSTR == 2));
                     const uint32_t cgi = kNeedGi ? gi_alloc(gi_counter) : 0u;
                     const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == kAblEmit) {
@@ -1202,6 +1206,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
 #endif
                         st_em(v + 3, make_ulonglong2(((uint64_t)cgi << 32) | (uint64_t)ctree[0],
                                                contribOut));
+                    } else if constexpr (LMODE == LM_USE && OUTSTR == 1) {
+                        st_em(out_belem + od, t5_rec(c.w[0], bucket));
                     } else {
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
                         // Round 4's record carries the emitting block's INPUT bucket, so

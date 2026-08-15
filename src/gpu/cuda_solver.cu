@@ -50,7 +50,9 @@ constexpr uint32_t kPairStride = 2u;     // r1 -> r2 pair record, 16 B
 #define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,kPairStride,MXBM_R1_FCAP
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, kPairStride,kR2RecStride,kFCap
 #define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap
-#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,2u,kFCap
+// Round 4's output stride: 8 B (t5_rec) on a shipping build, 16 B where MXBM_R4_ROWS
+// keeps gi and lead for the reference recovery arm.
+#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,(MXBM_R4_ROWS?2u:1u),kFCap
 // The quad-record pair. Only rounds 2 and 3 differ, and only in their strides and round
 // 3's mode: the record carries the same INFORMATION either way, so every L value, tree
 // width and cap is identical. Both pairs are instantiated and the choice is made at
@@ -175,7 +177,7 @@ struct CudaSolver::Impl {
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
     // Recovery by replay: the survivors' round-4 parents by slot, and the round-3
     // ancestors replay_r4 derives from them.
-    uint32_t *survL4=nullptr, *l3Slots=nullptr;
+    uint32_t *survL4=nullptr, *l3Slots=nullptr, *l4Lead=nullptr;
     std::atomic<bool> abort_{false};
     DeviceInfo info;
     int device_index = 0;
@@ -250,7 +252,7 @@ struct CudaSolver::Impl {
         for (auto* q : {elem[0], elem[1], dpp, specElem, specPp}) cudaFree(q);
         for (auto* q : {counts[0], counts[1], gictr, drops, spillTot,
                         left, right, survSlots, survCount, dleaves, specCounts,
-                        survL4, l3Slots}) cudaFree(q);
+                        survL4, l3Slots, l4Lead}) cudaFree(q);
         for (auto* a : {ahead, anext, atag, actr})
             for (int k = 0; k < 2; ++k) cudaFree(a[k]);
     }
@@ -329,6 +331,7 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     p_->dleaves = dalloc<uint32_t>((size_t)kSurvCap*32);
     p_->survL4  = dalloc<uint32_t>((size_t)kSurvCap*2);
     p_->l3Slots = dalloc<uint32_t>((size_t)kSurvCap*4);
+    p_->l4Lead  = dalloc<uint32_t>((size_t)kSurvCap*2);
     p_->dpp = dalloc<uint64_t>(4);
     if (!p_->dpp || !p_->survSlots)
         throw std::runtime_error("CUDA allocation failed (device out of memory)");
@@ -459,7 +462,7 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
         CARVE((fused_round<MXBM_R3_ARGS,  false, false, false, false,  0u, true>));
         CARVE((fused_round<MXBM_R2_ARGS,  false, false, false, true,   0u, true>));
         CARVE((fused_round<MXBM_R3_ARGS,  false, false, false, true,   0u, true>));
-        CARVE((terminal_round<true>));
+        CARVE((terminal_round<true>)); CARVE((terminal_round<true, 2u>));
     }
     #undef CARVE
 
@@ -709,13 +712,17 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // round 4's row as the replay's reference arm. Off those, the terminal names its two
     // parents by slot in survL4 and the rows stop at three.
     const bool r5 = I.octo || MXBM_R4_ROWS;
-    if (I.arena)
+    if (I.octo)
+        terminal_round<true, 2u><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
+                                        I.counts[inSet], I.elem[inSet], I.left, I.right,
+                                        I.survSlots, I.survCount, kSurvCap, I.drops,
+                                        I.ahead[inSet], I.anext[inSet]);
+    else if (I.arena)
         terminal_round<true><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
                                         I.counts[inSet], I.elem[inSet],
                                         r5 ? I.left : nullptr, r5 ? I.right : nullptr,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
-                                        I.ahead[inSet], I.anext[inSet],
-                                        I.octo ? nullptr : I.survL4);
+                                        I.ahead[inSet], I.anext[inSet], I.survL4);
     else
         terminal_round<false><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
                                         I.counts[inSet], I.elem[inSet],
@@ -762,11 +769,12 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         // round 3's output the record names, and hands the walk its four round-3
         // ancestors. Two blocks per survivor, ~4 in the whole grid.
         cudaMemset(I.l3Slots, 0xFF, (size_t)hs*4*4);
-        replay_r4<<<2*hs, 256>>>(hs, I.survL4, I.elem[0], 2u, I.elem[1], 8u,
-                                 I.counts[1], I.cap, I.l3Slots, I.drops, I.bb,
+        replay_r4<<<2*hs, 256>>>(hs, I.survL4, I.elem[0], I.elem[1], 8u,
+                                 I.counts[1], I.cap, I.l3Slots, I.l4Lead, I.drops, I.bb,
                                  I.arena ? I.ahead[1] : nullptr,
                                  I.arena ? I.anext[1] : nullptr);
         recover_from_l3<<<(hs+63)/64, 64>>>(hs, kCapacity, I.left, I.right, I.l3Slots,
+                                            MXBM_R4_ROWS ? nullptr : I.l4Lead,
                                             I.elem[1], 8u, I.dleaves);
     }
     std::vector<uint32_t> hl((size_t)hs*32);

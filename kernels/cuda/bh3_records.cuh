@@ -220,4 +220,37 @@ __device__ __forceinline__ uint64_t octo_contrib(const uint32_t l[8]) {
     return bh3::rotl64(z.w[0], 40);
 }
 
+// r4 -> terminal, 8 B instead of 16. The terminal round combines at Lout = 24, so only
+// word 0's bits 24..47 reach the acceptance test and only the 24 - bb key bits the bucket
+// address does not already carry reach the sub-mask filter and the chain hash -- 32 bits
+// of information in what was a 16 B record. gi and lead are not stored at all: nothing
+// indexes a reference row by them any more, and combine is symmetric, so the left/right
+// order is settled by the replay two levels down instead of here.
+//   bits  0..9   word 0's low 10 key bits (>= 24 - bb for every rung on the ladder)
+//   bits 10..33  word 0 bits 24..47
+//   bits 34..50  the emitting block's input bucket, for replay_r4
+//   bits 51..63  word 0 bits 48..60, widening the replay's content match to 47 bits
+__device__ __forceinline__ uint64_t t5_rec(uint64_t w0, uint32_t bucket) {
+    return (w0 & 0x3FFull) | (((w0 >> 24) & 0xFFFFFFull) << 10)
+         | ((uint64_t)bucket << 34) | (((w0 >> 48) & 0x1FFFull) << 51);
+}
+// Word 0 as the terminal stages it: key in the low bits where every mode puts it, and
+// bits 24..47 where combine reads them. The bucket bits of the key are not restored --
+// nothing downstream of here consults them.
+__device__ __forceinline__ uint64_t t5_work(uint64_t r) {
+    return (r & 0x3FFull) | (((r >> 10) & 0xFFFFFFull) << 24);
+}
+__device__ __forceinline__ uint32_t t5_bucket(uint64_t r) {
+    return (uint32_t)((r >> 34) & 0x1FFFFu);
+}
+// The 47 bits replay_r4 matches a candidate child against, from the record and from a
+// freshly combined word 0 respectively.
+__device__ __forceinline__ uint64_t t5_ident(uint64_t r) {
+    return (r & 0x3FFull) | (((r >> 10) & 0xFFFFFFull) << 10) | ((r >> 51) << 34);
+}
+__device__ __forceinline__ uint64_t t5_ident_w0(uint64_t w0) {
+    return (w0 & 0x3FFull) | (((w0 >> 24) & 0xFFFFFFull) << 10)
+         | (((w0 >> 48) & 0x1FFFull) << 34);
+}
+
 }} // namespace mxbm::cuda
