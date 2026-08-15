@@ -59,8 +59,23 @@ repeating the run.** Five repeats of the 2026-07-26 build read 58.3/58.4/58.4/58
 only. The real uncertainty is in solutions-per-solve, and only a longer run samples it:
 the 300 s run saw 1.99 where the 120 s runs saw 2.01, nine times that σ. So `58.0 ± 0.4`
 is 8,729 solves × 1.99 = 17,371 solutions → `1/√17371` = 0.76 %; the same model gives the
-2026-07-25 row its ±2.3 (600 solutions → 4.1 %). Rows without a measured spread stay bare
-points rather than being given a fabricated one.
+2026-07-25 row its ±2.3 (600 solutions → 4.1 %) and the 2026-08-13 row its ±0.3 (6 × 120 s
+at 32.00 ms = 22,500 solves × 2.006 = 45,135 solutions → 0.47 %). Rows whose run left no
+recorded solve count stay bare points rather than being given a fabricated bar.
+
+**It is an uncertainty on the figure, never a window σ.** A per-window standard deviation
+answers a different question — how far a one-minute reading bounces — and does not shrink
+as the run lengthens, so putting one in this column would make a well-sampled build look as
+uncertain as a short one. The two differ by about 8× on identical data: the 80-minute
+2026-08-13 pool session carries a 60 s-window σ of 0.90 against a `1/√N` uncertainty of
+0.11. Window spreads are reported with the live-mining sessions below, as spreads.
+
+**The bar sits on the sol/s column, and what it measures is BeamHash III rather than the
+solver.** Across the 60 s windows of a live session the sol/s spread runs ~1.4 %, nearly
+all of it the solutions-per-solve sampling noise above; the solves/s factor behind it moves
+by less than the miner's own display step, so a log cannot resolve the solver's timing
+spread at all. It is the same asymmetry that makes ms/solve the quoted quantity and sol/s
+the derived one.
 
 </details>
 
@@ -94,8 +109,8 @@ points rather than being given a fabricated one.
 | 2026-07-25 | Un-pad round 2's record — 9th word to its own plane | 35.16 | 35.0 | **56.4** | −0.2 | −0.6 % | [Alignment pad](performance-research.md#the-round-2-alignment-pad) *(the win is −0.36 GiB; the speed is noise-level)* | — |
 | 2026-07-26 | Perfect chain table + group spill → `kFCap` 320 | 35.0 | 34.1 | **58.0 ± 0.4** | −0.9 | −2.6 % | [Group cap](performance-research.md#shipped-the-group-cap-no-longer-has-to-cover-the-tail-125-ms), [Occupancy](performance-research.md#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate) | [streaming stores, warp-aggregated gi, (17,0), sub-pass, co-tenant entry](performance-research.md#bytes-are-nearly-free-per-element-work-is-not) |
 | 2026-07-31 | **Speculative entry co-scheduling** — r4's launch hosts the next nonce's entry as interleaved co-blocks | 33.85 | 33.4 | **59.5** | −0.45 | −1.3 % | [Co-blocks](performance-research.md#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), [ships](performance-research.md#speculative-entry-co-scheduling-ships-in-the-miner-045-ms) | [pipe2 1:1, split host, r2/r3 hosts](performance-research.md#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms), [register-forced occupancy](performance-research.md#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
-| 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7 ± 0.8** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07; the ± is the 60 s-window σ of the live session below)* | — |
-| 2026-08-13 | **Implicit-bits record** — the packed r2 record stops storing the key bits its bucket address encodes; the side plane loses its writer and reader | 33.2 | 32.0 | **62.7 ± 0.9** | −1.2 | −3.6 % | [address-redundant bits](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) *(± is the 60 s-window σ of the 80-minute live-pool session)* | — |
+| 2026-07-31 | Below-the-floor pair: r2's 16 B record in one `LD.128` + the terminal round joins the perfect table | 33.4 | 33.2 | **59.7** | −0.2 | −0.7 % | [Below-the-floor levers](performance-research.md#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms) *(delta pinned by ×9 replay: r2 −0.145, terminal −0.07; a bare point — this run's solve count was not recorded, so `1/√N` cannot be formed for it)* | — |
+| 2026-08-13 | **Implicit-bits record** — the packed r2 record stops storing the key bits its bucket address encodes; the side plane loses its writer and reader | 33.2 | 32.0 | **62.7 ± 0.3** | −1.2 | −3.6 % | [address-redundant bits](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) *(± is `1/√N` over the headline run's 45,135 solutions; the live-pool session's window spreads are quoted with the validation below)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
@@ -107,7 +122,9 @@ The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-13, commit
 `5c93f0f`), 0.0 % spread, stock 285 W, headless, 240 s warmup discarded,
 2610 MHz / 10251 MHz / 281.4 W / 67 °C. New standing condition: `sw_power_cap`
 intermittent (~20 % of samples) — the draw now reaches the board limit; any other
-flag voids a run. Pool validation: **62.32 ± 1.99 sol/s** over 80 minutes.
+flag voids a run. Pool validation: **62.32 sol/s** over 80 minutes, with window spreads of
+σ = 0.90 over 60 s and 1.99 over 15 s — dispersions of the reading, not uncertainty on the
+mean, which is the Poisson ±0.11 over ~303,000 solutions.
 
 [^drift]: Absolute figures carry a ~2.5 % cross-session band ([how far they
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions));
@@ -134,8 +151,10 @@ path on real jobs.
 
 Both medians agree with the benchmark figure (59.7) to under 1 %, shares ran **47
 accepted / 0 stale / 0 rejected**, and the card held 284 W / 2595–2685 MHz / 66–68 °C.
-The ±0.8 on the progress row is the 60 s-window σ; the session-mean uncertainty is the
-Poisson one (~71,000 solutions → ±0.2 sol/s).
+The 0.82 above is a spread of the reading, not an uncertainty on the figure; the
+uncertainty on this session's own mean is the Poisson one (~71,000 solutions → ±0.2
+sol/s). The progress row stays a bare point because the benchmark run behind its 59.7
+left no recorded solve count.
 
 The CUDA backend is **~6 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as

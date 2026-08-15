@@ -205,7 +205,7 @@ def render(rows, switch_at, log=True):
             c.text(xb + dx, H - B - 6, txt, 9, cl.MUTED, "start", rotate=-90)
 
     # -- series ----------------------------------------------------------
-    # +/-1 sigma range bars, drawn before the markers so the dot sits on top.
+    # Poisson 1/sqrt(N) bars, drawn before the markers so the dot sits on top.
     for i, r in enumerate(rows):
         if not r["sd"]:
             continue
@@ -230,7 +230,7 @@ def render(rows, switch_at, log=True):
     c.text(x(0) + 7, ym(mss[0]) + 13, "%.0f ms" % mss[0], 10, cl.INK_2)
 
     c.text(L, H - 12, "%d optimizations, %s to %s  ·  %.1f → %.1f sol/s (%.1fx)  ·  "
-                      "error bars are ±1σ, drawn only where a spread was measured"
+                      "error bars are the Poisson 1/√N, drawn where the count is known"
            % (n, rows[0]["date"], rows[-1]["date"], sols[0], sols[-1], sols[-1] / sols[0]),
            10, cl.MUTED)
     return c.render()

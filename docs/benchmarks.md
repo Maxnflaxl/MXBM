@@ -43,7 +43,8 @@ Both mining BeamHash III against `de.beam.herominers.com:1130` over TLS, stock s
 | VRAM for a full search | 6.84 GiB[^4g] | ~4 GiB | |
 
 MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
-**62.32 ± 1.99 sol/s** (15 s windows), and the controlled benchmark the same day
+**62.32 sol/s**, its 15 s windows spread σ = 1.99 (a spread of the reading — the
+uncertainty on that mean is ±0.11), and the controlled benchmark the same day
 reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). lolMiner's
 column is the 2026-07 head-to-head session; its binary is unchanged.
 
