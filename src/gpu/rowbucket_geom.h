@@ -90,9 +90,12 @@ constexpr uint32_t kRbArenaSlots = 65536;
 // Bytes the row-bucket path needs at a given geometry: {total, largest single
 // allocation}. The single figure is what OpenCL's CL_DEVICE_MAX_MEM_ALLOC_SIZE caps,
 // and is what binds below 12 GB.
+// `replay` is the backend reconstructing a round's pairing at recovery instead of
+// storing a reference row for every child. CUDA passes true; OpenCL and Metal store all
+// five rows and keep the default.
 void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& single,
                      bool quad = false, bool impb = false, bool arena = false,
-                     bool octo = false);
+                     bool octo = false, bool replay = false);
 
 // The shipping element capacity: the 2^25 seed layer plus the 1/32 growth slack every
 // round is budgeted against. Each backend keeps its own kCapacity for kernel arithmetic
@@ -193,18 +196,20 @@ struct RbGeometry { uint32_t bb, sm; bool quad; bool viable; bool arena; bool oc
 //   allow_arena : the backend carries the dense-cap / overflow-pool kernels. CUDA
 //               passes true; OpenCL and Metal have neither and never see those rungs.
 //   allow_octo : the backend carries the octo record and rebuild_r4. CUDA only.
+//   allow_replay : the backend replays a round at recovery instead of storing a
+//               reference row per child, so the rows shrink or disappear. CUDA only.
 RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t global_mem,
                            bool allow_quad = false, unsigned power_limit_w = 0,
                            bool allow_split = false,
                            uint64_t slack_bytes = (uint64_t)1 << 30,
                            bool allow_impb = false, bool allow_arena = false,
-                           bool allow_octo = false);
+                           bool allow_octo = false, bool allow_replay = false);
 
 // Largest single allocation when each record set may split into two bucket-halves:
 // half the larger set, or the never-split back-ref rows if bigger. The arithmetic
 // behind allow_split, exposed so viability and the tests ask the same question.
 size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool impb = false,
-                              bool arena = false, bool octo = false);
+                              bool arena = false, bool octo = false, bool replay = false);
 
 // The ladder itself, in the order rb_geometry_for walks it. Exposed because the CUDA
 // backend has to keep stepping when the ALLOCATOR refuses a rung the arithmetic said

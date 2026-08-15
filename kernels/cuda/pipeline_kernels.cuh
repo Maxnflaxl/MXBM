@@ -250,6 +250,107 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
     }
 }
 
+// ---- replay_r3: the same trick one level down, on the implicit-bits record -----------
+// Round 3's output record spends a work word on nothing: at Lout(4) = 288 the shift drops
+// everything above bit 311, so word 5 cannot reach round 4's output ("round 3 stores a
+// work word round 4 never reads" in docs/performance.md). The emitting block's input
+// bucket rides there, and this re-runs round 3 over that one bucket of round 2's output,
+// matching a candidate child on work words 0..4. That deletes rows 1, 2 and 3 together:
+// once the survivor's eight round-2 ancestors are known by slot, their records carry the
+// four leaves each, in tree order.
+// One block per (survivor, round-3 ancestor); the grid is four blocks per survivor.
+__global__ __launch_bounds__(256)
+void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
+               const uint64_t* __restrict__ r3_elem, uint32_t r3_stride,
+               const uint64_t* __restrict__ r2_elem, uint32_t r2_stride, uint32_t impb,
+               const uint32_t* __restrict__ r2_counts, uint32_t r2_cap,
+               uint32_t* __restrict__ out_slots, uint32_t* __restrict__ drops,
+               uint32_t bucket_bits,
+               const uint32_t* __restrict__ r2_ahead = nullptr,
+               const uint32_t* __restrict__ r2_anext = nullptr) {
+    constexpr uint32_t kMaxN = 4096;
+    __shared__ uint32_t skey[kMaxN];
+    __shared__ uint32_t apool[kAMax];
+    __shared__ uint32_t ntot;
+    if (blockIdx.x >= 4u*nSurv) return;
+    const uint32_t s3 = l3_slots[blockIdx.x];
+    if (s3 == 0xFFFFFFFFu) return;                  // the round-4 replay found no pair
+    const size_t d3 = (size_t)s3 * r3_stride;
+    uint64_t tw[5];
+    #pragma unroll
+    for (int w = 0; w < 5; ++w) tw[w] = r3_elem[d3 + w];
+    const uint32_t b2 = (uint32_t)r3_elem[d3 + 5];
+    // The record keeps the 24 - impb key bits the bucket address does not carry, so
+    // inside one bucket those bits alone decide whether two full keys are equal.
+    const uint32_t impKB = 24u - impb;
+    const uint32_t impM  = (1u << impKB) - 1u;
+    uint32_t cnt = r2_counts[b2];
+    if (cnt > r2_cap) cnt = r2_cap;
+    if (cnt > kMaxN) { if (threadIdx.x == 0) atomicAdd(&drops[1], 1u); cnt = kMaxN; }
+    const size_t base  = (size_t)b2 * r2_cap;
+    const size_t nbcap = ((size_t)1u << bucket_bits) * r2_cap;
+    auto slot_of = [&](uint32_t p) -> size_t {
+        return p < cnt ? base + p : nbcap + apool[p - cnt];
+    };
+    if (threadIdx.x == 0) {
+        uint32_t n_ = 0;
+        if (r2_ahead)
+            for (uint32_t a_ = r2_ahead[b2]; a_ != 0xFFFFFFFFu && n_ < kAMax;
+                 a_ = r2_anext[a_])
+                apool[n_++] = a_;
+        ntot = cnt + n_;
+    }
+    __syncthreads();
+    const uint32_t n = ntot;
+    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x)
+        skey[p] = (uint32_t)(r2_elem[slot_of(p) * r2_stride]) & impM;
+    __syncthreads();
+    // Unpack one record: seven work words with the block's bucket put back into word 0,
+    // four leaves and gi. Inverse of the implicit-bits pack in fused_round's LM_RD2 emit.
+    auto load = [&](size_t d, uint64_t w[7], uint32_t l[4], uint32_t& gi) {
+        const ulonglong2* v = reinterpret_cast<const ulonglong2*>(r2_elem + d);
+        const ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
+        w[0] = (q0.x & impM) | ((uint64_t)b2 << impKB)
+             | (((q0.x >> impKB) & 0xFFFFFFFFFFull) << 24);
+        w[1] = (q0.x >> (64u - impb)) | (q0.y << impb);
+        w[2] = (q0.y >> (64u - impb)) | (q1.x << impb);
+        w[3] = (q1.x >> (64u - impb)) | (q1.y << impb);
+        w[4] = (q1.y >> (64u - impb)) | (q2.x << impb);
+        w[5] = (q2.x >> (64u - impb)) | (q2.y << impb);
+        w[6] = (q2.y >> (64u - impb)) & 0xFFFFull;
+        l[0] = r3_l0(q3.x); l[1] = r3_l1(q3.x);
+        l[2] = r3_l2(q3.x, q3.y); l[3] = r3_l3(q3.y);
+        gi   = r3_gi(q3.y);
+    };
+    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x) {
+        for (uint32_t q = p + 1u; q < n; ++q) {
+            if (skey[q] != skey[p]) continue;
+            uint64_t wp[7], wq[7]; uint32_t lp[4], lq[4], gp, gq;
+            const size_t dp = slot_of(p) * r2_stride, dq = slot_of(q) * r2_stride;
+            load(dp, wp, lp, gp); load(dq, wq, lq, gq);
+            // Leaf 0 IS the lead, and the tiebreak is the round's own.
+            const bool swap = (lq[0] < lp[0]) || (lq[0] == lp[0] && gq < gp);
+            const uint64_t* wL = swap ? wq : wp; const uint32_t* lL = swap ? lq : lp;
+            const uint64_t* wR = swap ? wp : wq; const uint32_t* lR = swap ? lp : lq;
+            bh3::Elem a{}, b{}, c;
+            #pragma unroll
+            for (int w = 0; w < 7; ++w) { a.w[w] = wL[w]; b.w[w] = wR[w]; }
+            bh3::combine(a, b, 376u, c);
+            uint32_t ctree[8];
+            #pragma unroll
+            for (int i = 0; i < 4; ++i) { ctree[i] = lL[i]; ctree[i + 4] = lR[i]; }
+            bh3::apply_mix(c, ctree, 6u, 376u);
+            bool hit = true;
+            #pragma unroll
+            for (int w = 0; w < 5; ++w) if (c.w[w] != tw[w]) hit = false;
+            if (hit) {
+                out_slots[2u*blockIdx.x]      = (uint32_t)((swap ? dq : dp) / r2_stride);
+                out_slots[2u*blockIdx.x + 1u] = (uint32_t)((swap ? dp : dq) / r2_stride);
+            }
+        }
+    }
+}
+
 // ---- recover: walk a survivor's back-ref ancestry to its 32 leaf indices -----------
 // Explicit-stack pre-order DFS from level 5 down to level 1, whose left/right entries ARE
 // leaf indices. Right is pushed first so left pops first, which is what makes the leaves
@@ -346,5 +447,33 @@ __global__ void recover_from_l3(uint32_t nSurv, uint32_t capacity,
     }
 }
 
+
+// Recovery with no reference row left to read: replay_r3 has named the survivor's eight
+// round-2 ancestors by slot, and a round-2 output record carries the four seed indices
+// below it in the order this walk would have produced -- ctree[0..1] came from the left
+// parent and [2..3] from the right.
+__global__ void recover_from_l2(uint32_t nSurv,
+                                const uint32_t* __restrict__ l2_slots,
+                                const uint32_t* __restrict__ l4_lead,
+                                const uint64_t* __restrict__ r2_elem, uint32_t r2_stride,
+                                uint32_t* __restrict__ out) {
+    const uint32_t i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i >= nSurv) return;
+    // Equal leads mean a shared seed index, so that pair can never be a valid solution
+    // and the order it is given does not matter.
+    const uint32_t flip = (l4_lead && l4_lead[2u*i + 1u] < l4_lead[2u*i]) ? 4u : 0u;
+    for (uint32_t k0 = 0; k0 < 8u; ++k0) {
+        const uint32_t sr = l2_slots[i*8u + (k0 ^ flip)];
+        const size_t o = (size_t)i*32u + k0*4u;
+        if (sr == 0xFFFFFFFFu) {          // a replay that found no pair; fails the CPU gate
+            for (int t = 0; t < 4; ++t) out[o + t] = 0u;
+            continue;
+        }
+        const size_t d = (size_t)sr * r2_stride;
+        const uint64_t p0 = r2_elem[d + 6], p1 = r2_elem[d + 7];
+        out[o + 0] = r3_l0(p0);       out[o + 1] = r3_l1(p0);
+        out[o + 2] = r3_l2(p0, p1);   out[o + 3] = r3_l3(p1);
+    }
+}
 
 }} // namespace mxbm::cuda

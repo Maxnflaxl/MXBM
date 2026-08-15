@@ -1202,7 +1202,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
 #else
                         st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));
                         st_em(v + 1, make_ulonglong2(c.w[2], c.w[3]));
-                        st_em(v + 2, make_ulonglong2(c.w[4], c.w[5]));
+                        // Word 5 in the emitting block's INPUT bucket's place: at
+                        // Lout(4) = 288 the shift drops everything above bit 311, so this
+                        // word cannot reach round 4's output and round 4 reads it only to
+                        // XOR it into a result that masks it away. replay_r3 reads it.
+                        st_em(v + 2, make_ulonglong2(c.w[4], (uint64_t)bucket));
 #endif
                         st_em(v + 3, make_ulonglong2(((uint64_t)cgi << 32) | (uint64_t)ctree[0],
                                                contribOut));
@@ -1225,9 +1229,16 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         st_em(reinterpret_cast<ulonglong2*>(out_belem + od),
                               make_ulonglong2(w0o, m1o));
                     }
-                    // LM_USE is round 4 off the octo rungs, whose row recovery replays
-                    // instead of reading; see MXBM_R4_ROWS.
-                    if constexpr (REFS && (MXBM_R4_ROWS || LMODE != LM_USE)) {
+                    // Which rounds still write a reference row. Off the octo rungs
+                    // round 4 never does -- replay_r4 reconstructs its pairing -- and on
+                    // the implicit-bits rungs rounds 1-3 do not either: replay_r3 reaches
+                    // round 2's output, whose record already carries four leaves in tree
+                    // order. IMPB is nonzero on exactly those rungs. MXBM_R4_ROWS puts
+                    // every row back so the two recoveries can be compared.
+                    constexpr bool kReplayed = (LMODE == LM_USE)
+                        || (IMPB != 0 && (LMODE == LM_SEED || LMODE == LM_RD2
+                                          || LMODE == LM_EMIT));
+                    if constexpr (REFS && (MXBM_R4_ROWS || !kReplayed)) {
                         st_em(all_left  + out_off + cgi, ref_of(leftPos));
                         st_em(all_right + out_off + cgi, ref_of(rightPos));
                     }

@@ -131,7 +131,8 @@ RbGeometry pick_geometry(uint64_t usable_mem, unsigned power_limit_w = 0,
                                    /*allow_quad=*/true, power_limit_w,
                                    /*allow_split=*/false, slack,
                                    /*allow_impb=*/impb_allowed(),
-                                   /*allow_arena=*/true, /*allow_octo=*/true);
+                                   /*allow_arena=*/true, /*allow_octo=*/true,
+                                   /*allow_replay=*/MXBM_R4_ROWS == 0);
     if (const char* e = std::getenv("MXBM_BB")) { g.bb = (uint32_t)atoi(e); g.sm = 17u - g.bb;
                                                  g.viable = true; }
     if (const char* e = std::getenv("MXBM_SM")) { g.sm = (uint32_t)atoi(e); g.viable = true; }
@@ -177,7 +178,13 @@ struct CudaSolver::Impl {
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
     // Recovery by replay: the survivors' round-4 parents by slot, and the round-3
     // ancestors replay_r4 derives from them.
-    uint32_t *survL4=nullptr, *l3Slots=nullptr, *l4Lead=nullptr;
+    uint32_t *survL4=nullptr, *l3Slots=nullptr, *l4Lead=nullptr, *l2Slots=nullptr;
+    // Round 4's own output plane. Without it round 4 would land on set 0 and destroy
+    // round 2's output, which is the record recovery reads its leaves out of once rows
+    // 1-3 are gone. 8 B a slot against the 24 B a row pair costs.
+    uint64_t *elem4 = nullptr;
+    uint32_t *counts4 = nullptr;
+    uint32_t *ahead4=nullptr, *anext4=nullptr, *atag4=nullptr, *actr4=nullptr;
     std::atomic<bool> abort_{false};
     DeviceInfo info;
     int device_index = 0;
@@ -210,7 +217,10 @@ struct CudaSolver::Impl {
         for (auto* a : {ahead, anext, atag, actr})
             for (int k = 0; k < 2; ++k) { cudaFree(a[k]); a[k] = nullptr; }
         cudaFree(left); left = nullptr; cudaFree(right); right = nullptr;
+        cudaFree(elem4); elem4 = nullptr; cudaFree(counts4); counts4 = nullptr;
+        for (auto** q : {&ahead4, &anext4, &atag4, &actr4}) { cudaFree(*q); *q = nullptr; }
         bb = bb_; sm = sm_; nb = 1u << bb_; quad = quad_; arena = arena_; octo = octo_;
+        impb = impb_allowed() && rb_impb_ok(bb, sm, quad);
         // Back-refs: the surviving rows are gi-indexed and need full capacity. Rows 4 and
         // 5 are not written at all off the octo rungs -- replay_r4 reconstructs round 4's
         // pairing from the bucket the record carries -- so three rows are allocated, and
@@ -218,11 +228,12 @@ struct CudaSolver::Impl {
         // one. Sized here rather than beside the geometry-independent buffers because a
         // step-down can cross onto an octo rung, and holding rows it will never read is
         // 0.77 GiB withheld exactly where memory is tightest.
-        refRows = octo ? 1u : (MXBM_R4_ROWS ? 4u : 3u);
-        left  = dalloc<uint32_t>((size_t)refRows*kCapacity + kSurvCap);
-        right = dalloc<uint32_t>((size_t)refRows*kCapacity + kSurvCap);
-        if (!left || !right) return false;
-        impb   = impb_allowed() && rb_impb_ok(bb, sm, quad);
+        refRows = octo ? 1u : (MXBM_R4_ROWS ? 4u : (impb ? 0u : 3u));
+        if (refRows) {
+            left  = dalloc<uint32_t>((size_t)refRows*kCapacity + kSurvCap);
+            right = dalloc<uint32_t>((size_t)refRows*kCapacity + kSurvCap);
+            if (!left || !right) return false;
+        }
         cap    = fb_cap_for(kCapacity / nb, arena ? kRbDenseSigma : kRbCapSigma);
         nslots = (size_t)nb * cap;
         // Set 0 is 9 u64 for the packed record, 8 once the implicit-bits pack deletes the
@@ -240,6 +251,18 @@ struct CudaSolver::Impl {
             atag[k]  = dalloc<uint32_t>(kArenaCap);   actr[k]  = dalloc<uint32_t>(1);
             if (!ahead[k] || !anext[k] || !atag[k] || !actr[k]) return false;
         }
+        // On the implicit-bits rungs; under MXBM_R4_ROWS as well, so the rows and the
+        // replays can both run and be compared.
+        if (impb) {
+            elem4   = dalloc<uint64_t>(slots * (MXBM_R4_ROWS ? 2u : 1u));
+            counts4 = dalloc<uint32_t>(nb);
+            if (!elem4 || !counts4) return false;
+            if (arena) {
+                ahead4 = dalloc<uint32_t>(nb);        anext4 = dalloc<uint32_t>(kArenaCap);
+                atag4  = dalloc<uint32_t>(kArenaCap); actr4  = dalloc<uint32_t>(1);
+                if (!ahead4 || !anext4 || !atag4 || !actr4) return false;
+            }
+        }
         return true;
     }
 
@@ -249,10 +272,11 @@ struct CudaSolver::Impl {
     // the throw and retrying smaller therefore got LESS memory on each attempt. ~Impl
     // runs either way, p_ being a fully-constructed member.
     ~Impl() {
-        for (auto* q : {elem[0], elem[1], dpp, specElem, specPp}) cudaFree(q);
+        for (auto* q : {elem[0], elem[1], dpp, specElem, specPp, elem4}) cudaFree(q);
         for (auto* q : {counts[0], counts[1], gictr, drops, spillTot,
                         left, right, survSlots, survCount, dleaves, specCounts,
-                        survL4, l3Slots, l4Lead}) cudaFree(q);
+                        survL4, l3Slots, l4Lead, l2Slots,
+                        counts4, ahead4, anext4, atag4, actr4}) cudaFree(q);
         for (auto* a : {ahead, anext, atag, actr})
             for (int k = 0; k < 2; ++k) cudaFree(a[k]);
     }
@@ -332,6 +356,7 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     p_->survL4  = dalloc<uint32_t>((size_t)kSurvCap*2);
     p_->l3Slots = dalloc<uint32_t>((size_t)kSurvCap*4);
     p_->l4Lead  = dalloc<uint32_t>((size_t)kSurvCap*2);
+    p_->l2Slots = dalloc<uint32_t>((size_t)kSurvCap*8);
     p_->dpp = dalloc<uint64_t>(4);
     if (!p_->dpp || !p_->survSlots)
         throw std::runtime_error("CUDA allocation failed (device out of memory)");
@@ -578,6 +603,9 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         // below instead.
     }
     int inSet = 0;
+    // What the terminal round reads: round 4's output, wherever this rung put it.
+    const uint32_t* termC = nullptr; const uint64_t* termE = nullptr;
+    const uint32_t* termAh = nullptr; const uint32_t* termAn = nullptr;
     // Where each round's back-reference row starts. Rounds 1-3 write none on an octo
     // rung, so round 4's row is the first and the terminal round's the second.
     const uint32_t r4Off = I.octo ? 0u : 3u*kCapacity;
@@ -657,56 +685,67 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // round only. When speculating it hosts the next nonce's entry pass as interleaved
     // co-blocks: grid *3/2, every third block seeds into the spec buffers.
     { const int o = inSet ^ 1;
-      cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);
-      arenaClear(o);
+      // Where round 4 puts its output. On its own plane wherever recovery needs round
+      // 2's, which is still sitting in set 0; on set 0 otherwise, as before.
+      const bool own = I.elem4 != nullptr;
+      uint64_t* const r4E = own ? I.elem4   : I.elem[o];
+      uint32_t* const r4C = own ? I.counts4 : I.counts[o];
+      uint32_t* const r4Ah = own ? I.ahead4 : I.ahead[o];
+      uint32_t* const r4An = own ? I.anext4 : I.anext[o];
+      uint32_t* const r4At = own ? I.atag4  : I.atag[o];
+      uint32_t* const r4Ac = own ? I.actr4  : I.actr[o];
+      cudaMemset(r4C, 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);
+      if (I.arena) { cudaMemset(r4Ah, 0xFF, (size_t)I.nb*4); cudaMemset(r4Ac, 0, 4); }
       // Round 4's own chain arguments, spelled once: the arms below differ only in
       // which instantiation they name.
       #define R4_ARENA_ARGS I.arena ? I.ahead[inSet] : nullptr,                      \
                             I.arena ? I.anext[inSet] : nullptr,                      \
-                            I.arena ? I.actr[o] : nullptr, I.arena ? I.atag[o] : nullptr
+                            I.arena ? r4Ac : nullptr, I.arena ? r4At : nullptr
       if (spec) {
           cudaMemset(I.specCounts, 0, (size_t)I.nb*4);
           fused_round<MXBM_R4_ARGS, false, false, true>
             <<<(I.nb << I.sm) + (I.nb << I.sm)/2u, kWG>>>(I.bb, I.sm, I.cap, I.cap,
-                r4Off, I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                r4Off, I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp,
                 nullptr, nullptr, nullptr, nullptr,     // speculation is off with the arena
                 I.specPp, kElems, I.cap, I.specCounts, I.specElem, 3u);
       } else if (I.octo && I.matchFirst) {
           fused_round<MXBM_R4O_ARGS, false, false, false, true, 0u, true, true, MXBM_MB_OCTO>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
       } else if (I.octo) {
           fused_round<MXBM_R4O_ARGS, false, false, false, false, 0u, true, true, MXBM_MB_OCTO>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
       } else if (I.arena && I.matchFirst) {
           fused_round<MXBM_R4_ARGS, false, false, false, true, 0u, true>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
       } else if (I.arena) {
           fused_round<MXBM_R4_ARGS, false, false, false, false, 0u, true>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
       } else if (I.matchFirst) {
           // No co-blocks arm: speculation and match-first never coexist -- spec is off
           // below kSpecMinPowerW and match-first is on below the same threshold.
           fused_round<MXBM_R4_ARGS, false, false, false, true>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp);
       } else {
           fused_round<MXBM_R4_ARGS>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
-                I.counts[inSet], I.elem[inSet], I.counts[o], I.elem[o],
+                I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp);
       }
       #undef R4_ARENA_ARGS
-      arenaLink(o);
+      if (I.arena)
+          arena_link<<<(kArenaCap+255)/256, 256>>>(r4Ac, r4At, r4Ah, r4An, I.spillTot);
+      termC = r4C; termE = r4E; termAh = r4Ah; termAn = r4An;
       inSet = o; }
     // Row 5 is written only where recovery reads it: an octo rung, or a build that keeps
     // round 4's row as the replay's reference arm. Off those, the terminal names its two
@@ -714,18 +753,18 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     const bool r5 = I.octo || MXBM_R4_ROWS;
     if (I.octo)
         terminal_round<true, 2u><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
-                                        I.counts[inSet], I.elem[inSet], I.left, I.right,
+                                        termC, termE, I.left, I.right,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
-                                        I.ahead[inSet], I.anext[inSet]);
+                                        termAh, termAn);
     else if (I.arena)
         terminal_round<true><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
-                                        I.counts[inSet], I.elem[inSet],
+                                        termC, termE,
                                         r5 ? I.left : nullptr, r5 ? I.right : nullptr,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
-                                        I.ahead[inSet], I.anext[inSet], I.survL4);
+                                        termAh, termAn, I.survL4);
     else
         terminal_round<false><<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, r5Off,
-                                        I.counts[inSet], I.elem[inSet],
+                                        termC, termE,
                                         r5 ? I.left : nullptr, r5 ? I.right : nullptr,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
                                         nullptr, nullptr, I.survL4);
@@ -765,17 +804,29 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         recover<true><<<(hs+63)/64, 64>>>(hs, I.survSlots, kCapacity, I.left, I.right,
                                           I.dleaves, I.elem[1], kOctoStride);
     else {
-        // Rows 4 and 5 are not written: replay_r4 re-runs round 4 over the one bucket of
-        // round 3's output the record names, and hands the walk its four round-3
-        // ancestors. Two blocks per survivor, ~4 in the whole grid.
+        // No reference row is written for round 4: replay_r4 re-runs it over the one
+        // bucket of round 3's output the record names and hands back the survivor's four
+        // round-3 ancestors by slot. Two blocks per survivor, ~4 in the whole grid.
         cudaMemset(I.l3Slots, 0xFF, (size_t)hs*4*4);
-        replay_r4<<<2*hs, 256>>>(hs, I.survL4, I.elem[0], I.elem[1], 8u,
-                                 I.counts[1], I.cap, I.l3Slots, I.l4Lead, I.drops, I.bb,
-                                 I.arena ? I.ahead[1] : nullptr,
+        replay_r4<<<2*hs, 256>>>(hs, I.survL4, I.elem4 ? I.elem4 : I.elem[0], I.elem[1],
+                                 8u, I.counts[1], I.cap, I.l3Slots, I.l4Lead, I.drops,
+                                 I.bb, I.arena ? I.ahead[1] : nullptr,
                                  I.arena ? I.anext[1] : nullptr);
-        recover_from_l3<<<(hs+63)/64, 64>>>(hs, kCapacity, I.left, I.right, I.l3Slots,
-                                            MXBM_R4_ROWS ? nullptr : I.l4Lead,
-                                            I.elem[1], 8u, I.dleaves);
+        if (I.elem4) {
+            // ...and none for rounds 1-3 either. replay_r3 does the same one level down,
+            // reaching round 2's output, whose record carries four leaves in tree order.
+            cudaMemset(I.l2Slots, 0xFF, (size_t)hs*8*4);
+            replay_r3<<<4*hs, 256>>>(hs, I.l3Slots, I.elem[1], 8u, I.elem[0], 8u, I.bb,
+                                     I.counts[0], I.cap, I.l2Slots, I.drops, I.bb,
+                                     I.arena ? I.ahead[0] : nullptr,
+                                     I.arena ? I.anext[0] : nullptr);
+            recover_from_l2<<<(hs+63)/64, 64>>>(hs, I.l2Slots, I.l4Lead,
+                                                I.elem[0], 8u, I.dleaves);
+        } else {
+            recover_from_l3<<<(hs+63)/64, 64>>>(hs, kCapacity, I.left, I.right, I.l3Slots,
+                                                MXBM_R4_ROWS ? nullptr : I.l4Lead,
+                                                I.elem[1], 8u, I.dleaves);
+        }
     }
     std::vector<uint32_t> hl((size_t)hs*32);
     cudaMemcpy(hl.data(), I.dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost);

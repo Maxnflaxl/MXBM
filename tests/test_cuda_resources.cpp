@@ -236,7 +236,7 @@ const Kernel kContract[] = {
       "crossing 3 -> 4 together was worth 1.13 ms (docs/performance-research.md:1609)" },
     { "r2 (quad record)",       true, {7,7,2,4,2,3,0,0,0,0,1}, nullptr,             256,  64, 23624,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM" },
-    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  56, 26184,  0, 3,
+    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  54, 26184,  0, 3,
       "shared-bound at 3 blocks; r3 does not want a fourth "
       "(docs/performance-research.md:1731-1745)" },
     { "r3 (quad record)",       true, {7,6,4,7,3,8,0,0,0,0,1}, nullptr,             256,  80, 26184,  0, 3,
@@ -283,7 +283,7 @@ const Kernel kContract[] = {
     { "r1 pair-w0 17 mf arena", true, {7,7,1,3,1,2,0,1,17,1,1}, nullptr,       256,  64, 19720,  0, 4, "" },
 #endif
     { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1,0,0,1}, nullptr,         256,  64, 24256,  0, 4, "" },
-    { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  56, 26816,  0, 3, "" },
+    { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  54, 26816,  0, 3, "" },
     { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1,0,0,1}, nullptr,         256,  80, 26816,  0, 3, "" },
     { "r4 match-first",         true, {6,1,2,2,8,1,0,1,0,0,1}, nullptr,         256,  47, 22976,  0, 4, "" },
     { "r4 (entry co-blocks)",   true, {6,1,2,2,8,1,1,0,0,0,1}, nullptr,           256,  64, 22336,  0, 4,
@@ -305,8 +305,8 @@ const Kernel kContract[] = {
     { "r1 mf arena",            true, {7,7,1,3,1,2,0,1,0,1,1}, nullptr,    256,  64, 19720,  0, 4, "" },
     { "r2 arena",               true, {7,7,2,4,2,8,0,0,0,1,1}, nullptr,    256,  64, 23752,  0, 4, "" },
     { "r2 mf arena",            true, {7,7,2,4,2,8,0,1,0,1,1}, nullptr,    256,  64, 24384,  0, 4, "" },
-    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  60, 26312,  0, 3, "" },
-    { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1,1}, nullptr,    256,  60, 26944,  0, 3, "" },
+    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  57, 26312,  0, 3, "" },
+    { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1,1}, nullptr,    256,  61, 26944,  0, 3, "" },
     { "r2 implicit-bits arena", true, {7,7,2,4,2,8,0,0,16,1,1}, nullptr,   256,  64, 23752,  0, 4, "" },
     { "r2 implicit-bits mf arena", true, {7,7,2,4,2,8,0,1,16,1,1}, nullptr,256,  64, 24384,  0, 4, "" },
     { "r3 implicit-bits arena", true, {7,6,4,1,8,8,0,0,16,1,1}, nullptr,   256,  58, 26312,  0, 3, "" },
@@ -364,6 +364,11 @@ const Kernel kContract[] = {
       "stack the five-level form needs is gone" },
     { "recover_from_l3",       false, {0,0,0,0,0,0}, "15recover_from_l3E",  64,  26,     0, 64, 24,
       "the same walk entered at level 3; same 64 B DFS stack, same <= 17-block grid" },
+    { "recover_from_l2",       false, {0,0,0,0,0,0}, "15recover_from_l2E",  64,  40,     0,  0, 24,
+      "no walk and no stack: the eight round-2 records ARE the 32 leaves" },
+    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  62, 16644, 144, 4,
+      "four blocks per survivor, so ~8 in the whole grid; the 144 B stack is the two\n"
+      "      unpacked 7-word records, not a spill of the hot path" },
     { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  48, 16644,  0, 5,
       "two blocks per survivor, so ~4 in the whole grid: occupancy is not a lever here,\n"
       "      and the 4096-key staging that costs the fifth block is what covers bb = 14" },
