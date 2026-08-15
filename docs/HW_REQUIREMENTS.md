@@ -265,12 +265,12 @@ that is the only comparison that means anything; the column figures above are ea
 backend's own controlled headline.
 
 The card is power-limited, not thermally limited, in every kernel, so the board power
-limit is the most valuable knob on it: **at 220 W the solver does 56.9 sol/s for 219.6 W,
-against 62.8 at 284 W** — 9 % of the speed for 23 % of the power. Below ~170 W the memory
-clock is the second knob: `--mclk 5001` is worth 8.5–14.4 % there and puts the efficiency
-optimum at 160 W (**3.70 J/solution**, against ~4.8 at stock). Against an *equally capped*
-lolMiner, MXBM wins on both speed and efficiency from ~210 W to the 285 W stock limit, and loses
-below that band — by 6–12 % once both miners run their best low-power configuration. The full curves are in
+limit is the most valuable knob on it: **at 220 W the solver does 60.3 sol/s for 219.6 W,
+against 64.9 at 284 W** — 7 % of the speed for 23 % of the power, and 220 W is also where
+efficiency peaks (**3.642 J/solution**). Below ~170 W the memory clock is the second knob:
+`--mclk 5001` is worth 8.5–14.4 % there. Against an *equally capped* lolMiner, MXBM wins on
+both speed and efficiency from ~200 W to the 285 W stock limit, and loses below that band —
+worst at 140 W (−21 %), narrowing to −6.7 % at the 100 W floor. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
 [the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
 

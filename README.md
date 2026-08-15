@@ -19,18 +19,16 @@ auditable alternative to the closed-source miners in the ecosystem.
 >
 > | board cap | MXBM | lolMiner 1.98a | |
 > |---|---|---|---|
-> | 180 W | 45.2 sol/s · 0.251 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | lolMiner ahead on both |
-> | 220 W | **54.9 sol/s · 0.250 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
-> | 285 W | **59.1 sol/s** · 0.208 sol/s/W | 53.7 sol/s · **0.226 sol/s/W** | faster vs more efficient |
+> | 180 W | 47.4 sol/s · 0.263 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | lolMiner ahead on both |
+> | 220 W | **60.3 sol/s · 0.275 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
+> | 285 W | **64.9 sol/s · 0.228 sol/s/W** | 53.7 sol/s · 0.226 sol/s/W | MXBM ahead on both |
 >
-> **MXBM has the higher ceiling — now 62.8 sol/s against ~54.0, which lolMiner cannot
-> reach at any setting — and it leads on both speed and efficiency between roughly
-> 210 W and the 285 W stock limit.** (lolMiner's column is the 2026-07-30 sweep; MXBM's
-> 240 W and up were re-swept 2026-08-15, the rest not yet.)
-> Below that window lolMiner is still ahead, but the gap has been driven to single
-> digits across 100–160 W — −6 to −12 % best-config-vs-best-config as of
-> [2026-08-14](docs/performance.md#the-low-band-after-the-2026-08-1314-kernel-ships) —
-> and closing the rest is
+> **MXBM has the higher ceiling — 64.9 sol/s against ~54.0, which lolMiner cannot reach
+> at any setting — and it leads on both speed and efficiency from roughly 200 W to the
+> 285 W stock limit.** (lolMiner's column is the 2026-07-30 sweep; MXBM's was swept end
+> to end 2026-08-15.)
+> Below that window lolMiner is still ahead, and its best cap is 140 W at +21 %, but the
+> gap narrows again toward the floor — **+6.7 % at 100 W** — and closing it is
 > [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
 >
 > **`--pl 220` is the setting to use.** Needs root; restored on exit. See

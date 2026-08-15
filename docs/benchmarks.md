@@ -63,14 +63,15 @@ to 220 W:
 
 | | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
-| Throughput | **56.9 sol/s** | 54.4 sol/s | **+4.6 %** |
+| Throughput | **60.3 sol/s** | 54.4 sol/s | **+11.0 %** |
 | Board power | 219.6 W | 219.4 W | — |
-| Efficiency | **0.259 sol/s/W** | 0.248 sol/s/W | **+4.6 %** |
+| Efficiency | **0.275 sol/s/W** | 0.248 sol/s/W | **+10.9 %** |
 
-MXBM is ahead on both from roughly **210 W to the 285 W stock limit** (210 itself is a
+MXBM is ahead on both from roughly **200 W to the 285 W stock limit** (200 itself is a
 tie at the cross-session band). Below that lolMiner is ahead on both — at 180 W by about
-19 %. The upper crossing at ~277 W closed with the w0-checkpoint record: MXBM is now
-ahead on efficiency at 285 W too, 0.2284 against 0.2259.
+10 %, peaking at 21 % around 140 W and narrowing to 6.7 % at the 100 W floor. The upper
+crossing at ~277 W closed with the w0-checkpoint record: MXBM is now ahead on efficiency
+at 285 W too, 0.2284 against 0.2259.
 
 **Both curves are measured.** lolMiner was swept across the same caps as MXBM rather than
 sampled once at its own uncapped draw, which is what makes the window above a comparison
@@ -112,20 +113,21 @@ a great deal. Swept against each other at identical caps:
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
-**Where each one wins.** Below ~210 W lolMiner is ahead on speed *and* efficiency, by
-about 19 % at 180 W. From ~210 W to the 285 W stock limit MXBM is ahead on both, by 4.6 %
-at 220 W and 15 % at 240 W. The upper crossing at ~277 W closed with the w0-checkpoint
+**Where each one wins.** Below ~200 W lolMiner is ahead on speed *and* efficiency, by
+about 10 % at 180 W. From ~200 W to the 285 W stock limit MXBM is ahead on both, by 11 %
+at 220 W and 16 % at 240 W. The upper crossing at ~277 W closed with the w0-checkpoint
 record.
 lolMiner barely responds to a cap at all — it gives up 2.4 % of its speed for 24 % less
 power, and above ~237 W the cap does nothing — so its best efficiency (0.2991 sol/s/W at
-175 W) beats MXBM's best on stock memory (0.2592 at 220 W). On the memory rung, with the
-low-power kernels, MXBM's own best is **0.271 sol/s/W at 160 W** — see the next section;
-lolMiner keeps a 10 % efficiency lead at each miner's best point. What MXBM has is the
-ceiling: 62.8 sol/s against ~54.0, which lolMiner cannot reach at any setting.
+175 W) still beats MXBM's best, now **0.2746 sol/s/W at 220 W on stock memory** — 3.642
+J/solution — but by 8.9 % rather than the 15.4 % of the previous kernel. On the memory
+rung MXBM's best is 3.70 J/sol at 160 W, measured a kernel earlier; see the next section.
+What MXBM has is the ceiling: 64.9 sol/s against ~54.0, which lolMiner cannot reach at
+any setting.
 
 The July sweep was run twice, two days apart, and **reproduced within ~1 %** at every
 cap, so the crossings are a property of the two miners, not of the day. The MXBM
-column was re-measured 2026-08-13 on the current build — the window widened because
+column was swept end to end 2026-08-15 on the current build — the window widened because
 the build got faster, not because the rig moved.
 It now runs down to the card's **100 W floor**, which settles the question of whether
 lolMiner had a better efficiency point hiding below the old 120 W left edge: it does not.
@@ -147,12 +149,12 @@ observed.
 
 Two things worth knowing before you cap your own card:
 
-- **Efficiency peaks around 200–210 W and gets *worse* below it.** At 180 W the core clock
-  has fallen to 1905 MHz and the parts of the board that do not scale with it — memory,
+- **Efficiency peaks at 220 W and gets *worse* below it.** At 180 W the core clock has
+  fallen to 1725 MHz and the parts of the board that do not scale with it — memory,
   uncore, leakage — are being paid for out of less work. Lower is not always better, and
-  the head-to-head sweep now shows this holds all the way down to the card's 100 W floor.
-- **The last watts are the worst value.** Going 240 → 285 W buys 2.3 sol/s for 45 W; the
-  first 20 W above 180 buys 5.4. Where to sit is an economic choice about your power
+  the head-to-head sweep shows this holds all the way down to the card's 100 W floor.
+- **The last watts are the worst value.** Going 220 → 285 W buys 4.6 sol/s for 65 W; the
+  20 W from 190 to 210 buys 7.1. Where to sit is an economic choice about your power
   price, not a technical one.
 
 ```sh
@@ -173,8 +175,8 @@ for bandwidth nothing is using. Dropping it to the **5001 MHz rung** returns tho
 core clock, and below ~130 W MXBM also switches to a different geometry and rebuild
 variant. Together that is MXBM's best configuration at each cap.
 
-Measured 2026-08-14 on the current build, headless, two 120 s runs per point in mirrored
-cap order (the two arms agree within 1.5 % everywhere):
+Measured 2026-08-14, headless, two 120 s runs per point in mirrored cap order (the two
+arms agree within 1.5 % everywhere) — one kernel behind the rest of this page:
 
 | cap | ms/solve | sol/s | J/solution | sol/s/W | lolMiner at its own best |
 |---|---|---|---|---|---|
@@ -183,10 +185,11 @@ cap order (the two arms agree within 1.5 % everywhere):
 | 140 W | 54.3 | 37.0 | 3.79 | 0.264 | 39.75 |
 | **160 W** | 46.6 | 43.2 | **3.70** | **0.271** | 47.85 |
 
-**160 W + the rung is MXBM's efficiency optimum — 3.70 J/solution**, better than anything
-on stock memory at any cap, and the curve is nearly flat from 120 to 160 W. lolMiner is
-still ahead in this band, but by **6–12 %** rather than the 19–32 % it led by on stock
-memory. The mechanism, the A/Bs behind each step and lolMiner's own rung sweep are in
+**160 W + the rung gives 3.70 J/solution** and the curve is nearly flat from 120 to
+160 W. lolMiner is still ahead in this band, by **6–12 %** against the rung. On stock
+memory and the current kernel the same caps run 6.7–21 % behind, and 220 W gives 3.642
+J/sol — so which configuration holds MXBM's efficiency optimum is open until this table
+is re-taken. The mechanism, the A/Bs behind each step and lolMiner's own rung sweep are in
 [performance.md](performance.md#below-stock-the-other-rung-pays-85-to-144--under-caps-below-173-w-and-a-new-efficiency-record).
 
 ```sh
@@ -420,4 +423,4 @@ Curves for the three NVIDIA cards, generated from the tables in
 [performance.md](performance.md#third-party-hardware--a-two-card-rig-2026-08-02). **Not a
 controlled comparison** — different machines, operating systems and instruments — so
 cross-card distances are unreliable. What holds is each curve's shape and where its own
-efficiency peak sits: 210 W, 148 W and 130 W, all well under stock.
+efficiency peak sits: 220 W, 148 W and 130 W, all well under stock.
