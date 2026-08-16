@@ -5591,6 +5591,56 @@ present in round 4 where the pair-count argument says it should be worst. **The 
 is a genuine 8σ**, and a Gaussian estimate of the spill rate at a tighter cap is
 trustworthy, which is what the singleton-eviction family needs to price itself.
 
+### The block-exit barrier is removable, and the barrier family is over-priced 10x
+
+`fused_round_body` carries ten `__syncthreads()`, four of them live at stock. The one at
+the bottom of `while (xp < nparts)` guards the *next* pass's `tab` clear and `gcount`
+reset against this pass's still-running walk — and at stock there is no next pass:
+`nparts` is 1 on every non-spilling bucket and `nsweep` is 1 because SUBPASS is off at
+every shipping launch site. So it executes once, at block exit, with nothing after it.
+`nparts` is a runtime value, so the compiler cannot see this.
+
+```c
+if (xp + 1u < nparts || sweep + 1u < nsweep) __syncthreads();
+```
+
+The guard is block-uniform — `nparts` is computed from `gcount` and `cnt8[]` after a
+barrier, so every thread derives the same value — which is what makes skipping a barrier
+legal rather than undefined.
+
+**−0.048 ms, −0.165 %** (six arms ABBA-interleaved at 2600/10251, 45 s each, 0.06 % spread
+per arm, `base` and `bar` ranges non-overlapping: 34.19–34.21 against 34.24–34.26
+solves/s). KAT 3/3 on fifteen geometries, and separately on a `MXBM_FCAP=192` build where
+the split path is live — positive-controlled, because at that cap the solve is 15 % slower
+from the double staging, so the multi-part path provably ran and the guarded barrier
+provably fired. Occupancy holds at three blocks/SM on every affected kernel; r3's registers
+rise 54→56 and 56→60 with 24 to spare, and the octo r4 rebuild's stack falls 96→88 B. The
+octo rung measures 17.68 solves/s on every arm of its own ABBA, so nothing is paid there.
+
+**The number is the finding, and it is a tenth of what was predicted.** The proposal
+reasoned from the stall census: barrier is 31.2 % of warp-active cycles in r1 and 28.9 %
+in r2, above every other reason, so removing one of four live barriers should be worth
+about a quarter of that — ~0.4 ms conservatively, up to 0.95. It is worth 0.048.
+
+**A barrier's stall percentage is not its time cost when the SM holds other blocks.** The
+census counts cycles a warp spends waiting at a barrier; those cycles are only wall clock
+if no other resident warp can issue into them. r1 runs five blocks per SM and r2 four, so
+the wait is largely covered — and the barrier this deletes is the one *least* able to cost
+anything, because after it the block only retires. That is screen 9 read from the other
+side: a resident block's marginal value decays because the machine is already covered, and
+the same coverage is what makes a barrier cheap.
+
+The consequence is a bound on a family. Deleting the one deletable barrier of four buys
+0.048 ms, so the whole deletion route is ~0.2 ms at its most generous, and any proposal
+that quotes the 28–31 % barrier share as headroom — narrower named barriers, a
+work-stealing staging loop to equalise the warps each barrier waits on, generation tags to
+retire the `tab` clear — is quoting a number that is already covered by residency. Price
+them against 0.048 ms per barrier, not against the census percentage.
+
+*(Kept despite being under the ~1 %-of-a-solve floor: it is three tokens, it is pinned by
+six non-overlapping arms rather than inferred, it costs nothing anywhere, and the barrier
+genuinely is not needed where it stood.)*
+
 ### The w0-checkpoint pair record, repriced by the address bits: −0.76 ms (−2.4 %)
 
 **Round 2 no longer derives work word 0. Round 1 stores it, in the same 16 bytes.**

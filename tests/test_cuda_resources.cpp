@@ -236,7 +236,7 @@ const Kernel kContract[] = {
       "crossing 3 -> 4 together was worth 1.13 ms (docs/performance-research.md:1609)" },
     { "r2 (quad record)",       true, {7,7,2,4,2,3,0,0,0,0,1}, nullptr,             256,  64, 23624,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM" },
-    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  54, 26184,  0, 3,
+    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  56, 26184,  0, 3,
       "shared-bound at 3 blocks; r3 does not want a fourth "
       "(docs/performance-research.md:1731-1745)" },
     { "r3 (quad record)",       true, {7,6,4,7,3,8,0,0,0,0,1}, nullptr,             256,  80, 26184,  0, 3,
@@ -256,15 +256,15 @@ const Kernel kContract[] = {
       "the packed stores fold the repack; resources identical to the base record, "
       "still exactly on the 64-register cliff" },
     { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,16,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
-    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,16,0,1}, nullptr,       256,  56, 26184,  0, 3, "" },
-    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,16,0,1}, nullptr,       256,  56, 26816,  0, 3, "" },
+    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,16,0,1}, nullptr,       256,  60, 26184,  0, 3, "" },
+    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,16,0,1}, nullptr,       256,  60, 26816,  0, 3, "" },
     // The (17,0) pack: same code with 17 address-implied bits, selected under the
     // low-power gate. Resources identical to the 16-bit pack on every variant --
     // r2 stays exactly on the 64-register cliff.
     { "r2 implicit-bits 17",    true, {7,7,2,4,2,8,0,0,17,0,1}, nullptr,       256,  64, 23624,  0, 4, "" },
     { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
-    { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17,0,1}, nullptr,       256,  56, 26184,  0, 3, "" },
-    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17,0,1}, nullptr,       256,  56, 26816,  0, 3, "" },
+    { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17,0,1}, nullptr,       256,  60, 26184,  0, 3, "" },
+    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17,0,1}, nullptr,       256,  60, 26816,  0, 3, "" },
 #if MXBM_PAIR_W0
     // The w0-checkpoint pair record. Round 1 emits it, so round 1 is instantiated at the
     // same IMPB as rounds 2 and 3; word 0 is already in a register at the emit and the
@@ -305,8 +305,8 @@ const Kernel kContract[] = {
     { "r1 mf arena",            true, {7,7,1,3,1,2,0,1,0,1,1}, nullptr,    256,  64, 19720,  0, 4, "" },
     { "r2 arena",               true, {7,7,2,4,2,8,0,0,0,1,1}, nullptr,    256,  64, 23752,  0, 4, "" },
     { "r2 mf arena",            true, {7,7,2,4,2,8,0,1,0,1,1}, nullptr,    256,  64, 24384,  0, 4, "" },
-    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  57, 26312,  0, 3, "" },
-    { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1,1}, nullptr,    256,  61, 26944,  0, 3, "" },
+    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  60, 26312,  0, 3, "" },
+    { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1,1}, nullptr,    256,  62, 26944,  0, 3, "" },
     { "r2 implicit-bits arena", true, {7,7,2,4,2,8,0,0,16,1,1}, nullptr,   256,  64, 23752,  0, 4, "" },
     { "r2 implicit-bits mf arena", true, {7,7,2,4,2,8,0,1,16,1,1}, nullptr,256,  64, 24384,  0, 4, "" },
     { "r3 implicit-bits arena", true, {7,6,4,1,8,8,0,0,16,1,1}, nullptr,   256,  58, 26312,  0, 3, "" },
@@ -327,7 +327,7 @@ const Kernel kContract[] = {
     // six work words from eight leaves costs 46 -> 128 registers, which is EXACTLY the
     // limit for 2 blocks/SM, so the round halves its residency as well as its input
     // bytes. That trade is the rung's whole question and it is measured, not assumed.
-    { "r4 octo arena",          true, {6,1,2,8,4,2,0,0,0,1,1}, nullptr,  256,  80, 23744, 96, 3,
+    { "r4 octo arena",          true, {6,1,2,8,4,2,0,0,0,1,1}, nullptr,  256,  80, 23744, 88, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM. Left to itself the "
       "rebuild takes 128 and 2 blocks; MXBM_MB_OCTO asks for the third and ptxas finds it "
       "with zero spill" },

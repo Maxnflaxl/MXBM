@@ -1249,7 +1249,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             oth = lchain[oth];
         }
     }
-    __syncthreads();       // next pass reuses every shared array above
+    // Only a pass that HAS a successor needs it -- it guards the next one's tab clear and
+    // gcount reset against this one's still-running walk. At stock nparts and nsweep are
+    // both 1, so the block exits here instead of paying a block-wide wait it cannot use.
+    // nparts is runtime, so the compiler cannot fold this away on its own.
+    if (xp + 1u < nparts || sweep + 1u < nsweep) __syncthreads();
     ++xp;
     }
   }
