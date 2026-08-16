@@ -8,8 +8,7 @@ repository — nothing is estimated or extrapolated unless explicitly labelled.
 **Everything else lives in [performance-research.md](performance-research.md)**: the
 solver architecture, every optimization that worked and every one that did not with
 the measured mechanism behind each, the established hardware limits, and the open
-leads. This page links into it throughout; that page is the one to read before
-proposing a new lever, because most of them have already been tried.
+leads. Read it before proposing a new lever — most have already been tried.
 
 **Target:** lolMiner does **~53 sol/s** on an RTX 4070 Ti SUPER at **stock clocks, no
 special configuration** (user-measured). BeamHash III yields **2.006** solutions per
@@ -40,13 +39,12 @@ the only way to see the early changes next to a 30× range. **Linear** starts bo
 zero, so equal height means equal *absolute* change — which shows that almost all of the
 ms was won early while almost all of the sol/s came late.
 
-Both charts carry two y axes, which is normally a lie and here is not: sol/s and ms/solve
-are one quantity inverted, so no correlation is being implied between two things. On the
-log chart the two lines are near-mirror images; on the linear chart the reciprocal's
-convexity makes them genuinely different shapes, which is exactly what the sentence above
-is pointing at. Relabelling one axis in the other's units instead is *not* available —
-`sol/s × ms` is ~1900 over the OpenCL rows and ~1980 over the CUDA ones, so a single
-converted ruler would misstate half the chart by 4 %.
+Two y axes are safe here because sol/s and ms/solve are one quantity inverted, so no
+correlation between two things is implied. On the log chart the lines are near-mirror
+images; on the linear chart the reciprocal's convexity makes them different shapes.
+Relabelling one axis in the other's units is *not* available — `sol/s × ms` is ~1900 over
+the OpenCL rows and ~1980 over the CUDA ones, so one converted ruler would misstate half
+the chart by 4 %.
 
 The x axis is optimization step, not calendar time: only three dates exist and 16 rows
 fall on one of them, so dates are drawn as bands. The dashed divider is the change of
@@ -64,20 +62,17 @@ at 32.00 ms = 22,500 solves × 2.006 = 45,135 solutions → 0.47 %). Rows whose 
 recorded solve count stay bare points rather than being given a fabricated bar.
 
 **It is an uncertainty on the figure, never a window σ.** A per-window standard deviation
-answers a different question — how far a one-minute reading bounces — and does not shrink
-as the run lengthens, so putting one in this column would make a well-sampled build look as
-uncertain as a short one. The two differ by 6–8× on identical data, and the gap widens with
-run length because only one of them shrinks: the 80-minute 2026-08-13 pool session carries
-a 60 s-window σ of 0.90 against a `1/√N` uncertainty of 0.11, and the 31-minute 2026-08-16
-one carries 1.09 against 0.19. Window spreads are reported with the live-mining sessions
-below, as spreads.
+measures how far a one-minute reading bounces and does not shrink as the run lengthens, so
+it would make a well-sampled build look as uncertain as a short one. The two differ by
+6–8× on identical data: the 80-minute 2026-08-13 pool session carries a 60 s-window σ of
+0.90 against a `1/√N` of 0.11, and the 31-minute 2026-08-16 one 1.09 against 0.19. Window
+spreads are reported with the live-mining sessions below, as spreads.
 
-**The bar sits on the sol/s column, and what it measures is BeamHash III rather than the
-solver.** Across the 60 s windows of a live session the sol/s spread runs 1.4–1.6 %, nearly
-all of it the solutions-per-solve sampling noise above; the solves/s factor behind it moves
-by less than the miner's own display step, so a log cannot resolve the solver's timing
-spread at all. It is the same asymmetry that makes ms/solve the quoted quantity and sol/s
-the derived one.
+**The bar sits on the sol/s column, and it measures BeamHash III rather than the solver.**
+Across a live session's 60 s windows the sol/s spread runs 1.4–1.6 %, nearly all of it the
+solutions-per-solve sampling above; the solves/s factor moves by less than the miner's own
+display step, so a log cannot resolve the solver's timing spread at all. Same asymmetry
+that makes ms/solve the quoted quantity.
 
 </details>
 
@@ -116,6 +111,7 @@ the derived one.
 | 2026-08-15 | **The w0-checkpoint pair record** — round 1 stores the child's post-mix work word 0, so round 2 derives only the linear lane (12 siphashes, no mixes); the record stays 16 B because the address-implied key bits pay for word 0 | 32.0 | 31.3 | **64.2 ± 0.3** | −0.7 | −2.2 % | [w0 checkpoint](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24) *(−0.76 ms measured ABBA-interleaved; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 46,290 solutions)* | [the 24 B form of the same record, +3.8 %](performance-research.md#measured-results-2026-08-12) |
 | 2026-08-15 | **Recovery replays instead of storing reference rows** — round 4's row, then its record at 8 B instead of 16, then round 3's row and rows 1–3 with it; recovery re-runs two rounds over one bucket each and reads round 2's four leaves | 31.3 | 29.3 | **68.6 ± 0.3** | −2.0 | −6.4 % | [the replay](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) *(−2.029 ms measured ABBA-interleaved in three increments; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 49,392 solutions. Also −688 MiB)* | — |
 | 2026-08-16 | **Two barriers' worth of work that nothing needed** — the block-exit `__syncthreads()`, which at stock guards a pass that never runs; then **singleton-free staging**, which never stages the 12.8 % of a group alone in its chain slot, since a perfect table makes that element provably partnerless | 29.3 | 29.1 | **69.0 ± 0.3** | −0.2 | −0.7 % | [the barrier](performance-research.md#the-block-exit-barrier-is-removable-and-the-barrier-family-is-over-priced-10x), [singleton-free staging](performance-research.md#singleton-free-staging-the-prize-is-085-ms-and-the-prepass-that-finds-it-costs-076) *(−0.048 and −0.089 ms measured ABBA-interleaved; the pin resolves the pair, not the halves, because the barrier shipped without a re-pin. The second is a −0.852 ms skip against a +0.763 ms census — see the ledger, which is where the value of this row is. ± is `1/√N` over the pin's ~49,700 solutions)* | — |
+| 2026-08-16 | **The census and the chain share one `tab` word** — the singleton filter's word-0 count goes in the high 16 bits and the chain head in the low 16, so the table is initialised once per group instead of twice and the barrier between the two clears goes with it | 29.1 | 29.1 | **69.0 ± 0.3** | −0.06 | −0.2 % | [the packed tab](performance-research.md#the-census-and-the-chain-share-one-tab-word-and-a-barrier-goes-with-it) *(−0.060 ms measured over eight interleaved arms a side, ranges not overlapping — below the pin's 0.1 ms print resolution either way, and the After column is the previous pin rather than a re-take. With the block-exit barrier's −0.048 this is the second independent measurement of what a `__syncthreads()` costs here)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
@@ -125,7 +121,8 @@ the derived one.
 
 The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-16), 0.0 % spread on
 ms/solve and 0.1 % on sol/s, stock 285 W, headless, 240 s warmup discarded,
-2610 MHz / 10251 MHz / 277.0 W / 67 °C.
+2610 MHz / 10251 MHz / 277.0 W / 67 °C. It is one kernel change behind the shipping
+build, by the −0.060 ms of the packed `tab` word.
 Pool validation is one pin behind — on the build two kernel changes ago, where it matched
 that pin to the digit: **68.52 sol/s** over 31 minutes, a 15 s median of
 **68.60** against that benchmark's 68.60, with window spreads of σ = 1.09 over 60 s and 2.21
@@ -160,11 +157,10 @@ it, on a path that shares no code with the benchmark harness. Shares ran **92 ac
 0 stale / 0 rejected**, and the card held 284–285 W / 2610–2670 MHz / 64–68 °C with the
 memory clock pinned at 10251 by the P-state.
 
-The 1.09 is a spread of the reading, not an uncertainty on the figure: this session's own
-mean carries the Poisson ±0.19 over 127,449 solutions, which is **2.6× the solution count
-behind the benchmark row's ±0.3** and is why the two figures agreeing to 0.1 % is worth
-something. The progress row keeps its own `1/√N`, because a bar belongs to the run behind
-the row and this is a different measurement, not more of the same one.
+The 1.09 is a spread of the reading; this session's mean carries a Poisson ±0.19 over
+127,449 solutions, **2.6× the solution count behind the benchmark row's ±0.3**. The
+progress row keeps its own `1/√N` — a bar belongs to the run behind the row, and this is a
+different measurement rather than more of the same one.
 
 The CUDA backend is **~29 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as
@@ -400,10 +396,8 @@ way:
 power-limited rig, which is most rigs, that reads as a loss.
 
 **It is not one. That table compares two different operating points, and at equal
-power MXBM wins both.** All four leads listed when this was first recorded have
-now been measured; the rest of this section is what they said. Reproduce with
-`benchmarks/power_bench.sh`, `benchmarks/stage_power.sh` and
-`benchmarks/power_sweep.sh`.
+power MXBM wins both.** Reproduce with `benchmarks/power_bench.sh`,
+`benchmarks/stage_power.sh` and `benchmarks/power_sweep.sh`.
 
 ### The card is at its power limit, in every kernel
 
@@ -465,7 +459,7 @@ sits measurably below it — and it runs the highest clock of any stage — beca
 round 3 is the DRAM-bound round: moving bytes costs this board less than working
 the SM does, so the freed power comes back as core clock.
 
-Two consequences, and they matter more than the table:
+Two consequences:
 
 1. **Energy per solve tracks time per solve.** At a fixed cap, sol/s/W is just
    sol/s ÷ 285. Every speed optimization on record is an efficiency
@@ -543,11 +537,9 @@ is free.**
 
 *(Measured 2026-07-28 with `benchmarks/compare_power.sh`.)*
 
-The sweep above compares MXBM's whole curve against lolMiner at one **uncapped** point,
-on the reasoning that uncapped is how people run it. That reasoning was wrong. lolMiner
-1.98a has `--pl` too — it is in the installed binary's help — so it has a curve of its
-own, and nobody had measured it. This section is that measurement, and it revises the
-conclusion above rather than supporting it.
+The sweep above compares MXBM's whole curve against lolMiner at one **uncapped** point.
+lolMiner 1.98a has `--pl` too — it is in the installed binary's help — so it has a curve
+of its own. This section is that measurement, and it revises the conclusion above.
 
 Both miners, same session, interleaved, alternating which goes first, caps set externally
 with `nvidia-smi -pl` so neither miner's own OC code is a variable. Power is sampled from
@@ -633,7 +625,7 @@ moved both crossings from ~200 W to ~183 W — the singleton filter has since ta
   under a cap than at stock. **The 175–185 W band is narrower than the ±2.5 % this
   comparison carries between sessions**, so read the crossing as a band, not a point.
 
-Three facts that reframe the whole comparison:
+Three facts behind it:
 
 **lolMiner barely responds to the cap at all.** From 285 W down to 180 W it moves 53.65 →
 52.35 sol/s — it gives up **2.4 %** of its speed for **24 %** less power. MXBM over the
@@ -746,27 +738,24 @@ each 120 s point; lolMiner's is the 2026-07-30 session. The clock deficit is a l
 wider than the previous kernel's at every cap, and the throughput gap is nonetheless much
 narrower — which is the point of the section.)*
 
-**Above 160 W this is the story the section was written to tell.** MXBM's kernels cost
-more power per clock, so a tightening cap takes clock away from us faster than from them
-— 102 MHz behind at stock, 723 MHz behind at 175 W. The suspect was
-DRAM traffic: MXBM moves [10.73 GB/solve](benchmarks.md#where-the-time-and-energy-go) at geometry
-(16,1), while lolMiner selects a **4G** variant that fits the search in 4 GB and must
-therefore move far less.
-
-**That suspicion has since been measured, and it accounts for the shape of this table.**
+**Above 160 W the mechanism is traffic.** MXBM's kernels cost more power per clock, so a
+tightening cap takes clock away from us faster than from them — 102 MHz behind at stock,
+723 MHz behind at 175 W. MXBM moves
+[10.73 GB/solve](benchmarks.md#where-the-time-and-energy-go) at geometry (16,1), while
+lolMiner selects a **4G** variant that fits the search in 4 GB and moves far less.
 Narrowing round 2's record so the solve moves 16 % fewer bytes buys **60 MHz at 285 W and
-210 MHz at 180 W** — the price of a byte rises 5× as the cap tightens, which is exactly
-the asymmetry the gap column shows. One lever worth 210 MHz against a 570 MHz deficit
-means the whole gap is the right order of magnitude for a traffic story: it needs about
-2.7× our lever, and lolMiner's 4 GB variant against our 6.17 GiB is plausibly that. See
+210 MHz at 180 W** — the price of a byte rises 5× as the cap tightens, which is the
+asymmetry the gap column shows. One lever worth 210 MHz against a 570 MHz deficit puts the
+whole gap in range of a traffic story: it needs about 2.7× our lever, and lolMiner's 4 GB
+variant against our 6.17 GiB is plausibly that. See
 [bytes are not free in watts](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
 
-**And it is not the whole story any more.** Two levers that deleted *instructions* rather
-than bytes — the w0-checkpoint record and the replayed reference rows — each paid more
-under a cap than at stock, and between them they took the 180 W deficit from −10.4 % to
-−1.8 % without narrowing a single record. The clock gap they were measured against did
-not close; it widened. So the traffic story bounds the gap but does not exhaust it, and
-the issue economy is the other half.
+**Traffic is not the whole of it.** Two levers that deleted *instructions* rather than
+bytes — the w0-checkpoint record and the replayed reference rows — each paid more under a
+cap than at stock, and between them took the 180 W deficit from −10.4 % to −1.8 % without
+narrowing a single record. The clock gap they were measured against widened rather than
+closed. So traffic bounds the gap but does not exhaust it, and the issue economy is the
+other half.
 
 **This inverts one of our own conclusions.** [Bytes are nearly
 free](performance-research.md#bytes-are-nearly-free-per-element-work-is-not) measured that narrowing records buys

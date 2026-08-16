@@ -17,6 +17,7 @@
 /cuda/test_primitives
 /benchmarks/nvml_energy
 /build-probe/
+/build-tp0/
 
 # CUDA / HIP intermediates
 *.i

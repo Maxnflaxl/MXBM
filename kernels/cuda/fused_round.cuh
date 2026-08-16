@@ -238,6 +238,18 @@ constexpr uint32_t kSKey = (uint32_t)MXBM_SKEY;
 constexpr uint32_t kTabSize = (uint32_t)MXBM_TAB;
 constexpr uint32_t kEmpty   = 0xFFFFFFFFu;
 
+// MXBM_TABPACK: the census count and the chain head share one tab word -- count in the
+// high 16 bits, head in the low 16 -- so the table is initialised once per group instead
+// of twice. Without it the census leaves counts behind and the chain needs its own clear
+// pass and its own barrier before the expand loop can insert. The count's 16 bits carry
+// a whole bucket against a cap of ~2.5 k at the coarsest rung on the ladder; the head's
+// 16 are asserted against FCAP below.
+#ifndef MXBM_TABPACK
+#define MXBM_TABPACK 1
+#endif
+constexpr uint32_t kEmpty16  = 0xFFFFu;            // chain sentinel in the packed low half
+constexpr uint32_t kCountOne = 0x10000u;           // one census hit
+
 // MXBM_STCS: emit through __stcs (streaming, evict-first in L2). Emitted records are
 // read exactly ONCE, by the next round; back-refs are read only for the <=1024 survivors
 // out of 33 M. Both still allocate L2 normally and evict the staging reads that DO have
@@ -360,12 +372,12 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #endif
 
 // MXBM_LWORK_SOA=1 lays lwork out column-major -- word w of element p at
-// w*FCAP + p instead of p*LWS + w -- so lanes walking consecutive p read
-// consecutive u64: conflict-free, where the record layout's odd u64 stride is
-// 2-way (the 2026-07-31 r2 census measured 39 % of shared-load wavefronts as
-// conflict replays at exactly the record reads). Same bytes, same shared
-// budget, only the index changes; FCAP is compile-time, so per-word offsets
-// stay immediates and each element still costs one base computation.
+// w*FCAP + p instead of p*LWS + w. Same bytes, same shared budget, only the index
+// changes. Kept as an instrument rather than a lever: the odd u64 stride it replaces
+// already hits the 16 distinct slots a 64-bit shared access can reach, so the layout
+// contributes no bank conflicts and swapping it moves the conflict counter by under
+// 2 %. What the counter does see is the data-dependent addressing -- the chain-walk's
+// two element reads and the tab atomics -- which no layout reaches.
 #ifndef MXBM_LWORK_SOA
 #define MXBM_LWORK_SOA 0
 #endif
@@ -662,6 +674,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                                 : LMODE == LM_EMIT ? 4u : 8u;
     constexpr bool SOLO    = (MXBM_SOLO != 0) && !MFIRST && (MXBM_SOLO_R & kSoloBit) != 0;
     constexpr bool SOLO_FL = SOLO && (MXBM_SOLO == 2);
+    // See MXBM_TABPACK. The chain sentinel moves into 16 bits, so a slot index must fit.
+    constexpr bool PACKTAB = (MXBM_TABPACK != 0) && SOLO;
+    constexpr uint32_t kChEmpty = PACKTAB ? kEmpty16 : kEmpty;
+    static_assert(!PACKTAB || FCAP < kEmpty16, "a staged slot must not alias the sentinel");
     // See MXBM_COOP. The unpack it splits across four lanes is the IMPB one, and MFIRST
     // would need the chain built before the record is read.
     constexpr bool COOP = (MXBM_COOP != 0) && LMODE == LM_EMIT && IMPB != 0
@@ -788,7 +804,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     const uint32_t sbits = submask_bits + xb;
     const uint32_t mask  = mask_s | (xp << submask_bits);
     if (lId == 0) { gcount = 0; if constexpr (MFIRST) nmatch = 0; }
-    for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = SOLO ? 0u : kEmpty;
+    for (uint32_t i = lId; i < kTabSize; i += kWG)
+        tab[i] = PACKTAB ? kEmpty16 : SOLO ? 0u : kEmpty;
     __syncthreads();
 
     // SLOT CENSUS. One scalar load per input element -- the same 32 B sector the staging
@@ -802,7 +819,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             // above the sub-mask, which leave the byte as soon as submask_bits > 1.
             const uint32_t key = (uint32_t)(in_belem[i_ * INSTR] & 0xFFFFFFu);
             if ((key & ((1u << sbits) - 1u)) != mask) continue;
-            atomicAdd(&tab[(key >> submask_bits) & (kTabSize - 1u)], 1u);
+            atomicAdd(&tab[(key >> submask_bits) & (kTabSize - 1u)],
+                      PACKTAB ? kCountOne : 1u);
         }
         __syncthreads();
     }
@@ -837,7 +855,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
         // Alone in the slot means no equal-key partner, so nothing to emit and nothing
         // for the walk to read. Ahead of the record load, which is what it saves.
         if constexpr (SOLO_FL)
-            if (tab[(key >> submask_bits) & (kTabSize - 1u)] < 2u) continue;
+            if (tab[(key >> submask_bits) & (kTabSize - 1u)]
+                    < (PACKTAB ? 2u * kCountOne : 2u)) continue;
         const uint32_t pos = atomicAdd(&gcount, 1u);
         // Keep counting past FCAP: gcount is what decides whether to split.
         if (pos >= FCAP) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
@@ -1033,7 +1052,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
         if (gcount > FCAP && lId == 0) atomicAdd(&drops[1], gcount - FCAP);
     }
     // tab held the census; the chain built in the expand loop needs it empty again.
-    if constexpr (SOLO) {
+    // Under MXBM_TABPACK the two live in one word and this pass is not needed.
+    if constexpr (SOLO && !PACKTAB) {
         for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
         __syncthreads();
     }
@@ -1192,7 +1212,9 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[lwx(pos, 0)] & 0xFFFFFFu)
                                                  : lkey[pos];
             const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
-            lchain[pos] = atomicExch(&tab[hk], pos);
+            // Packed: the exchanged word still carries the census count above the head.
+            const uint32_t prev = atomicExch(&tab[hk], pos);
+            lchain[pos] = PACKTAB ? (prev & kEmpty16) : prev;
         }
     }
     __syncthreads();
@@ -1201,7 +1223,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     // equal full key, so every unordered colliding pair is emitted exactly once.
     for (uint32_t pos = lId; pos < total; pos += kWG) {
         uint32_t oth = lchain[pos], walk = 0;
-        while (oth != kEmpty) {
+        while (oth != kChEmpty) {
             if (++walk > 64u) { atomicAdd(&drops[3], 1u); break; }
             // Perfect table => same chain means same key, so the test is a tautology.
             if (MXBM_PERFECT_TAB || lkey[oth] == lkey[pos]) {
