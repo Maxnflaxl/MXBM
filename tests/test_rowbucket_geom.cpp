@@ -116,10 +116,12 @@ int main() {
         }
     }
 
-    section("CUDA reaches cards OpenCL cannot");
+    section("the single-allocation cap binds the packed ladder on its own");
     {
         // max_alloc = 0 means "no per-allocation limit", which is the honest CUDA value;
-        // NVIDIA's OpenCL reports CL_DEVICE_MAX_MEM_ALLOC_SIZE = VRAM/4.
+        // NVIDIA's OpenCL reports CL_DEVICE_MAX_MEM_ALLOC_SIZE = VRAM/4. This pins the
+        // cap's effect alone: the record axes below are all off here, so it is not a
+        // statement about what either backend reaches today.
         struct { const char* card; double vram; int ocl_bb; int cuda_bb; } cards[] = {
             //                       OpenCL (VRAM/4 cap)     CUDA (no cap)
             { "16 GB", 15.59,  16, 16 },   // both take the finest geometry
@@ -483,6 +485,32 @@ int main() {
               "rounds 3 and 4 write the same record either way");
         check(fb_cap_for(528u) == 743u, "fb_cap_for(528) == 743 (mean + 8 sd + 32)");
         check(fb_cap_for(2112u) == 2511u, "fb_cap_for(2112) == 2511");
+    }
+
+    section("both backends carry every record, so both reach the same floor");
+    {
+        // The shipping capability set, which is now identical on the two backends except
+        // for the single-allocation cap and the replayed reference rows. If either caller
+        // ever stops passing one of these, the floor moves and this fails.
+        auto pick = [&](double v, uint64_t ma, bool replay) {
+            return rb_geometry_for(cap, ma, gib(v), /*allow_quad=*/true, 0,
+                                   /*allow_split=*/true, /*slack=*/0, /*allow_impb=*/true,
+                                   /*allow_arena=*/true, /*allow_octo=*/true, replay);
+        };
+        // A 3 GB card, as each backend sees it: OpenCL reports max_alloc = VRAM/4.
+        const RbGeometry o = pick(2.93, (uint64_t)(gib(2.93) / 4), false);
+        const RbGeometry c = pick(2.93, 0, true);
+        check(o.viable && o.octo && c.viable && c.octo,
+              "3 GB reaches the octo rungs on both backends");
+        // The octo rungs allocate ONE reference row either way, so the replay that
+        // separates the two backends above them buys nothing here and the floors are
+        // the same number rather than merely close.
+        size_t to = 0, tc = 0, so_ = 0, sc = 0;
+        rowbucket_bytes(cap, 14, to, so_, true, false, true, true, false);
+        rowbucket_bytes(cap, 14, tc, sc, true, false, true, true, true);
+        check(to == tc, "the floor rung costs the same with and without the replay");
+        check(!pick(1.80, 0, true).viable, "1.80 GiB is under the floor");
+        check( pick(1.95, 0, true).viable, "1.95 GiB clears it");
     }
 
     return summary("rowbucket_geom");

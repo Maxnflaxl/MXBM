@@ -16,8 +16,8 @@ report; BeamHash III yields 2.006 solutions per solve.
 | | Requirement |
 |---|---|
 | **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
-| **VRAM** | **3 GB on CUDA** — BeamHash III's own stated minimum (needs > 2.6 GiB *reported*) — and **5 GB on OpenCL** (> 4.04 GiB usable). 8 GB and up get the fastest geometry on CUDA; below that [the ladder](#the-vram-ladder) steps down, 2–81 % slower |
-| **VRAM — what a full search occupies** | CUDA **6.84 GiB** at the fastest geometry, down to **1.90 GiB** at the coarsest. OpenCL 7.20 down to **4.04** — it carries the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) and the [dense-cap rungs](performance-research.md#the-overflow-arena-ported-36--for-a-404-gib-floor), but neither the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) nor the octo record |
+| **VRAM** | **3 GB on either backend** — BeamHash III's own stated minimum (needs > 2.6 GiB *reported*). 8 GB and up get the fastest geometry; below that [the ladder](#the-vram-ladder) steps down, 3–110 % slower |
+| **VRAM — what a full search occupies** | CUDA **6.17 GiB** at the fastest geometry, down to **1.90 GiB** at the coarsest; OpenCL **6.84** down to the same **1.90**. Both carry the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation), the [dense-cap rungs](performance-research.md#the-overflow-arena-ported-36--for-a-404-gib-floor), the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) and the octo record; the 0.67 GiB between them is the three reference rows CUDA [replays instead of storing](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — met: MXBM's floor is **1.90 GiB**, so a 3 GB card lands on the octo rungs with room |
 | **Host RAM** | Modest; only survivor candidates (≤ 1024 × 128 B) are read back per solve. |
 | **CPU** | Any; the CPU verifies candidates only (a few per solve). |
@@ -53,10 +53,10 @@ the two backends' figures separate.
 | Path | Total | Per element | Largest single allocation |
 |---|---|---|---|
 | Row-bucket, CUDA default | **6.17 GiB** | 197 B | 2.90 GiB |
-| Row-bucket, OpenCL default | **7.20 GiB** | 230 B | 3.27 GiB |
+| Row-bucket, OpenCL default | **6.84 GiB** | 219 B | 3.27 GiB |
 | Row-bucket, quad record — CUDA / OpenCL | **4.76 / 5.02 GiB** | 152 / 161 B | 2.90 GiB |
 | Row-bucket, quad + dense caps — CUDA / OpenCL | **4.03 / 4.29 GiB** | 129 / 137 B | 2.42 GiB |
-| Row-bucket, quad + dense caps + octo (CUDA) | **1.90 GiB** | 61 B | 1.35 GiB |
+| Row-bucket, quad + dense caps + octo — both | **1.90 GiB** | 61 B | 1.35 GiB |
 | Sort (fallback) | 8.25 GiB | 264 B | ~1.8 GiB |
 
 The largest single allocation is listed because OpenCL caps it: NVIDIA reports
@@ -79,8 +79,8 @@ KAT-gated with drops zero.
 
 **The ladder has two axes, and it is ordered by measured time rather than by footprint** —
 because the two disagree. Times are CUDA, one binary, 200 distinct nonces, 2026-07-28; the
-build has since gained ~1 ms overall, so the ratios are the point rather than the
-absolutes:
+build has since gained ~1 ms overall and the footprints predate the implicit-bits pack,
+so the ratios are the point rather than the absolutes:
 
 | rung | footprint | ms/solve | reached when |
 |---|---|---|---|
@@ -98,18 +98,20 @@ is cheaper. A ladder sorted by footprint would hand those cards the slower rung.
 (14,3) is kept below it only because its *single* allocation is smaller (2.76 GiB against
 2.90), which a `max_alloc`-bound backend can still need.
 
-**Three mechanisms narrow every row of that table and add a row between each pair.** The
-dense caps are on both backends; the other two are CUDA-only:
+**Three mechanisms narrow every row of that table and add a row between each pair**, and
+all three are on both backends:
 
-- The **implicit-bits record** (CUDA only) drops the key bits the bucket address already encodes, so
+- The **implicit-bits record** drops the key bits the bucket address already encodes, so
   round 2's 9th-word plane has no writer and set 0 is 8 u64 per slot instead of 9. It fits
-  (16,1) and (17,0) only. Worth −0.36 GiB, and it is also ~3 % *faster* there.
+  (16,1) and (17,0) only. Worth −0.36 GiB, and it is also ~3 % *faster* there. Deleting
+  the plane is what lets a packed rung take dense caps at all — the pool had nowhere to
+  live behind it — so (15,2) + dense caps is refused and the ladder steps past it.
 - **Dense caps** (both backends) replace the per-bucket tail reserve with one overflow
   pool per record set: a bucket that fills appends to the pool instead of dropping, so the cap falls from
   mean + 8σ to mean + 2σ and ~22 % of the record slots go away. Zero drops becomes a
   pool-full check against 65,536 slots — measured spill is ~56 elements per solve. The
   mechanism costs a fixed few per cent, so it is a rung, never a default.
-- The **octo record** (CUDA only) does to round 3's output what the quad record does to
+- The **octo record** does to round 3's output what the quad record does to
   round 2's:
   eight seed indices determine the element, so its six work words, its lead and its
   leftContrib are all derivable and only the leaves are stored. 32 B instead of 64, which
@@ -143,28 +145,43 @@ instead has no slack to put word 0 in.
 (The (15,2) and packed-(14,3) rows are still in the list, for the `max_alloc`-bound
 backend; on CUDA a card that fits them fits a faster row first.)
 
-**OpenCL reaches the same dense-cap rungs**, without the two records that need a repack.
-Its own times, measured on the reference card by simulating each class with `--keepfree`,
-so they are not comparable with the CUDA column above:
+**OpenCL now runs every record on the ladder**, and so reaches the same floor. It stores
+all five reference rows where CUDA replays three of them away, which is the whole of the
+difference above the octo rungs — and none of it on them, where only one row exists
+either way. Its own times, measured on the reference card at a forced geometry, so they
+are not comparable with the CUDA column above:
 
 | OpenCL rung | footprint | ms/solve | runs when usable VRAM is |
 |---|---|---|---|
-| packed (16,1) | 7.20 GiB | 33.4 | ≥ 7.2 GiB |
-| packed (15,2) | 6.62 GiB | 34.9 | ≥ 6.7 |
-| quad (16,1) | 5.02 GiB | 39.0 | ≥ 5.1 |
-| quad (14,3) | 4.40 GiB | 43.5 | ≥ 4.4 |
-| quad (16,1) + dense caps | **4.29 GiB** | 39.9 | ≥ 4.3 |
-| **quad (14,3) + dense caps** | **4.04 GiB** | 45.9 | ≥ 4.1 — the OpenCL floor |
+| packed (16,1) | **6.84 GiB** | 32.1 | ≥ 6.9 GiB |
+| packed (16,1) + dense caps | **5.77 GiB** | 33.1 | ≥ 5.8 |
+| packed (15,2) | 6.62 GiB | 34.8 | ≥ 6.7 |
+| packed (15,2) + dense caps | — | — | refused: no pack at bb 15, so the pool has nowhere to live |
+| quad (16,1) | 5.02 GiB | 38.7 | ≥ 5.1 |
+| quad (16,1) + dense caps | **4.29 GiB** | 39.7 | ≥ 4.3 |
+| packed (14,3) | 6.24 GiB | 38.4 | only when a single-allocation ceiling binds |
+| quad (15,2) | 4.65 GiB | 40.1 | ≥ 4.7 |
+| quad (15,2) + dense caps | **4.13 GiB** | 41.5 | ≥ 4.2 |
+| quad (14,3) | 4.40 GiB | 43.6 | ≥ 4.5 |
+| quad (14,3) + dense caps | **4.04 GiB** | 45.6 | ≥ 4.1 |
+| quad (16,1) + dense caps + octo | **2.04 GiB** | 61.5 | ≥ 2.1 |
+| quad (15,2) + dense caps + octo | **1.95 GiB** | 63.5 | ≥ 2.0 |
+| **quad (14,3) + dense caps + octo** | **1.90 GiB** | 67.6 | ≥ 2.0 — the OpenCL floor |
 
 The dense-cap rung is where the ladder's ordering earns itself: at 4.45 GiB a card takes
-quad (16,1) + dense caps at 39.9 ms instead of quad (14,3) at 43.5, so it uses **less**
-memory and runs **8.3 % faster**. An arena rung also turns speculative entry off — that
+quad (16,1) + dense caps at 39.7 ms instead of quad (14,3) at 43.6, so it uses **less**
+memory and runs **8.9 % faster**. An arena rung also turns speculative entry off — that
 set has no pool region — so the delivered cost of the mechanism there is nearer 5 % than
 the 3.6 % an interleaved A/B measures for the caps alone.
 
+The octo rungs cost this backend more than they cost CUDA — 1.9× the top rung against
+CUDA's 1.8× — because OpenCL's round 4 rebuilds from eight leaves without the w0
+checkpoint that deletes CUDA's `apply_mix` calls. It is still ~3× faster than the sort
+path those cards used to fall to.
+
 **Two stages, two different numbers, and it matters which one is quoted.** A device is
-*offered* when its TOTAL VRAM clears the floor plus the 640 MiB allowance — 4.66 GiB
-reported, so a 5 GB card makes the list and a 4 GB one does not. Which rung it then
+*offered* when its TOTAL VRAM clears the floor plus the 640 MiB allowance — 2.53 GiB
+reported, so a 3 GB card makes the list and a 2 GB one does not. Which rung it then
 *runs* is decided against FREE memory at construction, which is usually a better answer
 than the offer implied. The column above is the second number. Which card classes this
 actually moves is [the table below](#what-each-card-class-gets) — not every row of a
@@ -177,41 +194,45 @@ smaller card run at all. `MXBM_QUAD=0|1` forces the choice.
 
 ### What each card class gets
 
+Both columns are the rung the ladder picks against the *reported* figure, with the whole
+card idle. A desktop holding half a gigabyte steps a card down one row, which is why the
+8 GB and 6 GB cases are called out below.
+
 | Card | reported gmem / max_alloc | CUDA rung | OpenCL rung | OpenCL allocation |
 |---|---|---|---|---|
 | 16 GB (4070 Ti S) | 15.59 / 3.90 GiB | (16,1) | (16,1) | one buffer per set |
 | 12 GB | 11.60 / 2.90 GiB | (16,1) | (16,1) | split into bucket-halves |
 | 11 GB | 10.60 / 2.65 GiB | (16,1) | (16,1) | split |
 | 10 GB | 9.70 / 2.42 GiB | (16,1) | (16,1) | split |
-| 8 GB | 8.00 / 2.00 GiB | **(16,1)** | (15,2) | split |
-| 6 GB | 5.70 / 1.43 GiB | quad (16,1) | quad (14,3) | split |
-| 5 GB | 4.70 / 1.18 GiB | **quad (16,1) + dense caps** | — refuses | — |
-| 4 GB | 3.90 / 0.98 GiB | **quad (16,1) + dense caps + octo** | — refuses | — |
-| 3 GB | 2.93 / 0.73 GiB | **quad (16,1) + dense caps + octo** | — refuses | — |
-| 2 GB | 1.95 / 0.49 GiB | — refuses | — refuses | — |
+| 8 GB | 8.00 / 2.00 GiB | (16,1) | (16,1) | split |
+| 6 GB | 5.70 / 1.43 GiB | (16,1) + dense caps | quad (16,1) + dense caps | split |
+| 5 GB | 4.70 / 1.18 GiB | quad (16,1) + dense caps | quad (15,2) + dense caps | split |
+| 4 GB | 3.90 / 0.98 GiB | quad (15,2) + dense caps | **quad (16,1) + d.c. + octo** | split |
+| 3 GB | 2.93 / 0.73 GiB | **quad (16,1) + d.c. + octo** | **quad (16,1) + d.c. + octo** | split |
+| 2 GB | 1.95 / 0.49 GiB | — not offered | — not offered | — |
 
 The general effect is that every rung's requirement fell, so a card climbs one whenever it
 was within 0.36 GiB of the next rung up (implicit bits) or 1.07 GiB (dense caps). Which
 cards that is depends on how much of the card the desktop is holding, since construction
 sizes against *free* memory — so the concrete cases are worth naming:
 
-- **3, 4 and 5 GB gain reach.** 4.70 GiB reported clears the 3.78 GiB dense-cap floor,
-  and 2.93 GiB clears the 1.90 GiB octo floor; before, nothing on the ladder fit any of
-  them and none of those devices was offered at all. The reported figure is ~97.5 % of
-  physical VRAM on this driver — `totalGlobalMem` reads 15.598 GiB where nvidia-smi says
-  15.99 — and availability holds back 640 MiB of it.
+- **3 and 4 GB gain reach, on both backends.** 2.93 GiB clears the 1.90 GiB octo floor;
+  before, nothing on the ladder fit them and neither device was offered at all. The
+  reported figure is ~97.5 % of physical VRAM on this driver — `totalGlobalMem` reads
+  15.598 GiB where nvidia-smi says 15.99 — and availability holds back 640 MiB of it.
 - **8 GB gains speed when it is also driving a desktop.** Idle and headless it already
-  cleared 7.20 GiB and ran (16,1); with a compositor holding ~0.5 GiB it did not, and
-  stepped to (15,2) at 36.0 ms. 6.17 GiB clears that case too — 33.7 ms, ~6 % back.
-- **6 GB is unchanged at rest** — it was already on quad (16,1) through the free-memory
-  path. What the dense-cap rungs add there is the same desktop fallback: quad (16,1) +
-  dense caps at ~39 ms where it used to drop to quad (15,2) at 40.7.
+  cleared 7.20 GiB on OpenCL and ran (16,1); with a compositor holding ~0.5 GiB it did
+  not, and stepped to (15,2) at 34.8 ms. 6.84 GiB clears that case too, at 32.1.
+- **6 GB is unchanged at rest** on either backend: it was already on a dense-cap rung
+  through the free-memory path. What it gains is the same desktop fallback the 8 GB row
+  gains — one row down rather than two.
 
 2 GB is out of reach, and is not a target — see [what is left](#what-is-left-below-it).
 
-The back-ref rows never split. On CUDA they no longer exist off the octo rungs, where
-they are 0.13 GiB; on OpenCL they are 0.64 GiB and bind only below ~2.6 GiB of VRAM, which
-is under that backend's floor anyway.
+The back-ref rows never split. On CUDA they no longer exist off the octo rungs; on OpenCL
+they are 0.64 GiB above those rungs. On the octo rungs themselves both backends keep one
+gi-indexed row pair and a survivor-sized one, 0.13 GiB, which is why the two floors are
+the same number.
 
 **The prediction is checked against the allocator, not trusted.** `rb_geometry_for()`
 sizes against *total* VRAM and a desktop compositor can be holding a gigabyte of it, so
@@ -312,8 +333,8 @@ Beam's own mining documentation states:
 > — <https://beam.mw/docs/mining>
 
 That is the **algorithm's design target**, not a third-party miner's quirk: BeamHash III
-was designed by Wilke Trei, who also writes lolMiner. MXBM's CUDA floor is **1.90 GiB**,
-which clears the stated figure and the card class behind it with room — down from 2.4×
+was designed by Wilke Trei, who also writes lolMiner. MXBM's floor is **1.90 GiB on both
+backends**, which clears the stated figure and the card class behind it with room — down from 2.4×
 over, which is what the quad record, the survivor-sized back-ref row, the implicit-bits
 record, the dense-cap rungs, the octo record, the reference rows it made dead and the
 `gi` field those rows were the last reader of together bought. A 3 GB card reports

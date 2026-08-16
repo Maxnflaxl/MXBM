@@ -474,11 +474,18 @@ Each row is at the card's **stock** power cap.
 
 | GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Source |
 |---|---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 60.2 | 33.1 | 284 | 0.212 | ours, `--benchmark` |
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 59.4 | 33.5 | 284 | 0.209 | ours, `--benchmark`, same session |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 69.5 | 28.7 | 284 | 0.245 | ours, `--benchmark` ‡ |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 62.5 | 32.3 | 284 | 0.220 | ours, `--benchmark`, same session ‡ |
 | RTX 4070 SUPER | 12 GiB GDDR6X | 610.62 · Windows | CUDA | 43.9 | 44.8 | 214 | 0.205 | ZumZum, `--tune` † |
 | RTX 3060 Ti | 8 GiB GDDR6 | 610.62 · Windows | CUDA | 22.4 | 88.1 | 195 | 0.115 | ZumZum, `--tune` † |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
+
+‡ Both re-taken 2026-08-16, interleaved in one session at released clocks, 30 s a run.
+The CUDA row therefore reads ~1.4 % faster than the 29.10 ms
+[locked-clock pin](benchmarking.md#the-named-reference-lgc-2600) — the pin trades boost for
+reproducibility, and the published headline is the pin. What the pair is for is the ratio:
+**1.11×**, where the same pair read 1.012× on 2026-08-02. OpenCL has since gained one
+record (implicit bits) against CUDA's several.
 
 † `--tune` sweep points, not `--benchmark`: 60 s, CPU-verified, warmed up and
 drift-gauged. On the 4070 SUPER the miner loop reported ~48 sol/s at the same watts in

@@ -22,12 +22,12 @@ constexpr uint32_t kFbStride[6] = { 0u, 1u, 2u, 9u, 8u, 2u };
 //
 // The IMPLICIT-BITS pack is the third format for the same round: the bucket-address key
 // bits are packed out, the 400 - bb work bits fit 6 u64, and the 9th-word plane has no
-// writer at all -- so set 0 is 8 u64 per slot rather than 9. CUDA only, and only on the
-// rungs rb_impb_ok admits.
+// writer at all -- so set 0 is 8 u64 per slot rather than 9. Only on the rungs
+// rb_impb_ok admits.
 // The OCTO RECORD is the same argument one round further down: a round-3 output element
 // is determined by the eight seed indices at its leaves, so its 6 work words, its lead
 // and its leftContrib are all derivable and round 4 rebuilds them. 8 u64 becomes 4, which
-// is where set 1 halves. CUDA only, and only on rungs where the alternative is refusing.
+// is where set 1 halves. Only on rungs where the alternative is refusing.
 constexpr uint32_t fb_round_stride(int r, bool quad, bool impb = false, bool octo = false) {
     // Round 2's quad record loses its gi on an octo rung -- nothing reads one there -- and
     // 24 + 4 x 25 bits then fit 2 u64 instead of 3.

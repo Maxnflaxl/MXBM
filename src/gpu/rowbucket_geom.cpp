@@ -66,10 +66,13 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // OpenCL has no w0 checkpoint to widen the gap.
 //
 // An arena row is its neighbour's geometry at a dense cap: same kernels, same record,
-// ~22 % fewer record slots, plus the pool's fixed mechanism cost. Footprints are CUDA's,
-// with the implicit-bits pack and the replayed reference rows where the rung admits them;
-// a backend that stores all five rows adds 0.26 GiB, and 0.41 more on the implicit-bits
-// rungs.
+// ~22 % fewer record slots, plus the pool's fixed mechanism cost. Its pool lives behind
+// the bucket records, and the packed record's 9th-word side plane has nowhere to put
+// one, so a PACKED arena row needs the implicit-bits pack that deletes the plane -- which
+// rb_impb_ok admits at bb 16 and 17 only. (15,2) dense is therefore refused rather than
+// run, and the caller steps past it. Footprints are CUDA's, with the implicit-bits pack
+// and the replayed reference rows where the rung admits them; a backend that stores all
+// five rows adds 0.26 GiB, and 0.41 more on the implicit-bits rungs.
 const RbRung* rb_rungs(int& n) {
     //     bb   sm   quad   arena  octo        footprint / time
     // Times re-measured in one sitting 2026-08-16, 40 s a rung, clocks released.
