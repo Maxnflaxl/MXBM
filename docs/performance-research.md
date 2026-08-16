@@ -5954,6 +5954,17 @@ Eight interleaved arms a side (`A B B A` × 4), 45 s each, stock 285 W headless,
 from `solves/s`. The two ranges do not overlap. Drops zero, 1.99 verified solutions/solve
 and 284.0–284.5 W on every one of the sixteen arms; KAT 3/3 over 22 configurations.
 
+**Null under a cap, and compiled out below the low-power gate.** `PACKTAB` is
+`MXBM_TABPACK && SOLO` and `SOLO` is `!MFIRST`, so under the `kSpecMinPowerW` gate — where
+match-first is on — the change is not in the kernels that run, and all 28 match-first
+instantiations are byte-identical to the control's. Above the gate it is live and measures
+**−0.14 % at 180 W** (39.597 → 39.541 ms, the shipping range inside the control's) over
+four interleaved arms a side. At 120 W, where the two binaries execute the same code, the
+same harness reads **+0.12 %** with the ranges overlapping — a positive control on the
+method. *(A cap sweep taken the same evening disagreed by 2–4 % below 240 W; it is the
+[swept-column offset](#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it),
+recurring, and the byte-identical kernels are what prove it.)*
+
 **−0.060 ms (−0.21 %), and it bounds the barrier family a second time.** The
 [block-exit barrier](#the-block-exit-barrier-is-removable-and-the-barrier-family-is-over-priced-10x)
 was −0.048 ms; this one is −0.060 with a 128-word clear pass thrown in. Two independent
@@ -6184,6 +6195,29 @@ provisional until at least one of its points is reproduced by a bracketed A/B** 
 current column carries 120 W and 180 W agreeing with interleaved arms to 0.2 %, and that
 is now the bar for adopting one. And **a cross-session sweep difference is not evidence
 about a kernel.** It cannot be: the sweep's own repeatability is the thing under test.
+
+**It recurred the same day, and the second instance is airtight.** The column swept after
+the packed `tab` word read 2–4 % slower than the previous kernel's at every cap below
+240 W and +0.7 % at stock — a smooth monotonic ramp, and a mechanism was available to
+explain it (the change adds one instruction per staged element and removes a barrier,
+which is the wrong trade for a starved core). It is not the kernel, and no measurement of
+the kernel was needed to know that: **`PACKTAB` is `MXBM_TABPACK && SOLO`, `SOLO` is
+`!MFIRST`, and below the 130 W gate match-first is on** — so on the three points at 100,
+110 and 120 W the two builds run byte-identical SASS. All 28 match-first kernels compare
+equal instruction for instruction. The sweep read −2.2 %, −1.9 % and **−4.4 %** between
+two binaries that execute the same code there.
+
+Bracketed pairs then measured the two caps that matter, `A B B A`, 45 s arms:
+
+| cap | control | shipping | |
+|---|---|---|---|
+| 120 W | 65.013 ms (64.935–65.104) | 65.090 (64.893–65.147) | +0.12 %, ranges overlapping — and **null by construction**, which makes it a positive control on the harness |
+| 180 W | 39.597 ms (39.324–39.730) | 39.541 (39.448–39.604) | −0.14 %, the shipping range inside the control's |
+
+So the swept difference is a **per-session offset on the sweep**, twice now, in the same
+band. The bar above stands and is worth restating in its strong form: a swept column may
+be compared with *itself*, never with another session's — and where a per-cap conclusion
+matters, the cap gets a bracketed pair.
 
 The clock-lock row is worth keeping separately. It is the third independent confirmation
 that [the governor outranks the lock](#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs) — under a 120 W cap, `-lgc 2600 -lmc 10251` and released

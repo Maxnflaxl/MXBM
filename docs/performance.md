@@ -565,6 +565,14 @@ variation of the method; it is written up as an [instrument
 failure](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it)
 and is not the column below.)*
 
+*(**Scope: the packed `tab` word does not move this column.** It is compiled out below the
+130 W gate — all 28 match-first kernels are byte-identical to the previous build's — and
+above the gate it measures null, −0.14 % at 180 W over four interleaved arms a side with
+the ranges overlapping. A cap sweep taken after it read 2–4 % below this column, including
+at the three caps where the two binaries run the same code; that is the sweep's
+[per-session offset](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it),
+not a kernel change.)*
+
 *(**What moved, and what only appears to have moved.** Against the previous kernel's
 column this one gains 1.4–2.8 % from 140 to 210 W, which is the size of the singleton
 filter's own [in-session delta under a
