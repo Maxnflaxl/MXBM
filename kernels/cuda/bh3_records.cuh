@@ -129,6 +129,21 @@ __device__ __forceinline__ void quad16_leaves(uint64_t w0, uint64_t w1, uint32_t
     l[3] = (uint32_t)(w1 >> 35) & kIdxMask;
 }
 
+// r2 -> r3, QUAD W0-CHECKPOINT RECORD (MXBM_QUAD_W0): the same 24 B, carrying the child's
+// post-mix work word 0 where the plain quad record carries only its 24-bit key. Word 0 is
+// what deletes the mixes -- see rebuild_r3_lane -- and here it costs nothing to carry:
+// its own low 24 bits ARE the key, so it is stored verbatim and the staging loop's
+// `rec0 & 0xFFFFFF` extraction reads it where it always was. Nothing is dropped, so this
+// form needs neither the implicit-bits pack the r1 -> r2 checkpoint rides on nor the
+// perfect table the r3 -> r4 one does.
+//
+// The four leaves and gi move down into the other two words, where the packed record
+// already puts them: 64 + 4 x 25 + 26 = 190 bits of 192.
+//   w0 = the child's work word 0     w1 = r3_p0(l0,l1,l2)     w2 = r3_p1(l2,l3,gi)
+//
+// The 16 B quad16 form cannot take it: 24 + 4 x 25 = 124 of 128 leaves no slack, and
+// keeping only the address-implied key bits still needs 150.
+
 // r3 -> r4, OCTO RECORD: 32 B instead of 64. The same argument one round further down --
 // a round-3 output element is a combine of two round-3 inputs, each determined by four
 // seed indices, so EIGHT indices determine it and those eight ARE its leaves (sBuild = 8).
@@ -283,20 +298,26 @@ __device__ __forceinline__ void combine_hi(const uint64_t a[7], const uint64_t b
     }
 }
 
-// Words 1..6 of a ROUND-3 OUTPUT element from its eight leaves, with no `apply_mix` at all
-// and six siphashes a leaf instead of seven. The same argument rebuild_r2_lane rests on,
-// three levels deep: apply_mix writes work word 0 alone, so the whole 15-mix chain and each
-// leaf's k = 0 seed word reach word 0 and nothing else. The caller stages word 0 from the
-// record; everything below word 0 is linear in the leaves' seed words 1..6.
-__device__ __forceinline__ void rebuild_r4_lane(const uint64_t pp[4], const uint32_t l[8],
+// Words 1..6 of a ROUND-2 OUTPUT element from its four leaves, with no `apply_mix` at all
+// and 24 siphashes instead of 28. The same argument rebuild_r2_lane rests on, one level
+// deeper: apply_mix writes work word 0 alone, so the whole mix chain and each leaf's k = 0
+// seed word reach word 0 and nothing else. The caller stages word 0 from the record;
+// everything below it is linear in the leaves' seed words 1..6.
+__device__ __forceinline__ void rebuild_r3_lane(const uint64_t pp[4], const uint32_t l[4],
                                                 uint64_t* w16 /* w16[1..6] written */) {
-    uint64_t a[7], b[7], r0[7], r1[7];
+    uint64_t a[7], b[7];
     rebuild_r2_lane(pp, l[0], l[1], a);
     rebuild_r2_lane(pp, l[2], l[3], b);
-    combine_hi(a, b, 400u, r0);
-    rebuild_r2_lane(pp, l[4], l[5], a);
-    rebuild_r2_lane(pp, l[6], l[7], b);
-    combine_hi(a, b, 400u, r1);
+    combine_hi(a, b, 400u, w16);
+}
+
+// Words 1..6 of a ROUND-3 OUTPUT element from its eight leaves: the same lane one level
+// further down, so all 15 mixes and 8 of the 56 siphashes go.
+__device__ __forceinline__ void rebuild_r4_lane(const uint64_t pp[4], const uint32_t l[8],
+                                                uint64_t* w16 /* w16[1..6] written */) {
+    uint64_t r0[7], r1[7];
+    rebuild_r3_lane(pp, l,     r0);
+    rebuild_r3_lane(pp, l + 4, r1);
     combine_hi(r0, r1, 376u, w16);
 }
 

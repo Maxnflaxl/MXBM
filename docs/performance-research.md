@@ -27,7 +27,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [Measured results, 2026-08-12](#measured-results-2026-08-12) | the mix's tree truncation at r4/r5 and the linear-lane decomposition (both pinned by identity tests); the w0-checkpoint record — a measured loss with its mechanism; **instruction placement is not a lever on sm_89 (single-issue), only count is**; MATCH_FIRST wins at the floor and composes with (17,0) for −2.4/−2.7 % (the tail closure was stock-scoped); (17,0)'s floor prize reproduces on the current build — re-arm condition met; **the switching-height re-pricing: a store design with a re-derived round 1 bounds −13/−26/−11 % at 140/120/100 W — and the h=1 build-out (2026-08-13) kills it: +0.9–1.8 % measured at all three points, because the cap's currency is L2 sectors × core clock, not the DRAM bytes the mock priced**; **co-residency is closed for same-mix tenants** — two real pipelines in green-context partitions gain nothing at any operating point; under a cap the card is power-bound and SMs are fungible with clock (34 of 66 SMs costs 4 % at 120 W); back-ref row 5 was capacity-sized for survivor-indexed data, −0.26 GiB every rung; **the stock free list inverts at the floor** — r2's marginal store bytes move at the rung's own 282 GB/s at 100 W (pure bytes) and the mix bills ~1.5 ms/solve; **the first hardware census** — r1's stock wall is its own barrier (31.5 % of stalls), r3 idles 61 % of its lanes, and the census reconciles with the marginal-replay instrument across methods; **populations are pinned at 2^25 and the occupancy tail is thin** — a mean+2σ dense cap + ~9 MB spill arena buys −1.50 GiB at (16,1), and the record's address-redundant bits buy another −0.36; **merging the two back-ref stores into one u64 is a wash everywhere** — gi-sequential store streams already merge in L2, so a store stream is priced by its scatter pattern, not its store count |
 | [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0)** and shipped under the low-power gate — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the floor curve moves to 3.70 J/sol at 160 W and 3.76 at 120 W; a carveout drift fixed; **duty-cycled average power closed with mechanism** — the arbitrage is real but a resident context idles at 41–47 W in P2/P3 and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288, PRMT rotates and uniform-datapath offload all null; **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, half-used store sectors are the 16 B-store floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB) and the overflow arena ported to a fit-ladder rung (+1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**, and with the availability allowance re-derived (1 GiB → 640 MiB) that is a 5 GB card; **the octo record takes it to 1.90 GiB for +35 %** — round 3's output as its eight leaves, which kills three back-reference rows and then round 2's `gi` with them, six u64 per slot with no field nothing reads, clearing BeamHash III's stated 3 GB minimum; **the stock per-stage profile re-taken** — 32.39 ms attributed, the implicit-bits record's 1.5 ms landing where its mechanism says (r2 −0.94, r3 −0.52, nothing else past 0.06); **the octo record's two halves priced apart** — round 4's rebuild is a flat **+16 ms** on either input, so a reach lever that can never be a speed lever; **the solutions-per-solve multiplier is the algorithm's, not the solver's** — nothing dropped (four counters zero over 1,892 solves), nothing invalid produced (56,781 of 56,783 candidates verify over 28,305 solves), and `bb + sm + 7 = 24` makes the partition incapable of separating a colliding pair. Pinned at **2.006 ± 0.008**, which corrects the 1.98 this ledger quoted and moves the reference miner's solve time to **37.9 ms**; and **the stock census re-taken** — `sm__throughput` IS the integer pipe, so the currency is ALU-pipe slots on a half-width INT32 unit: entry at 98.7 %, r1+r2 at 76–78 % with issue slots half busy, r3+r4 at 76.5/82.7 % of DRAM peak with traffic exactly compulsory (12.30 GB). The barrier is top stall in round 2 as well as round 1, which falsifies the warp-specialization closure's premise without changing its verdict. Both leads the census pointed at are **zero** — **wider LOP3 LUT fusion** (SipHash's XORs are irreducibly 2-input, which empties the single-issue closure's exemption list) and **lane density in r3/r4 at stock** (memory-bound with an 18 %-idle ALU pipe; the (17,0) that would delete the filter costs ~23 % at stock) |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
-| [Measured results, 2026-08-15](#measured-results-2026-08-15) | **every back-reference row deleted, −2.03 ms and −688 MiB** — recovery replays rounds 3 and 4 over the one bucket each child's record names, identifies the pair by content, and reads round 2's four leaves; both bucket hints ride in bits that provably reach nothing, and round 4's record drops to 8 B. The closure that held this back priced a third record set at +2.5 GB from the width of its neighbours; round 4's own plane costs 0.32 GiB. Gated leaf-for-leaf over 1426 solves; the pipe census — r1/r2 are 22 points under the ALU roofline and it is warp supply; store-versus-derive collapses to one exchange rate with h=2 a structural optimum; **round 3 stores a work word round 4 provably never reads** (identity test + whole-pipeline poisoning, both positive-controlled) — worth 268 MB and **nothing in time**, because halving r3's write sectors buys 4 % of the round, an implied ~3000 GB/s against a 656 GB/s bus: *price narrowings in memory instructions and sectors, never in bytes*; three corrections — the warp-supply target is **unreachable** (8 blocks × 256 threads is 64 warps, sm_89 allows 48) and worth ≈ −0.66 ms not −3.07; a fifth r2 block needs **≤48 registers as well as ≤19456 B shared**, and the register half is now measured solved (64 → 48, zero spill, +0.023 ms), so **shared is the sole gate** at a 4168 B deficit no *pair* of the available cuts reaches; **`drops[0]` has no writer**, so every four-counter gate has been three; **round 3's `apply_mix` costs 0.024 ms and round 1's 0.736**, bounding ALU restructuring to r1; **the w0-checkpoint pair record ships at −0.76 ms (−2.4 %)** — round 1 stores the child's post-mix word 0 and round 2 derives only the linear lane (12 siphashes, no mixes) in the SAME 16 B, because the address-implied key bits pay for word 0's extra 24: a re-derivation is priced against what its checkpoint costs to CARRY, so one that fits a packed record's slack is worth re-pricing even after losing in a form that had to grow the record — and it is the first lever here that pays MORE under a cap than at stock, **+11.9 % at 100 W against +3.3 % at 285**, moving both crossings to ~200 W and the efficiency peak to 220 W (3.642 J/sol); **two instruments were returning false greens** — `bench_rounds`/`test_gpu_solver` drive the OpenCL backend and cannot see a CUDA change, and a CONSTANT poison is invisible through `combine`'s pairwise XOR, so a control here must be element-dependent; **the block-exit barrier is gone for −0.048 ms, a tenth of the prediction, and that bounds its whole family** — a barrier's stall percentage is not its time cost when the SM holds other blocks; **singleton-free staging ships at −0.089 ms** — 12.8 % of a group is alone in its chain slot and therefore provably nobody's ancestor, worth **−0.85 ms** to skip against **+0.76** for the word-0 prepass that finds it, registers and shared byte-identical: a large prize and a larger question, which is only what it costs to learn which slots are singletons; **the packed `tab` word ships at −0.060 ms** — the census count and the chain head share one word, so the table is initialised once per group and a second barrier goes with the second clear, which with the block-exit barrier is two independent measurements of ~0.05 ms per `__syncthreads()`; **the 1.68 ms of bank conflicts is a ceiling on a pipe that is never the critical path** — a calibration against time shows the counter does not charge for a 64-bit access's two wavefronts, the solver's `l1tex` runs at 32–43 % of peak, and the strongest available layout change moves the count under 2 %, because the population is the chain walk's scattered reads; and **compile-time geometry (+0.26 % stock, +1.12 % at 120 W) and the FMA-pipe re-encoding are both dead** — a kernel parameter that reaches the SASS only as an instruction operand is already free, and ptxas has already moved 95.9 % of the carry-consuming high halves off the ALU pipe; and **the w0 checkpoint reaches the octo record for −4.39 ms (−7.93 %) at no footprint cost** — storing the child's word 0 deletes all 15 `apply_mix` calls and 8 of the 56 siphashes in `rebuild_r4`, paid for out of a `gi` nothing indexes any more and 14 key bits the bucket address already carries, so the record stays 32 B and the 1.90 GiB floor rung goes 61.14 → 56.97 ms |
+| [Measured results, 2026-08-15](#measured-results-2026-08-15) | **every back-reference row deleted, −2.03 ms and −688 MiB** — recovery replays rounds 3 and 4 over the one bucket each child's record names, identifies the pair by content, and reads round 2's four leaves; both bucket hints ride in bits that provably reach nothing, and round 4's record drops to 8 B. The closure that held this back priced a third record set at +2.5 GB from the width of its neighbours; round 4's own plane costs 0.32 GiB. Gated leaf-for-leaf over 1426 solves; the pipe census — r1/r2 are 22 points under the ALU roofline and it is warp supply; store-versus-derive collapses to one exchange rate with h=2 a structural optimum; **round 3 stores a work word round 4 provably never reads** (identity test + whole-pipeline poisoning, both positive-controlled) — worth 268 MB and **nothing in time**, because halving r3's write sectors buys 4 % of the round, an implied ~3000 GB/s against a 656 GB/s bus: *price narrowings in memory instructions and sectors, never in bytes*; three corrections — the warp-supply target is **unreachable** (8 blocks × 256 threads is 64 warps, sm_89 allows 48) and worth ≈ −0.66 ms not −3.07; a fifth r2 block needs **≤48 registers as well as ≤19456 B shared**, and the register half is now measured solved (64 → 48, zero spill, +0.023 ms), so **shared is the sole gate** at a 4168 B deficit no *pair* of the available cuts reaches; **`drops[0]` has no writer**, so every four-counter gate has been three; **round 3's `apply_mix` costs 0.024 ms and round 1's 0.736**, bounding ALU restructuring to r1; **the w0-checkpoint pair record ships at −0.76 ms (−2.4 %)** — round 1 stores the child's post-mix word 0 and round 2 derives only the linear lane (12 siphashes, no mixes) in the SAME 16 B, because the address-implied key bits pay for word 0's extra 24: a re-derivation is priced against what its checkpoint costs to CARRY, so one that fits a packed record's slack is worth re-pricing even after losing in a form that had to grow the record — and it is the first lever here that pays MORE under a cap than at stock, **+11.9 % at 100 W against +3.3 % at 285**, moving both crossings to ~200 W and the efficiency peak to 220 W (3.642 J/sol); **two instruments were returning false greens** — `bench_rounds`/`test_gpu_solver` drive the OpenCL backend and cannot see a CUDA change, and a CONSTANT poison is invisible through `combine`'s pairwise XOR, so a control here must be element-dependent; **the block-exit barrier is gone for −0.048 ms, a tenth of the prediction, and that bounds its whole family** — a barrier's stall percentage is not its time cost when the SM holds other blocks; **singleton-free staging ships at −0.089 ms** — 12.8 % of a group is alone in its chain slot and therefore provably nobody's ancestor, worth **−0.85 ms** to skip against **+0.76** for the word-0 prepass that finds it, registers and shared byte-identical: a large prize and a larger question, which is only what it costs to learn which slots are singletons; **the packed `tab` word ships at −0.060 ms** — the census count and the chain head share one word, so the table is initialised once per group and a second barrier goes with the second clear, which with the block-exit barrier is two independent measurements of ~0.05 ms per `__syncthreads()`; **the 1.68 ms of bank conflicts is a ceiling on a pipe that is never the critical path** — a calibration against time shows the counter does not charge for a 64-bit access's two wavefronts, the solver's `l1tex` runs at 32–43 % of peak, and the strongest available layout change moves the count under 2 %, because the population is the chain walk's scattered reads; and **compile-time geometry (+0.26 % stock, +1.12 % at 120 W) and the FMA-pipe re-encoding are both dead** — a kernel parameter that reaches the SASS only as an instruction operand is already free, and ptxas has already moved 95.9 % of the carry-consuming high halves off the ALU pipe; and **the w0 checkpoint reaches the octo record for −4.39 ms (−7.93 %) at no footprint cost** — storing the child's word 0 deletes all 15 `apply_mix` calls and 8 of the 56 siphashes in `rebuild_r4`, paid for out of a `gi` nothing indexes any more and 14 key bits the bucket address already carries, so the record stays 32 B and the 1.90 GiB floor rung goes 61.14 → 56.97 ms; **and it reaches the quad record for −1.84 ms (−5.11 %), where word 0 needs no repacking at all** — the quad record's first u64 held the key, and word 0's own low 24 bits *are* that key, so it goes in whole and the leaves move down into the pack the packed record already uses, 190 bits of 192, with no implicit-bits pack and no perfect table required; every quad rung drops ~2 ms; **the walk's shared reads are free** — `combine` is an XOR, so the lane's own element can be read once per chain instead of once per step, which takes the inner loop from 12 `LDS` to 9 at unchanged occupancy and measures **+0.10 %**, because each round emits about as many children as it consumes and the walk therefore averages **one chain step per element**: there is nothing to amortise, which bounds that whole family; and **the GPU computes 99.3 % of a solve** — a steady-state solve is 25 null-stream dispatches (8 kernels, 14 memsets, 3 copies) and the entire non-kernel budget is **0.19 ms**, so there is no idle-GPU family |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -6670,8 +6670,141 @@ funnel through L2 was, and this is the second measurement that says so.
 round-4 octo kernel, so the locked-clock headline and the cap table are untouched. And it
 does not make the octo record a speed lever —
 [that closure](#the-octo-records-two-halves-priced-apart-round-4s-rebuild-is-a-flat-16-ms)
-stands, only cheaper: on this build the rebuild costs **+13.7 ms** over quad (16,1) + dense
-caps at 37.19, where it was +18.1 before. A reach rung is still a reach rung.
+stands, only cheaper: on this build the rebuild costs **+15.9 ms** over quad (16,1) + dense
+caps at 35.0, where it was +18.1 before. A reach rung is still a reach rung.
+
+</details>
+
+
+---
+
+### The w0 checkpoint on the quad record: the record holds word 0 with no repacking
+
+<details>
+<summary>Details</summary>
+
+The same lever one round up from the octo record, and the cheapest of the three to carry.
+`rebuild_r3` is two `rebuild_r2` calls, a combine and a mix — **28 siphashes and 7
+`apply_mix` calls per staged element**. Storing the child's post-mix work word 0 deletes
+**every mix and 4 of the siphashes**, by the argument the
+[octo checkpoint](#the-w0-checkpoint-on-the-octo-record-the-mixes-go-and-the-record-does-not-grow)
+spells out: `apply_mix` writes work word 0 alone and `combine`'s word *i* reads only `x[i]`
+and `x[i+1]`, so words 1..6 are a function of the four leaves' *seed* words 1..6 and the
+whole mix chain reaches word 0 and stops.
+
+**Word 0 costs nothing to carry here, and needs no repacking at all.** The quad record was
+key 24 + 4 × 25 + gi 26 = 150 of its 192 bits, and word 0's own low 24 bits *are* that key
+— so the record simply stores word 0 whole in its first u64 and moves the leaves and `gi`
+down into the other two, where the packed record's `r3_p0`/`r3_p1` already put them:
+
+```
+w0 = the child's work word 0        w1 = r3_p0(l0,l1,l2)     w2 = r3_p1(l2,l3,gi)
+```
+
+64 + 4 × 25 + 26 = **190 bits of 192**. Nothing is dropped, so unlike the other two forms
+this one needs neither the implicit-bits pack nor the perfect table, and the staging loop's
+`rec0 & 0xFFFFFF` key extraction reads the key exactly where it always was.
+
+The 16 B `quad16` record the **octo** rungs read instead cannot take it — 24 + 4 × 25 = 124
+of 128 leaves no slack, and keeping only the address-implied key bits still needs 150 — so
+this is a quad-rung lever and the octo rungs keep paying `rebuild_r3` in full.
+
+**Measured**, `A B B A` interleaved, 40 s arms, KAT 3/3 on all four quad rungs and every
+drop counter zero with the arena's spill counter nonzero as the positive control:
+
+| rung | plain quad record | w0 checkpoint | delta |
+|---|---|---|---|
+| (16,1) quad | 36.021 ms | **34.180** | **−1.841 (−5.11 %)**, 12 arms |
+| (14,3) quad + dense caps, the 3.78 GiB floor | 44.748 | **42.804** | **−1.944 (−4.34 %)**, 8 arms |
+
+No range overlaps, and both arms report 1.99–2.02 verified solutions/solve throughout. The
+control's 36.021 and 44.748 reproduce the ladder's own 36.05 and 44.78 to the digit.
+
+**Applied-asserted in the SASS**: of 67 kernels exactly five differ — the four round-3 quad
+ones at **−872 instructions each**, and round 2's quad emit at +8 for the new pack. Nothing
+else in the object moves, which is what says the checkpoint is off on the octo rungs' 16 B
+path. Registers, shared memory and blocks/SM are all unchanged; the prize is deleted
+instructions.
+
+The algebra needed no new proof: `rebuild_r3_lane` is the first three lines of the already
+shipping `rebuild_r4_lane`, so the octo record's 200 k-trial identity test covers it, and
+the pack is `r3_p0`/`r3_p1` unchanged. `rebuild_r4_lane` now calls it rather than repeating
+it.
+
+</details>
+
+
+---
+
+### Deleting a quarter of the walk's shared reads buys nothing, because the chains are length one
+
+<details>
+<summary>Details</summary>
+
+The chain walk reads `INW` words for **both** sides of every pair, and one of the two slots
+is always the lane's own `pos` — re-read from shared at every chain step. `combine` is
+`a.w[i] ^ b.w[i]`, so the pair's order never reaches it and the lane's own element can be
+read once for the whole chain instead, with the left/right ordering left to decide only
+which side supplies the leaves.
+
+It works, and it is worth nothing: **+0.028 ms (+0.10 %)** over 12 interleaved arms with
+the ranges overlapping. In the SASS the inner walk loop goes from **12 `LDS` to 9** and the
+three hoisted loads move out to the per-element loop; registers rise (r3 56 → 68, r4 47 →
+50) with **every kernel holding its blocks/SM** and no spill, so the residency gate the
+idea was expected to fail is not what stopped it.
+
+**The mechanism is the chain length.** Each round emits about as many children as it
+consumes, and emits are exactly walk steps, so the walk averages **one chain step per
+element**. Hoisting a per-step load to a per-element one is therefore break-even by
+construction; the only saving is the variance term, the elements whose chain is longer
+than one. That bounds the whole "amortise across the chain" family, not just this member
+— and it closes the walk's shared traffic from the opposite end to
+[the layout closure](#the-shared-bank-conflicts-are-the-chain-walks-and-no-layout-reaches-them),
+which found that no rearrangement reaches that loop. Rearranging does nothing and deleting
+does nothing.
+
+</details>
+
+
+---
+
+### The GPU computes 99.3 % of a solve
+
+<details>
+<summary>Details</summary>
+
+Every census here had measured *kernels* — pipes, sectors, stalls, clocks. None had
+measured the gaps between them, which left an unbounded family: memset traffic, launch
+overhead, and the host round-trip the solve makes before recovery.
+
+Every dispatch goes to the **null stream**, so the GPU timeline is fully serial and the
+census is a subtraction. A steady-state solve at the shipping rung is **25 dispatches — 8
+kernel launches, 14 `cudaMemset`s and 3 copies**, two of the copies blocking pageable D2H.
+Per-kernel durations from `ncu --metrics gpu__time_duration.sum`:
+
+| kernel | ms |
+|---|---|
+| round 1 | 4.790 |
+| round 2 | 7.936 |
+| round 3 | 8.523 |
+| round 4, carrying the next solve's entry scatter as extra blocks | 6.391 |
+| terminal | 0.791 |
+| `replay_r4` + `replay_r3` + `recover_from_l2` | 0.176 |
+| **total** | **28.608** |
+
+Against **28.8 ms/solve** measured in the same process: **99.3 % of a solve is kernel
+execution**, and the whole non-kernel budget — 14 memsets, 3 copies and 25 launch gaps
+together — is **0.19 ms, 0.66 %**, under the ~1 % floor this instrument can resolve. The
+memsets move ~1.25 MB against the solve's 12.30 GB of compulsory traffic, so what they cost
+is launch overhead, not bandwidth.
+
+`ncu`'s defaults must be turned off for this to mean anything: with the standard
+`--cache-control all --clock-control base` the same sum reads **31.12 ms**, which is more
+than the wall time and therefore impossible. That is the positive control that
+`--cache-control none --clock-control none` is measuring the real thing.
+
+There is no idle-GPU family. The entry pass no longer appears as its own dispatch at all —
+speculative entry carries it inside round 4's launch, at a grid 1.5× round 4's own.
 
 </details>
 

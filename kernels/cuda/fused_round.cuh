@@ -185,6 +185,18 @@ constexpr uint32_t kImpDB = (uint32_t)MXBM_IMPDB;
 #define MXBM_PAIR_W0 1
 #endif
 
+// MXBM_QUAD_W0: the r2 -> r3 quad record carries the child's post-mix work word 0, so
+// round 3 derives only words 1..6 -- 24 siphashes and no mixes, against 28 siphashes and
+// 7 mixes. See the quad w0-checkpoint record in bh3_records.cuh for the bit layout.
+//
+// The record stays 24 B and pays nothing for the checkpoint: word 0's low 24 bits are the
+// key the plain form stored there anyway, and the four leaves plus gi fit the remaining
+// 128 with two bits to spare. Quad rungs only -- the 16 B form the octo rungs read has no
+// slack to put word 0 in. Set to 0 for the A/B.
+#ifndef MXBM_QUAD_W0
+#define MXBM_QUAD_W0 1
+#endif
+
 // MXBM_NARROW6: round 3 stages its 7th work word in 2 bytes instead of 8.
 //
 // r3's input is r2's output, which combine() masked to LOUT = 400 bits -- so word 6
@@ -693,6 +705,12 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                               && (LMODE == LM_EMIT || LMODE == LM_RD3);
     constexpr bool OW0      = (MXBM_OCTO_W0 != 0) && LMODE == LM_RD4;
     static_assert(!OW0 || MXBM_PERFECT_TAB, "the checkpoint pollutes the key above bit 9");
+    // See MXBM_QUAD_W0: round 2's emit shape and round 3's read shape. Keyed on the
+    // stride for the same reason the quad record itself is -- the miner instantiates both
+    // formats and picks between them from the card's VRAM, so the macro is not a constant
+    // there. The 16 B form (stride 2) is the octo rungs' and cannot carry word 0.
+    constexpr bool QW0_EMIT = (MXBM_QUAD_W0 != 0) && LMODE == LM_RD2 && OUTSTR == 3;
+    constexpr bool QW0      = (MXBM_QUAD_W0 != 0) && LMODE == LM_RD3 && INSTR == 3;
     // See MXBM_COOP. The unpack it splits across four lanes is the IMPB one, and MFIRST
     // would need the chain built before the record is read.
     constexpr bool COOP = (MXBM_COOP != 0) && LMODE == LM_EMIT && IMPB != 0
@@ -917,12 +935,23 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             // exists to save. Fewer INSTRUCTIONS as well as fewer bytes, which matters
             // because round 3's top stall is the MIO queue and not bandwidth.
             const uint64_t w1 = in_belem[d + 1], w2 = in_belem[d + 2];
-            lgi[pos] = quad_gi(w2);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
-            lleaf[pos*LEAFW + 0] = quad_l0(rec0);   // leaf 0 IS the lead
-            lleaf[pos*LEAFW + 1] = quad_l1(w1);
-            lleaf[pos*LEAFW + 2] = quad_l2(w1);
-            lleaf[pos*LEAFW + 3] = quad_l3(w2);
+            if constexpr (QW0) {
+                // Word 0 is read, not derived -- and stored verbatim, so it needs no
+                // repacking. The all-lanes loop below rebuilds the linear lane only.
+                stw(pos, 0, rec0);
+                lgi[pos] = r3_gi(w2);
+                lleaf[pos*LEAFW + 0] = r3_l0(w1);       // leaf 0 IS the lead
+                lleaf[pos*LEAFW + 1] = r3_l1(w1);
+                lleaf[pos*LEAFW + 2] = r3_l2(w1, w2);
+                lleaf[pos*LEAFW + 3] = r3_l3(w2);
+            } else {
+                lgi[pos] = quad_gi(w2);
+                lleaf[pos*LEAFW + 0] = quad_l0(rec0);   // leaf 0 IS the lead
+                lleaf[pos*LEAFW + 1] = quad_l1(w1);
+                lleaf[pos*LEAFW + 2] = quad_l2(w1);
+                lleaf[pos*LEAFW + 3] = quad_l3(w2);
+            }
         } else if constexpr (COOP) {
             // Park the index in lchain: nothing reads it until the chain is built at the
             // end of the expand loop, and the cooperative loop never writes it, which is
@@ -1200,9 +1229,16 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             MXBM_PP_LOAD(pp);
             const uint32_t l[4] = { lleaf[pos*LEAFW + 0], lleaf[pos*LEAFW + 1],
                                     lleaf[pos*LEAFW + 2], lleaf[pos*LEAFW + 3] };
-            bh3::Elem e;
-            rebuild_r3(pp, l, e);
-            for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+            if constexpr (QW0) {
+                uint64_t w16[7];
+                rebuild_r3_lane(pp, l, w16);
+                #pragma unroll
+                for (int w = 1; w < INW; ++w) stw(pos, w, w16[w]);
+            } else {
+                bh3::Elem e;
+                rebuild_r3(pp, l, e);
+                for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+            }
         } else if constexpr (LMODE == LM_RD4) {
             // Deferred here for the same reason as the two rebuilds above: every lane is
             // live, and only 1/2^submask_bits of them were in the staging loop. The leaves
@@ -1361,9 +1397,18 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         // round 3 rebuilds them from these same four leaves. Three
                         // scalar stores rather than 4 x ST.128 + 1 x ST.64, so this is
                         // fewer store INSTRUCTIONS as well as fewer bytes.
-                        st_em(out_belem + od + 0, quad_w0(ckey, ctree[0]));
-                        st_em(out_belem + od + 1, quad_w1(ctree[1], ctree[2]));
-                        st_em(out_belem + od + 2, quad_w2(ctree[3], cgi));
+                        if constexpr (QW0_EMIT) {
+                            // Word 0 goes in whole -- its low 24 bits are the key the
+                            // plain form stored there, so the reader's key extraction and
+                            // this record's width are both unchanged.
+                            st_em(out_belem + od + 0, c.w[0]);
+                            st_em(out_belem + od + 1, r3_p0(ctree[0], ctree[1], ctree[2]));
+                            st_em(out_belem + od + 2, r3_p1(ctree[2], ctree[3], cgi));
+                        } else {
+                            st_em(out_belem + od + 0, quad_w0(ckey, ctree[0]));
+                            st_em(out_belem + od + 1, quad_w1(ctree[1], ctree[2]));
+                            st_em(out_belem + od + 2, quad_w2(ctree[3], cgi));
+                        }
                     } else if constexpr (LMODE == LM_RD2 || LMODE == LM_RAW) {
                         // Matching 128-bit stores; the even stride makes od*8 16 B
                         // aligned. 4 x ST.128 + 1 x ST.64 instead of 9 x ST.64.

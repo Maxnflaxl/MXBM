@@ -237,7 +237,14 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage, baseline
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
 It is the 29.30 ms build's breakdown, not the 29.10 one's; the per-stage split has not
-been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
+been re-taken with power and `benchmarks/stage_power.sh` is what re-takes it. The *time*
+split has been, by a second instrument that cannot give the power column —
+[the idle-GPU census](performance-research.md#the-gpu-computes-993--of-a-solve) reads
+per-kernel durations straight out of Nsight Compute. Round 3 and the terminal round agree
+to ~1 %; rounds 1 and 2 read 4.79 and 7.94, which is where the −0.20 ms landed. It also
+shows why `entry_scatter` has no dispatch of its own at stock: speculative entry carries
+it inside round 4's launch, and the pair costs 6.39 ms against the 6.86 these two rows sum
+to when replayed apart.
 
 Deleting the reference rows is visible here as its own mechanism: **round 4 −1.21 ms**
 (its row and half its output record), **round 3 −0.54**, **round 2 −0.29**, **round 1

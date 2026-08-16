@@ -55,13 +55,15 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 }
 
 // Ordered by MEASURED time, fastest first -- NOT by footprint, which disagrees: quad
-// (16,1) at 4.76 GiB / 36.05 ms is both smaller and faster than packed (14,3) at 5.98 /
+// (16,1) at 4.76 GiB / 34.1 ms is both smaller and faster than packed (14,3) at 5.98 /
 // 38.52, so a footprint-sorted ladder would hand a card the slower rung.
 //
 // One row is deliberately out of time order: packed (14,3) sits ahead of quad (15,2)
-// despite 38.52 against 38.14, because its single allocation is smaller (2.76 GiB against
-// 2.90) and a max_alloc-bound backend can still want it. On CUDA it is unreachable anyway
-// -- a card with room for its 5.98 GiB takes the 5.03 GiB row above first.
+// despite 38.52 against 36.3, because its single allocation is smaller (2.76 GiB against
+// 2.90) and a max_alloc-bound backend can still want it. The times below are CUDA's, and
+// CUDA never reaches that row -- a card with room for its 5.98 GiB takes the 5.03 GiB row
+// above first -- so the order is decided by the backend that does, which is OpenCL, and
+// OpenCL has no w0 checkpoint to widen the gap.
 //
 // An arena row is its neighbour's geometry at a dense cap: same kernels, same record,
 // ~22 % fewer record slots, plus the pool's fixed mechanism cost. Footprints are CUDA's,
@@ -76,13 +78,13 @@ const RbRung* rb_rungs(int& n) {
         { 16u, 1u, false, true,  false },   // 5.03      29.81
         { 15u, 2u, false, false, false },   // 6.36      33.66
         { 15u, 2u, false, true,  false },   // 5.56
-        { 16u, 1u, true,  false, false },   // 4.76      36.05
-        { 16u, 1u, true,  true,  false },   // 4.03      37.19
+        { 16u, 1u, true,  false, false },   // 4.76      34.1
+        { 16u, 1u, true,  true,  false },   // 4.03      35.0
         { 14u, 3u, false, false, false },   // 5.98      38.52  -- for max_alloc-bound backends
-        { 15u, 2u, true,  false, false },   // 4.39      38.14
-        { 15u, 2u, true,  true,  false },   // 3.87      39.62
-        { 14u, 3u, true,  false, false },   // 4.15      42.97
-        { 14u, 3u, true,  true,  false },   // 3.78      44.78
+        { 15u, 2u, true,  false, false },   // 4.39      36.3
+        { 15u, 2u, true,  true,  false },   // 3.87      37.6
+        { 14u, 3u, true,  false, false },   // 4.15      41.2
+        { 14u, 3u, true,  true,  false },   // 3.78      42.9
         // The octo rows, below everything: round 4 rebuilds its work state from eight
         // leaves, which is the deepest re-derivation on the ladder. Only ever reached
         // when no row above fits, and only paired with quad and dense caps -- a card
