@@ -5794,6 +5794,63 @@ ABBA confirms it: 63.4/63.5 ms shipping against 63.3/63.4 with the filter compil
 ranges overlapping. What the filter does below 130 W is nothing, so whatever the low band
 needs, it is a match-first question and not this lever's.
 
+### Where round 3's read sectors go, and why deleting one of them costs 2 percent
+
+Two profiles decompose the read side exactly. `CLOCKS=none TARGET=miner cuda/profile.sh`
+on the shipping (16,1) geometry, then the same run forced to (17,0), which has no sub-mask
+and therefore no second block per bucket. Read sectors **per input element**:
+
+| round | (16,1) | (17,0) | Δ |
+|---|---|---|---|
+| r1 | 1.24 | 0.70 | −0.54 |
+| r2 | 2.21 | 1.18 | −1.03 |
+| r3 | **6.03** | 5.03 | **−1.00** |
+| r4 | 6.04 | 5.03 | −1.01 |
+
+The −1.00 is exact and it names the two terms. A block owns one sub-mask of a bucket and
+scans the **whole** bucket's word 0 to find its share, so at sm=1 every element's word 0 is
+read by two blocks and kept by one: **2 sectors of scan**. Then the block that keeps it
+reads the 64 B record as four `LD.128`, each lane 16 B at a 64 B stride, so the two sectors
+the record occupies are touched twice each: **4 sector-touches**. 2 + 4 = 6.03 measured;
+drop the sub-mask and it is 1 + 4 = 5.03. That is also the whole of the 6.48 GB of L1←L2
+traffic behind 2.15 GB of DRAM — **193 B of sector traffic per 64 B record**.
+
+**So the record read is over-counted 2×, and the scan is duplicated.** Both look like free
+money and only one of them is.
+
+**The duplicated scan is not.** `SUBPASS` already implements its removal — one block owns a
+whole bucket, reads each element's sub-mask bits once into shared, and sweeps the masks out
+of shared — and on the current kernel it costs **+0.623 ms (+2.11 %)**: 29.490 against
+30.113 ms, six arms a side ABBA in `cuda/pipeline`, ranges non-overlapping, KAT 3/3 and
+drops 0 on both. It lost 1.3 % on the 35.24 ms build and it loses *more* now.
+
+The mechanism is the one the geometry closure already found — time is monotonic in
+**blocks × group**, and SUBPASS halves the blocks while doubling each one's sweeps, so the
+product is unchanged and the sub-masks that used to run concurrently on two SMs now run in
+sequence inside one. **A sector removed by a structural change is not a sector removed.**
+
+That is the calibration to carry: the [currency
+correction](#bytes-are-nearly-free-per-element-work-is-not) was measured on round 3's
+*write* sectors, where halving them bought 4 % of the round. On the read side, deleting
+17 % of r3's sectors and 45 % of r2's **cost** 2.11 %, because the deletion came bundled
+with less parallelism. Sectors are a currency, not a conserved quantity — price the
+structure that removes them, never the sectors alone.
+
+**What survives is the 4 → 2 on the record read**, which is structure-neutral: same
+instruction count, same blocks, same group, same bytes, only which lane holds which 16 B.
+Four consecutive lanes covering one record's 64 B issue two fully-used sector requests
+where one lane issuing four `LD.128` issues four half-used ones. Worth **2 of r3's 6.03
+read sectors** at (16,1) and 2 of 5.03 at (17,0). Its obstacle is not the one the lead
+assumed: the staging loop is sub-mask divergent, so the surviving lanes do not hold
+consecutive records and the quad's record index has to arrive by `__shfl`, with the IMPB
+unpack straddling lanes because each output word draws bits from two adjacent input words.
+
+Two instrument notes. **Wavefronts per element are 7.9 / 12.4 / 16.8 / 11.0** across r1–r4,
+so the "already ≤ 1, nothing to halve" kill test does not fire. And **`-DMXBM_SUBPASS=1`
+is a no-op on the miner** — only `cuda/pipeline.cu` reads it, the solver passes the
+template parameter as a literal — which a byte-identical `cuobjdump -sass` caught before it
+could be reported as a perfect null.
+
 ### r2's fifth resident block is reachable and costs 0.10 ms
 
 The singleton filter takes the staged group from ~264 to ~230, which was supposed to make
