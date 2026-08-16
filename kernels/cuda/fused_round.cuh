@@ -423,6 +423,33 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #ifndef MXBM_SOLO_R
 #define MXBM_SOLO_R 3
 #endif
+
+// MXBM_COOP: four lanes share one 64 B record instead of one lane reading all of it.
+// MEASURED LOSS, +0.200 ms; default off, kept as an instrument. See the research doc.
+//
+// Round 3's input record is 8 u64 and the staging loop reads it as four LD.128, each lane
+// on its own record at a 64 B stride. A lane's 16 B is half of a 32 B sector and its
+// neighbour's is 64 B away, so every sector is fetched twice: 4 sector-touches to deliver
+// the 2 the record occupies. Four CONSECUTIVE lanes covering one record's four chunks
+// fetch each sector once, which takes round 3 from 6.03 read sectors per element to 4.07.
+// The other 2 are the sub-mask rescan and are structural.
+//
+// The staging loop is sub-mask filtered, so its live lanes are not consecutive and the
+// read has to move: staging parks the element's index in lchain and a second loop reads
+// the records with every lane live, quad q taking element q of each block-wide batch.
+// Same move the r2/r3/r4 rebuilds make, for memory rather than arithmetic.
+//
+// The unpack straddles chunks -- output word 2c takes its low bits from chunk c-1's second
+// word -- so each lane needs its LEFT neighbour's, one __shfl_up_sync. From the left
+// rather than the right is what puts every lane's outputs at 2*sub and 2*sub+1: one store
+// instruction with a computed index, where a four-way branch on the sub-lane cost twice
+// as much again.
+//
+// Why it loses anyway: long_scoreboard holds at 56 % of warp-active cycles and DRAM bytes
+// cannot change, so the sectors were never the binding constraint.
+#ifndef MXBM_COOP
+#define MXBM_COOP 0
+#endif
 #if MXBM_PP_CONST
 __constant__ uint64_t c_pp[4];
 #define MXBM_PP_LOAD(dst) uint64_t dst[4] = { c_pp[0], c_pp[1], c_pp[2], c_pp[3] }
@@ -635,6 +662,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                                 : LMODE == LM_EMIT ? 4u : 8u;
     constexpr bool SOLO    = (MXBM_SOLO != 0) && !MFIRST && (MXBM_SOLO_R & kSoloBit) != 0;
     constexpr bool SOLO_FL = SOLO && (MXBM_SOLO == 2);
+    // See MXBM_COOP. The unpack it splits across four lanes is the IMPB one, and MFIRST
+    // would need the chain built before the record is read.
+    constexpr bool COOP = (MXBM_COOP != 0) && LMODE == LM_EMIT && IMPB != 0
+                       && !MFIRST && !SUBPASS && !MXBM_CPASYNC && !NARROW6;
     // Reference bindings: the body below is textually what it was when these were the
     // kernel's own __shared__ declarations, and the bindings keep it that way.
     auto& lwork  = shm.lwork;
@@ -858,6 +889,12 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             lleaf[pos*LEAFW + 1] = quad_l1(w1);
             lleaf[pos*LEAFW + 2] = quad_l2(w1);
             lleaf[pos*LEAFW + 3] = quad_l3(w2);
+        } else if constexpr (COOP) {
+            // Park the index in lchain: nothing reads it until the chain is built at the
+            // end of the expand loop, and the cooperative loop never writes it, which is
+            // what makes that loop's clamped read of slot 0 safe. See MXBM_COOP.
+            lchain[pos] = (uint32_t)idx_;
+            if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else if constexpr (LMODE == LM_EMIT) {
 #if MXBM_ABL_TAIL == 3
             // Prices the OTHER half of "materialise only what the walk reads": in a
@@ -1021,6 +1058,45 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
 #if MXBM_ABL_TAIL == 2
     const uint32_t nDer = (total * 7u) / 8u;
 #endif
+
+    // COOPERATIVE RECORD READ. Quad q of the block takes element q of each batch and its
+    // four lanes take one 16 B chunk each, so a record's two sectors are fetched once
+    // rather than twice. See MXBM_COOP.
+    if constexpr (COOP) {
+        constexpr uint32_t kQ = kWG / 4u;                  // elements per block-wide batch
+        constexpr uint32_t impKB = 24u - IMPB;
+        constexpr uint64_t impM  = (1ull << impKB) - 1u;
+        // Block-uniform trip count: every lane must reach the shuffle below, so the tail
+        // batch reads slot 0 and discards it rather than skipping. lchain is the only
+        // array here that no lane writes, so slot 0 still holds an index when it does.
+        const uint32_t nIt = (total + kQ - 1u) / kQ;
+        const uint32_t sub = lId & 3u;
+        for (uint32_t it = 0; it < nIt; ++it) {
+            const uint32_t pos  = it * kQ + (lId >> 2);
+            const bool     live = pos < total;
+            const size_t   d    = (size_t)lchain[live ? pos : 0u] * INSTR + sub * 2u;
+            const ulonglong2 qc = *reinterpret_cast<const ulonglong2*>(in_belem + d);
+            // The PREVIOUS chunk's second word: output word 2c draws its low bits from it.
+            // Taking it from the left rather than the right is what puts every lane's two
+            // outputs at 2*sub and 2*sub+1, so the stores are one instruction each with a
+            // computed index instead of a four-way branch.
+            const uint64_t   pv = __shfl_up_sync(0xFFFFFFFFu, qc.y, 1);
+            if (!live) continue;
+            const int w0 = (int)(sub << 1);
+            stw(pos, w0, sub == 0u ? ((qc.x & impM) | ((uint64_t)bucket << impKB)
+                                      | (((qc.x >> impKB) & 0xFFFFFFFFFFull) << 24))
+                       : sub == 3u ? ((pv >> (64 - IMPB)) & 0xFFFFull)
+                                   : ((pv >> (64 - IMPB)) | (qc.x << IMPB)));
+            if (sub != 3u) {
+                stw(pos, w0 + 1, (qc.x >> (64 - IMPB)) | (qc.y << IMPB));
+            } else {
+                lgi[pos] = r3_gi(qc.y);
+                lleaf[pos*LEAFW + 0] = r3_l0(qc.x);        lleaf[pos*LEAFW + 1] = r3_l1(qc.x);
+                lleaf[pos*LEAFW + 2] = r3_l2(qc.x, qc.y);  lleaf[pos*LEAFW + 3] = r3_l3(qc.y);
+            }
+        }
+        __syncthreads();
+    }
 
     uint32_t nWork = total;
     if constexpr (MFIRST) {

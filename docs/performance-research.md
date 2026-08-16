@@ -236,7 +236,9 @@ alone, 2 the shipping pair — so the cost and the prize are separable in one AB
 `-DMXBM_SOLO_R` is the round mask it runs on (1 = r1, 2 = r2, 4 = r3, 8 = r4 and the reach
 rungs, default 3). Its positive control is a `-DMXBM_SPILL=0 -DMXBM_FCAP=64` build, where
 `drops[1]` becomes the staged count less a constant and the two arms differ by exactly the
-elements refused.
+elements refused. `-DMXBM_COOP=1` puts four consecutive lanes on one of round 3's 64 B
+records; it is a measured loss, kept because it is the one build that provably halves that
+round's read sectors (6.03 → 4.07 per element) and so bounds any claim made about them.
 
 `./cuda/pipeline N --fuse` runs the co-tenant entry experiment (`MXBM_CO_ROUND` picks the
 host round, default 3); `--overlap` runs the two-stream one. Both are null — kept because
@@ -5793,6 +5795,53 @@ deficits, at 100/110/120 W, are in a band where the suspected lever does not run
 ABBA confirms it: 63.4/63.5 ms shipping against 63.3/63.4 with the filter compiled out,
 ranges overlapping. What the filter does below 130 W is nothing, so whatever the low band
 needs, it is a match-first question and not this lever's.
+
+### Cooperative record staging: the sectors halve exactly, and it costs 0.20 ms
+
+Built, and it does precisely what it was designed to do. `MXBM_COOP=1` moves round 3's
+record read out of the sub-mask-filtered staging loop — which parks the element's index in
+`lchain` — into a loop where every lane is live and **four consecutive lanes take one 16 B
+chunk each of one 64 B record**, so the two sectors a record occupies are fetched once
+instead of twice.
+
+**The mechanism assert is exact.** Round 3's read sectors per element go **6.034 → 4.066**
+against a predicted 4.03, DRAM reads are unchanged at 2.15 GB, and r1, r2 and r4 do not
+move at all. The occupancy contract passes with **zero drift** on every kernel. KAT 3/3
+over 22 configurations, drops 0.
+
+It is still slower. Two forms, each 12 runs ABBA at 2600/10251, zero within-arm spread:
+
+| | shipping | v1, four-way branch | v2, computed index |
+|---|---|---|---|
+| **ms/solve** | **29.100** | 29.500 (**+1.37 %**) | 29.300 (**+0.69 %**) |
+| r3 read sectors/element | 6.034 | **4.066** | **4.066** |
+| r3 instructions/element | 32.20 | 39.54 | 36.79 |
+| r3 shared-store inst/element | 0.787 | 1.538 | 0.905 |
+| r3 MIO throttle | 5.78 % | 2.89 % | 2.79 % |
+| r3 long scoreboard | 56.21 % | 56.49 % | — |
+
+v1 gave each sub-lane its own branch, which made every shared store a four-way divergent
+instruction and nearly doubled the store count. v2 takes the straddling word from the
+**left** neighbour instead of the right, which puts every lane's two outputs at `2*sub` and
+`2*sub+1` — one store instruction with a computed index — and recovers most of it. The
+residual **+4.6 instructions per element** is the second loop, its index arithmetic, the
+shuffle and the one branch that remains.
+
+**The prize was never there to collect.** Everything the lead promised arrived — a third of
+the read sectors gone, a third of the load instructions gone, MIO throttle halved — and the
+round did not get faster, because **`long_scoreboard` does not move**: 56 % of r3's
+warp-active cycles are waiting on DRAM, and DRAM bytes are unchanged by construction. MIO
+throttle was only 5.78 % to begin with, so halving it cannot pay for 4.6 instructions.
+Extrapolating the two forms, a zero-overhead version lands at break-even, not at a win.
+
+**Scope the currency correction to writes.** Halving round 3's *write* sectors bought 4 % of
+the round; halving its *read* sectors bought nothing. The asymmetry has a reason — a read
+that misses L1 is usually served by L2, while a write has to reach DRAM eventually — so
+"sectors are the currency" is a statement about the write path and does not transfer.
+
+`MXBM_COOP` stays default-off. It is kept because it is the only measurement that bounds
+the lane-assignment family, and because its assert is reusable: any future claim about
+round 3's read sectors can be checked against a build that provably halves them.
 
 ### Where round 3's read sectors go, and why deleting one of them costs 2 percent
 
