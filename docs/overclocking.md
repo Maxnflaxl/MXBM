@@ -32,6 +32,23 @@ Three measured facts that decide what to set:
   outranks the lock, on either knob, at any offset
   ([measured](performance-research.md#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs)).
   At stock it is worth ~1 % and sits close to the hang threshold; not recommended.
+- **To raise memory, reach for `--moff` before `--mclk`** — they are different
+  instruments, and only the second one competes with the core for watts. A locked P-state
+  buys its clock with voltage; on a board already pinned at its power limit those watts
+  come out of the core clock, which is a loss whenever more of the solve is core-bound
+  than memory-bound. An offset shifts the V/F curve instead: same voltage, higher
+  frequency. Note this is the opposite direction from the low-rung advice above —
+  locking memory *down* under a low cap returns watts to the core, which is why it pays
+  there.
+
+  On the reference card the effect is large enough to invert the knob: it holds 10251 MHz
+  under load against a reported maximum of 10501, so the headroom is real, and *locking*
+  to that maximum still measures
+  **[+0.95 % slower](performance-research.md#locking-the-memory-clock-to-its-reported-maximum-costs-095--and-the-offset-is-the-knob-that-does-not)**,
+  while an offset of comparable size goes the other way. **Both the sign and the size are
+  properties of your card and your power limit** — a card not sitting at its limit has no
+  such trade to make. `--tune` measures the cap and the low rung for you; the offset has
+  no auto-sweep, so treat it as a manual experiment and change one knob at a time.
 
 ## `--tune`: measure this card's power curve, then `--pl auto`
 

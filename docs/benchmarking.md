@@ -84,6 +84,15 @@ precondition alone it cannot see something started during the twelve minutes of 
 runs, which is a wrong number rather than a noisy one — and the arms are far enough
 apart that the check is only ever asked while the miner itself is off the card.
 
+**The clock scripts carry the same guard, and need it more.** `benchmarks/oc_guard.sh`
+gives `mem_clock_ab.sh` and `mem_offset_sweep.sh` the same between-arm refusal, because a
+clock knob is **device-global**: a second process on the card does not merely take a share
+of the solves, it runs at the arm's clocks while doing so, so the arm measures two things
+at once. Its other half is the clock reading — `--query-gpu=clocks.mem` after a run
+samples the card settling, not the clock the run held, so the guard samples throughout
+from a single `-lms` process. Repeatedly launching `nvidia-smi` instead is not free; one
+`-lms` sampler alongside a benchmark costs 0.0 %.
+
 The telemetry is what makes a failure diagnosable: the original measurement recorded a
 number and nothing else, so when it failed to reproduce there was nothing to diff. The
 controlled run was tight to **0.3 % across six repeats** with clocks and power identical

@@ -878,12 +878,14 @@ band the driver reports for your card and says so when it clamps. On the referen
 > sol/s *falling* while everything still verifies, because GDDR6X answers marginal
 > timing with link-level retries rather than with wrong data.
 
-**The memory offset's unit is not confirmed.** `nvidia-settings` exposes memory offsets
-in MHz of *transfer rate*, which is twice the memory clock; whether NVML's
-`nvmlDeviceSetMemClkVfOffset` uses the same convention has not been measured. MXBM
-reports the offset in the units you typed and the resulting clock in the statistics
-block, so the two together are unambiguous even though the convention is not yet
-settled. See [overclocking.md](overclocking.md).
+**The memory offset is in MHz of transfer rate, which is twice the memory clock** — so
+`--moff 400` asks for +200 MHz of clock. NVML's `nvmlDeviceSetMemClkVfOffset` follows
+`nvidia-settings`' `GPUMemoryTransferRateOffset` convention here; measured under load,
+where the clock landed on `base + offset/2` for every offset tried. MXBM reports the
+offset in the units you typed and the resulting clock in the statistics block, so the two
+together are unambiguous whatever your driver does with them. See
+[overclocking.md](overclocking.md), which also has the reason to reach for this knob
+before `--mclk`.
 
 Restore order is the reverse of apply order: the fan goes back to the driver's curve
 first, so the card is cooling itself normally while the clocks come down, and the power

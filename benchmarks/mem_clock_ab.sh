@@ -7,6 +7,8 @@
 #     sudo benchmarks/mem_clock_ab.sh
 set -u
 cd "$(dirname "$0")/.."
+. benchmarks/oc_guard.sh
+oc_require_idle
 BIN=${BIN:-./build/mxbm}
 SECS=${SECS:-40}
 BLOCKS=${BLOCKS:-3}
@@ -25,10 +27,11 @@ run() {  # run <arm> <mem-mhz>
   if [ "$mc" = "auto" ]; then nvidia-smi -rmc > /dev/null
   else nvidia-smi -lmc "$mc" > /dev/null || { echo "  -lmc $mc REFUSED"; return 1; }
   fi
+  oc_require_idle
   local n; n=$(ls "$OUT"/${arm}_*.log 2>/dev/null | wc -l)
+  oc_sample_start "$OUT/clk_${arm}_$n.csv"
   "$BIN" --benchmark BEAM-III --benchmark-seconds "$SECS" > "$OUT/${arm}_$n.log" 2>&1
-  printf "%s (%s MHz, achieved %s)  %s\n" "$arm" "$mc" \
-    "$(nvidia-smi --query-gpu=clocks.mem --format=csv,noheader,nounits)" \
+  printf "%s (%s MHz, held %s)  %s\n" "$arm" "$mc" "$(oc_sample_stop)" \
     "$(grep -o '[0-9.]* solves/s' "$OUT/${arm}_$n.log")"
 }
 

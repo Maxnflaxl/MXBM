@@ -6768,6 +6768,97 @@ does nothing.
 
 ---
 
+### Locking the memory clock to its reported maximum costs 0.95 %, and the offset is the knob that does not
+
+<details>
+<summary>Details</summary>
+
+Rounds 3 and 4 are 45 % of the solve at 77.4 % and 88.6 % of DRAM peak, so the memory
+clock is the one knob on the resource that binds them. The card's load clock is **10251
+MHz** — 25 of 25 samples through a 40 s run, from a single `nvidia-smi -lms` sampler that
+costs 0.0 % — against a driver-reported maximum of 10501. The headroom is real.
+
+Taking it makes the solver **slower**. `nvidia-smi -lmc 10501` against the stock clock,
+`A B B A` interleaved, 12 arms of 40 s:
+
+| arm | ms/solve | min | max |
+|---|---|---|---|
+| stock memory clock | **28.733** | 28.711 | 28.744 |
+| locked to 10501 | 29.005 | 28.994 | 29.011 |
+
+**+0.272 ms, +0.95 %**, and the ranges do not come within 0.25 ms of touching.
+
+**The board is at its power cap in every kernel**, so the memory clock is not bought with
+nothing — a locked P-state raises memory voltage with it, and those watts come out of the
+core. The solve is **54 % core-bound** (entry, r1 and r2 at 77–99 % of the ALU pipe)
+against 45 % memory-bound, so trading core clock for memory clock loses on the majority of
+the solve. Third instance of the same currency after the SM-count and duty-cycle results:
+under the cap the resources are fungible with watts, and the split already sits where the
+governor put it.
+
+**The V/F offset is a different knob and moves the other way.** `--moff` shifts the curve
+— the same voltage at a higher frequency — where `--mclk`/`-lmc` selects a P-state. At
+matched magnitude the signs differ: +250 MHz by lock costs 0.95 %, while +200 MHz by
+offset reads 28.5 against 28.7. That second figure is **one unbracketed sample per point
+and is not evidence** — it locates a candidate, and `benchmarks/mem_offset_sweep.sh`
+exists to re-find it under a bracket. What is settled is the instrument:
+
+> Where a board sits at its power limit and the work is majority core-bound, the two
+> knobs are not interchangeable: a locked memory P-state is bought from the core clock
+> and an offset is not.
+
+The sign and the size are both properties of the card and its limit, not of the solver —
+a card with headroom under its limit has no such trade to make, and the same reasoning run
+backwards is why locking memory *down* to the low rung pays under a low cap. What
+generalises is that the two knobs are not interchangeable, not the 0.95 %.
+
+</details>
+
+
+---
+
+### The fourth w0 checkpoint: entry to round 1 needs 73 bits, and would lose if it had them
+
+<details>
+<summary>Details</summary>
+
+Three records carry the child's post-mix work word 0 — the
+[pair](#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24),
+[quad](#the-w0-checkpoint-on-the-quad-record-the-record-holds-word-0-with-no-repacking)
+and [octo](#the-w0-checkpoint-on-the-octo-record-the-mixes-go-and-the-record-does-not-grow)
+forms. The fourth boundary is **entry → round 1**, and it is the natural next question:
+`entry_body` computes a seed element, applies the mix, and then keeps 24 bits of word 0,
+while round 1 recomputes the whole thing from the index. Storing word 0 would delete one
+of round 1's seven siphashes and its `apply_mix` outright.
+
+It is closed three ways, all at the desk.
+
+**It does not fit the 8 B record.** Round 1's `combine` reads `x[0]` only through
+`(x[0] >> 24)`, so word 0's low 24 bits are read by nothing but the key — the same fact
+the octo record spends. The record would then need the seed index (25), word 0's bits
+24..63 (40) and the `24 − bb = 7 + sm` key bits the bucket address does not carry (8 at
+(16,1)): **73 bits.** Nine over, and there is no field left to squeeze — the index is
+2^25 exactly and every one of those 40 bits reaches the combine.
+
+**At 16 B it loses by 3×.** This ledger's own exchange rate — a siphash call costs 8.9 ps
+of solve time, a byte written and read back through a bucket scatter costs 4.35 ps — puts
+8 extra bytes over 2^25 elements at **1.17 ms** against a saving of ~0.4 ms. The
+[terminal record's 16 B → 8 B](#splitting-the-terminal-record-into-two-planes-costs-11--sectors-for-the-third-time)
+agrees independently at −0.947 ms over the same element count and the same scatter shape.
+A call is worth about two bytes and this one would buy 8; that is the 3.9× store-versus-
+derive constant, unchanged.
+
+**As a side plane it is the sector doubling**, +11.2 % measured.
+
+So the checkpoint family is complete, and it is complete by arithmetic rather than by a
+null: of the four boundaries, three had a field worth less than word 0 and the fourth is
+nine bits short of being able to ask.
+
+</details>
+
+
+---
+
 ### The GPU computes 99.3 % of a solve
 
 <details>
