@@ -4236,6 +4236,12 @@ direction; count-*reducing* encodings (PRMT-fused shift-OR folds, wider LOP3 LUT
 fusion) are untouched by this closure. Corollary applied elsewhere the same day: the
 `MXBM_PAIR_W0` loss above, and the floor pricing of every instruction-adding trade.
 
+The three encodings measured here were all count-*increasing* (145 instructions became
+193), which left a count-neutral move to the FMA pipe formally untested. That gap is
+closed by census rather than by measurement: ptxas has already made the move, on 95.9 %
+of the population. See
+[the carry-consuming IMAD](#the-carry-consuming-imad-is-already-on-the-fma-pipe-96-percent-of-it).
+
 </details>
 
 ### The tail-family closure is stock-scoped: MATCH_FIRST wins at the floor
@@ -5357,9 +5363,12 @@ sub-partition has 16 INT32 lanes, so a warp ALU instruction holds the pipe two c
 issue slots empty. This *re-scopes* the single-issue closure instead of contradicting it:
 on the ALU-bound stages the currency is ALU-pipe instructions specifically, and LSU and
 branch instructions issue in slots the INT pipe cannot use. Trading an XOR for a shared
-load pays there; the reverse does not. Entry's own work cannot leave the INT pipe — every
-SipRound operation is a carry-producing IADD3, a LOP3 or an SHF, none encodable as IMAD,
-which is the carry closure arrived at from the other side. Entry is also at its
+load pays there; the reverse does not. What is left of entry's own work cannot leave the
+INT pipe: every SipRound operation is a LOP3, an SHF, or the **carry-producing** low half
+of a 64-bit add, and IMAD can consume a carry but not produce one. The high halves have
+already gone — see
+[the carry-consuming IMAD](#the-carry-consuming-imad-is-already-on-the-fma-pipe-96-percent-of-it).
+Entry is also at its
 instruction floor: 1074 SASS instructions for 7 siphash calls, 153 per call against a
 hand-derived minimum of 155 (48 IADD3 + 48 LOP3 + 48 SHF, the two `rotl64(·,32)` free as
 register swaps), with `IADD3 165 + IMAD 173 = 338` matching the 336 predicted 64-bit adds.
@@ -5795,6 +5804,87 @@ deficits, at 100/110/120 W, are in a band where the suspected lever does not run
 ABBA confirms it: 63.4/63.5 ms shipping against 63.3/63.4 with the filter compiled out,
 ranges overlapping. What the filter does below 130 W is nothing, so whatever the low band
 needs, it is a match-first question and not this lever's.
+
+### Compile-time geometry costs 0.26 percent at stock and 1.12 under a cap
+
+`bucket_bits`, `submask_bits` and the two bucket caps are runtime kernel arguments, and
+the innermost walk loop shifts by one of them and multiplies by another. That is the same
+shape as [compile-time round constants](#compile-time-round-constants), the largest single
+win in this project's history, so the geometry looked like the same lever one layer down.
+
+It is not, and the reason is worth more than the lever: **a runtime scalar that reaches
+the SASS only as an instruction operand is free.** The −27 ms win was never about
+constants — it was about a *runtime loop bound* producing a dynamically indexed private
+array, which cannot live in registers and went to local memory. Nothing about the geometry
+does that.
+
+Probed at its maximum strength: four assignments at the top of `fused_round_body`
+hardwiring one rung, built twice — (16,1) with `cap` 743 and (17,0) with `cap` 425. Such a
+binary is correct on its own rung and silently wrong on every other, so it cannot run the
+ladder's KAT; it is gated instead on all four drop counters zero and on 2.00 / 2.02
+verified solutions per solve, which the record layout could not produce if the hardwired
+cap were off by one. That doubles as the applied-assert, alongside every
+`c[0x0][0x160..0x16c]` reference disappearing from all four kernels.
+
+| | shipping | compile-time geometry |
+|---|---|---|
+| stock, 284 W, headless | **28.948 ms** | 29.023 (**+0.26 %**) |
+| 120 W cap, the (17,0) rung | **65.435 ms** | 66.171 (**+1.12 %**) |
+
+Four interleaved arms a side at each point, no arm overlapping the other build's range.
+
+**Why there was nothing to win.** Three separate reasons, each visible in the SASS:
+
+- A kernel parameter is a **constant-bank operand**, encoded in the instruction. The walk
+  loop's shift is `SHF.R.U32.HI R9, RZ, c[0x0][0x164], R9` — one instruction, exactly what
+  the immediate form costs. The output slot is `IMAD.WIDE.U32 R4, R47, c[0x0][0x16c], R4`,
+  the entire `cb * out_bucket_cap + cpos` as one 32×32→64 multiply-add, which is the
+  cheapest encoding available whether the cap is a constant or not.
+- The divisions are already gone. `bid / (1u << sm)` and `bid % (1u << sm)` are recognised
+  as a shift and a mask without being told `sm` is a shift count.
+- What geometry math is left, the compiler hoists into the **uniform datapath** —
+  `ULDC.64 UR8, c[0x0][0x160]`, `USHF.L.U64.HI`, `UIMAD.WIDE.U32` — one copy per warp, in
+  registers the vector datapath never pays for.
+
+**And folding it costs.** Static instruction counts rise in every kernel: at (16,1) r1
+1832 → 1912, r2 2560 → 2632, r3 840 → 896, r4 704 → 760; at (17,0) by 24 to 40 each.
+Round 3's `BSSY`/`BSYNC` pairs go 13 → 19 — once the shift amounts are immediates the
+scheduler un-if-converts and re-branches. The occupancy contract fails in 13 places, all
+upward: r3 arena 58 → 62 registers, r4 47 → 52, and the octo r4 spilling 88 → 96 B of
+stack. The 4.3× ratio between the capped and stock losses is the rule that killed NARROW6
+read in the same direction: the cap prices instructions, and this adds them.
+
+*Scope: sm_89, CUDA 13.3, driver 610.43.03, the two rungs measured. The probe was removed
+— reproducing it is four assignments.*
+
+### The carry-consuming IMAD is already on the FMA pipe, 96 percent of it
+
+The [single-issue closure](#sm_89-issue-is-single-slot-instruction-placement-is-not-a-lever-only-count-is)
+rests in part on the claim that a SipRound's operations are "none encodable as IMAD". The
+shipped object holds 933 `IMAD.WIDE.U32`, so that phrasing is wrong, and the closure only
+ever measured **count-increasing** conversions — 88 SHF becoming 192 IMAD. A count-neutral
+one was never tested. Both objections hold. The conclusion still does not, and one
+`cuobjdump -sass` pass is the whole answer.
+
+| whole object | count |
+|---|---|
+| `IMAD.X` — carry-consuming high half on the FMA pipe | **14,160** |
+| `IADD3.X` — the same job left on the ALU pipe | **607** |
+| `IMAD.SHL.U32` — shifts moved off the ALU pipe | 1,737 |
+| `IMAD.MOV.U32` — register moves moved off the ALU pipe | 12,118 |
+
+**ptxas has already done the count-neutral conversion, to 95.9 % of the population.** Per
+shipping kernel the remainder is: entry `IADD3.X 3` against `IMAD.X 157`, r1 6/161,
+r2 3/270, r3 4/5, r4 3/3.
+
+Entry is the only stage where it could pay — 98.7 % ALU-pipe utilization with the FMA pipe
+idle — and its unconverted population is **3 instructions out of 1,080**, 0.28 % of one
+stage, two orders of magnitude under this instrument's floor. The correct statement of the
+carry claim is that **IMAD cannot *produce* a carry on sm_89**, only consume one, which is
+why the low half of every 64-bit add stays `IADD3` and caps the conversion near half the
+add instructions in the first place. And a count-neutral move would be worth nothing even
+if a population existed: the schedulers issue one instruction per cycle regardless of
+destination pipe.
 
 ### Cooperative record staging: the sectors halve exactly, and it costs 0.20 ms
 
