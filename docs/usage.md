@@ -572,9 +572,9 @@ power. Going below 220 W makes things *worse* on both counts, because by then th
 clock has fallen far enough that the parts of the board which do not scale with it are
 being paid for out of less work.
 
-**220 W is both MXBM's own efficiency peak and comfortably inside the window where it
+**210 W is both MXBM's own efficiency peak and comfortably inside the window where it
 beats the alternative**; the crossing where lolMiner takes over on speed and efficiency
-is at ~183 W. The full curve, and both miners
+is at ~181 W. The full curve, and both miners
 swept against each other at the same caps, is in
 [performance.md](performance.md#both-miners-under-the-same-cap).
 
@@ -596,11 +596,11 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 On a rig that doesn't run the miner as root, set the card once instead
 (`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. At
 165 W and above the rung *loses* — badly at stock — so this is strictly a low-cap
-pairing, and it ties rather than beats 220 W on energy per solution. Details in
+pairing, and it does not reach 210 W on energy per solution. Details in
 [performance.md](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
 
 ```
-sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 210
 ```
 
 **It needs root** — every NVML write does. Without it MXBM says so by name and mines on
@@ -856,7 +856,7 @@ lock the clock and raise the offset, so the locked frequency runs at a voltage t
 otherwise deliver less. `--fan` sets a fan target in percent, on every fan the card has.
 
 ```sh
-sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220 --cclk 2100 --coff 200 --moff 1500
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 210 --cclk 2100 --coff 200 --moff 1500
 ```
 
 All of them take the same per-GPU list syntax as `--pl`, all need root, and all are

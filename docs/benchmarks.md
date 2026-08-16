@@ -64,14 +64,14 @@ to 220 W:
 
 | | MXBM at 220 W | lolMiner at 220 W | |
 |---|---|---|---|
-| Throughput | **65.2 sol/s** | 54.4 sol/s | **+19.8 %** |
+| Throughput | **65.8 sol/s** | 54.35 sol/s | **+21.1 %** |
 | Board power | 219.7 W | 219.4 W | — |
-| Efficiency | **0.297 sol/s/W** | 0.248 sol/s/W | **+19.8 %** |
+| Efficiency | **0.2995 sol/s/W** | 0.2477 sol/s/W | **+20.9 %** |
 
-MXBM is ahead on both from roughly **183 W to the 285 W stock limit**. Below that
-lolMiner is ahead on both — at 180 W by about 2 %, peaking at 11 % around 140 W and
-narrowing to 2.0 % at the 100 W floor. The upper crossing at ~277 W closed with the
-w0-checkpoint record: MXBM is now ahead on efficiency at 285 W too, 0.2433 against
+MXBM is ahead on both from roughly **181 W to the 285 W stock limit**. Below that
+lolMiner is ahead on both — at 180 W by about 0.5 %, peaking at 8 % around 140 W and
+gone by the 100 W floor, where the two are level. The upper crossing at ~277 W closed with
+the w0-checkpoint record: MXBM is now ahead on efficiency at 285 W too, 0.2448 against
 0.2260.
 
 **Both curves are measured.** lolMiner was swept across the same caps as MXBM rather than
@@ -114,16 +114,17 @@ a great deal. Swept against each other at identical caps:
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
-**Where each one wins.** Below ~183 W lolMiner is ahead on speed *and* efficiency, by
-about 2 % at 180 W. From ~183 W to the 285 W stock limit MXBM is ahead on both, by 17 %
-at 220 W and 20 % at 240 W. The upper crossing at ~277 W closed with the w0-checkpoint
-record.
+**Where each one wins.** Between ~101 W and ~181 W lolMiner is ahead on speed *and*
+efficiency, by about 0.5 % at 180 W. From ~181 W to the 285 W stock limit MXBM is ahead on
+both, by 21 % at 220 W and 25 % at 240 W. The upper crossing at ~277 W closed with the
+w0-checkpoint record.
 lolMiner barely responds to a cap at all — it gives up 2.4 % of its speed for 24 % less
 power, and above ~237 W the cap does nothing. Its best efficiency (0.2991 sol/s/W at
-175 W) is now matched: MXBM's best is **0.2968 sol/s/W at 220 W on stock memory** —
-3.369 J/solution — a **0.8 %** gap where it was 8.9 % on the previous kernel and 15.4 %
-the one before, and at that tie MXBM does 65.2 sol/s against 52.25.
-What MXBM has is the ceiling: 69.2 sol/s against ~54.0, which lolMiner cannot reach at
+175 W) is now met: MXBM's best is **0.3009 sol/s/W at 210 W on stock memory** —
+3.324 J/solution — **0.6 % ahead**, where it was 0.8 % behind on the previous kernel,
+8.9 % the one before and 15.4 % the one before that, and at that point MXBM does 63.1
+sol/s against 52.25. Treat 0.6 % as a tie, not a lead.
+What MXBM has is the ceiling: 69.6 sol/s against ~54.0, which lolMiner cannot reach at
 any setting.
 
 The July sweep was run twice, two days apart, and **reproduced within ~1 %** at every
@@ -154,12 +155,12 @@ Two things worth knowing before you cap your own card:
   fallen to 1725 MHz and the parts of the board that do not scale with it — memory,
   uncore, leakage — are being paid for out of less work. Lower is not always better, and
   the head-to-head sweep shows this holds all the way down to the card's 100 W floor.
-- **The last watts are the worst value.** Going 220 → 285 W buys 4.6 sol/s for 65 W; the
+- **The last watts are the worst value.** Going 220 → 285 W buys 3.8 sol/s for 65 W; the
   20 W from 190 to 210 buys 7.1. Where to sit is an economic choice about your power
   price, not a technical one.
 
 ```sh
-sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 210
 ```
 
 `--pl` needs root. Without it MXBM says so by name and mines on at the card's current
@@ -187,17 +188,17 @@ elsewhere; the table is their mean):
 | 140 W | 49.4 | 40.8 | 3.434 | 0.291 | +12.4 % | 39.75 |
 | **160 W** | 42.5 | **47.4** | **3.368** | **0.297** | +8.2 % | 47.85 |
 
-**Take the rung only if you are hard-limited to ~160 W or below.** It is worth +8 % at
-160 W rising to +20 % at 100 W — and with each miner at its own best configuration MXBM
+**Take the rung only if you are hard-limited to ~160 W or below.** It is worth +6 % at
+160 W rising to +17 % at 100 W — and with each miner at its own best configuration MXBM
 now *leads* the band at 120 and 140 W, ties at 160, and trails only at the 100 W floor.
-What it is not is an efficiency setting: 3.368 J/solution at 160 W ties 220 W's 3.369 on
-stock memory to 0.03 %, and at that tie 220 W does **65.2 sol/s against 47.4** — 38 % more
-work for the same energy per solution.
+What it is not is an efficiency setting: 3.368 J/solution at 160 W against 210 W's 3.324
+on stock memory, and at that point stock does **63.1 sol/s against 47.4** — 33 % more
+work for less energy per solution.
 
-The rung's margin over stock memory is unchanged where it is best measured: the
-2026-07-31 ABBA read +16.7/+16.8/+12.1/+9.3 % across these caps and this pair reads
-+20.4/+13.2/+12.4/+8.2 %, the two middle caps agreeing to a point and the ends moving by
-about the arm spread there. The mechanism, the A/Bs behind each step and lolMiner's own
+The rung's margin over stock memory is a floor rather than a measurement: the 2026-07-31
+ABBA read +16.7/+16.8/+12.1/+9.3 % across these caps and against the current stock column
+it reads +17.2/+11.4/+9.4/+5.8 %, but the rung has not been re-swept since the singleton
+filter shipped and stock has. The mechanism, the A/Bs behind each step and lolMiner's own
 rung sweep are in
 [performance.md](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
 

@@ -5757,6 +5757,77 @@ atomics per element for exactly 1 — 2.8 ms, still 3.7× the prepass. Four bits
 available at all: a wrap at 16 reads as "singleton", the one direction that loses
 solutions.
 
+### The singleton filter pays 4.7x more under a cap than at stock
+
+The [filter](#singleton-free-staging-the-prize-is-085-ms-and-the-prepass-that-finds-it-costs-076) shipped on a stock number, and the cap sweep taken straight after read
+**slower at every cap below 220 W** than the previous sweep — a tilt, in the direction
+NARROW6's null predicts for a lever that adds instructions. Capped rigs are a target, so
+that had to be settled before anything else was built on top.
+
+**It is not a capped-rig loss. It is a bigger win capped than at stock**, and the tilt is
+not the kernel at all.
+
+Three arms interleaved at 180 W in one session, `A B C C B A` twice, 45 s each: the
+shipping build, a `-DMXBM_SOLO=0` build of the same tree, and a build of the tree as it
+stood before either of the day's two kernel changes. All twelve runs drew 179.7–180.1 W,
+and no two arms' ranges overlap.
+
+| arm | ms/solve | sol/s | Δ vs shipping |
+|---|---|---|---|
+| shipping | **38.775** | 51.48 | — |
+| `MXBM_SOLO=0` | 39.350 | 50.63 | the filter alone is **−1.46 %** |
+| neither lever | 39.325 | 50.68 | both levers are **−1.40 %** |
+
+So the filter is worth **−1.46 % at 180 W against −0.31 % at stock**, ~4.7× more under the
+cap, which is what the instruction-deleting family has done twice before. Its net is
+negative *instructions*: the prepass adds one scalar load per element and the filter
+removes a record load, the staging stores, and the ragged second block-pass. The
+block-exit barrier is separately **null at this cap** (+0.06 %, inside the arm spread),
+against −0.165 % at stock.
+
+**Below 130 W the filter is not in the binary path at all.** `kSpecMinPowerW` turns
+match-first on there, and `SOLO` is `!MFIRST` — match-first claims `tab` for the chain in
+the staging loop and reaches the same elements later. So the sweep's three *largest*
+deficits, at 100/110/120 W, are in a band where the suspected lever does not run. A 120 W
+ABBA confirms it: 63.4/63.5 ms shipping against 63.3/63.4 with the filter compiled out,
+ranges overlapping. What the filter does below 130 W is nothing, so whatever the low band
+needs, it is a match-first question and not this lever's.
+
+### A swept cap column that did not reproduce, and the five explanations that were not it
+
+A cap sweep is fifteen unrepeated runs. That is fine for a curve's *shape* and it is what
+`power_sweep.sh` was written for, but it makes a swept column the one number in this
+project that never gets bracketed — and one of them was wrong.
+
+The column swept immediately after the singleton filter shipped read **67.2 ms at 120 W**.
+Re-run later the same day, same binary, same script, same cap: **63.9 ms**, agreeing with
+an interleaved ABBA taken between the two at 63.4–64.6. A 5.5 % gap, and every candidate
+was measured at 120 W as its own interleaved pair rather than argued about:
+
+| suspected | measured | |
+|---|---|---|
+| no warmup before the timed run | **0.2 %** | a discarded run first changes nothing |
+| the NVML sampler running alongside | **0.0 %** | 5 Hz of `nvidia-smi` is free |
+| run length | **0.4 %** across 45 / 90 / 180 s | and not monotonic |
+| the cap transition the sweep measures through | **0.6 %** | settle at 110 W, raise, start at once, against a settled cap |
+| leftover clock locks from the pin | **0.0 %** | both arms settle to 1035 MHz |
+
+Sum of everything found: ~0.8 % of a 5.5 % gap. No co-tenant either — that session's own
+logs report 15968 MB free, and a second miner would hold gigabytes. **The cause is
+unknown**, which is the honest state, and the useful part is what it cost: the bad column
+was read as a tilt, the tilt had a mechanism ready to explain it, and a day's shipped work
+was suspected of a capped-rig regression it did not have.
+
+Two things follow, and the second is the one that generalises. **A swept column is
+provisional until at least one of its points is reproduced by a bracketed A/B** — the
+current column carries 120 W and 180 W agreeing with interleaved arms to 0.2 %, and that
+is now the bar for adopting one. And **a cross-session sweep difference is not evidence
+about a kernel.** It cannot be: the sweep's own repeatability is the thing under test.
+
+The clock-lock row is worth keeping separately. It is the third independent confirmation
+that [the governor outranks the lock](#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs) — under a 120 W cap, `-lgc 2600 -lmc 10251` and released
+clocks both settle to the same 1035 MHz and the same time per solve.
+
 ### The w0-checkpoint pair record, repriced by the address bits: −0.76 ms (−2.4 %)
 
 **Round 2 no longer derives work word 0. Round 1 stores it, in the same 16 bytes.**
@@ -6101,6 +6172,8 @@ the 100 W floor, where the card is slow enough that nothing is the constraint. B
 crossings against the reference miner move from ~200 W to **~183 W**, and the efficiency
 peak improves from 0.2746 to **0.2968 sol/s/W at 220 W** (3.642 → **3.369 J/solution**),
 which is within 0.8 % of that miner's own best point and does 25 % more work at the tie.
+(The singleton filter has since taken the crossings to ~181 W and the peak to 0.3009 at
+210 W; the live figures are always [the cap table](performance.md#both-miners-under-the-same-cap).)
 On the 5001 memory rung, where each miner is at its own best configuration, the low band
 stops being a deficit: MXBM leads at 120 and 140 W and ties at 160.
 

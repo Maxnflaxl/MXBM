@@ -19,21 +19,22 @@ auditable alternative to the closed-source miners in the ecosystem.
 >
 > | board cap | MXBM | lolMiner 1.98a | |
 > |---|---|---|---|
-> | 180 W | 51.4 sol/s · 0.286 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | lolMiner ahead, by 2 % |
-> | 220 W | **65.2 sol/s · 0.297 sol/s/W** | 54.4 sol/s · 0.248 sol/s/W | MXBM ahead on both |
-> | 285 W | **69.2 sol/s · 0.243 sol/s/W** | 53.7 sol/s · 0.226 sol/s/W | MXBM ahead on both |
+> | 180 W | 52.1 sol/s · 0.290 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | level, lolMiner by 0.5 % |
+> | 210 W | **63.1 sol/s · 0.301 sol/s/W** | 53.9 sol/s · 0.257 sol/s/W | MXBM ahead on both |
+> | 285 W | **69.6 sol/s · 0.245 sol/s/W** | 53.7 sol/s · 0.226 sol/s/W | MXBM ahead on both |
 >
-> **MXBM has the higher ceiling — 69.2 sol/s against ~54.0, which lolMiner cannot reach
-> at any setting — and it leads on both speed and efficiency from roughly 183 W to the
+> **MXBM has the higher ceiling — 69.6 sol/s against ~54.0, which lolMiner cannot reach
+> at any setting — and it leads on both speed and efficiency from roughly 181 W to the
 > 285 W stock limit.** (lolMiner's column is the 2026-07-30 sweep; MXBM's was swept end
 > to end 2026-08-16.)
-> Below that window lolMiner is still ahead, and its best cap is 140 W at +11 %, but the
-> gap narrows again toward the floor — **+2.0 % at 100 W** — and closing it is
+> Below that window lolMiner is still ahead, and its best cap is 140 W at +8 %, but the
+> gap narrows again toward the floor and is **gone by 100 W**, where the two are level;
+> closing the middle of that band is
 > [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
-> The two miners' best efficiency points are now within 0.8 % of each other — 0.2968
-> sol/s/W at 220 W against 0.2991 at 175 — and at that tie MXBM does 25 % more work.
+> The two miners' best efficiency points are now level — 0.3009 sol/s/W at 210 W against
+> 0.2991 at 175 — and there MXBM does 21 % more work.
 >
-> **`--pl 220` is the setting to use.** Needs root; restored on exit. See
+> **`--pl 210` is the setting to use.** Needs root; restored on exit. See
 > [usage.md](docs/usage.md#power-limit).
 
 ---

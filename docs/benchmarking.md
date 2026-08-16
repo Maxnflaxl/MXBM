@@ -248,6 +248,22 @@ silently caps whatever runs next.
 This still does not make the sol/s columns comparable *between* miners, for the reason in
 §1. The watts are comparable, because one instrument measured both.
 
+### 4c. A swept column is provisional until one of its points is bracketed
+
+`power_sweep.sh` gives **one unrepeated run per cap**. That is the right instrument for
+the *shape* of a curve, and the wrong one for any single number in it: nothing in a sweep
+is interleaved, so nothing in it is bracketed against session drift. One column measured
+this way read 4–6 % low across the whole band below 220 W, and re-running the identical
+script on the identical binary later the same day did not reproduce it. Warmup, the NVML
+sampler, run length, the cap transition and leftover clock locks were each priced at
+120 W as their own interleaved pair and together account for ~0.8 % of the 5.5 % gap; the
+cause is still unknown ([the write-up](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it)).
+
+Two rules came out of it. **Before a swept column is published, reproduce at least one of
+its caps with an interleaved A/B** and quote the agreement. And **a difference between two
+sweeps is never evidence about a kernel change** — the sweep's own repeatability is the
+thing that has not been established.
+
 ---
 
 ## 5. Gotchas

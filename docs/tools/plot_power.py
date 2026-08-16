@@ -116,6 +116,10 @@ def band(rows):
     efficiency crosses TWICE: MXBM starts behind at the low end, goes ahead, and
     falls behind again at the top. Taking the first crossing of each measure
     reported a band of 213-213 W, which is how this was caught.
+
+    The longest CONTIGUOUS run, not first-to-last: the two curves also touch at
+    the 100 W floor, and first-to-last would shade the whole sweep on the
+    strength of one point a fifth of a percent apart.
     """
     caps = [r["cap"] for r in rows]
     lo, hi, step = caps[0], caps[-1], 0.1
@@ -128,16 +132,21 @@ def band(rows):
                 return a[who][idx] + t * (b[who][idx] - a[who][idx])
         return rows[-1][who][idx]
 
-    inside = []
+    runs, cur = [], []
     x = lo
     while x <= hi + 1e-9:
         if (interp(x, 1, "mx") > interp(x, 1, "lol")
                 and interp(x, 2, "mx") > interp(x, 2, "lol")):
-            inside.append(x)
+            cur.append(x)
+        elif cur:
+            runs.append(cur); cur = []
         x += step
-    if not inside:
+    if cur:
+        runs.append(cur)
+    if not runs:
         return None, None
-    return inside[0], inside[-1]
+    best = max(runs, key=len)
+    return best[0], best[-1]
 
 
 def render(rows, above=()):
