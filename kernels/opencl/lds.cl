@@ -873,7 +873,9 @@ void NAME(                                                                      
                 /* 32 B OCTO record: key, eight leaves, gi. Two 16 B loads where the   \
                    packed round-4 input takes two; the work words, the lead and the    \
                    leftContrib are all rebuilt in the expand loop from these leaves.   \
-                   lslot is kept because this round's references name parents by slot. */ \
+                   lslot is kept because this round's references name parents by slot --  \
+                   half-local, so its top bit carries which half it came from (see        \
+                   LDS_OCTO_HI): a split set gives the same slot number in both. */       \
                 uint l8[8];                                                            \
                 if (LDS_V2) {                                                          \
                     __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
@@ -886,7 +888,7 @@ void NAME(                                                                      
                     oc_leaves(rec0, w1, w2, w3, l8);                                   \
                     lgi[pos] = (uint)(w3 >> 32);                                       \
                 }                                                                      \
-                lslot[pos] = (uint)sl_;                                                \
+                lslot[pos] = (uint)sl_ | ((bucket < in_half) ? 0u : LDS_OCTO_HI);       \
                 if (LDS_OCTO_CHECK) {                                                  \
                 /* The record's eight leaves must re-derive the element the record IS:  \
                    rebuild it and check the key that produces against the stored one. */ \

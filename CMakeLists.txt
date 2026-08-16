@@ -508,6 +508,16 @@ if(OpenCL_FOUND)
   set_tests_properties(gpu_solver_rowbucket PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_ROWBUCKET=1")
   add_test(NAME gpu_recover_rowbucket COMMAND test_gpu_recover)
   set_tests_properties(gpu_recover_rowbucket PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_ROWBUCKET=1")
+  # The OCTO rungs, which a 16 GB card never selects: round 3 emits its eight leaves and
+  # round 4 rebuilds from them. Its back-references name a round-3 SLOT, and a slot is
+  # half-local, so the SPLIT set is its own gate -- and the only case the small cards
+  # this rung exists for will ever run.
+  add_test(NAME gpu_solver_octo COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_octo PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_OCTO=1;MXBM_QUAD=1;MXBM_ARENA=1")
+  add_test(NAME gpu_solver_octo_split COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_octo_split PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_OCTO=1;MXBM_QUAD=1;MXBM_ARENA=1;MXBM_SPLIT=1")
 
   # Apple's OpenCL cannot build the LDS or fused row-bucket kernels at all --
   # clCreateKernel returns CL_INVALID_KERNEL (-48) and clGetProgramBuildInfo reports
@@ -522,6 +532,7 @@ if(OpenCL_FOUND)
     set_tests_properties(lds_collide gpu_rounds_lds gpu_solver_lds
                          gpu_rounds_rowbucket gpu_solver_rowbucket
                          gpu_recover_rowbucket
+                         gpu_solver_octo gpu_solver_octo_split
                          PROPERTIES DISABLED TRUE)
     message(STATUS "macOS: OpenCL LDS/row-bucket gates disabled "
                    "(Apple's OpenCL cannot build those kernels); Metal covers the "

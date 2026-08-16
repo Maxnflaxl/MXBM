@@ -334,6 +334,10 @@ inline ulong oc_w2(uint l4, uint l5, uint l6) {
 inline ulong oc_w3(uint l6, uint l7, uint gi) {
     return ((ulong)l6 >> 18) | ((ulong)l7 << 7) | ((ulong)gi << 32);
 }
+// Round 4's back-references name a round-3 parent by SLOT, and a slot is HALF-LOCAL: a
+// split record set numbers both halves from zero. This bit rides in the reference to say
+// which half, leaving 31 bits for a slot number that never exceeds nb/2 * cap + pool.
+#define LDS_OCTO_HI 0x80000000u
 inline void oc_leaves(ulong w0, ulong w1, ulong w2, ulong w3, uint l[8]) {
     l[0] = (uint)(w0 >> 24) & RD2_IDXMASK;
     l[1] = (uint)(((w0 >> 49) | (w1 << 15)) & RD2_IDXMASK);
@@ -359,7 +363,8 @@ inline void oc_leaves(ulong w0, ulong w1, ulong w2, ulong w3, uint l[8]) {
 __kernel void recover(uint nSurv, __global const uint* surv_slots, uint capacity,
                       __global const uint* all_left, __global const uint* all_right,
                       __global uint* out /* [nSurv*32] */,
-                      __global const ulong* r3_elem, uint r3_stride) {
+                      __global const ulong* r3_elem, uint r3_stride,
+                      __global const ulong* r3_elem_hi) {
     uint i = (uint)get_global_id(0);
     if (i >= nSurv) return;
     uint got = 0u;
@@ -369,7 +374,8 @@ __kernel void recover(uint nSurv, __global const uint* surv_slots, uint capacity
     for (int k = 0; k < 2; ++k) {
         uint sl[2] = { all_left[g4[k]], all_right[g4[k]] };
         for (int j = 0; j < 2; ++j) {
-            __global const ulong* r = r3_elem + (size_t)sl[j] * r3_stride;
+            __global const ulong* hset = (sl[j] & LDS_OCTO_HI) ? r3_elem_hi : r3_elem;
+            __global const ulong* r = hset + (size_t)(sl[j] & ~LDS_OCTO_HI) * r3_stride;
             uint l[8];
             oc_leaves(r[0], r[1], r[2], r[3], l);
             for (int t = 0; t < 8 && got < 32u; ++t)

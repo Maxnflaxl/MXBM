@@ -171,11 +171,10 @@ static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity, uint64_t usable) 
                                          /*allow_quad=*/true, 0, /*allow_split=*/true,
                                          slack, /*allow_impb=*/false,
                                          /*allow_arena=*/true,
-                                         // allow_octo: the kernels are here (MXBM_OCTO
-                                         // selects them) but round 4 does not yet place
-                                         // every child in the bucket its key names, so
-                                         // the ladder must not be able to reach them.
-                                         /*allow_octo=*/false);
+                                         // allow_octo: round 3's record as its eight
+                                         // leaves, round 4 rebuilding from them. The
+                                         // bottom three rungs, and the 3-4 GB classes.
+                                         /*allow_octo=*/true);
     // MXBM_QUAD / MXBM_ARENA force a format a card would not otherwise need, which is
     // the only way to exercise those paths on a 16 GB device.
     return { g.bb, g.sm, g.quad || std::getenv("MXBM_QUAD") != nullptr,
@@ -1212,7 +1211,10 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         //                (L5-thin: round 5 is terminal; recover walks back-refs).
         const FusedConsts fc = fused_consts_for(r);
         const uint32_t sIn = fc.sIn, sOut = fc.sOut, sBuild = fc.sBuild;
-        uint32_t outOff = (uint32_t)(r - 1) * capacity;
+        // Back-reference row. An octo build allocates ONE row plus the survivor tail and
+        // writes it from round 4 alone -- rounds 1-3 write none -- so round 4's row sits
+        // at 0, where recover() reads it, not at the (r-1) the five-row layout gives it.
+        uint32_t outOff = pb.fb_octo ? 0u : (uint32_t)(r - 1) * capacity;
         // Per-round work compaction (inwords->outwords): r1,r2=(7,7); r3=(7,6); r4=(6,5).
         // Rounds 2 and 3 switch TOGETHER between record formats -- r2's out-stride is
         // r3's in-stride, so a mismatch would have r3 read a record r2 never wrote.
@@ -1484,11 +1486,15 @@ std::vector<std::array<uint8_t,104>> recover_candidates(Runtime& rt, PipelineBuf
     rt.set_arg(k.get(), 3, sizeof(cl_mem), &leftMem);
     rt.set_arg(k.get(), 4, sizeof(cl_mem), &rightMem);
     rt.set_arg(k.get(), 5, sizeof(cl_mem), &leavesRaw);
-    // Round 3's output set, which the octo walk reads the eight leaves from. Off an
-    // octo build the kernel never dereferences it, so any live buffer will do.
+    // Round 3's output set, which the octo walk reads the eight leaves from -- both
+    // halves, because a reference names a half-local slot and carries its half in the
+    // top bit. Off an octo build the kernel never dereferences either, so any live
+    // buffer will do.
     cl_mem r3e = pb.fb_octo ? pb.fb_elem[1].get() : leavesRaw;
+    cl_mem r3eHi = (pb.fb_octo && pb.fb_elem_hi[1]) ? pb.fb_elem_hi[1].get() : r3e;
     rt.set_arg(k.get(), 6, sizeof(cl_mem), &r3e);
     rt.set_arg(k.get(), 7, pb.fb_octo ? pb.fb_stride[1] : 0u);
+    rt.set_arg(k.get(), 8, sizeof(cl_mem), &r3eHi);
     rt.run1d(k.get(), n);
 
     // Read back ONLY n*32 uints (the recovered leaves) -- never the
