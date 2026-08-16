@@ -370,6 +370,19 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 #ifndef LDS_OCTO_CHECK
 #define LDS_OCTO_CHECK 0
 #endif
+// IMPLICIT BITS. A packed r2 -> r3 record sits in the bucket its key names, so the top
+// LDS_IMPB of those 24 bits are the bucket ADDRESS and need not be stored: the consumer
+// reinserts them from its own bucket index. What is left, 400 - LDS_IMPB work bits, fits
+// 6 u64 instead of 7, and the freed word carries the 9th word the side plane held -- so
+// the plane has no writer and set 0 costs 8 u64 a slot rather than 9.
+//
+// The kept low 24 - LDS_IMPB key bits stay at the bottom of word 0, where the staging
+// loop's sub-mask filter and the spill rescan read them. The chain hash needs the whole
+// key and so reads the REBUILT word 0, which is why this rides the perfect table.
+// Set to the geometry's bucket_bits (rb_impb_ok admits 16 and 17), 0 = off.
+#ifndef LDS_IMPB
+#define LDS_IMPB 0
+#endif
 #ifndef LDS_ARENA_CAP
 #define LDS_ARENA_CAP 65536u
 #endif
@@ -710,9 +723,10 @@ inline ulong oc_contrib(const uint l[8]) {
         return;                                                                       \
     }                                                                                 \
     grp -= grp / co_stride;                           /* rank among round groups */
-#define FUSED_LDS(NAME, ...)     FUSED_LDS_C(NAME, 0, __VA_ARGS__)
-#define FUSED_LDS_COB(NAME, ...) FUSED_LDS_C(NAME, 1, __VA_ARGS__)
-#define FUSED_LDS_C(NAME, COB, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR, FCAP, TAB, PERFECT, SPILL) \
+#define FUSED_LDS(NAME, ...)     FUSED_LDS_C(NAME, 0, __VA_ARGS__, 0)
+#define FUSED_LDS_COB(NAME, ...) FUSED_LDS_C(NAME, 1, __VA_ARGS__, 0)
+#define FUSED_LDS_I(NAME, ...)   FUSED_LDS_C(NAME, 0, __VA_ARGS__, LDS_IMPB)
+#define FUSED_LDS_C(NAME, COB, INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD, INSTR, OUTSTR, FCAP, TAB, PERFECT, SPILL, IMPB) \
 __kernel __attribute__((reqd_work_group_size(LDS_WG, 1, 1)))                          \
 void NAME(                                                                            \
     uint bucket_bits, uint submask_bits, uint in_bucket_cap, uint out_bucket_cap,     \
@@ -902,10 +916,28 @@ void NAME(                                                                      
                 /* Stride-8 r2 record [work0..6 | p0], p1 in the side plane: 4 x 16 B \
                    loads where 9 scalars were (CUDA: the MIO-queue win, 41.5->35.3). \
                    Indexed by p, not by the staged slot: the plane has no pool region \
-                   behind it, which is why the arena rungs are quad-only and the host \
-                   refuses the pairing rather than reaching this line with p >= cnt. */ \
-                ulong p0, p1 = side_in[side_base + p];                                \
-                if (LDS_V2) {                                                         \
+                   behind it, which is why an arena rung needs the quad record or the \
+                   pack below rather than reaching this line with p >= cnt. */        \
+                ulong p0, p1;                                                         \
+                if (IMPB) {                                                           \
+                    /* Inverse of the emit's pack: the address bits come back from     \
+                       this group's own bucket, and the freed 7th word carries p1 --   \
+                       so this branch reads no plane at all. */                        \
+                    __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
+                    ulong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];                \
+                    const uint  impKB = 24u - (IMPB);                                 \
+                    const ulong impM  = (1ul << impKB) - 1ul;                         \
+                    lwork[pos*(INW) + 0] = (q0.x & impM) | ((ulong)bucket << impKB)   \
+                                         | (((q0.x >> impKB) & 0xFFFFFFFFFFul) << 24); \
+                    lwork[pos*(INW) + 1] = (q0.x >> (64u - (IMPB))) | (q0.y << (IMPB)); \
+                    lwork[pos*(INW) + 2] = (q0.y >> (64u - (IMPB))) | (q1.x << (IMPB)); \
+                    lwork[pos*(INW) + 3] = (q1.x >> (64u - (IMPB))) | (q1.y << (IMPB)); \
+                    lwork[pos*(INW) + 4] = (q1.y >> (64u - (IMPB))) | (q2.x << (IMPB)); \
+                    lwork[pos*(INW) + 5] = (q2.x >> (64u - (IMPB))) | (q2.y << (IMPB)); \
+                    lwork[pos*(INW) + 6] = (q2.y >> (64u - (IMPB))) & 0xFFFFul;       \
+                    p0 = q3.x; p1 = q3.y;                                             \
+                } else if (LDS_V2) {                                                  \
+                    p1 = side_in[side_base + p];                                      \
                     __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
                     ulong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];                \
                     lwork[pos*(INW) + 0] = q0.x; lwork[pos*(INW) + 1] = q0.y;         \
@@ -913,6 +945,7 @@ void NAME(                                                                      
                     lwork[pos*(INW) + 4] = q2.x; lwork[pos*(INW) + 5] = q2.y;         \
                     lwork[pos*(INW) + 6] = q3.x; p0 = q3.y;                           \
                 } else {                                                              \
+                    p1 = side_in[side_base + p];                                      \
                     for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = in_belem[d + w]; \
                     p0 = in_belem[d + (INW)];                                         \
                 }                                                                     \
@@ -1168,6 +1201,23 @@ void NAME(                                                                      
                         out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
                         out_belem[od + 1u] = rd3_w1(ctree[1], ctree[2]);              \
                         out_belem[od + 2u] = rd3_w2(ctree[3], cgi);                   \
+                    } else if ((LMODE) == LMODE_RD2 && (IMPB)) {                      \
+                        /* IMPLICIT BITS: the top IMPB key bits ARE cb, so word 0 is  \
+                           stored as its kept low bits then its bits 63..24, and each \
+                           later word slides down by IMPB. 400 - IMPB bits in 6 u64,  \
+                           and p1 rides in the word that frees -- no side plane. */   \
+                        const uint  impKB = 24u - (IMPB);                             \
+                        const ulong impM  = (1ul << impKB) - 1ul;                     \
+                        __global ulong2* v = (__global ulong2*)(out_belem + od);      \
+                        v[0] = (ulong2)((c[0] & impM) | ((c[0] >> 24) << impKB)       \
+                                                      | (c[1] << (impKB + 40u)),      \
+                                        (c[1] >> (IMPB)) | (c[2] << (64u - (IMPB)))); \
+                        v[1] = (ulong2)((c[2] >> (IMPB)) | (c[3] << (64u - (IMPB))),  \
+                                        (c[3] >> (IMPB)) | (c[4] << (64u - (IMPB)))); \
+                        v[2] = (ulong2)((c[4] >> (IMPB)) | (c[5] << (64u - (IMPB))),  \
+                                        (c[5] >> (IMPB)) | (c[6] << (64u - (IMPB)))); \
+                        v[3] = (ulong2)(r3_p0(ctree[0], ctree[1], ctree[2]),          \
+                                        r3_p1(ctree[2], ctree[3], cgi));              \
                     } else if ((LMODE) == LMODE_RD2) {                                \
                         /* Stride-8 record [work0..6 | p0]; p1 to the side plane at   \
                            the GLOBAL slot (the plane never splits). lead == ctree[0] \
@@ -1281,6 +1331,16 @@ FUSED_LDS(round_fused_rd2q16, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 2u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
 FUSED_LDS(round_fused_rd3o,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 2u, 4u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
+// The IMPLICIT-BITS pair: the same packed record with the bucket-address key bits packed
+// out and the side plane's word folded into what that frees. Same stride 8, so only the
+// bit layout differs -- which is why these are their own kernels and not an OUTSTR case.
+// Compiled only where the host chose the format, because the pack shifts by LDS_IMPB.
+#if LDS_IMPB
+FUSED_LDS_I(round_fused_rd2i, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 8u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
+FUSED_LDS_I(round_fused_7_6i, 7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 8u, 8u,
+          LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
+#endif
 FUSED_LDS(round_fused_rd4,   6, 1, 8, LMODE_RD4, 288u, 9u, 2u, 0u, 0u, 4u, 2u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
 

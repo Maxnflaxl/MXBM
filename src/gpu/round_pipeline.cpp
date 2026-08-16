@@ -135,6 +135,14 @@ bool compact_active();   // defined below; gates the compacted sort path
 // knob: it changes the record format, hence the strides, hence the allocation.
 struct RbGeom { uint32_t bb, sm; bool quad; bool arena; bool octo; };
 
+// The IMPLICIT-BITS record follows from the geometry (rb_impb_ok), not from a rung of
+// its own. MXBM_NO_IMPB turns it off on both sides at once -- the arithmetic that sizes
+// the set and the kernels that read it -- so the two cannot disagree.
+static bool impb_allowed() {
+    static const bool off = std::getenv("MXBM_NO_IMPB") != nullptr;
+    return !off;
+}
+
 // `usable` is the budget's free-derived figure (driver free less gpu/budget.h's
 // reserve), which is what rowbucket_viable checks against; the ladder has to answer
 // against the same number or the two disagree and the caller falls back to the sort
@@ -169,7 +177,7 @@ static RbGeom rb_pick_geometry(Runtime& rt, uint32_t capacity, uint64_t usable) 
     // slots, so the ladder only reaches for it when the rows above do not fit.
     const RbGeometry g = rb_geometry_for(capacity, d.max_alloc, mem,
                                          /*allow_quad=*/true, 0, /*allow_split=*/true,
-                                         slack, /*allow_impb=*/false,
+                                         slack, /*allow_impb=*/impb_allowed(),
                                          /*allow_arena=*/true,
                                          // allow_octo: round 3's record as its eight
                                          // leaves, round 4 rebuilding from them. The
@@ -195,11 +203,12 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (d.global_mem == 0 || d.max_alloc == 0) return false;    // unknown -> sort (safe)
     const RbGeom g = rb_pick_geometry(rt, capacity, b.usable);
     size_t total = 0, single = 0;
-    rowbucket_bytes(capacity, g.bb, total, single, g.quad, false, g.arena, g.octo);
+    const bool impb = impb_allowed() && rb_impb_ok(g.bb, g.sm, g.quad);
+    rowbucket_bytes(capacity, g.bb, total, single, g.quad, impb, g.arena, g.octo);
     // max_alloc binds on the split figure when smaller. Checked here too, not just
     // in rb_geometry_for: MXBM_BB/MXBM_SM bypass the ladder yet still get the split.
     size_t bind = single;
-    { const size_t s = rowbucket_single_split(capacity, g.bb, g.quad, false, g.arena, g.octo);
+    { const size_t s = rowbucket_single_split(capacity, g.bb, g.quad, impb, g.arena, g.octo);
       if (s < bind) bind = s; }
     if (bind > (size_t)d.max_alloc) return false;
     // Against the budget's usable figure -- free VRAM less the reserve (gpu/budget.h)
@@ -223,6 +232,15 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
     p.fb_quad = quad;
     p.fb_arena = arena;
     p.fb_octo = octo;
+    p.fb_impb = impb_allowed() && rb_impb_ok(bb, sm, quad);
+    // The pool lives BEHIND the bucket records in the record buffer, and the packed
+    // record's side plane has none -- so a packed arena rung is only legal once the
+    // implicit-bits pack has folded the plane away. Refused here rather than at first
+    // use, because a ClError from this function is what alloc_rowbucket steps down on.
+    if (arena && !quad && !p.fb_impb)
+        throw ClError(CL_INVALID_VALUE,
+                      "the overflow arena needs the quad record or the implicit-bits "
+                      "pack: the packed r2->r3 side plane carries no pool region");
     // The pool is split between the two halves, so the total matches what the footprint
     // arithmetic budgeted whether or not the set ends up split.
     p.fb_arena_cap = arena ? kRbArenaSlots / 2 : 0u;
@@ -230,10 +248,11 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
     const uint64_t maxAlloc = rt.device().max_alloc;
     const bool forceSplit = std::getenv("MXBM_SPLIT") != nullptr;
     for (int i = 0; i < 2; ++i) {
-        p.fb_stride[i] = fb_set_stride((int)i, quad, false, octo);
+        p.fb_stride[i] = fb_set_stride((int)i, quad, p.fb_impb, octo);
         // Packed set 0 allocates stride-8 records; the 9th word (r3_p1) lives in
         // fb_side so every record access is 16 B aligned. Slot cost stays 9 u64
-        // (rowbucket_bytes' figure), split 8 + 1.
+        // (rowbucket_bytes' figure), split 8 + 1. Under the implicit-bits pack the
+        // plane has no writer and fb_set_stride already says 8.
         if (i == 0 && !quad) p.fb_stride[i] = 8u;
         // Each buffer carries its half's pool region behind the bucket records, which
         // is what lets one slot index address both.
@@ -262,7 +281,7 @@ static void try_alloc_rowbucket(Runtime& rt, PipelineBuffers& p,
     }
     if (arena) { p.fb_spill = rt.alloc(CL_MEM_READ_WRITE, 4); rt.fill_u32(p.fb_spill.get(), 0u, 1); }
     p.fb_gictr = rt.alloc(CL_MEM_READ_WRITE, 4);
-    if (!quad) p.fb_side = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
+    if (!quad && !p.fb_impb) p.fb_side = rt.alloc(CL_MEM_READ_WRITE, nslots * 8);
     // Consolidated back-ref rows for recover. Rows 1-4 are gi-indexed and need full
     // capacity; row 5 is written only by the terminal round at SURVIVOR indices
     // (round5_fused_lds stores at out_off + si, si < the 1024 survivor cap), so a
@@ -295,7 +314,7 @@ static void release_rowbucket(PipelineBuffers& p) {
         p.fb_ahead[i] = Mem(); p.fb_anext[i] = Mem();
         p.fb_atag[i] = Mem(); p.fb_actr[i] = Mem();
     }
-    p.fb_arena = false; p.fb_arena_cap = 0; p.fb_spill = Mem();
+    p.fb_arena = false; p.fb_arena_cap = 0; p.fb_spill = Mem(); p.fb_impb = false;
     p.fb_gictr = Mem(); p.fb_side = Mem();
     p.left = Mem(); p.right = Mem(); p.counters = Mem();
     p.spec_elem = Mem(); p.spec_counts = Mem(); p.spec_on = false;
@@ -1069,19 +1088,16 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
     std::string opts = rowbucket_cl_opts();
     // The arena is a build option for the same reason the geometry is: this program is
     // compiled after the ladder has settled, so an arena rung compiles the pool paths in
-    // and every other rung compiles the kernels it always had. The pool region only
-    // exists behind the RECORD buffers, and the packed r2->r3 side plane has none, so
-    // the pairing is refused rather than silently mis-indexed.
-    if (pb.fb_arena) {
-        if (!pb.fb_quad)
-            throw ClError(CL_INVALID_VALUE,
-                          "the overflow arena needs the quad record: the packed r2->r3 "
-                          "side plane carries no pool region");
+    // and every other rung compiles the kernels it always had. Which rungs may pair with
+    // it is decided in try_alloc_rowbucket, where a refusal can still step down.
+    if (pb.fb_arena)
         opts += " -DLDS_ARENA=1 -DLDS_ARENA_CAP=" + std::to_string(pb.fb_arena_cap) + "u";
-    }
     if (pb.fb_octo) opts += " -DLDS_OCTO=1";
+    uint32_t bbv0 = 0; for (uint32_t t = nb; t > 1u; t >>= 1) ++bbv0;
+    // The dropped-bit count IS bucket_bits, so the pack is a build option like the
+    // rest: writer and reader take it from the same string.
+    if (pb.fb_impb) opts += " -DLDS_IMPB=" + std::to_string(bbv0) + "u";
     if (!std::getenv("MXBM_NO_GEOBAKE")) {
-        uint32_t bbv0 = 0; for (uint32_t t = nb; t > 1u; t >>= 1) ++bbv0;
         opts += " -DGEO_BAKED=1 -DGEO_BB=" + std::to_string(bbv0) + "u"
               + " -DGEO_SM=" + std::to_string(pb.fb_submask_bits) + "u"
               + " -DGEO_INCAP=" + std::to_string(cap) + "u"
@@ -1224,9 +1240,11 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         const char* fusedName = "round_fused_lds";
         if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
         else if (r == 2) fusedName = pb.fb_octo ? "round_fused_rd2q16"
-                                   : (pb.fb_quad ? "round_fused_rd2q" : "round_fused_rd2");
+                                   : (pb.fb_quad ? "round_fused_rd2q"
+                                   : (pb.fb_impb ? "round_fused_rd2i" : "round_fused_rd2"));
         else if (r == 3) fusedName = pb.fb_octo ? "round_fused_rd3o"
-                                   : (pb.fb_quad ? "round_fused_rd3"  : "round_fused_7_6");
+                                   : (pb.fb_quad ? "round_fused_rd3"
+                                   : (pb.fb_impb ? "round_fused_7_6i" : "round_fused_7_6"));
         else if (r == 4) fusedName = pb.fb_octo ? "round_fused_rd4"
                                    : (cob ? "round_fused_6_5_cob" : "round_fused_6_5");
         Kernel k = rt.kernel(prog, fusedName);
@@ -1247,7 +1265,7 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         // The packed r2->r3 record allocates stride 8 (9th word in the plane); the
         // slot-cost table still says 9, so patch the runtime stride args to match.
         auto recStride = [&](int rr) {
-            const uint32_t s = fb_round_stride(rr, pb.fb_quad, false, pb.fb_octo);
+            const uint32_t s = fb_round_stride(rr, pb.fb_quad, pb.fb_impb, pb.fb_octo);
             return s == 9u ? 8u : s;
         };
         int a = 0;

@@ -518,6 +518,16 @@ if(OpenCL_FOUND)
   add_test(NAME gpu_solver_octo_split COMMAND test_gpu_solver)
   set_tests_properties(gpu_solver_octo_split PROPERTIES TIMEOUT 1800
     ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_OCTO=1;MXBM_QUAD=1;MXBM_ARENA=1;MXBM_SPLIT=1")
+  # The packed record WITHOUT the implicit-bits pack: the gates above take it, since
+  # (16,1) is where the pack applies, so the fallback layout needs a gate of its own.
+  add_test(NAME gpu_solver_noimpb COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_noimpb PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_NO_IMPB=1")
+  # And the packed arena rung, which the pack makes legal by deleting the side plane
+  # the pool had nowhere to live behind.
+  add_test(NAME gpu_solver_arena COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_arena PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_ARENA=1")
 
   # Apple's OpenCL cannot build the LDS or fused row-bucket kernels at all --
   # clCreateKernel returns CL_INVALID_KERNEL (-48) and clGetProgramBuildInfo reports
@@ -533,6 +543,7 @@ if(OpenCL_FOUND)
                          gpu_rounds_rowbucket gpu_solver_rowbucket
                          gpu_recover_rowbucket
                          gpu_solver_octo gpu_solver_octo_split
+                         gpu_solver_noimpb gpu_solver_arena
                          PROPERTIES DISABLED TRUE)
     message(STATUS "macOS: OpenCL LDS/row-bucket gates disabled "
                    "(Apple's OpenCL cannot build those kernels); Metal covers the "

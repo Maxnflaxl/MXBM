@@ -85,7 +85,13 @@ struct PipelineBuffers {
     Mem fb_side;               // r2->r3 side plane (packed only): the record's 9th
                                // word, ulong[nb*cap], indexed by GLOBAL slot and
                                // never split. Keeps the record stride 8 so every
-                               // access is 16 B aligned. Empty under quad.
+                               // access is 16 B aligned. Empty under quad, and under
+                               // the implicit-bits pack, which folds it back inline.
+    // IMPLICIT BITS (fb_impb true). The packed record stores neither the key bits its
+    // bucket address already carries nor a 9th word: 400 - bb work bits fit 6 u64 and
+    // the plane's word rides in the seventh. Follows the geometry (rb_impb_ok), so it
+    // is derived at allocation rather than carried down the ladder.
+    bool fb_impb = false;
     Mem fb_counts[2];          // uint[nb] arrival counters
     Mem fb_gictr;              // uint[1] per-round dense child-gi counter
     // OCTO RECORD (fb_octo true). Round 3's output as the eight seed indices that
