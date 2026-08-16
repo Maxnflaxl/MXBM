@@ -5542,7 +5542,8 @@ alone.
 registers**, which by the occupancy model in `tests/test_cuda_resources.cpp` is exactly the
 cliff for four blocks, so freeing shared memory alone leaves it at four. The two knobs have
 never been moved together — `MXBM_MB_RD2` measured null *because shared capped it at four
-anyway*, and the `MXBM_FCAP` sweep never went low enough to clear 19456 B.
+anyway*, and the `MXBM_FCAP` sweep never went low enough to clear 19456 B. They have since
+been moved together, and [the block is a loss](#r2s-fifth-resident-block-is-reachable-and-costs-010-ms).
 
 **`drops[0]` had no writer, and the entry pass was reporting into the wrong counter.**
 Every device increment targeted `drops[1..3]`, so the allocated, zeroed, `pair=`-printed
@@ -5792,6 +5793,55 @@ deficits, at 100/110/120 W, are in a band where the suspected lever does not run
 ABBA confirms it: 63.4/63.5 ms shipping against 63.3/63.4 with the filter compiled out,
 ranges overlapping. What the filter does below 130 W is nothing, so whatever the low band
 needs, it is a match-first question and not this lever's.
+
+### r2's fifth resident block is reachable and costs 0.10 ms
+
+The singleton filter takes the staged group from ~264 to ~230, which was supposed to make
+`kFCap` cuttable: 320 → 260 removes 60 slots at 72 B and takes round 2's shared from
+23624 B to the 19456 B line a fifth block needs. **The arithmetic was exactly right** —
+the built kernel reports **19304 B** — and every part of the conclusion drawn from it was
+wrong.
+
+Four arms, each 12 runs ABBA at 2600/10251 and 285 W, headless, KAT 3/3, drops 0. Every
+arm has **zero within-arm spread** — all six runs of each identical to 0.1 ms:
+
+| arm | ms/solve | r2 registers | r2 shared | r2 blocks/SM | board |
+|---|---|---|---|---|---|
+| shipping | **29.100** | 64 | 23624 | 4 | 267.6 W |
+| `kFCap` 260 | 29.300 (**+0.69 %**) | 60 | 19304 | 4 | 284.0 W |
+| `kFCap` 260 + `MXBM_MB_RD2=5` | 29.400 (**+1.03 %**) | 48 | 19304 | **5** | 283.9 W |
+| `MXBM_MB_RD2=5` alone | 29.100 (**0.00 %**) | 48 | 23624 | 4 | 268.4 W |
+
+Read down the last two rows: asking ptxas for five blocks costs **nothing** on its own,
+so the **+0.100 ms** between the middle two arms is the resident block itself. **The fifth
+block is a loss**, where the decay of r2's own fourth (−0.33 ms) predicted a −0.15 gain.
+
+**The cut's own cost is the split, and it is measured with a control.** `MXBM_SPILL=0`
+turns `drops[1]` into the count of elements past the cap, so the spill volume reads
+directly and a zero cannot be mistaken for a dead probe:
+
+| `kFCap` | elements over cap, per solve |
+|---|---|
+| 320 (shipping) | **184** |
+| 260 | **813 900** |
+
+4400×. The lead's premise was a Gaussian tail — 260 sits 2σ above a mean of 230, so ~3 %
+of groups split — and the real tail is far heavier than that: 813 900 over-cap elements is
+6.2 per group averaged over *every* group, where a normal tail of that width predicts
+under 0.1. The split re-runs the whole group pass, which is why the cut arms draw **16 W
+more at a locked clock**: same time budget, more work done in it.
+
+The register half [held](#round-2s-register-wall-is-not-a-wall-48-registers-zero-spill-0023-ms) through two record changes: the occupancy contract reports 48 registers with no
+spill on the implicit-bits rows, which is what `bb + sm = 17` runs, and 8 B of stack on
+the plain-packed variant it does not — the same split that entry recorded, unchanged.
+
+**What this closes.** The `kFCap` route is the only one that reaches the fifth block
+today, and it pays +0.200 ms in splits before the block is even reached. The other route —
+three structural shared cuts that would free 4168 B without touching the cap — now has a
+measured prize with the wrong sign, so it is no longer worth its tiebreak risk. The one
+thing it could still argue is that the block only looked bad *because* it was measured
+alongside heavy splitting, and that is a real caveat: no configuration exists yet that
+gives r2 five blocks without them.
 
 ### A swept cap column that did not reproduce, and the five explanations that were not it
 
@@ -6384,7 +6434,7 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | fewer bytes | every record is `ceil(bits/64)` ([audit](#the-record-redundancy-audit)) — except one that was *stored* wider than that, [since fixed](#the-round-2-alignment-pad). And bytes buy almost no **time**: shrinking r2's and r3's records to 16 B, well past what the audit allows, is worth ~4 ms of 34 ([measured](#bytes-are-nearly-free-per-element-work-is-not)) |
 | bytes as **watts** | where that lever moved to. Under a cap bytes are clock: 16 % less traffic is worth [60 MHz at 285 W and 210 MHz at 180 W](#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz) — but that is the prize for a *free* narrowing, and the [one built](#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation) spends the freed watts on the arithmetic replacing the bytes. **CLOSED 2026-07-29.** The denominator is 1.47 GB measured, not 2.09 derived, and the numerator is a replay clock — so the whole-solve rate is ≤ 92 MHz/GB and closing 570 MHz needs 48 % of all traffic against the 1.07 GB the audit allows. [Details](performance.md#-closed-2026-07-29-the-low-end-is-not-reachable-by-traffic-and-no-other-mechanism-has-been-found) |
 | redundant rescan | removing it entirely buys nothing over halving it ([geometry](#row-bucket-geometry)); re-confirmed on CUDA, where (17,0) is −9 % traffic and +9 % time |
-| occupancy | **closed 2026-07-31, from both resources.** OpenCL's 48 KB LDS made it structurally unreachable ([details](#occupancy-again)); CUDA exposes 100 KB/SM, where [3 → 4 blocks/SM is worth ~1.6 ms](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate). r1/r2 crossed at `kFCap` 320 (**−1.25 ms**) and [r1 took a fifth block](#round-1-takes-a-fifth-block-015-ms-via-a-per-round-group-cap) (−0.15). r3 reaches 4 blocks and [does not care](#round-3-does-not-want-a-fourth-block--occupancy-pays-only-where-a-round-is-latency-bound). This entry used to end "`B` is the only term left"; it is not — **r2's 4 × 256 × 64 registers are the ENTIRE register file**, so the next block needs fewer shared bytes AND fewer registers at once, and [forcing the register side is null](#occupancy-is-closed-from-both-resources--r2-sits-on-the-whole-register-file) |
+| occupancy | **closed 2026-07-31, from both resources.** OpenCL's 48 KB LDS made it structurally unreachable ([details](#occupancy-again)); CUDA exposes 100 KB/SM, where [3 → 4 blocks/SM is worth ~1.6 ms](#occupancy-is-worth-real-time-and-shared-memory-is-the-only-gate). r1/r2 crossed at `kFCap` 320 (**−1.25 ms**) and [r1 took a fifth block](#round-1-takes-a-fifth-block-015-ms-via-a-per-round-group-cap) (−0.15). r3 reaches 4 blocks and [does not care](#round-3-does-not-want-a-fourth-block--occupancy-pays-only-where-a-round-is-latency-bound). This entry used to end "`B` is the only term left"; it is not — **r2's 4 × 256 × 64 registers are the ENTIRE register file**, so the next block needs fewer shared bytes AND fewer registers at once. Both were moved together on 2026-08-16 and **r2's fifth block arrived and cost +0.10 ms** -- occupancy on that round is a price, not a prize ([the fifth block](#r2s-fifth-resident-block-is-reachable-and-costs-010-ms)) |
 | coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](#two-level-bucketing)) |
 | the two atomics | both load-bearing; removing either is slower |
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined on OpenCL and less on CUDA — nothing left to win |
