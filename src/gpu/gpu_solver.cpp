@@ -62,16 +62,23 @@ GpuSolver::GpuSolver(unsigned index) : rt_(index) {
     // honest behaviour. MXBM_ALLOW_PARTIAL_SEARCH overrides for experiments.
     if (!budget_can_find_solutions(budget_.elems_per_round) &&
         std::getenv("MXBM_ALLOW_PARTIAL_SEARCH") == nullptr) {
-        char msg[320];
+        // Quote the LADDER's floor, not the sort path's flat divisor. The divisor is
+        // what this budget was sized by once the ladder refused, and it is ~4.7x the
+        // real requirement -- a figure that would tell a 3 GB owner to give up.
+        size_t floor_b = 0, ignore = 0;
+        { int n = 0; const RbRung* r = rb_rungs(n);
+          rowbucket_bytes(kRbCapacity, r[n-1].bb, floor_b, ignore,
+                          r[n-1].quad, false, r[n-1].arena, r[n-1].octo); }
+        char msg[352];
         std::snprintf(msg, sizeof msg,
             "GPU has too little memory for BeamHash III: it can host only %u of the "
             "required %u seed elements. A partial seed layer cannot find solutions "
-            "(probability ~(%.2f)^32). Need ~%.1f GiB of usable VRAM; this device "
-            "offers %.1f GiB after the reserve (see --keepfree). Set "
+            "(probability ~(%.2f)^32). The coarsest geometry needs ~%.2f GiB of usable "
+            "VRAM; this device offers %.2f GiB after the reserve (see --keepfree). Set "
             "MXBM_ALLOW_PARTIAL_SEARCH=1 to override for testing.",
             budget_.elems_per_round, 1u << kTargetElemsLog2,
             (double)budget_.elems_per_round / (double)(1u << kTargetElemsLog2),
-            (double)((uint64_t)(1u << kTargetElemsLog2) * kBytesPerElement) / 1073741824.0,
+            (double)floor_b / 1073741824.0,
             (double)usable_ / 1073741824.0);
         throw ClError(CL_OUT_OF_RESOURCES, msg);
     }

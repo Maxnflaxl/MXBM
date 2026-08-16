@@ -229,6 +229,30 @@ sizes against *free* memory — so the concrete cases are worth naming:
 
 2 GB is out of reach, and is not a target — see [what is left](#what-is-left-below-it).
 
+#### Simulated on the reference card, end to end
+
+`--keepfree` hands the solver the memory budget a smaller card would have, so each class
+can be run through the real `Engine` path — CPU-verified solutions and all — on hardware
+we have. 20 s per point, headless, nothing else on the card, 2026-08-16:
+
+| simulated card | usable | CUDA | OpenCL |
+|---|---|---|---|
+| 8 GB | 7.50 GiB | 28.7 ms / 69.7 sol/s | 32.3 / 61.8 |
+| 6 GB | 5.60 GiB | 29.6 / 67.1 | 39.0 / 51.2 |
+| 4 GB | 3.75 GiB | 50.4 / 40.4 | 61.7 / 32.9 |
+| **3 GB** | **2.79 GiB** | **50.3 / 40.5** | **61.6 / 32.9** |
+| 2 GB | 1.80 GiB | refuses, names the cause | refuses, names the cause |
+
+Verified solutions per solve stayed in band at every point (1.94–2.04), so these are
+solves that find solutions, not a hashrate. The 3 GB and 4 GB rows are the same rung —
+(16,1) quad + dense caps + octo at 2.04 GiB — which is why they read the same.
+
+What this does **not** simulate is the single-allocation ceiling: `--keepfree` shrinks the
+budget, not `CL_DEVICE_MAX_MEM_ALLOC_SIZE`, and a real 3 GB card reports ~0.73 GiB there
+and would split every record set into bucket-halves. `MXBM_SPLIT=1` forces that path, and
+the 3 GB point measures identically with it on. Nor does it simulate a smaller SM count,
+so read the times as *which rung runs*, not as what a 3 GB card would score.
+
 The back-ref rows never split. On CUDA they no longer exist off the octo rungs; on OpenCL
 they are 0.64 GiB above those rungs. On the octo rungs themselves both backends keep one
 gi-indexed row pair and a survivor-sized one, 0.13 GiB, which is why the two floors are
