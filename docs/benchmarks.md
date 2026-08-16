@@ -47,7 +47,7 @@ MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
 uncertainty on that mean is ±0.11), and the controlled benchmark the same day
 reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). **That column
 predates the w0-checkpoint record and the replayed recovery**, which together took the
-controlled figure to **69.00 sol/s at 29.10 ms** on 2026-08-16 (+10.1 %); the table is left
+controlled figure to **69.20 sol/s at 29.10 ms** on 2026-08-16 (+10.4 %); the table is left
 at what was actually measured side by side rather than restated from a figure the
 head-to-head session never ran, so read every margin in it as a floor on the current
 one. lolMiner's
@@ -144,7 +144,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 69.00).
+(both on the build of 2026-07-25; the current one is 69.20).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
 observed.

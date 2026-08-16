@@ -111,20 +111,19 @@ that makes ms/solve the quoted quantity.
 | 2026-08-15 | **The w0-checkpoint pair record** — round 1 stores the child's post-mix work word 0, so round 2 derives only the linear lane (12 siphashes, no mixes); the record stays 16 B because the address-implied key bits pay for word 0 | 32.0 | 31.3 | **64.2 ± 0.3** | −0.7 | −2.2 % | [w0 checkpoint](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24) *(−0.76 ms measured ABBA-interleaved; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 46,290 solutions)* | [the 24 B form of the same record, +3.8 %](performance-research.md#measured-results-2026-08-12) |
 | 2026-08-15 | **Recovery replays instead of storing reference rows** — round 4's row, then its record at 8 B instead of 16, then round 3's row and rows 1–3 with it; recovery re-runs two rounds over one bucket each and reads round 2's four leaves | 31.3 | 29.3 | **68.6 ± 0.3** | −2.0 | −6.4 % | [the replay](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) *(−2.029 ms measured ABBA-interleaved in three increments; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 49,392 solutions. Also −688 MiB)* | — |
 | 2026-08-16 | **Two barriers' worth of work that nothing needed** — the block-exit `__syncthreads()`, which at stock guards a pass that never runs; then **singleton-free staging**, which never stages the 12.8 % of a group alone in its chain slot, since a perfect table makes that element provably partnerless | 29.3 | 29.1 | **69.0 ± 0.3** | −0.2 | −0.7 % | [the barrier](performance-research.md#the-block-exit-barrier-is-removable-and-the-barrier-family-is-over-priced-10x), [singleton-free staging](performance-research.md#singleton-free-staging-the-prize-is-085-ms-and-the-prepass-that-finds-it-costs-076) *(−0.048 and −0.089 ms measured ABBA-interleaved; the pin resolves the pair, not the halves, because the barrier shipped without a re-pin. The second is a −0.852 ms skip against a +0.763 ms census — see the ledger, which is where the value of this row is. ± is `1/√N` over the pin's ~49,700 solutions)* | — |
-| 2026-08-16 | **The census and the chain share one `tab` word** — the singleton filter's word-0 count goes in the high 16 bits and the chain head in the low 16, so the table is initialised once per group instead of twice and the barrier between the two clears goes with it | 29.1 | 29.1 | **69.0 ± 0.3** | −0.06 | −0.2 % | [the packed tab](performance-research.md#the-census-and-the-chain-share-one-tab-word-and-a-barrier-goes-with-it) *(−0.060 ms measured over eight interleaved arms a side, ranges not overlapping — below the pin's 0.1 ms print resolution either way, and the After column is the previous pin rather than a re-take. With the block-exit barrier's −0.048 this is the second independent measurement of what a `__syncthreads()` costs here)* | — |
+| 2026-08-16 | **The census and the chain share one `tab` word** — the singleton filter's word-0 count goes in the high 16 bits and the chain head in the low 16, so the table is initialised once per group instead of twice and the barrier between the two clears goes with it | 29.1 | 29.1 | **69.2 ± 0.3** | −0.09 | −0.3 % | [the packed tab](performance-research.md#the-census-and-the-chain-share-one-tab-word-and-a-barrier-goes-with-it) *(ms/solve is 29.10 on both pins because −0.060 ms is under the print resolution; the finer `solves/s` line reads 34.33 → 34.44, i.e. −0.094 ms, and −0.060 was measured over eight interleaved arms a side with the ranges not overlapping. The two agree inside the cross-session band. With the block-exit barrier's −0.048 this is the second independent measurement of what a `__syncthreads()` costs here. ± is `1/√N` over the pin's 49,856 solutions)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 59.4 | 33.5 | fallback / `--solver opencl` — 2026-08-02, [lineage](performance-research.md#speculative-entry-ported-to-opencl-the-entry-pass-hides-inside-round-4-035-ms); 1.012× of same-session CUDA |
-| **CUDA** | **69.00**[^drift] | **29.10**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **69.20**[^drift] | **29.10**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-16), 0.0 % spread on
-ms/solve and 0.1 % on sol/s, stock 285 W, headless, 240 s warmup discarded,
-2610 MHz / 10251 MHz / 277.0 W / 67 °C. It is one kernel change behind the shipping
-build, by the −0.060 ms of the packed `tab` word.
-Pool validation is one pin behind — on the build two kernel changes ago, where it matched
-that pin to the digit: **68.52 sol/s** over 31 minutes, a 15 s median of
+The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-16), **0.0 % spread on
+both columns** — all six runs 29.10 / 69.20 / 4134 solves / 2.01 verified per solve —
+stock 285 W, headless, 240 s warmup discarded, 2610 MHz / 10251 MHz / 275.5 W / 66 °C.
+Pool validation is two pins behind — on the build three kernel changes ago, where it
+matched that pin to the digit: **68.52 sol/s** over 31 minutes, a 15 s median of
 **68.60** against that benchmark's 68.60, with window spreads of σ = 1.09 over 60 s and 2.21
 over 15 s — dispersions of the reading, not uncertainty on the mean, which is the Poisson
 ±0.19 over 127,449 solutions.
@@ -162,7 +161,7 @@ The 1.09 is a spread of the reading; this session's mean carries a Poisson ±0.1
 progress row keeps its own `1/√N` — a bar belongs to the run behind the row, and this is a
 different measurement rather than more of the same one.
 
-The CUDA backend is **~29 % past the target** and OpenCL 1.07× short — read
+The CUDA backend is **~31 % past the target** and OpenCL 1.07× short — read
 [the caveats](performance-research.md#the-cuda-backend) before treating the target as
 beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **8.36 →
 6.17 GiB** at the fastest geometry (268 → 197 B/element), and **1.90 GiB** at the CUDA
@@ -367,7 +366,7 @@ T.Limit Temp: N/A`. A GeForce restriction, not a driver or API-surface problem.
 </details>
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — **29.10 ms / 69.00 sol/s** at stock 285 W, headless, locked LGC=2600
+attached — **29.10 ms / 69.20 sol/s** at stock 285 W, headless, locked LGC=2600
 LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-08-16; see
 the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
 cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline

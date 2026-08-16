@@ -251,9 +251,9 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **69.00 sol/s** | 59.4 sol/s |
+| Throughput | **69.20 sol/s** | 59.4 sol/s |
 | End-to-end solve | **29.10 ms** | 33.5 ms |
-| Board power | 277.0 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
+| Board power | 275.5 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
 | Efficiency | **0.228 sol/s/W** stock, **0.275 at 220 W** (its optimum on the stock memory clock), matched but not beaten by **0.276** at 160 W with `--mclk 5001` | — |
 
 *(CUDA column: the locked-clock pin, re-taken 2026-08-16 after the block-exit barrier and
