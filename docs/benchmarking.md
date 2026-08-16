@@ -198,7 +198,14 @@ back to back — never concurrently, they would contend for the GPU.
 1. **Fix the variables.** No other GPU load. Same power limit and clocks for both runs
    (`nvidia-smi -q -d POWER,CLOCK` before each; record it). Use stock clocks —
    overclocking is a separate exercise and must not be mixed in. See
-   [overclocking.md](overclocking.md).
+   [overclocking.md](overclocking.md). Identical clocks are not the same thing as a fair
+   comparison here, which is why this is a rule and not a preference: **a memory
+   overclock does not move two miners by the same amount.** MXBM re-derives where a
+   state-storing design writes every element to DRAM — 12.30 GB a solve against 17.67 —
+   so 45 % of this solve is memory-bound against nearly all of that one, and the same
+   clock is worth more to the miner that stores. A memory-overclocked comparison flatters
+   whichever design is closer to its DRAM roofline, and a core-overclocked one flatters
+   the other.
 2. **Run each miner for the same duration.** 30 minutes minimum; 60 is better. Share
    arrival is Poisson, so short runs are dominated by variance — see §4.
 3. **Record, per run:** accepted shares (from the *pool dashboard*, not the miner),

@@ -6798,10 +6798,37 @@ governor put it.
 
 **The V/F offset is a different knob and moves the other way.** `--moff` shifts the curve
 — the same voltage at a higher frequency — where `--mclk`/`-lmc` selects a P-state. At
-matched magnitude the signs differ: +250 MHz by lock costs 0.95 %, while +200 MHz by
-offset reads 28.5 against 28.7. That second figure is **one unbracketed sample per point
-and is not evidence** — it locates a candidate, and `benchmarks/mem_offset_sweep.sh`
-exists to re-find it under a bracket. What is settled is the instrument:
+`--moff 1600` (11051 MHz, +7.8 %), bracketed `A B B A` over 12 arms:
+
+| arm | ms/solve | range | J/sol |
+|---|---|---|---|
+| stock | 28.733 | 28.711 – 28.760 | 4.090 |
+| `--moff 1600` | **28.050** | 28.027 – 28.066 | **4.008** |
+
+**−0.682 ms (−2.37 %) and −0.082 J/sol (−2.00 %)**, the ranges separated by 0.645 ms,
+verified solutions/solve in band on both arms and every drop counter zero. Faster *and*
+more efficient, which follows from the board being pinned at its limit: power is constant,
+so the energy win is the speed win.
+
+**The offset pays the same tax, about five times smaller.** The core clock still falls
+under it — 2670 → 2640 — so the trade is the same one the lock makes and simply at a much
+better rate. A two-clock model over the whole sweep (45 % of the solve tracks the memory
+clock, 54 % the core) predicts the measurement to **101 % and 97 %** through +1400, then
+decays to **80 %** at +1600 and **71 %** at +2200 while the clock keeps climbing. That
+decay is the retry wall arriving gradually rather than as a cliff: GDDR6X answers timing
+it cannot hold with link-level retries, which cost bandwidth without ever producing a
+wrong answer. It is 28 points of decay against the ±5 the 0.1 ms print resolution can
+manufacture, so it is real, and it is why the bracketed figure sits at +1600 rather than
+at the +2400 that measured 1 % better.
+
+**It is worth less here than to a miner that stores.** MXBM moves 12.30 GB a solve where
+[a state-storing design moves 17.67](#lolminer-measured-under-ncu-the-state-storing-design-confirmed--and-its-54-sols-ceiling-is-a-dram-roofline)
+and is against a DRAM roofline in nearly every kernel; 45 % of this solve is memory-bound
+against nearly all of that one. The same clock therefore buys a competitor more than it
+buys us, which is the measured reason — not merely a methodological one — that
+[a comparison run must be taken at stock](benchmarking.md).
+
+What is settled is the instrument:
 
 > Where a board sits at its power limit and the work is majority core-bound, the two
 > knobs are not interchangeable: a locked memory P-state is bought from the core clock

@@ -169,6 +169,42 @@ limit. The previous limit is restored on exit, including on Ctrl+C. See
 
 ---
 
+## At the other end: the memory V/F offset
+
+The low rung below is what a *capped* rig wants. An uncapped one wants the opposite knob.
+Rounds 3 and 4 are 45 % of the solve at 77.4 % and 88.6 % of DRAM peak, so the memory
+clock is the only knob on the resource that binds them — and on the reference card there
+is headroom above the 10251 MHz it holds under load.
+
+**Take it with `--moff`, not `--mclk`.** Locking to the driver's reported 10501 maximum
+measures **+0.95 % slower**, because a locked P-state buys its clock with voltage and the
+board is already at its power limit, so the watts come out of a solve that is 54 %
+core-bound. The offset shifts the V/F curve instead. Bracketed `A B B A`, 12 arms of 40 s,
+headless, drop counters zero and verified solutions/solve in band on both arms:
+
+| | ms/solve | range | J/sol | sol/s |
+|---|---|---|---|---|
+| stock memory | 28.733 | 28.711 – 28.760 | 4.090 | 69.8 |
+| `--moff 1600` (11051 MHz) | **28.050** | 28.027 – 28.066 | **4.008** | **71.5** |
+
+**−2.37 % time and −2.00 % energy**, ranges separated by 0.645 ms. Both figures at once,
+because the board is pinned at its limit: power is constant, so the energy win *is* the
+speed win.
+
+The sweep behind that point ran monotone to +2400 (11451 MHz) without reversing, but the
+gain stops tracking the clock: a two-clock model predicts the measurement to 101 % and
+97 % through +1400, then 80 % at +1600 and 71 % at +2200. That is the retry wall arriving
+gradually, so +1600 is where the returns bend rather than where they stop.
+[The mechanism](performance-research.md#locking-the-memory-clock-to-its-reported-maximum-costs-095--and-the-offset-is-the-knob-that-does-not);
+[how to find your own](overclocking.md#finding-your-own-memory-offset).
+
+**This figure is excluded from every comparison in this document,** and not only as
+methodology: MXBM moves 12.30 GB a solve where a state-storing design moves 17.67, so the
+same clock is worth more to the miner that stores. An overclocked head-to-head measures
+the overclock.
+
+---
+
 ## Capped rigs: the memory rung and the low-power kernels
 
 The curve above is stock memory. Under a cap that is the wrong configuration: the memory

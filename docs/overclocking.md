@@ -43,12 +43,37 @@ Three measured facts that decide what to set:
 
   On the reference card the effect is large enough to invert the knob: it holds 10251 MHz
   under load against a reported maximum of 10501, so the headroom is real, and *locking*
-  to that maximum still measures
-  **[+0.95 % slower](performance-research.md#locking-the-memory-clock-to-its-reported-maximum-costs-095--and-the-offset-is-the-knob-that-does-not)**,
-  while an offset of comparable size goes the other way. **Both the sign and the size are
-  properties of your card and your power limit** — a card not sitting at its limit has no
-  such trade to make. `--tune` measures the cap and the low rung for you; the offset has
-  no auto-sweep, so treat it as a manual experiment and change one knob at a time.
+  to that maximum still measures **+0.95 % slower** — while `--moff 1600` on the same card
+  measures **−2.37 % and −2.00 % J/sol**, bracketed over 12 interleaved arms
+  ([both](performance-research.md#locking-the-memory-clock-to-its-reported-maximum-costs-095--and-the-offset-is-the-knob-that-does-not)).
+  **Both the sign and the size are properties of your card and your power limit** — a card
+  not sitting at its limit has no such trade to make. `--tune` measures the cap and the low
+  rung for you; the offset has no auto-sweep, so treat it as a manual experiment and change
+  one knob at a time.
+
+## Finding your own memory offset
+
+Worth doing — on the reference card it is the largest single knob after the power limit —
+but it is the one knob that can hang a card, so it is never applied for you.
+
+**The wall does not announce itself.** A core offset that is too high fails loudly:
+solutions stop verifying. A memory offset that is too high fails *quietly*, because GDDR6X
+answers timing it cannot hold with link-level retries rather than with wrong data — so the
+symptom is sol/s falling while everything still verifies. On the reference card the gain
+tracked the clock almost exactly to +1400 and then fell to 80 % and then 71 % of it, with
+no step ever going backwards. **Stop where the returns bend, not where they reverse**, and
+back off from there.
+
+`benchmarks/mem_offset_sweep.sh` walks the offsets with that gate built in, and
+`benchmarks/mem_offset_ab.sh` brackets whichever one you settle on — a swept point is a
+single sample and never a figure. Both refuse to run with another process on the card,
+because a clock knob is device-global and a co-tenant would run at your clocks while
+taking your solves.
+
+Two things the benchmark cannot tell you. **40 s is not a soak**: retry degradation grows
+with heat, so run a candidate for hours before trusting it. And on many cards
+`temperature.memory` reads `N/A` — the reference card included — so there is no junction
+temperature to watch, which is its own argument for leaving headroom.
 
 ## `--tune`: measure this card's power curve, then `--pl auto`
 
