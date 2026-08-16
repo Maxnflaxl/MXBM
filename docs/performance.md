@@ -115,18 +115,20 @@ the derived one.
 | 2026-08-13 | **Implicit-bits record** — the packed r2 record stops storing the key bits its bucket address encodes; the side plane loses its writer and reader | 33.2 | 32.0 | **62.7 ± 0.3** | −1.2 | −3.6 % | [address-redundant bits](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) *(± is `1/√N` over the headline run's 45,135 solutions; the live-pool session's window spreads are quoted with the validation below)* | — |
 | 2026-08-15 | **The w0-checkpoint pair record** — round 1 stores the child's post-mix work word 0, so round 2 derives only the linear lane (12 siphashes, no mixes); the record stays 16 B because the address-implied key bits pay for word 0 | 32.0 | 31.3 | **64.2 ± 0.3** | −0.7 | −2.2 % | [w0 checkpoint](performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits--076-ms--24) *(−0.76 ms measured ABBA-interleaved; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 46,290 solutions)* | [the 24 B form of the same record, +3.8 %](performance-research.md#measured-results-2026-08-12) |
 | 2026-08-15 | **Recovery replays instead of storing reference rows** — round 4's row, then its record at 8 B instead of 16, then round 3's row and rows 1–3 with it; recovery re-runs two rounds over one bucket each and reads round 2's four leaves | 31.3 | 29.3 | **68.6 ± 0.3** | −2.0 | −6.4 % | [the replay](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) *(−2.029 ms measured ABBA-interleaved in three increments; the pin prints to 0.1 ms. ± is `1/√N` over the pin's 49,392 solutions. Also −688 MiB)* | — |
+| 2026-08-16 | **Two barriers' worth of work that nothing needed** — the block-exit `__syncthreads()`, which at stock guards a pass that never runs; then **singleton-free staging**, which never stages the 12.8 % of a group alone in its chain slot, since a perfect table makes that element provably partnerless | 29.3 | 29.1 | **69.0 ± 0.3** | −0.2 | −0.7 % | [the barrier](performance-research.md#the-block-exit-barrier-is-removable-and-the-barrier-family-is-over-priced-10x), [singleton-free staging](performance-research.md#singleton-free-staging-the-prize-is-085-ms-and-the-prepass-that-finds-it-costs-076) *(−0.048 and −0.089 ms measured ABBA-interleaved; the pin resolves the pair, not the halves, because the barrier shipped without a re-pin. The second is a −0.852 ms skip against a +0.763 ms census — see the ledger, which is where the value of this row is. ± is `1/√N` over the pin's ~49,700 solutions)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 59.4 | 33.5 | fallback / `--solver opencl` — 2026-08-02, [lineage](performance-research.md#speculative-entry-ported-to-opencl-the-entry-pass-hides-inside-round-4-035-ms); 1.012× of same-session CUDA |
-| **CUDA** | **68.6**[^drift] | **29.3**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **69.00**[^drift] | **29.10**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-15), 0.3 % spread on
-ms/solve and 0.0 % on sol/s, stock 285 W, headless, 240 s warmup discarded,
-2610 MHz / 10251 MHz / 271.1 W / 67 °C, throttle reasons `none` on all six runs.
-Pool validation is on the same build: **68.52 sol/s** over 31 minutes, a 15 s median of
-**68.60** against the benchmark's 68.6, with window spreads of σ = 1.09 over 60 s and 2.21
+The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-16), 0.0 % spread on
+ms/solve and 0.1 % on sol/s, stock 285 W, headless, 240 s warmup discarded,
+2610 MHz / 10251 MHz / 277.0 W / 67 °C.
+Pool validation is one pin behind — on the build two kernel changes ago, where it matched
+that pin to the digit: **68.52 sol/s** over 31 minutes, a 15 s median of
+**68.60** against that benchmark's 68.60, with window spreads of σ = 1.09 over 60 s and 2.21
 over 15 s — dispersions of the reading, not uncertainty on the mean, which is the Poisson
 ±0.19 over 127,449 solutions.
 
@@ -230,7 +232,7 @@ Under a locked clock the rig reproduces **to the digit across days** (0.0 % spre
 six runs on each of the five pins that measured an unchanged build, and 0.3 % on each of
 the two that measured a changed one), so use `LGC=2600 LMC=10251 benchmarks/headline.sh`
 to regression-test builds and the stock figure to describe what a user gets. The pin
-stands at **29.30 ms** as of 2026-08-15, taken with the compute GPU headless — a condition of
+stands at **29.10 ms** as of 2026-08-16, taken with the compute GPU headless — a condition of
 the number, since a compositor on the card costs a measured 0.20 ms and ~6 W, and one
 that follows the HDMI cable per login, so it is verified from the miner's own banner
 each session.
@@ -369,8 +371,8 @@ T.Limit Temp: N/A`. A GeForce restriction, not a driver or API-surface problem.
 </details>
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — **29.30 ms / 68.60 sol/s** at stock 285 W, headless, locked LGC=2600
-LMC=10251, six runs at 0.3 % spread (most recently re-pinned 2026-08-15; see
+attached — **29.10 ms / 69.00 sol/s** at stock 285 W, headless, locked LGC=2600
+LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-08-16; see
 the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
 cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline
 from a short run: see the note on solutions/solve under the progress table.
@@ -431,6 +433,11 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage:
 | round 4 | 4.20 | 14.4 | 283.5 W | 1.19 | 14.4 |
 | terminal | 0.78 | 2.7 | 285.3 W | 0.22 | 2.7 |
 | **sum** | **29.30** | **100.2 %** | 282.8 W | **8.29** | |
+
+**Scope: this table predates the day's two kernel changes** (the block-exit barrier and
+singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
+It is the 29.30 ms build's breakdown, not the 29.10 one's; the per-stage split has not
+been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
 
 Solve is 29.23 ms in the harness, so the stages account for 100.2 % of it, and
 their summed energy lands within 0.2 % of the counter's own whole-solve figure
@@ -554,6 +561,18 @@ first is the subsection that follows.
 session, stock memory clock, headless. The lolMiner columns are the 2026-07-30
 measurement; its binary is unchanged. The two sessions carry the documented ±2.5 %
 cross-session band between them.)*
+
+*(**Scope: the MXBM column is one pin behind as of 2026-08-16.** Two kernel changes have
+shipped since it was swept — the block-exit barrier and singleton-free staging, −0.20 ms
+together on the locked-clock pin — and both delete instructions in rounds 1 and 2, which
+is the class of lever that has paid *more* under a cap than at stock twice running. So
+read the low-power half of this table as a floor, and re-derive the crossings and per-cap
+margins from the re-sweep rather than from the figures below:*
+
+```sh
+sudo -v && LIMITS="100 110 120 140 160 175 180 190 200 210 220 240 255 270 285" \
+    benchmarks/power_sweep.sh
+```
 
 **Deleting the reference rows pays half again as much under a cap as it does at stock.**
 Against the same sweep on the previous kernel: **+10.3 % at 120 W, +8.7 % at 140,

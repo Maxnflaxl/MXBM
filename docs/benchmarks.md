@@ -47,7 +47,7 @@ MXBM's column is the 2026-08-13 build: 80 minutes against the pool reads
 uncertainty on that mean is ±0.11), and the controlled benchmark the same day
 reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). **That column
 predates the w0-checkpoint record and the replayed recovery**, which together took the
-controlled figure to **68.6 sol/s at 29.30 ms** on 2026-08-15 (+9.4 %); the table is left
+controlled figure to **69.00 sol/s at 29.10 ms** on 2026-08-16 (+10.1 %); the table is left
 at what was actually measured side by side rather than restated from a figure the
 head-to-head session never ran, so read every margin in it as a floor on the current
 one. lolMiner's
@@ -143,7 +143,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 68.6).
+(both on the build of 2026-07-25; the current one is 69.00).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
 observed.
@@ -233,6 +233,11 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage, baseline
 | terminal | 0.78 | 2.7 % | 285.3 W | 0.27 GB | DRAM |
 | **total** | **29.30** | 100.2 % | 282.8 W | **10.73 GB** | |
 
+**Scope: this table predates the day's two kernel changes** (the block-exit barrier and
+singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
+It is the 29.30 ms build's breakdown, not the 29.10 one's; the per-stage split has not
+been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
+
 Deleting the reference rows is visible here as its own mechanism: **round 4 −1.21 ms**
 (its row and half its output record), **round 3 −0.54**, **round 2 −0.29**, **round 1
 −0.14**, **terminal −0.20**, and entry unmoved. Round 4 carries more than half the win
@@ -268,12 +273,19 @@ Build first — see [building.md](building.md).
 | Throughput + power + J/sol | `benchmarks/power_bench.sh 120 myrun -- --solver cuda` | no |
 | Power/speed curve | `benchmarks/power_sweep.sh` | yes (`nvidia-smi -pl`) |
 | Per-stage time and power | `benchmarks/stage_power.sh` | no |
-| Kernel counters (DRAM bytes, stalls) | `sudo ./cuda/profile.sh` | yes (Nsight) |
+| Kernel counters (DRAM bytes, stalls) | `CLOCKS=none TARGET=miner ./cuda/profile.sh` | no, once the module option below is set |
 | Pipeline A/B for a code change | `./cuda/pipeline 700` | no |
-| **Correctness gate for a CUDA change** | `./build/tests/test_cuda_solver` — 3/3 goldens on 15 geometries | no |
+| **Correctness gate for a CUDA change** | `./build/tests/test_cuda_solver` — 3/3 goldens on 22 configurations | no |
 | Any rung of the VRAM ladder, on any card | `MXBM_BB=14 MXBM_QUAD=1 MXBM_ARENA=1 mxbm --benchmark BEAM-III` | no |
 | Drop counters (entry/stage/out/walk) and the arena's spill total | prefix any run with `MXBM_DROP_STATS=1` | no |
 | Positive control for those counters | `MXBM_CAP_SIGMA=-6` undershoots the bucket reservation and makes `entry` fill | no |
+| Positive control for the singleton filter | build at `-DMXBM_SPILL=0 -DMXBM_FCAP=64`; `drops stage` is then the staged count less a constant, and `MXBM_SOLO=0` vs `=2` differ by the elements refused | no |
+
+Nsight needs GPU counter access, which is admin-restricted by default and lifted
+permanently here by `NVreg_RestrictProfilingToAdminUsers=0` in
+`/etc/modprobe.d/nvidia-profiling.conf` — check with `grep RmProfilingAdminOnly
+/proc/driver/nvidia/params` (0 = unrestricted). Installing that file takes one reboot;
+running the profiler afterwards takes neither root nor a reboot.
 
 Run on an **idle GPU**. A benchmark taken while something else is using the card measures
 contention, not the miner — a lolMiner run taken while MXBM was mining read 25–27 sol/s

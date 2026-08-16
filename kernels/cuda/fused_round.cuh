@@ -359,6 +359,36 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #ifndef MXBM_MATCH_FIRST
 #define MXBM_MATCH_FIRST 0
 #endif
+
+// MXBM_SOLO: never STAGE an element that is alone in its chain slot.
+//
+// The table is a perfect hash inside a group, so a slot holds exactly the elements
+// sharing a key: one alone in its slot has no partner, emits nothing, and no walk step
+// reads it. Dropping it is lossless by construction, and at 264 staged over 128 slots it
+// is e^-2.06 = 12.8 % of a group. Occupancy is not known until every key has been seen,
+// so a prepass counts it from word 0 -- the key in every record format -- into tab, which
+// the chain does not claim until the expand loop, so the census costs no shared memory.
+//
+// MATCH_FIRST's prize taken one step earlier, avoiding both of its costs: no mlist, so no
+// lost resident block, and no compaction, so the rebuild keeps its lwork stride. Staging
+// stores and the record load go too, and gcount falls ~264 -> ~230, under kWG, which
+// deletes the ragged second block-pass of the expand loop.
+//
+// Prize -0.85 ms, prepass +0.76, net -0.089 (-0.31 %) at stock, registers and shared
+// byte-identical. The census is the expensive half, which is what scopes MXBM_SOLO_R.
+//
+// 0 = off, the A/B arm. 1 = prepass only, staging unfiltered, which prices the census
+// against its own prize. 2 = both.
+#ifndef MXBM_SOLO
+#define MXBM_SOLO 2
+#endif
+// Rounds it runs on, by LMODE: 1 = r1 (LM_SEED), 2 = r2 (LM_RD2), 4 = r3 (LM_EMIT),
+// 8 = round 4 and the reach rungs. Rounds 1 and 2 read an 8 or 16 B record, so the
+// prepass re-touches a sector staging reads anyway; round 3's is 64 B, which makes it a
+// second sector stream through a round already at 88 % of DRAM peak.
+#ifndef MXBM_SOLO_R
+#define MXBM_SOLO_R 3
+#endif
 #if MXBM_PP_CONST
 __constant__ uint64_t c_pp[4];
 #define MXBM_PP_LOAD(dst) uint64_t dst[4] = { c_pp[0], c_pp[1], c_pp[2], c_pp[3] }
@@ -561,6 +591,13 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     // Round 1's gi IS its leaf: both are the seed index, written from the same
     // rec0 >> 32. So LM_SEED keeps only one copy and reads gi through lleaf[0].
     constexpr bool kGiIsLead = (LMODE == LM_SEED || LMODE == LM_SEEDF);
+    // See MXBM_SOLO. Off under MFIRST, which claims tab for the chain in the staging
+    // loop and reaches the same elements later and at a higher price.
+    constexpr uint32_t kSoloBit = kGiIsLead        ? 1u
+                                : LMODE == LM_RD2  ? 2u
+                                : LMODE == LM_EMIT ? 4u : 8u;
+    constexpr bool SOLO    = (MXBM_SOLO != 0) && !MFIRST && (MXBM_SOLO_R & kSoloBit) != 0;
+    constexpr bool SOLO_FL = SOLO && (MXBM_SOLO == 2);
     // Reference bindings: the body below is textually what it was when these were the
     // kernel's own __shared__ declarations, and the bindings keep it that way.
     auto& lwork  = shm.lwork;
@@ -683,8 +720,24 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     const uint32_t sbits = submask_bits + xb;
     const uint32_t mask  = mask_s | (xp << submask_bits);
     if (lId == 0) { gcount = 0; if constexpr (MFIRST) nmatch = 0; }
-    for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
+    for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = SOLO ? 0u : kEmpty;
     __syncthreads();
+
+    // SLOT CENSUS. One scalar load per input element -- the same 32 B sector the staging
+    // loop reads below -- against the whole record it lets that loop skip. See MXBM_SOLO.
+    if constexpr (SOLO) {
+        for (uint32_t p = lId; p < cnt + acnt; p += kWG) {
+            const bool ar_ = ARENA && p >= cnt;
+            size_t i_ = base + p;
+            if constexpr (ARENA) if (ar_) i_ = nbcap_in + shm.aidx[p - cnt];
+            // The full key, not SUBPASS's cached low byte: the slot wants seven bits
+            // above the sub-mask, which leave the byte as soon as submask_bits > 1.
+            const uint32_t key = (uint32_t)(in_belem[i_ * INSTR] & 0xFFFFFFu);
+            if ((key & ((1u << sbits) - 1u)) != mask) continue;
+            atomicAdd(&tab[(key >> submask_bits) & (kTabSize - 1u)], 1u);
+        }
+        __syncthreads();
+    }
 
     // STAGE. Sub-mask filtered, so only ~1/2^submask_bits of the lanes survive: keep this
     // loop cheap and defer anything expensive to the all-lanes loop below.
@@ -713,6 +766,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
         // Pool entries bypass the skey prepass, so under SUBPASS they filter here.
         if constexpr (ARENA && SUBPASS)
             if (ar_ && (key & ((1u << sbits) - 1u)) != mask) continue;
+        // Alone in the slot means no equal-key partner, so nothing to emit and nothing
+        // for the walk to read. Ahead of the record load, which is what it saves.
+        if constexpr (SOLO_FL)
+            if (tab[(key >> submask_bits) & (kTabSize - 1u)] < 2u) continue;
         const uint32_t pos = atomicAdd(&gcount, 1u);
         // Keep counting past FCAP: gcount is what decides whether to split.
         if (pos >= FCAP) { if constexpr (!MXBM_SPILL) atomicAdd(&drops[1], 1u); continue; }
@@ -900,6 +957,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
         }
         // Only reachable if the chosen split still overflows, which the count rules out.
         if (gcount > FCAP && lId == 0) atomicAdd(&drops[1], gcount - FCAP);
+    }
+    // tab held the census; the chain built in the expand loop needs it empty again.
+    if constexpr (SOLO) {
+        for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
+        __syncthreads();
     }
 #if MXBM_ABL_TAIL == 1
     uint32_t total = gcount < FCAP ? gcount : FCAP;
