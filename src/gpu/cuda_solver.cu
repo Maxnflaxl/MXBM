@@ -175,6 +175,9 @@ struct CudaSolver::Impl {
     uint32_t cap = 0; size_t nslots = 0;
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
+#if MXBM_GCEN
+    uint32_t* kcen = nullptr;          // the key census, see MXBM_GCEN
+#endif
     uint32_t *left=nullptr, *right=nullptr, *survSlots=nullptr, *survCount=nullptr, *dleaves=nullptr;
     // Recovery by replay: the survivors' round-4 parents by slot, and the round-3
     // ancestors replay_r4 derives from them.
@@ -273,6 +276,9 @@ struct CudaSolver::Impl {
     // runs either way, p_ being a fully-constructed member.
     ~Impl() {
         for (auto* q : {elem[0], elem[1], dpp, specElem, specPp, elem4}) cudaFree(q);
+#if MXBM_GCEN
+        cudaFree(kcen);
+#endif
         for (auto* q : {counts[0], counts[1], gictr, drops, spillTot,
                         left, right, survSlots, survCount, dleaves, specCounts,
                         survL4, l3Slots, l4Lead, l2Slots,
@@ -349,6 +355,11 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
     p_->info = device_info(index);
     // Geometry-independent first, so the step-down below is not retrying these.
     p_->gictr = dalloc<uint32_t>(1); p_->drops = dalloc<uint32_t>(4);
+#if MXBM_GCEN
+    // 2 bits per 24-bit key. Geometry-independent: the key is 24 bits at every rung.
+    p_->kcen = dalloc<uint32_t>(1u << 20);
+    cudaMemcpyToSymbol(g_kcen, &p_->kcen, sizeof(uint32_t*));
+#endif
     p_->spillTot = dalloc<uint32_t>(1);
     if (p_->spillTot) cudaMemset(p_->spillTot, 0, 4);
     p_->survSlots = dalloc<uint32_t>(kSurvCap); p_->survCount = dalloc<uint32_t>(1);
@@ -583,6 +594,9 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     };
     if (!hit) {
         cudaMemset(r1Counts, 0, (size_t)I.nb*4);
+#if MXBM_GCEN
+        cudaMemset(I.kcen, 0, (size_t)1u << 22);
+#endif
         arenaClear(0);
         entry_scatter<<<(kElems+255)/256,256>>>(I.dpp, 0, kElems, I.bb, I.cap,
                                                 r1Counts, r1Elem, I.drops,
@@ -610,6 +624,11 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // rung, so round 4's row is the first and the terminal round's the second.
     const uint32_t r4Off = I.octo ? 0u : 3u*kCapacity;
     const uint32_t r5Off = I.octo ? kCapacity : 4u*kCapacity;
+#if MXBM_GCEN
+    #define KCEN_CLEAR cudaMemset(I.kcen, 0, (size_t)1u << 22);
+#else
+    #define KCEN_CLEAR
+#endif
     // Variadic so a round can carry the optional trailing template arguments
     // (COTENANT, SUBPASS, FCAP) without every other round having to name them.
     // Round 1 reads the entry buffer, wherever this solve put it.
@@ -628,6 +647,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
           const uint64_t* inE = ((R)==1) ? r1Elem   : I.elem[inSet];                 \
           const bool arIn = I.arena;                                                 \
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
+          KCEN_CLEAR                                                             \
           arenaClear(o);                                                             \
           if (arIn) { if (I.matchFirst) ROUND_L(true,  true,  true, R, IMPB, __VA_ARGS__); \
                       else              ROUND_L(false, true,  true, R, IMPB, __VA_ARGS__); }\
@@ -644,6 +664,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
           const uint64_t* inE = ((R)==1) ? r1Elem   : I.elem[inSet];                 \
           const bool arIn = true;                                                    \
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
+          KCEN_CLEAR                                                             \
           arenaClear(o);                                                             \
           if (I.matchFirst) ROUND_L(true,  true, false, R, IMPB, __VA_ARGS__);       \
           else              ROUND_L(false, true, false, R, IMPB, __VA_ARGS__);       \
@@ -695,6 +716,8 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
       uint32_t* const r4At = own ? I.atag4  : I.atag[o];
       uint32_t* const r4Ac = own ? I.actr4  : I.actr[o];
       cudaMemset(r4C, 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);
+      KCEN_CLEAR
+#undef KCEN_CLEAR
       if (I.arena) { cudaMemset(r4Ah, 0xFF, (size_t)I.nb*4); cudaMemset(r4Ac, 0, 4); }
       // Round 4's own chain arguments, spelled once: the arms below differ only in
       // which instantiation they name.
@@ -787,6 +810,27 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // solve. Every A/B is gated on drops == 0, and on an arena rung that gate only means
     // something beside a spill count that is NOT zero -- otherwise "no drops" and "the
     // overflow path never ran" read the same. Off the hot path when unset.
+#if MXBM_GCEN
+    // MXBM_GCEN_STATS=1: read the census back and count what it says. This is the
+    // applied-assert AND an instrument independent of the drop counters -- the keys seen
+    // exactly once ARE the elements with no partner, so the figure must land on the
+    // 12.8 % the shared-memory prepass measured by a different route entirely. The table
+    // read here is the LAST producer's, round 4's.
+    static const bool kCenStats = std::getenv("MXBM_GCEN_STATS") != nullptr;
+    if (kCenStats && I.kcen) {
+        static std::vector<uint32_t> h(1u << 20);
+        cudaMemcpy(h.data(), I.kcen, (size_t)1u << 22, cudaMemcpyDeviceToHost);
+        uint64_t seen = 0, multi = 0;
+        for (uint32_t w : h) {
+            seen  += (uint32_t)__builtin_popcount(w & 0x55555555u);
+            multi += (uint32_t)__builtin_popcount(w & 0xAAAAAAAAu);
+        }
+        std::fprintf(stderr, "kcen seen=%llu multi=%llu single=%llu (%.2f %% of elements)\n",
+                     (unsigned long long)seen, (unsigned long long)multi,
+                     (unsigned long long)(seen - multi),
+                     100.0 * (double)(seen - multi) / (double)(1u << 25));
+    }
+#endif
     static const bool kDropStats = std::getenv("MXBM_DROP_STATS") != nullptr;
     if (kDropStats) {
         uint32_t d[4] = {0,0,0,0}, sp = 0;

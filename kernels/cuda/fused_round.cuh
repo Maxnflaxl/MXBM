@@ -19,6 +19,40 @@
 
 namespace mxbm { namespace cuda {
 
+// MXBM_GCEN: have the PRODUCING round take the key census, so the consumer does not have
+// to. MXBM_SOLO's filter is worth -0.852 ms and its own word-0 prepass costs +0.763 of
+// that, so the whole remaining question is where the census comes from -- and the emit
+// already holds the child's key, having just computed the bucket from it.
+//
+// Two bits per 24-bit key, sixteen keys to a word: bit 0 "seen", bit 1 "seen twice".
+// 4 MB, L2-resident against a 48 MB L2. The saturating direction is the safe one -- a
+// dropped or capped element can only leave a key looking SINGLE when it is not, and the
+// bit is only ever read to skip, so the census can be wrong in the direction that costs
+// time and never in the one that loses a solution.
+//
+// The consumer side is what makes this worth trying: within a bucket the key's top
+// bucket_bits are fixed, so a bucket's 256 keys are 16 CONSECUTIVE words -- 64 B, two
+// sectors, one load per BLOCK rather than one per element, and no extra barrier because
+// it lands in the tab-clear window that already has one.
+//
+// 1 = producer writes the census, nobody reads it: prices the write on its own, which is
+// the number that decides whether the rest is worth building.
+#ifndef MXBM_GCEN
+#define MXBM_GCEN 0
+#endif
+#if MXBM_GCEN
+// A device pointer rather than a kernel argument, so the probe needs no change at any of
+// the fourteen launch sites. The shipping form would pass it, and would ping-pong two
+// tables: a round's staging reads its producer's census while its own emit writes the
+// next one, in the same kernel.
+__device__ uint32_t* g_kcen;
+__device__ __forceinline__ void kcen_note(uint32_t key) {
+    uint32_t* const w = g_kcen + (key >> 4);
+    const uint32_t b = 1u << (2u * (key & 15u));
+    if (atomicOr(w, b) & b) atomicOr(w, b << 1);
+}
+#endif
+
 // The staged group is mean_bucket / 2^submaskBits = 264 elements, so a 256-thread block
 // runs a SECOND loop iteration with 8 of 256 lanes busy while the other seven warps wait
 // at the barrier -- which is where the 15-16% barrier stall comes from. Sizing the block
@@ -452,6 +486,9 @@ void entry_body(uint32_t idx, const uint64_t* __restrict__ pp4, uint32_t bucket_
     bh3::apply_mix(e, t1, 1u, 448u);
     const uint32_t key = (uint32_t)(e.w[0] & 0xFFFFFFu);
     const uint32_t b = key >> (24u - bucket_bits);
+#if MXBM_GCEN
+    kcen_note(key);            // round 1's producer is the entry pass
+#endif
     const uint32_t pos = atomicAdd(&counts[b], 1u);
     size_t slot = (size_t)b*bucket_cap + pos;
     if (pos >= bucket_cap) {
@@ -1130,6 +1167,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
 
                 const uint32_t ckey = (uint32_t)(c.w[0] & 0xFFFFFFu);
                 const uint32_t cb   = ckey >> (24u - bucket_bits);
+#if MXBM_GCEN
+                // Before the cap test on purpose: an element that ends up dropped still
+                // proves its key had a partner, and over-counting is the free direction.
+                kcen_note(ckey);
+#endif
                 const uint32_t cpos = atomicAdd(&out_counts[cb], 1u);
                 size_t oslot = (size_t)cb * out_bucket_cap + cpos;
                 if constexpr (ARENA)

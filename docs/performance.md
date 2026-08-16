@@ -574,6 +574,39 @@ sudo -v && LIMITS="100 110 120 140 160 175 180 190 200 210 220 240 255 270 285" 
     benchmarks/power_sweep.sh
 ```
 
+*(**The re-sweep was taken 2026-08-16 and is NOT adopted into the table above, because it
+raises a question it cannot answer.** Its numbers, 90 s a point:*
+
+| cap | sol/s | W | sol/s/W | J/sol | | cap | sol/s | W | sol/s/W | J/sol |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 100 W | 22.2 | 99.7 | 0.2227 | 4.48 | | 200 W | 57.4 | 199.7 | 0.2874 | 3.48 |
+| 110 W | 25.6 | 109.8 | 0.2331 | 4.29 | | 210 W | 60.9 | 209.8 | 0.2903 | 3.44 |
+| 120 W | 29.6 | 119.8 | 0.2471 | 4.05 | | 220 W | **64.9** | 219.6 | **0.2956** | **3.38** |
+| 140 W | 35.3 | 139.6 | 0.2529 | 3.95 | | 240 W | 67.2 | 239.7 | 0.2803 | 3.57 |
+| 160 W | 43.1 | 159.7 | 0.2699 | 3.71 | | 255 W | 68.2 | 254.5 | 0.2680 | 3.73 |
+| 175 W | 48.1 | 175.0 | 0.2749 | 3.64 | | 270 W | 69.1 | 269.3 | 0.2566 | 3.90 |
+| 180 W | 49.9 | 179.9 | 0.2774 | 3.60 | | 285 W | **69.8** | 284.2 | 0.2456 | 4.07 |
+| 190 W | 54.0 | 189.7 | 0.2847 | 3.51 | | | | | | |
+
+*Against the column above it is **faster at 240–285 W and slower at every cap below
+220 W** — 22.6 → 22.2 at 100 W, 31.0 → 29.6 at 120 W, 51.4 → 49.9 at 180 W, against
+69.2 → 69.8 at 285 W. That is a **tilt, not an offset**, so the ~2.5 % cross-session band
+does not obviously explain it, and the shorter points (90 s here against 120 s there) bias
+the new figures **high**, which makes the low-power deficit harder to explain away rather
+than easier.*
+
+***There is a mechanism that predicts exactly this shape.*** *The singleton filter adds a
+whole memory-instruction pass per round and deletes rebuild arithmetic, and
+[NARROW6](performance-research.md#measured-results-2026-07-26-to-2026-07-28) already
+established that added instructions cost more as the cap tightens — +0.9 % at 180 W
+growing to +3 % at 100 W, the same shape. If that is what this is, the filter is a stock
+win and a capped-rig loss, which matters because capped rigs are a target.*
+
+***Nothing here is a result yet, because a cross-session comparison is not a delta.*** *It
+is settled by one interleaved A/B and nothing else: build a `-DMXBM_SOLO=0` arm, unlock the
+clocks (a cap cannot lower a locked one), `nvidia-smi -pl 120`, and run it ABBA against the
+shipping build. Raw logs in `docs-internal/sweeps/`.)*
+
 **Deleting the reference rows pays half again as much under a cap as it does at stock.**
 Against the same sweep on the previous kernel: **+10.3 % at 120 W, +8.7 % at 140,
 +8.1 % at 160, +8.4 % at 180 and +9.3 % at 190**, against **+6.6 % at 285 W** — and only

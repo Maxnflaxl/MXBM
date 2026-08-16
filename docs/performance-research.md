@@ -5715,6 +5715,48 @@ already knows: equal keys are always co-resident, so round *r*'s emit sees the c
 structure round *r+1* will walk. Anything that carries that across for less than 0.76 ms
 collects the difference.
 
+### The key census cannot move to the producer: 4.36 ms against the 0.76 it would replace
+
+The singleton filter's census is [its expensive half](#singleton-free-staging-the-prize-is-085-ms-and-the-prepass-that-finds-it-costs-076) at +0.763 ms, and the
+producing round already holds the child's key, having just computed the bucket from it.
+Key multiplicity is global — the bucket is the key's top `bb` bits and the sub-mask its
+low `sm`, so every element sharing a key lands in the same group, and "alone in its chain
+slot" and "this key occurs once in the round" are the same statement. So round *r*'s emit
+can record it: two bits per 24-bit key, sixteen keys to a word, 4 MB against a 48 MB L2.
+
+**The census is exactly right and it costs 4.36 ms (+15.0 %)** — 5.7× the prepass it would
+replace, four ABBA arms per side, every arm identical to the digit (34.36 against 29.88
+solves/s). `MXBM_GCEN=1` writes the table and reads nothing, so that figure is the write
+alone.
+
+Correctness is not the problem, and the readback proves it. `MXBM_GCEN_STATS=1` counts the
+table against Poisson(2), which is what 2^25 elements over 2^24 keys must give:
+
+| | measured | `2^24 · P` |
+|---|---|---|
+| keys seen | 14 510 484 | 14 510 000 |
+| keys with a partner | 9 966 786 | 9 966 000 |
+| **keys seen once** | **4 543 698** | **4 542 000** |
+
+Those 4.54 M keys *are* the partnerless elements, **13.5 % of the round** — and the
+shared-memory prepass counted 4.51 M of them through an unrelated instrument. Two
+independent routes to the same population.
+
+**Moving a census from the consumer to the producer moves it from shared memory to
+global, and that is the whole cost.** The lead argued from contention: 2^24 addresses at
+~2 hits each against the emit's existing 2^16 at ~512, so the new atomic is 8× *less*
+contended than one already being issued. Contention was the wrong axis. Lower contention
+on a bigger table is worse, because 128 shared counters per block live in the SM and 4 M
+global ones all funnel through L2, where consecutive lanes of a warp hit as many distinct
+sectors as there are lanes. Per producer stage the census costs 0.87 ms against the
+prepass's 0.38 ms per round, and it has to run on five stages rather than the two whose
+consumers filter.
+
+That kills the family rather than this encoding. The 8-bit-per-key variant trades 1.57
+atomics per element for exactly 1 — 2.8 ms, still 3.7× the prepass. Four bits is not
+available at all: a wrap at 16 reads as "singleton", the one direction that loses
+solutions.
+
 ### The w0-checkpoint pair record, repriced by the address bits: −0.76 ms (−2.4 %)
 
 **Round 2 no longer derives work word 0. Round 1 stores it, in the same 16 bytes.**
