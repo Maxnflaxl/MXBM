@@ -54,41 +54,46 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
           + backrefs + arena_meta + 64;                           // +counts/refs/counters
 }
 
-// Ordered by MEASURED time, fastest first -- NOT by footprint, which disagrees:
-// quad (16,1) at 5.02 GiB / 38.39 ms is both smaller and faster than packed (14,3) at
-// 6.24 / 40.02, so a footprint-sorted ladder would hand a card the slower rung. packed
-// (14,3) stays in the list after it because its single allocation is smaller (2.76 GiB
-// against 2.90), so a max_alloc-bound backend can still want it.
+// Ordered by MEASURED time, fastest first -- NOT by footprint, which disagrees: quad
+// (16,1) at 4.76 GiB / 36.05 ms is both smaller and faster than packed (14,3) at 5.98 /
+// 38.52, so a footprint-sorted ladder would hand a card the slower rung.
+//
+// One row is deliberately out of time order: packed (14,3) sits ahead of quad (15,2)
+// despite 38.52 against 38.14, because its single allocation is smaller (2.76 GiB against
+// 2.90) and a max_alloc-bound backend can still want it. On CUDA it is unreachable anyway
+// -- a card with room for its 5.98 GiB takes the 5.03 GiB row above first.
 //
 // An arena row is its neighbour's geometry at a dense cap: same kernels, same record,
-// ~22 % fewer record slots, plus the pool's fixed mechanism cost. That cost is measured
-// on (16,1) and carried across the other rows, so their times are placings rather than
-// figures. Footprints are CUDA's, with the implicit-bits pack and the replayed reference
-// rows where the rung admits them; a backend that stores all five rows adds 0.26 GiB,
-// and 0.41 more on the implicit-bits rungs.
+// ~22 % fewer record slots, plus the pool's fixed mechanism cost. Footprints are CUDA's,
+// with the implicit-bits pack and the replayed reference rows where the rung admits them;
+// a backend that stores all five rows adds 0.26 GiB, and 0.41 more on the implicit-bits
+// rungs.
 const RbRung* rb_rungs(int& n) {
     //     bb   sm   quad   arena  octo        footprint / time
+    // Times re-measured in one sitting 2026-08-16, 40 s a rung, clocks released.
     static const RbRung kRungs[] = {
-        { 16u, 1u, false, false, false },   // 6.17 GiB  33.67 ms  (6.84 without impl. bits)
-        { 16u, 1u, false, true,  false },   // 5.03      +2 % on the row above
-        { 15u, 2u, false, false, false },   // 6.36      36.01
+        { 16u, 1u, false, false, false },   // 6.17 GiB  28.80 ms  (6.84 without impl. bits)
+        { 16u, 1u, false, true,  false },   // 5.03      29.81
+        { 15u, 2u, false, false, false },   // 6.36      33.66
         { 15u, 2u, false, true,  false },   // 5.56
-        { 16u, 1u, true,  false, false },   // 4.76      38.39
-        { 16u, 1u, true,  true,  false },   // 4.03
-        { 14u, 3u, false, false, false },   // 5.98      40.02  -- for max_alloc-bound backends
-        { 15u, 2u, true,  false, false },   // 4.39      40.65
-        { 15u, 2u, true,  true,  false },   // 3.87
-        { 14u, 3u, true,  false, false },   // 4.15      44.75
-        { 14u, 3u, true,  true,  false },   // 3.78
+        { 16u, 1u, true,  false, false },   // 4.76      36.05
+        { 16u, 1u, true,  true,  false },   // 4.03      37.19
+        { 14u, 3u, false, false, false },   // 5.98      38.52  -- for max_alloc-bound backends
+        { 15u, 2u, true,  false, false },   // 4.39      38.14
+        { 15u, 2u, true,  true,  false },   // 3.87      39.62
+        { 14u, 3u, true,  false, false },   // 4.15      42.97
+        { 14u, 3u, true,  true,  false },   // 3.78      44.78
         // The octo rows, below everything: round 4 rebuilds its work state from eight
         // leaves, which is the deepest re-derivation on the ladder. Only ever reached
         // when no row above fits, and only paired with quad and dense caps -- a card
-        // that can host the packed record has no use for them. Three things narrow at
+        // that can host the packed record has no use for them. Four things narrow at
         // once here: round 3's record halves, three of the five reference rows stop
-        // being read, and round 2's record loses the gi nothing reads any more.
-        { 16u, 1u, true,  true,  true  },   // 2.04
-        { 15u, 2u, true,  true,  true  },   // 1.95
-        { 14u, 3u, true,  true,  true  },   // 1.90  -- the floor, and this design's
+        // being read, round 2's record loses the gi nothing reads any more, and round
+        // 3's own record spends its gi and its address key bits on the child's work
+        // word 0, which deletes every apply_mix in the rebuild (see ow0_w0).
+        { 16u, 1u, true,  true,  true  },   // 2.04      50.89
+        { 15u, 2u, true,  true,  true  },   // 1.95      52.88
+        { 14u, 3u, true,  true,  true  },   // 1.90      56.98  -- the floor, and this design's
     };
     n = (int)(sizeof kRungs / sizeof kRungs[0]);
     return kRungs;

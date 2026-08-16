@@ -378,7 +378,8 @@ __global__ void recover(uint32_t nSurv, const uint32_t* __restrict__ surv_slots,
             for (int j = 0; j < 2; ++j) {
                 const uint64_t* r = r3_elem + (size_t)sl[j] * r3_stride;
                 uint32_t l[8];
-                octo_leaves(r[0], r[1], r[2], r[3], l);
+                if constexpr (MXBM_OCTO_W0) ow0_leaves(r[0], r[1], r[2], r[3], l);
+                else                        octo_leaves(r[0], r[1], r[2], r[3], l);
                 for (int t = 0; t < 8 && got < 32u; ++t)
                     out[(size_t)i*32u + got++] = l[t];
             }

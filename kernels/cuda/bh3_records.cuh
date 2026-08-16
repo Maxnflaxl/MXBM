@@ -212,6 +212,94 @@ __device__ __forceinline__ void rebuild_r4(const uint64_t pp[4], const uint32_t 
     bh3::apply_mix(out, l, 6u, 376u);
 }
 
+// r3 -> r4, OCTO W0-CHECKPOINT RECORD (MXBM_OCTO_W0): the same 32 B, carrying the child's
+// post-mix work word 0 where the plain octo record carries a 24-bit key and a gi. Word 0
+// is what deletes the mixes -- see rebuild_r4_lane -- and it is paid for out of two fields
+// that were carrying less than they cost:
+//
+//   * gi, all 26 bits. Nothing indexes a reference row by a round-3 element's gi any more,
+//     and its one remaining consumer is round 4's left/right tiebreak, which takes the
+//     input slot instead. The same substitution the quad16 record makes one round up.
+//   * 14 of the key's 24 bits. Only the low 24 - bb reach the sub-mask filter, the chain
+//     hash and the in-group key compare, and bb + sm = 17 makes that exactly 7 + sm <= 10
+//     on every rung the octo record runs on. The rest are the bucket address.
+//
+// Word 0's own low 24 bits are the key, and round 4's combine reads bits 24..63 alone
+// (`out.w[0] = (x[0] >> 24) | (x[1] << 40)`), so the 14 dropped bits are read by nothing.
+// 10 + 40 + 8 x 25 = 250 bits of 256, and the layout is fixed -- no template parameter and
+// no address arithmetic, unlike the r2 -> r3 implicit-bits pack.
+//   w0 = key low 10 | w0[24..63]<<10 | l0<<50
+//   w1 = l0>>14 | l1<<11 | l2<<36 | l3<<61
+//   w2 = l3>>3  | l4<<22 | l5<<47
+//   w3 = l5>>17 | l6<<8  | l7<<33
+__device__ __forceinline__ uint64_t ow0_w0(uint64_t w0, const uint32_t l[8]) {
+    return (w0 & 0x3FFull) | (((w0 >> 24) & 0xFFFFFFFFFFull) << 10) | ((uint64_t)l[0] << 50);
+}
+__device__ __forceinline__ uint64_t ow0_w1(const uint32_t l[8]) {
+    return ((uint64_t)l[0] >> 14) | ((uint64_t)l[1] << 11) | ((uint64_t)l[2] << 36)
+         | ((uint64_t)l[3] << 61);
+}
+__device__ __forceinline__ uint64_t ow0_w2(const uint32_t l[8]) {
+    return ((uint64_t)l[3] >> 3) | ((uint64_t)l[4] << 22) | ((uint64_t)l[5] << 47);
+}
+__device__ __forceinline__ uint64_t ow0_w3(const uint32_t l[8]) {
+    return ((uint64_t)l[5] >> 17) | ((uint64_t)l[6] << 8) | ((uint64_t)l[7] << 33);
+}
+__device__ __forceinline__ void ow0_leaves(uint64_t w0, uint64_t w1, uint64_t w2,
+                                           uint64_t w3, uint32_t l[8]) {
+    l[0] = (uint32_t)(((w0 >> 50) | (w1 << 14)) & kIdxMask);
+    l[1] = (uint32_t)(w1 >> 11) & kIdxMask;
+    l[2] = (uint32_t)(w1 >> 36) & kIdxMask;
+    l[3] = (uint32_t)(((w1 >> 61) | (w2 << 3)) & kIdxMask);
+    l[4] = (uint32_t)(w2 >> 22) & kIdxMask;
+    l[5] = (uint32_t)(((w2 >> 47) | (w3 << 17)) & kIdxMask);
+    l[6] = (uint32_t)(w3 >> 8) & kIdxMask;
+    l[7] = (uint32_t)(w3 >> 33) & kIdxMask;
+}
+// Word 0 as round 4 stages it: the kept key bits where every mode puts them, and bits
+// 24..63 where combine reads them. Bits 10..23 come back zero and nothing consults them --
+// the same trade the terminal record's t5_work makes.
+__device__ __forceinline__ uint64_t ow0_word0(uint64_t w0) {
+    return (w0 & 0x3FFull) | (((w0 >> 10) & 0xFFFFFFFFFFull) << 24);
+}
+__device__ __forceinline__ uint32_t ow0_lead(uint64_t w0, uint64_t w1) {
+    return (uint32_t)(((w0 >> 50) | (w1 << 14)) & kIdxMask);      // leaf 0 IS the lead
+}
+
+// Words 1..6 of a node from its two children's words 1..6. combine's word i reads x[i] and
+// x[i+1] alone, so word 0 never enters the lane; the masking is combine's, term for term.
+__device__ __forceinline__ void combine_hi(const uint64_t a[7], const uint64_t b[7],
+                                           uint32_t Lout, uint64_t out[7]) {
+    uint64_t x[7];
+    #pragma unroll
+    for (int i = 1; i < 7; ++i) x[i] = a[i] ^ b[i];
+    #pragma unroll
+    for (int i = 1; i < 7; ++i) {
+        uint64_t v = (x[i] >> 24) | (i < 6 ? (x[i + 1] << 40) : 0);
+        const uint32_t base = 64u * (uint32_t)i;
+        if (base >= Lout)           v = 0;
+        else if (Lout - base < 64u) v &= (((uint64_t)1 << (Lout - base)) - 1);
+        out[i] = v;
+    }
+}
+
+// Words 1..6 of a ROUND-3 OUTPUT element from its eight leaves, with no `apply_mix` at all
+// and six siphashes a leaf instead of seven. The same argument rebuild_r2_lane rests on,
+// three levels deep: apply_mix writes work word 0 alone, so the whole 15-mix chain and each
+// leaf's k = 0 seed word reach word 0 and nothing else. The caller stages word 0 from the
+// record; everything below word 0 is linear in the leaves' seed words 1..6.
+__device__ __forceinline__ void rebuild_r4_lane(const uint64_t pp[4], const uint32_t l[8],
+                                                uint64_t* w16 /* w16[1..6] written */) {
+    uint64_t a[7], b[7], r0[7], r1[7];
+    rebuild_r2_lane(pp, l[0], l[1], a);
+    rebuild_r2_lane(pp, l[2], l[3], b);
+    combine_hi(a, b, 400u, r0);
+    rebuild_r2_lane(pp, l[4], l[5], a);
+    rebuild_r2_lane(pp, l[6], l[7], b);
+    combine_hi(a, b, 400u, r1);
+    combine_hi(r0, r1, 376u, w16);
+}
+
 // The leftContrib round 3 stored: a mix of the eight leaves ALONE, over a zero element,
 // so it needs no work state and is the cheap half of what the octo record gives up.
 __device__ __forceinline__ uint64_t octo_contrib(const uint32_t l[8]) {

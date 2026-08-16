@@ -396,6 +396,13 @@ __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
 #define MXBM_ABL_TAIL 0
 #endif
 
+// MXBM_OCTO_W0: round 3 emits the w0-checkpoint octo record and round 4 rebuilds its input
+// through the mix-free lane -- 15 of the 16 apply_mix calls and 8 of the 56 siphashes gone,
+// in the same 32 B. See ow0_w0 and rebuild_r4_lane in bh3_records.cuh.
+#ifndef MXBM_OCTO_W0
+#define MXBM_OCTO_W0 1
+#endif
+
 // MXBM_MATCH_FIRST: build the chain from the STAGED key, then derive only the elements
 // the walk will actually read. An element alone in its chain slot is never loaded by the
 // walk -- at 264 staged elements over a 128-entry perfect table that is e^-2.06 = 12.8 %
@@ -678,6 +685,14 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     constexpr bool PACKTAB = (MXBM_TABPACK != 0) && SOLO;
     constexpr uint32_t kChEmpty = PACKTAB ? kEmpty16 : kEmpty;
     static_assert(!PACKTAB || FCAP < kEmpty16, "a staged slot must not alias the sentinel");
+    // See MXBM_OCTO_W0: round 3's emit shape and round 4's read shape. The checkpoint puts
+    // word 0's high bits where the key's dropped bits were, so a key compare on the staged
+    // word would compare them too -- the perfect table is what makes the compare a
+    // tautology, exactly as it is for the r2 -> r3 implicit-bits record.
+    constexpr bool OW0_EMIT = (MXBM_OCTO_W0 != 0) && OUTSTR == 4
+                              && (LMODE == LM_EMIT || LMODE == LM_RD3);
+    constexpr bool OW0      = (MXBM_OCTO_W0 != 0) && LMODE == LM_RD4;
+    static_assert(!OW0 || MXBM_PERFECT_TAB, "the checkpoint pollutes the key above bit 9");
     // See MXBM_COOP. The unpack it splits across four lanes is the IMPB one, and MFIRST
     // would need the chain built before the record is read.
     constexpr bool COOP = (MXBM_COOP != 0) && LMODE == LM_EMIT && IMPB != 0
@@ -982,8 +997,9 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             const ulonglong2 q0 = v[0], q1 = v[1];
             stw(pos, 0, q0.x); stw(pos, 1, q0.y);
             stw(pos, 2, q1.x); stw(pos, 3, q1.y);
-            lgi[pos]   = octo_gi(q1.y);
-            llead[pos] = octo_lead(q0.x);          // leaf 0 IS the lead
+            // The checkpoint record carries no gi; the slot orders the staged elements.
+            lgi[pos]   = OW0 ? (uint32_t)idx_ : octo_gi(q1.y);
+            llead[pos] = OW0 ? ow0_lead(q0.x, q0.y) : octo_lead(q0.x);
             lslot[pos] = (uint32_t)idx_;           // what this round's references name
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
@@ -1194,12 +1210,25 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             // is only apparent.
             MXBM_PP_LOAD(pp);
             uint32_t l[8];
-            octo_leaves(lwork[lwx(pos,0)], lwork[lwx(pos,1)],
-                        lwork[lwx(pos,2)], lwork[lwx(pos,3)], l);
-            bh3::Elem e;
-            rebuild_r4(pp, l, e);
-            const uint64_t lc = octo_contrib(l);   // the leftContrib round 3 did not store
-            for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+            const uint64_t rec[4] = { lwork[lwx(pos,0)], lwork[lwx(pos,1)],
+                                      lwork[lwx(pos,2)], lwork[lwx(pos,3)] };
+            uint64_t lc;
+            if constexpr (OW0) {
+                // See MXBM_OCTO_W0. Word 0 is read, not derived; only the linear lane
+                // below it is rebuilt, and no apply_mix runs anywhere in the tree.
+                ow0_leaves(rec[0], rec[1], rec[2], rec[3], l);
+                uint64_t w16[7];
+                rebuild_r4_lane(pp, l, w16);
+                lc = octo_contrib(l);
+                lwork[lwx(pos, 0)] = ow0_word0(rec[0]);
+                for (int w = 1; w < INW; ++w) lwork[lwx(pos, w)] = w16[w];
+            } else {
+                octo_leaves(rec[0], rec[1], rec[2], rec[3], l);
+                bh3::Elem e;
+                rebuild_r4(pp, l, e);
+                lc = octo_contrib(l);          // the leftContrib round 3 did not store
+                for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+            }
             lleaf[pos*LEAFW + 0] = (uint32_t)lc;
             lleaf[pos*LEAFW + 1] = (uint32_t)(lc >> 32);
         }
@@ -1284,9 +1313,12 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                     // it, so the atomic is not issued at all.
                     // Round 4's 8 B record drops gi with everything else it stopped
                     // needing, and no row is indexed by one there, so the atomic goes.
-                    constexpr bool kNeedGi = (LMODE == LM_USE && OUTSTR == 1)
-                                           ? false
-                                           : (REFS || !(LMODE == LM_RD2 && OUTSTR == 2));
+                    // The w0-checkpoint octo record spends gi's 26 bits on word 0, so it
+                    // goes there too -- unless a reference row still indexes one.
+                    constexpr bool kNeedGi =
+                        (LMODE == LM_USE && OUTSTR == 1)
+                            ? false
+                            : (REFS || !((LMODE == LM_RD2 && OUTSTR == 2) || OW0_EMIT));
                     const uint32_t cgi = kNeedGi ? gi_alloc(gi_counter) : 0u;
                     const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == kAblEmit) {
@@ -1389,8 +1421,15 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         // of 64, in one ST.128 pair.
                         static_assert(SBUILD == 8, "the octo record is the 8-leaf tree");
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
-                        st_em(v + 0, make_ulonglong2(octo_w0(ckey, ctree), octo_w1(ctree)));
-                        st_em(v + 1, make_ulonglong2(octo_w2(ctree), octo_w3(ctree, cgi)));
+                        if constexpr (OW0_EMIT) {
+                            // The w0-checkpoint form: the same two ST.128, carrying the
+                            // child's word 0 in place of the gi and the address key bits.
+                            st_em(v + 0, make_ulonglong2(ow0_w0(c.w[0], ctree), ow0_w1(ctree)));
+                            st_em(v + 1, make_ulonglong2(ow0_w2(ctree), ow0_w3(ctree)));
+                        } else {
+                            st_em(v + 0, make_ulonglong2(octo_w0(ckey, ctree), octo_w1(ctree)));
+                            st_em(v + 1, make_ulonglong2(octo_w2(ctree), octo_w3(ctree, cgi)));
+                        }
                     } else if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
                         // LM_RD3 differs from LM_EMIT only in how it READ its input; what
                         // round 3 writes for round 4 is byte-identical either way.

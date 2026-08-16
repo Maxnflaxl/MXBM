@@ -70,3 +70,5 @@ __pycache__/
 # transcript. The findings go in docs/performance.md; the traces stay local.
 .mclk/
 .mclk.out
+/build-ow0/
+/build-ow0off/

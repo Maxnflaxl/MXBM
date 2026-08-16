@@ -121,15 +121,20 @@ dense caps are on both backends; the other two are CUDA-only:
 
 | CUDA rung | footprint | ms/solve | runs when free VRAM is |
 |---|---|---|---|
-| packed (16,1) | **6.17 GiB** | 33.7 | ≥ 6.2 GiB |
-| packed (16,1) + dense caps | **5.03 GiB** | ~34.4 | ≥ 5.1 |
-| quad (16,1) | 4.76 GiB | 38.4 | ≥ 4.8 |
-| quad (16,1) + dense caps | **4.03 GiB** | ~39 | ≥ 4.1 |
-| quad (15,2) + dense caps | **3.87 GiB** | ~41 | ≥ 3.9 |
-| quad (14,3) + dense caps | **4.03 GiB** | 45.0 | ≥ 4.1 |
-| quad (16,1) + dense caps + octo | **2.04 GiB** | 54.9 | ≥ 2.1 |
-| quad (15,2) + dense caps + octo | **1.95 GiB** | 57.0 | ≥ 2.0 |
-| **quad (14,3) + dense caps + octo** | **1.90 GiB** | 60.6 | ≥ 2.0 — the CUDA floor |
+| packed (16,1) | **6.17 GiB** | 28.8 | ≥ 6.2 GiB |
+| packed (16,1) + dense caps | **5.03 GiB** | 29.8 | ≥ 5.1 |
+| quad (16,1) | 4.76 GiB | 36.1 | ≥ 4.8 |
+| quad (16,1) + dense caps | **4.03 GiB** | 37.2 | ≥ 4.1 |
+| quad (15,2) + dense caps | **3.87 GiB** | 39.6 | ≥ 3.9 |
+| quad (14,3) + dense caps | **3.78 GiB** | 44.8 | ≥ 3.9 |
+| quad (16,1) + dense caps + octo | **2.04 GiB** | 50.9 | ≥ 2.1 |
+| quad (15,2) + dense caps + octo | **1.95 GiB** | 52.9 | ≥ 2.0 |
+| **quad (14,3) + dense caps + octo** | **1.90 GiB** | 57.0 | ≥ 2.0 — the CUDA floor |
+
+The whole column was re-measured in one sitting on 2026-08-16, at 40 s a rung with the
+clocks released, so the rows are comparable with each other and not with the locked-clock
+headline. The octo rows carry the
+[w0 checkpoint](performance-research.md#the-w0-checkpoint-on-the-octo-record-the-mixes-go-and-the-record-does-not-grow).
 
 (The (15,2) and packed-(14,3) rows are still in the list, for the `max_alloc`-bound
 backend; on CUDA a card that fits them fits a faster row first.)

@@ -327,11 +327,11 @@ const Kernel kContract[] = {
     // six work words from eight leaves costs 46 -> 128 registers, which is EXACTLY the
     // limit for 2 blocks/SM, so the round halves its residency as well as its input
     // bytes. That trade is the rung's whole question and it is measured, not assumed.
-    { "r4 octo arena",          true, {6,1,2,8,4,2,0,0,0,1,1}, nullptr,  256,  80, 23744, 88, 3,
+    { "r4 octo arena",          true, {6,1,2,8,4,2,0,0,0,1,1}, nullptr,  256,  80, 23744,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM. Left to itself the "
-      "rebuild takes 128 and 2 blocks; MXBM_MB_OCTO asks for the third and ptxas finds it "
-      "with zero spill" },
-    { "r4 octo mf arena",       true, {6,1,2,8,4,2,0,1,0,1,1}, nullptr,  256,  80, 24376, 88, 3,
+      "rebuild takes 128 and 2 blocks; MXBM_MB_OCTO asks for the third and ptxas finds it. "
+      "Zero spill: with the mix chain gone the lane's live state fits those 80 registers" },
+    { "r4 octo mf arena",       true, {6,1,2,8,4,2,0,1,0,1,1}, nullptr,  256,  80, 24376,  0, 3,
       "+1280 B over its reference-by-gi twin: one u32 per staged element recording the\n      slot it was read from, which is what round 4 names its parents by" },
     // Rounds 1-3 of an octo rung, which write no back-references because rows 1-3 are not
     // allocated there. Resources are identical to their reference-writing twins on every
