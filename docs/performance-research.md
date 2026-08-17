@@ -904,6 +904,34 @@ Each of these was measured and reverted. They are recorded so they are not retri
 
 </details>
 
+### The terminal round's sm = 0 fast path costs 0.022 % on the rung that ships
+<details>
+<summary>Details</summary>
+
+At sm = 0 the terminal round's sub-mask filter admits every element, so the compaction
+atomic has nothing to compact and the staging index is already dense. Taking that path
+costs nothing to write and it is correct — but `submask_bits` is a **kernel argument**,
+not a template parameter, so the test is a runtime predicate, and the shipping rung is
+non-arena **(16,1)** where it is false. The effect is to put the filter's `continue` under
+a branch whose taken side never executes, making a uniform loop divergent for a path the
+card never uses. Confirmed against the ladder: default 28.6 ms, `MXBM_ARENA=1` 29.6 ms.
+
+Measured **+0.0223 % (t = 2.05)** in a position-balanced three-way A/B/C — block order
+`A B C C B A` so each arm averages position 3.5 — at 90 s per window, n = 10 per arm. The
+same run prices the chain-walk unroll beside it at **−0.0064 % (t = −0.67)**, i.e. free, so
+the whole of the pair's regression is this one hunk. Reverted; the unroll stays.
+
+Two things worth keeping. The **static instruction count predicted the wrong sign** — it
+sees one extra uniform branch over ~33.5 M elements and misses the divergence — which is
+the general caution for pricing a control-flow change by counting. And running the filter
+unconditionally does *not* fix it: the test is a tautology at sm = 0 (`submaskCount - 1`
+clears every bit, `mask` is 0) so it is safe, but the stock kernel grows 296 → 304
+instructions. Recovering both sides needs `noMask` as a template parameter and a dispatch
+at each launch site; the benefit that would protect has never been measured at (17,0),
+which is where it lives.
+
+</details>
+
 ### SoA word planes
 <details>
 <summary>Details</summary>
