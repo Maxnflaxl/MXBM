@@ -921,14 +921,19 @@ Measured **+0.0223 % (t = 2.05)** in a position-balanced three-way A/B/C — blo
 same run prices the chain-walk unroll beside it at **−0.0064 % (t = −0.67)**, i.e. free, so
 the whole of the pair's regression is this one hunk. Reverted; the unroll stays.
 
+**And it buys nothing on the rung it was written for.** Measured directly at
+`MXBM_BB=17 MXBM_SM=0`, where the fast path *is* taken: **−0.0090 % (t = −0.61)**, n = 6/7
+at 60 s, both arms at 32.6 ms and 2739–2741 MHz. Deleting 33.5 M single-address shared
+atomics is not worth a tenth of the instrument floor. So this was never a stock-versus-(17,0)
+trade to be recovered by templating `noMask` — it is a cost at stock and a null everywhere
+else, and the 20 lines of template boilerplate would protect nothing.
+
 Two things worth keeping. The **static instruction count predicted the wrong sign** — it
 sees one extra uniform branch over ~33.5 M elements and misses the divergence — which is
-the general caution for pricing a control-flow change by counting. And running the filter
-unconditionally does *not* fix it: the test is a tautology at sm = 0 (`submaskCount - 1`
-clears every bit, `mask` is 0) so it is safe, but the stock kernel grows 296 → 304
-instructions. Recovering both sides needs `noMask` as a template parameter and a dispatch
-at each launch site; the benefit that would protect has never been measured at (17,0),
-which is where it lives.
+the general caution for pricing a control-flow change by counting. And **the atomic was
+never the cost it looked like**: a single-address shared `atomicAdd` taken by every lane
+of a block is aggregated by the hardware, so 33.5 M of them price at zero here. An
+instruction count is not a serialization count.
 
 </details>
 
@@ -1513,7 +1518,7 @@ h=1 section below). No surviving route to this time is known.
 <details>
 <summary>Details</summary>
 
-*(Measured 2026-07-28, `benchmarks/byte_power.sh`. This is the counterpart to the section
+*(Measured 2026-07-28. This is the counterpart to the section
 above and it does not contradict it: the same bytes are cheap in time and expensive in
 power.)*
 
@@ -1633,7 +1638,7 @@ means a structural change and not tuning.
 <details>
 <summary>Details</summary>
 
-*(Measured 2026-07-28, `sudo PL=180 benchmarks/byte_power.sh`. This is the result that
+*(Measured 2026-07-28 at a 180 W cap. This is the result that
 matters, because 180 W is where MXBM actually loses.)*
 
 At stock the clock has almost no room to move and 16 % of the traffic was worth 2.3 % of
@@ -1707,7 +1712,7 @@ way to learn what the cost side is worth.
 <details>
 <summary>Details</summary>
 
-*(`benchmarks/occupancy_cap.sh`, 2026-07-28. Direction predicted correctly, magnitude
+*(Measured 2026-07-28 under a cap. Direction predicted correctly, magnitude
 overestimated 2.5×, and the honest conclusion is to drop it.)*
 
 Every occupancy decision here was tuned at stock, where more resident warps hide more
@@ -2030,7 +2035,7 @@ without ever covering the arithmetic. The cap sweep is below.)*
 <details>
 <summary>Details</summary>
 
-*(`benchmarks/quad_cap.sh`, 2026-07-28. Packed / quad / packed at each cap, so the two
+*(Measured 2026-07-28. Packed / quad / packed at each cap, so the two
 packed runs bracket the quad one and their spread is the drift the delta must beat.)*
 
 | cap | packed | quad | Δ time | Δ clock | drift |
@@ -2522,7 +2527,7 @@ re-baselined per its own RESOURCE DRIFT rule.
 <details>
 <summary>Details</summary>
 
-*(`benchmarks/eco_sweep.sh`, 2026-07-31. The below-160 W inversion said the low-power
+*(Measured 2026-07-31. The below-160 W inversion said the low-power
 currency is core cycles, not bytes — this reprices the two instruction-vs-bytes trades
 at every cap. KAT green and drops 0 at all 28 points.)*
 
