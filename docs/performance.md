@@ -120,18 +120,12 @@ that makes ms/solve the quoted quantity.
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 63.0 | 31.9 | fallback / `--solver opencl` — 2026-08-17, [lineage](performance-research.md#the-w0-checkpoint-reaches-opencl-0745-ms-229--the-same-lever-at-the-same-size); mean of 12 × 20 s interleaved arms, 31.86 ms, range 31.73–31.90. **1.10×** of same-session CUDA (28.90 ms over 200 solves, both stock and unlocked), which read 1.012× on 2026-08-02 |
+| **OpenCL** | 63.0 | 31.9 | fallback / `--solver opencl` |
 | **CUDA** | **69.20**[^drift] | **29.10**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
-The CUDA row: **6 × 120 s** (`benchmarks/headline.sh`, 2026-08-16), **0.0 % spread on
-both columns** — all six runs 29.10 / 69.20 / 4134 solves / 2.01 verified per solve —
-stock 285 W, headless, 240 s warmup discarded, 2610 MHz / 10251 MHz / 275.5 W / 66 °C.
-Pool validation is two pins behind — on the build three kernel changes ago, where it
-matched that pin to the digit: **68.52 sol/s** over 31 minutes, a 15 s median of
-**68.60** against that benchmark's 68.60, with window spreads of σ = 1.09 over 60 s and 2.21
-over 15 s — dispersions of the reading, not uncertainty on the mean, which is the Poisson
-±0.19 over 127,449 solutions.
+The CUDA row is six 120 s runs at stock 285 W, headless, at **0.0 % spread on both
+columns** — [the pin and its lineage](benchmarking.md#the-named-reference-lgc-2600).
 
 [^drift]: Absolute figures carry a ~2.5 % cross-session band ([how far they
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions));
@@ -140,42 +134,43 @@ over 15 s — dispersions of the reading, not uncertainty on the mean, which is 
     (2026-08-02), not this row against that one.
 
 > **Quote ms/solve, and treat sol/s as derived.** `sol/s = solves/s × solutions/solve`,
-> and only the first factor is a property of the solver. The second is a property of
-> BeamHash III — **2.006, pinned over 28,305 solves** (2026-08-14), against a theoretical
-> C(2²⁵,2)/2⁴⁸ = 2 — that a short run estimates noisily rather than wrongly: the standard
-> error of the mean is 0.033 at 1,900 solves and 0.008 at 28,000, so a benchmark of a few
-> thousand moves the headline by about a full sol/s in either direction. Anything quoted
-> here as a speed *change* is an ms/solve comparison for that reason.
+> and only the first factor is a property of the solver — the second belongs to BeamHash
+> III (**2.006**, pinned over 28,305 solves) and a short run estimates it noisily enough
+> to move the headline by a full sol/s. Every speed *change* here is an ms/solve figure.
 
-**Confirmed by live mining**, 2026-08-16: a 31-minute HeroMiners session on the shipping
-binary at stock 285 W, clocks unlocked — a separate measurement from the benchmark,
-through the stratum path on real jobs.
+**Live mining reproduced the pin** — on the build three kernel changes back, and not
+re-run since. A 31-minute HeroMiners session through the stratum path medianed **68.60
+sol/s** over 15 s windows against that build's benchmark 68.60, on a path sharing no code
+with the harness.
+
+<details>
+<summary>That session's windows, and why its σ is not an error bar</summary>
 
 | window | samples | median | mean | σ | min | max |
 |---|---|---|---|---|---|---|
 | 60 s | 31 | **68.52** | 68.52 | **1.09** | 66.4 | 70.5 |
 | 15 s | 125 | **68.60** | 68.52 | 2.21 | 62.5 | 73.2 |
 
-The 15 s median reproduces the benchmark figure exactly and the 60 s one is 0.1 % under
-it, on a path that shares no code with the benchmark harness. Shares ran **92 accepted /
-0 stale / 0 rejected**, and the card held 284–285 W / 2610–2670 MHz / 64–68 °C with the
-memory clock pinned at 10251 by the P-state.
+Stock 285 W, clocks unlocked; 92 shares accepted, 0 stale, 0 rejected; the card held
+284–285 W / 2610–2670 MHz / 64–68 °C with the memory clock pinned at 10251 by the
+P-state. The 60 s median is 0.1 % under the benchmark figure.
 
-The 1.09 is a spread of the reading; this session's mean carries a Poisson ±0.19 over
-127,449 solutions, **2.6× the solution count behind the benchmark row's ±0.3**. The
-progress row keeps its own `1/√N` — a bar belongs to the run behind the row, and this is a
-different measurement rather than more of the same one.
+The 1.09 is a spread of the reading, not uncertainty on the mean — that is the Poisson
+±0.19 over 127,449 solutions. The progress rows keep their own `1/√N`, because a bar
+belongs to the run behind its row and this is a different measurement rather than more of
+the same one.
 
-The CUDA backend is **~31 % past the target** and OpenCL 1.07× short — read
-[the caveats](performance-research.md#the-cuda-backend) before treating the target as
-beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **8.36 →
-6.17 GiB** at the fastest geometry (268 → 197 B/element), and **1.90 GiB** at the CUDA
-floor, which clears BeamHash III's stated 3 GB minimum and the card class behind it.
-**OpenCL floors at the same 1.90 GiB** — a 3 GB card — now that it carries every record
-on the ladder; the octo rungs store one reference row on either backend, so the two floors
-are the same number rather than merely close. They now cost the same *relative* to their
-own top rung, too — 2.00× against CUDA's 1.98× — since the reach rungs' w0 checkpoints
-[ported as well](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records).
+</details>
+
+**Standing:** CUDA is **~31 % past the target**, OpenCL 1.07× short — read
+[the caveats](performance-research.md#the-cuda-backend) before treating it as beaten.
+From **1.8 sol/s** at the start, **31× faster**.
+
+**VRAM for a full search:** 8.36 → **6.17 GiB** at the fastest geometry (268 → 197
+B/element), and **1.90 GiB** at the floor on *both* backends — a 3 GB card, clearing
+BeamHash III's stated 3 GB minimum. The octo rungs that reach it cost 2.00× their own top
+rung on OpenCL against 1.98× on CUDA, now that
+[both carry the w0 checkpoint](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records).
 
 <details>
 <summary>The earlier sessions, and why a peak must never be quoted</summary>
