@@ -138,27 +138,33 @@ columns** — [the pin and its lineage](benchmarking.md#the-named-reference-lgc-
 > III (**2.006**, pinned over 28,305 solves) and a short run estimates it noisily enough
 > to move the headline by a full sol/s. Every speed *change* here is an ms/solve figure.
 
-**Live mining reproduced the pin** — on the build three kernel changes back, and not
-re-run since. A 31-minute HeroMiners session through the stratum path medianed **68.60
-sol/s** over 15 s windows against that build's benchmark 68.60, on a path sharing no code
-with the harness.
+**Live mining reproduced the pin**, on the shipping kernel. A 31-minute HeroMiners
+session medianed **28.74 ms/solve** — 1.2 % under the pin, at stock boost (2655 MHz
+median) against the pin's locked 2600, which is the direction and roughly the size the
+clock difference predicts. **69 shares, 0 stale, 0 rejected** over 38 jobs, on a path
+sharing no code with the harness.
 
 <details>
 <summary>That session's windows, and why its σ is not an error bar</summary>
 
 | window | samples | median | mean | σ | min | max |
 |---|---|---|---|---|---|---|
-| 60 s | 31 | **68.52** | 68.52 | **1.09** | 66.4 | 70.5 |
-| 15 s | 125 | **68.60** | 68.52 | 2.21 | 62.5 | 73.2 |
+| 60 s | 31 | **69.67** | 69.50 | **1.15** | 67.35 | 72.33 |
+| 15 s | 124 | 69.60 | 69.50 | 2.33 | 63.93 | 75.27 |
 
-Stock 285 W, clocks unlocked; 92 shares accepted, 0 stale, 0 rejected; the card held
-284–285 W / 2610–2670 MHz / 64–68 °C with the memory clock pinned at 10251 by the
-P-state. The 60 s median is 0.1 % under the benchmark figure.
+Iteration rate held **34.8 it/s at σ 0.025** — the ms/solve figure, and the one quotable
+column, since the sol/s above carry the run's own 2.002 solutions/solve. Stock 285 W,
+clocks unlocked: 284–285 W / 2640–2670 MHz / 64–66 °C, memory pinned at 10251 by the
+P-state.
 
-The 1.09 is a spread of the reading, not uncertainty on the mean — that is the Poisson
-±0.19 over 127,449 solutions. The progress rows keep their own `1/√N`, because a bar
+The 1.15 is a spread of the reading, not uncertainty on the mean — that is the Poisson
+±0.19 over ~129,600 solutions. The progress rows keep their own `1/√N`, because a bar
 belongs to the run behind its row and this is a different measurement rather than more of
 the same one.
+
+The pool's own sol/s column is **not** a second measurement of the same thing: it
+converges on share count, reading 51.0 after one minute and 72.6 by the last, at a ~12 %
+standard error over 69 shares. It agrees; it cannot corroborate.
 
 </details>
 
