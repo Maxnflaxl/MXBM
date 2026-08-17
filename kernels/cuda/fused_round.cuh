@@ -1172,6 +1172,10 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             const uint32_t head = tab[h];
             if (head == kEmpty || lchain[head] == kEmpty) continue; // empty, or singleton
             uint32_t n = 0, e = head;
+            // FCAP bounds the trip count, so ptxas unrolls this fully; but the chase is
+            // serially dependent -- each address is the previous load -- so the unroll
+            // exposes no ILP and only costs I-cache. Chains here are length one.
+            #pragma unroll 1
             while (e != kEmpty && n < FCAP) { ++n; e = lchain[e]; }
             uint32_t w = atomicAdd(&nmatch, n);
             for (e = head; e != kEmpty && w < FCAP; e = lchain[e]) mlist[w++] = (uint16_t)e;
