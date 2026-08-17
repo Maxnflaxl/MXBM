@@ -184,6 +184,44 @@ Maintenance: re-pin after each kernel-shipping day. Any repeat that moves past �
 The full measured history, including every failed experiment, is in
 [performance-research.md](performance-research.md).
 
+### How small a difference this harness can actually see
+
+One number has been doing three jobs. The ~2.5 % cross-session band is right for a
+*published absolute figure*; it is not the resolution of a *paired* A/B, and using it as
+one retires levers this harness can see perfectly well. Measured directly, stock and
+headless:
+
+| protocol | band |
+|---|---|
+| cross-session absolute | ~2.5 % — unchanged, and still the right caution for a published figure |
+| one 30 s run against another, post-warmup | **0.112 %** (1σ, n = 30) |
+| paired ABBA, 12 arms a side, post-warmup | **0.040 %** |
+| the same, run in **both** arm orderings (48 runs, ~30 min) | resolves **~0.05 %** at t ≈ 4 |
+
+The bottom row is the working protocol. Four things make it work:
+
+- **Count solves over a fixed window.** The printed median has 0.1 ms granularity — 0.35 %,
+  coarser than the effects worth chasing — while ~1045 solves in 30 s resolves 0.1 %. Use
+  the solve *count*, not `sol/s`: the solutions-per-solve multiplier is the algorithm's and
+  only adds variance.
+- **Warm up ~2 minutes.** Drift over the first 15 minutes is **+0.205 %** with
+  `corr(ms, temp) = +0.575`, and nearly all of it is in the first four runs: the count falls
+  1050 → 1045 and then holds 1045 ± 1 for the next twenty-six.
+- **Run both arm orderings and subtract the bias.** ABBA cancels linear drift but *not* the
+  A-slot itself, which reads **+0.024 %** high. With `d1` and `d2` the two orderings,
+  `effect = (d1 − d2)/2` and `bias = (d1 + d2)/2`. A single ABBA measures their sum.
+- **Do not clock-normalise.** Dividing by `A·(f_ref/f) + (1 − A)` was tried and is *worse*:
+  the band goes 0.112 % → 0.298 %. A single mid-run clock sample explains only 14 % of the
+  variance, and with per-second averaging the warm steady-state clock spans just
+  **2650.8–2664.0 MHz (0.5 %)** — the governor wander the correction was built for is not
+  there once the card is hot. A warmup removes the systematic part more cheaply.
+
+**Two builds carry no layout noise**, which is what makes the above usable on real changes.
+Rebuilding identical source gives a binary that is *not* byte-identical — 48 bytes differ,
+scattered across 23.7 MB — but those are the ELF build-id note and the per-cubin UUIDs:
+`cuobjdump --dump-sass` is identical to the digit over 265,242 lines. So the whole
+difference between two builds is the change.
+
 ---
 
 ## 3. The protocol: accepted pool shares
