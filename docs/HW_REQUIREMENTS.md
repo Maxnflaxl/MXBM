@@ -149,35 +149,48 @@ backend; on CUDA a card that fits them fits a faster row first.)
 all five reference rows where CUDA replays three of them away, which is the whole of the
 difference above the octo rungs — and none of it on them, where only one row exists
 either way. Its own times, measured on the reference card at a forced geometry, so they
-are not comparable with the CUDA column above:
+are not comparable with the CUDA column above. The whole column was re-taken in one
+sitting on 2026-08-17, after the [w0
+checkpoint](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records)
+reached the two record boundaries it had not: **nine of the fourteen rungs moved** —
+the six quad rows and the three octo ones — and the four byte-identical rows that did not
+size the sitting's own offset at −0.73 %, which is what makes the column comparable with
+the one before it.
 
 | OpenCL rung | footprint | ms/solve | runs when usable VRAM is |
 |---|---|---|---|
-| packed (16,1) | **6.84 GiB** | 32.1 | ≥ 6.9 GiB |
-| packed (16,1) + dense caps | **5.77 GiB** | 33.1 | ≥ 5.8 |
-| packed (15,2) | 6.62 GiB | 34.8 | ≥ 6.7 |
+| packed (16,1) | **6.84 GiB** | 31.5 | ≥ 6.9 GiB |
+| packed (16,1) + dense caps | **5.77 GiB** | 32.5 | ≥ 5.8 |
+| packed (15,2) | 6.62 GiB | 34.9 | ≥ 6.7 |
 | packed (15,2) + dense caps | — | — | refused: no pack at bb 15, so the pool has nowhere to live |
-| quad (16,1) | 5.02 GiB | 38.7 | ≥ 5.1 |
-| quad (16,1) + dense caps | **4.29 GiB** | 39.7 | ≥ 4.3 |
-| packed (14,3) | 6.24 GiB | 38.4 | only when a single-allocation ceiling binds |
-| quad (15,2) | 4.65 GiB | 40.1 | ≥ 4.7 |
-| quad (15,2) + dense caps | **4.13 GiB** | 41.5 | ≥ 4.2 |
-| quad (14,3) | 4.40 GiB | 43.6 | ≥ 4.5 |
-| quad (14,3) + dense caps | **4.04 GiB** | 45.6 | ≥ 4.1 |
-| quad (16,1) + dense caps + octo | **2.04 GiB** | 61.5 | ≥ 2.1 |
-| quad (15,2) + dense caps + octo | **1.95 GiB** | 63.5 | ≥ 2.0 |
-| **quad (14,3) + dense caps + octo** | **1.90 GiB** | 67.6 | ≥ 2.0 — the OpenCL floor |
+| quad (16,1) | 5.02 GiB | 36.5 | ≥ 5.1 |
+| quad (16,1) + dense caps | **4.29 GiB** | 37.7 | ≥ 4.3 |
+| packed (14,3) | 6.24 GiB | 38.5 | only when a single-allocation ceiling binds |
+| quad (15,2) | 4.65 GiB | 37.8 | ≥ 4.7 |
+| quad (15,2) + dense caps | **4.13 GiB** | 39.5 | ≥ 4.2 |
+| quad (14,3) | 4.40 GiB | 41.4 | ≥ 4.5 |
+| quad (14,3) + dense caps | **4.04 GiB** | 43.7 | ≥ 4.1 |
+| quad (16,1) + dense caps + octo | **2.04 GiB** | 56.5 | ≥ 2.1 |
+| quad (15,2) + dense caps + octo | **1.95 GiB** | 58.7 | ≥ 2.0 |
+| **quad (14,3) + dense caps + octo** | **1.90 GiB** | 63.0 | ≥ 2.0 — the OpenCL floor |
 
 The dense-cap rung is where the ladder's ordering earns itself: at 4.45 GiB a card takes
-quad (16,1) + dense caps at 39.7 ms instead of quad (14,3) at 43.6, so it uses **less**
+quad (16,1) + dense caps at 37.7 ms instead of quad (14,3) at 41.4, so it uses **less**
 memory and runs **8.9 % faster**. An arena rung also turns speculative entry off — that
 set has no pool region — so the delivered cost of the mechanism there is nearer 5 % than
 the 3.6 % an interleaved A/B measures for the caps alone.
 
-The octo rungs cost this backend more than they cost CUDA — 1.9× the top rung against
-CUDA's 1.8× — because OpenCL's round 4 rebuilds from eight leaves without the w0
-checkpoint that deletes CUDA's `apply_mix` calls. It is still ~3× faster than the sort
-path those cards used to fall to.
+One row is out of time order and stays that way: **packed (14,3) at 38.5 ms sits above
+quad (15,2) at 37.8**, because its largest single allocation is 2.76 GiB against 2.90 —
+and a `max_alloc` ceiling that tight is the only way a card reaches the row at all. Before
+the quad record took the w0 checkpoint that row was faster as well as smaller; now only
+smaller.
+
+The octo rungs now cost this backend what they cost CUDA — **2.00× the top rung against
+CUDA's 1.98×** — because round 4's rebuild here carries the same w0 checkpoint, and with
+it none of the fifteen `apply_mix` calls the eight-leaf tree used to run. That is worth
+**−7.3 to −8.7 %** across the three rungs, and it is what closed a gap that was 1.9×
+against 1.8× while only CUDA had the record.
 
 **Two stages, two different numbers, and it matters which one is quoted.** A device is
 *offered* when its TOTAL VRAM clears the floor plus the 640 MiB allowance — 2.53 GiB
@@ -222,7 +235,7 @@ sizes against *free* memory — so the concrete cases are worth naming:
   15.598 GiB where nvidia-smi says 15.99 — and availability holds back 640 MiB of it.
 - **8 GB gains speed when it is also driving a desktop.** Idle and headless it already
   cleared 7.20 GiB on OpenCL and ran (16,1); with a compositor holding ~0.5 GiB it did
-  not, and stepped to (15,2) at 34.8 ms. 6.84 GiB clears that case too, at 32.1.
+  not, and stepped to (15,2) at 34.9 ms. 6.84 GiB clears that case too, at 31.5.
 - **6 GB is unchanged at rest** on either backend: it was already on a dense-cap rung
   through the free-memory path. What it gains is the same desktop fallback the 8 GB row
   gains — one row down rather than two.
@@ -305,8 +318,8 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 
 | | CUDA (default) | OpenCL (fallback) |
 |---|---|---|
-| Throughput | **69.20 sol/s** | 59.4 sol/s |
-| End-to-end solve | **29.10 ms** | 33.5 ms |
+| Throughput | **69.20 sol/s** | 63.2 sol/s |
+| End-to-end solve | **29.10 ms** | 31.8 ms |
 | Board power | 275.5 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
 | Efficiency | **0.228 sol/s/W** stock, **0.275 at 220 W** (its optimum on the stock memory clock), matched but not beaten by **0.276** at 160 W with `--mclk 5001` | — |
 
@@ -315,12 +328,15 @@ singleton-free staging shipped, and the 2026-08-14 rung measurements. Stock effi
 throughput over its own board draw. **The capped figures were not re-measured against
 the new kernel** — under a cap the binding currency is different, so their sign there is
 unknown rather than assumed.
-The OpenCL column is its own 2026-08-02 headline and has not been re-measured since.)*
+The OpenCL column is its own 2026-08-17 measurement, after the implicit-bits record and
+the w0-checkpoint pair record shipped there.)*
 
-The two backends are within **1.012×** of each other, measured in the same session
-(CUDA 33.1 ms, OpenCL 33.5 ms, 2026-08-02). Cross-session figures carry a ~2.5 % band, so
-that is the only comparison that means anything; the column figures above are each
-backend's own controlled headline.
+The two backends are within **1.10×** of each other, measured in the same session at
+released clocks (CUDA 28.9 ms, OpenCL 31.8 ms, 2026-08-17, two 30 s arms each); the same
+pair read 1.012× on 2026-08-02, before CUDA took several records OpenCL still lacks.
+Cross-session figures carry a ~2.5 % band, so the same-session pair is the only comparison
+that means anything; the column figures above are each backend's own controlled headline,
+and the CUDA one is a locked-clock pin while the OpenCL one is not.
 
 The card is power-limited, not thermally limited, in every kernel, so the board power
 limit is the most valuable knob on it: **at 210 W the solver does 63.1 sol/s for 209.7 W,

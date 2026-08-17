@@ -35,9 +35,9 @@ __device__ __forceinline__ uint64_t pair_w1(uint32_t i1, uint32_t gi)  { return 
 // 48 + 25 + 25 + 26 = 124 bits of 128 at IMPB=16, 123 at 17. gi is 26 bits for the same
 // reason it is in r3_p1: a round emits ~2^25 children and kCapacity is 34,603,008.
 //
-// CUDA only -- unlike the records above, this one has no counterpart in lds.cl. The two
-// backends never read each other's buffers, so they may differ here; OpenCL has no
-// implicit-bits pack and so no address bits to spend.
+// lds.cl carries the same layout under LDS_PW0, on the same condition -- the pack is what
+// frees the address bits word 0 is paid for with, and both backends have one. The two
+// never read each other's buffers, so the layouts may diverge; today they do not.
 template<uint32_t IMPB>
 __device__ __forceinline__ uint64_t pw0_w0(uint64_t w0, uint32_t gi) {
     constexpr uint32_t impKB = 24u - IMPB;              // kept key bits
@@ -143,6 +143,7 @@ __device__ __forceinline__ void quad16_leaves(uint64_t w0, uint64_t w1, uint32_t
 //
 // The 16 B quad16 form cannot take it: 24 + 4 x 25 = 124 of 128 leaves no slack, and
 // keeping only the address-implied key bits still needs 150.
+// lds.cl carries the same layout under LDS_QW0, keyed on the same record stride.
 
 // r3 -> r4, OCTO RECORD: 32 B instead of 64. The same argument one round further down --
 // a round-3 output element is a combine of two round-3 inputs, each determined by four
@@ -243,6 +244,7 @@ __device__ __forceinline__ void rebuild_r4(const uint64_t pp[4], const uint32_t 
 // (`out.w[0] = (x[0] >> 24) | (x[1] << 40)`), so the 14 dropped bits are read by nothing.
 // 10 + 40 + 8 x 25 = 250 bits of 256, and the layout is fixed -- no template parameter and
 // no address arithmetic, unlike the r2 -> r3 implicit-bits pack.
+// round.cl carries the same layout under LDS_OW0, where its recovery walk reads it too.
 //   w0 = key low 10 | w0[24..63]<<10 | l0<<50
 //   w1 = l0>>14 | l1<<11 | l2<<36 | l3<<61
 //   w2 = l3>>3  | l4<<22 | l5<<47

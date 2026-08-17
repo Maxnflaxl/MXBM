@@ -1238,7 +1238,9 @@ static PipelineResult run_pipeline_rowbucket(Runtime& rt, PipelineBuffers& pb, c
         // speculating; every other round, and an unspeculated round 4, is unchanged.
         const bool cob = (r == 4) && specOn && spec->seed_next;
         const char* fusedName = "round_fused_lds";
-        if      (r == 1) fusedName = "round_fused_seed";   // re-derives seeds from indices
+        // Round 1's variant differs only in the record it emits: the w0 checkpoint, which
+        // exists exactly where the implicit-bits pack does, since the address bits pay for it.
+        if      (r == 1) fusedName = pb.fb_impb ? "round_fused_seedi" : "round_fused_seed";
         else if (r == 2) fusedName = pb.fb_octo ? "round_fused_rd2q16"
                                    : (pb.fb_quad ? "round_fused_rd2q"
                                    : (pb.fb_impb ? "round_fused_rd2i" : "round_fused_rd2"));
@@ -1482,9 +1484,12 @@ std::vector<std::array<uint8_t,104>> recover_candidates(Runtime& rt, PipelineBuf
 
     // The octo walk is two levels deep instead of five and reads its leaves out of
     // round 3's surviving output, so this program needs the same build option the
-    // pipeline's does -- and the rows it walks are laid out differently.
+    // pipeline's does -- and the rows it walks are laid out differently. It takes
+    // MXBM_CL_OPTS with it because that is where the record's own -D lives: a walk
+    // reading one layout while round 3 writes the other would decode noise.
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)},
-                                        pb.fb_octo ? " -DLDS_OCTO=1" : "");
+                                        std::string(rowbucket_cl_opts())
+                                            + (pb.fb_octo ? " -DLDS_OCTO=1" : ""));
     Kernel k = rt.kernel(prog, "recover");
 
     Mem slotsMem  = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,

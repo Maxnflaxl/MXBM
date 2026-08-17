@@ -349,6 +349,54 @@ inline void oc_leaves(ulong w0, ulong w1, ulong w2, ulong w3, uint l[8]) {
     l[7] = (uint)(w3 >> 7) & RD2_IDXMASK;
 }
 
+// W0-CHECKPOINT OCTO RECORD: the same 32 B carrying the child's post-mix work word 0
+// where the record above carries a key and a gi, so round 4 derives only the linear lane
+// -- every apply_mix in the rebuild and 8 of its 56 siphashes go. It lives here rather
+// than in lds.cl because recover reads it too, and one definition cannot drift.
+// -DLDS_OW0=0 moves the emit, the rebuild and recover back together.
+#ifndef LDS_OW0
+#define LDS_OW0 1
+#endif
+// Word 0's 40 bits are paid for out of two fields carrying less than they cost:
+//   * gi, all 26. Nothing indexes a round-3 element by gi on an octo build -- the rows
+//     that did are not allocated -- and round 4's tiebreak takes the staged slot instead.
+//   * 14 of the 24 key bits. Only the low 24 - bb reach the sub-mask filter, the chain
+//     hash and the spill rescan, and bb + sm = 17 makes that 7 + sm <= 10 on all three
+//     octo rungs. The rest are the bucket address.
+// Round 4's combine reads word 0's bits 24..63 alone, so the dropped key bits are read by
+// nothing. 10 + 40 + 8 x 25 = 250 bits of 256, and no field is a build parameter.
+//   w0 = key low 10 | w0[24..63]<<10 | l0<<50
+//   w1 = l0>>14 | l1<<11 | l2<<36 | l3<<61
+//   w2 = l3>>3  | l4<<22 | l5<<47
+//   w3 = l5>>17 | l6<<8  | l7<<33
+inline ulong ow0_w0(ulong w0, uint l0) {
+    return (w0 & 0x3FFul) | (((w0 >> 24) & 0xFFFFFFFFFFul) << 10) | ((ulong)l0 << 50);
+}
+inline ulong ow0_w1(uint l0, uint l1, uint l2, uint l3) {
+    return ((ulong)l0 >> 14) | ((ulong)l1 << 11) | ((ulong)l2 << 36) | ((ulong)l3 << 61);
+}
+inline ulong ow0_w2(uint l3, uint l4, uint l5) {
+    return ((ulong)l3 >> 3) | ((ulong)l4 << 22) | ((ulong)l5 << 47);
+}
+inline ulong ow0_w3(uint l5, uint l6, uint l7) {
+    return ((ulong)l5 >> 17) | ((ulong)l6 << 8) | ((ulong)l7 << 33);
+}
+inline void ow0_leaves(ulong w0, ulong w1, ulong w2, ulong w3, uint l[8]) {
+    l[0] = (uint)(((w0 >> 50) | (w1 << 14)) & RD2_IDXMASK);
+    l[1] = (uint)(w1 >> 11) & RD2_IDXMASK;
+    l[2] = (uint)(w1 >> 36) & RD2_IDXMASK;
+    l[3] = (uint)(((w1 >> 61) | (w2 << 3)) & RD2_IDXMASK);
+    l[4] = (uint)(w2 >> 22) & RD2_IDXMASK;
+    l[5] = (uint)(((w2 >> 47) | (w3 << 17)) & RD2_IDXMASK);
+    l[6] = (uint)(w3 >> 8) & RD2_IDXMASK;
+    l[7] = (uint)(w3 >> 33) & RD2_IDXMASK;
+}
+// Word 0 as round 4 stages it: the kept key bits where every mode puts them, and bits
+// 24..63 where combine reads them. Bits 10..23 come back zero and nothing consults them.
+inline ulong ow0_word0(ulong r0) {
+    return (r0 & 0x3FFul) | (((r0 >> 10) & 0xFFFFFFFFFFul) << 24);
+}
+
 // recover: one work-item per survivor. Walk the consolidated back-refs from the
 // round-5 survivor (slot in work[0], back-ref at row 4 = (5-1)*capacity) down to
 // round 1 (row 0, whose left/right entries ARE leaf indices), collecting all 32
@@ -377,7 +425,8 @@ __kernel void recover(uint nSurv, __global const uint* surv_slots, uint capacity
             __global const ulong* hset = (sl[j] & LDS_OCTO_HI) ? r3_elem_hi : r3_elem;
             __global const ulong* r = hset + (size_t)(sl[j] & ~LDS_OCTO_HI) * r3_stride;
             uint l[8];
-            oc_leaves(r[0], r[1], r[2], r[3], l);
+            if (LDS_OW0) ow0_leaves(r[0], r[1], r[2], r[3], l);
+            else         oc_leaves (r[0], r[1], r[2], r[3], l);
             for (int t = 0; t < 8 && got < 32u; ++t)
                 out[(size_t)i*32u + got++] = l[t];
         }

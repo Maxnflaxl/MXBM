@@ -115,10 +115,12 @@ that makes ms/solve the quoted quantity.
 | 2026-08-16 | **The reach floor's round 4 stops re-deriving what it can be handed** — round 3's 32 B octo record spends a `gi` nothing indexes and 14 key bits the bucket address already carries on the child's work word 0, which deletes every `apply_mix` in `rebuild_r4` and 8 of its 56 siphashes | — | — | — | −4.39 | **−7.9 %** | [the octo checkpoint](performance-research.md#the-w0-checkpoint-on-the-octo-record-the-mixes-go-and-the-record-does-not-grow) *(a REACH-RUNG row: no shipping kernel changed, so the headline pin is untouched and there is nothing to re-pin. The octo (16,1) rung goes 55.31 → 50.92 ms and the 1.90 GiB floor rung 61.14 → 56.97, both ABBA-interleaved with non-overlapping ranges, at an unchanged 32 B record)* | — |
 | 2026-08-16 | **The same checkpoint on the reach rungs above it** — round 2's 24 B quad record stores the child's work word 0 in the u64 that held its key, since word 0's own low 24 bits *are* that key; the four leaves and `gi` move down into the pack the packed record already uses. `rebuild_r3` loses all 7 `apply_mix` calls and 4 of its 28 siphashes | — | — | — | −1.84 | **−5.1 %** | [the quad checkpoint](performance-research.md#the-w0-checkpoint-on-the-quad-record-the-record-holds-word-0-with-no-repacking) *(a REACH-RUNG row, like the one above: no shipping kernel changed, so the headline pin and the cap table are untouched. Quad (16,1) goes 36.02 → 34.18 ms and the 3.78 GiB quad floor 44.75 → 42.80, both ABBA-interleaved with non-overlapping ranges, at an unchanged 24 B record. Needs neither the implicit-bits pack nor the perfect table, because nothing is dropped to make room)* | — |
 | 2026-08-16 | **OpenCL reaches the same 1.90 GiB floor, and gains the implicit-bits record** — the octo rung's round 4 wrote its reference row three rows past the end of a one-row allocation, and its references named a HALF-LOCAL slot, which means two different records in a split set — and a split set is every card the rung exists for. The implicit-bits record ported with it | — | — | — | −1.12 | **−3.3 %** | [the OpenCL floor](performance-research.md#opencl-reaches-the-same-190-gib-floor-two-bugs-in-the-octo-rung-both-about-addresses) *(an OPENCL row: no CUDA kernel changed, so the headline pin and the cap table are untouched. The ms figure is OpenCL's own (16,1) rung, 33.400 → 32.283 over twelve interleaved arms with non-overlapping ranges; the reach half takes that backend's floor from 4.04 GiB to CUDA's 1.90)* | — |
+| 2026-08-17 | **The w0 checkpoint reaches OpenCL** — round 1 stores the child's post-mix work word 0 in the same 16 B pair record, so round 2 derives the linear lane alone: 12 siphashes and no `apply_mix`, against 14 and three. A port rather than a new lever, and one the implicit-bits pack unlocked the week before by freeing the address bits that pay for word 0 | — | — | — | −0.745 | **−2.3 %** | [the OpenCL checkpoint](performance-research.md#the-w0-checkpoint-reaches-opencl-0745-ms-229--the-same-lever-at-the-same-size) *(an OPENCL row: no CUDA kernel changed, so the headline pin and the cap table are untouched. 32.600 → 31.855 over twelve interleaved arms with non-overlapping ranges; CUDA measured −0.76 ms for the identical change. Confirmed again by a one-sitting ladder re-measurement, where the eleven byte-identical rungs size the session offset at +1.26 % and correct the two changed rungs to −2.19 / −2.46 %)* | — |
+| 2026-08-17 | **And its quad and octo records, which are the bigger half** — round 2's 24 B quad record holds word 0 with no repacking, since word 0's own low 24 bits *are* the key it stored there; round 3's 32 B octo record buys word 0's 40 bits out of a `gi` nothing indexes and 14 key bits the bucket address carries. Rounds 3 and 4 then run the lane alone — 24 and 48 siphashes, and not one of the 22 `apply_mix` calls between them | — | — | — | −2.43 / −5.28 | **−6.3 / −8.6 %** | [the quad and octo ports](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records) *(an OPENCL REACH-RUNG row: no CUDA kernel changed and no shipping OpenCL rung did either, so the headline pin and the cap table are untouched. Quad (16,1) goes 38.933 → 36.500 and octo (16,1) 61.733 → 56.450, six interleaved arms a side each with non-overlapping ranges. CUDA measured −1.84 and −4.39 ms for the identical changes. Confirmed again off the four ladder rungs that did not change, session offset −0.73 %, corrected −6.63 % and −8.72 %. The OpenCL floor goes 68.5 → 63.0 ms)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
-| **OpenCL** | 62.5 | 32.3 | fallback / `--solver opencl` — 2026-08-16, [lineage](performance-research.md#the-implicit-bits-record-on-opencl-and-the-arena-rung-it-unlocks); **1.11×** of same-session CUDA, which read 1.012× on 2026-08-02 |
+| **OpenCL** | 63.0 | 31.9 | fallback / `--solver opencl` — 2026-08-17, [lineage](performance-research.md#the-w0-checkpoint-reaches-opencl-0745-ms-229--the-same-lever-at-the-same-size); mean of 12 × 20 s interleaved arms, 31.86 ms, range 31.73–31.90. **1.10×** of same-session CUDA (28.90 ms over 200 solves, both stock and unlocked), which read 1.012× on 2026-08-02 |
 | **CUDA** | **69.20**[^drift] | **29.10**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
@@ -171,7 +173,9 @@ beaten. Started at **1.8 sol/s** → **31× faster**. VRAM for a full search: **
 floor, which clears BeamHash III's stated 3 GB minimum and the card class behind it.
 **OpenCL floors at the same 1.90 GiB** — a 3 GB card — now that it carries every record
 on the ladder; the octo rungs store one reference row on either backend, so the two floors
-are the same number rather than merely close.
+are the same number rather than merely close. They now cost the same *relative* to their
+own top rung, too — 2.00× against CUDA's 1.98× — since the reach rungs' w0 checkpoints
+[ported as well](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records).
 
 <details>
 <summary>The earlier sessions, and why a peak must never be quoted</summary>
@@ -1075,7 +1079,10 @@ rounds to reclaim.
 `./cuda/profile.sh`, 2026-08-14. The total was 13.51 GB before
 [the pad was removed](performance-research.md#the-round-2-alignment-pad) and 13.00 GB
 after; the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena)
-took it to 12.30 by deleting round 2's side plane. That plane was the last line
+took it to 12.30 by deleting round 2's side plane, and
+[the replay](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib)
+to **10.69** — 1.11 GB of reference rows and 0.54 GB from round 4's record at 8 B instead
+of 16. That plane was the last line
 materially above compulsory — round 2 used to write 72 B of record as 64 + 8 to
 two places, and the +4.1 % it cost was the sector granularity of the split.
 
@@ -1093,9 +1100,9 @@ streaming / in-place layer reuse.
 The sweep settles the *ranking*, not the *margin*. At its own operating point the
 lolMiner spends **4.48 J per solution**; MXBM spends **4.11** at stock and **3.37 at
 220 W**, its optimum. Undercutting it at stock rather than only by capping is new, and
-where the remaining gap to the ideal went is not mysterious: 12.3 GB of
-compulsory traffic per solve. **Traffic, specifically — not the footprint it
-sits in.** Those were treated here as one problem and they are two:
+where the remaining gap to the ideal went is not mysterious: 10.69 GB of
+compulsory traffic per solve, the total measured in the table above. **Traffic,
+specifically — not the footprint it sits in.** Those were treated here as one problem and they are two:
 [the byte-power measurement](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz)
 prices the bytes *moved* at 60 MHz of sustained clock per 16 % of traffic, while
 a smaller peak allocation that moves the same bytes to reused addresses buys

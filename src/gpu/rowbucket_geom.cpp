@@ -59,11 +59,11 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // 38.52, so a footprint-sorted ladder would hand a card the slower rung.
 //
 // One row is deliberately out of time order: packed (14,3) sits ahead of quad (15,2)
-// despite 38.52 against 36.3, because its single allocation is smaller (2.76 GiB against
-// 2.90) and a max_alloc-bound backend can still want it. The times below are CUDA's, and
-// CUDA never reaches that row -- a card with room for its 5.98 GiB takes the 5.03 GiB row
-// above first -- so the order is decided by the backend that does, which is OpenCL, and
-// OpenCL has no w0 checkpoint to widen the gap.
+// despite 38.52 against 36.3, and its only justification is that its single allocation is
+// smaller (2.76 GiB against 2.90), which a max_alloc-bound backend can still need -- and
+// a ceiling that tight is the only way a card reaches the row at all. Both backends now
+// call the row below it faster: the quad record carries the w0 checkpoint, which needs no
+// implicit-bits pack, and that is worth -6.2 % at (15,2) on OpenCL (37.8 against 38.5).
 //
 // An arena row is its neighbour's geometry at a dense cap: same kernels, same record,
 // ~22 % fewer record slots, plus the pool's fixed mechanism cost. Its pool lives behind

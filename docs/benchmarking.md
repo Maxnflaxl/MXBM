@@ -201,7 +201,7 @@ back to back — never concurrently, they would contend for the GPU.
    [overclocking.md](overclocking.md). Identical clocks are not the same thing as a fair
    comparison here, which is why this is a rule and not a preference: **a memory
    overclock does not move two miners by the same amount.** MXBM re-derives where a
-   state-storing design writes every element to DRAM — 12.30 GB a solve against 17.67 —
+   state-storing design writes every element to DRAM — 10.69 GB a solve against 17.67 —
    so 45 % of this solve is memory-bound against nearly all of that one, and the same
    clock is worth more to the miner that stores. A memory-overclocked comparison flatters
    whichever design is closer to its DRAM roofline, and a core-overclocked one flatters

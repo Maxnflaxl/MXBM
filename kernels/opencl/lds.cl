@@ -383,6 +383,43 @@ __kernel void round_collide_lds(uint bucket_bits, uint submask_bits, uint bucket
 #ifndef LDS_IMPB
 #define LDS_IMPB 0
 #endif
+// W0 CHECKPOINT on the r1 -> r2 pair record. Rides LDS_IMPB, because the address bits are
+// what pay for it; off wherever the pack is off. See the pw0_* helpers below.
+#ifndef LDS_PW0
+#define LDS_PW0 1
+#endif
+// One condition, used by round 1's emit AND round 2's staging and expand, so a writer and
+// a reader cannot end up on different layouts. It carries PERFECT because bits 23..8 of a
+// checkpointed word 0 are work bits: a full-key compare would reject true partners, so the
+// chain must come from the rebuilt word 0 -- which is what the perfect table does anyway.
+#define PW0_ON(IMPB, PERFECT) ((LDS_PW0) && (IMPB) && (PERFECT))
+// Positive control: poisons the checkpoint with an ELEMENT-DEPENDENT value at the emit,
+// so a live path must fail the goldens. A constant would cancel through combine's XOR.
+#ifndef LDS_PW0_BREAK
+#define LDS_PW0_BREAK 0
+#endif
+
+// W0 CHECKPOINT on the r2 -> r3 quad record. Unlike the pair one it buys its 40 bits for
+// nothing: word 0's own low 24 bits ARE the key the plain quad record stored there, so it
+// goes in verbatim and the four leaves plus gi fit the other two words with two bits over.
+// Keyed on the record STRIDE, so a writer and a reader cannot end up on different layouts
+// -- and the 16 B form the octo rungs use (stride 2) has no slack and is left alone.
+#ifndef LDS_QW0
+#define LDS_QW0 1
+#endif
+#define QW0_ON(STRIDE) ((LDS_QW0) && (STRIDE) == 3u)
+#ifndef LDS_QW0_BREAK
+#define LDS_QW0_BREAK 0
+#endif
+
+// W0 CHECKPOINT on the r3 -> r4 octo record (layout and payment in round.cl, ow0_w0). It
+// carries PERFECT because only 10 key bits survive the pack: a full-key compare in the
+// walk would reject true partners, so the chain must come from the truncated word 0 --
+// which is what the perfect table already makes it.
+#define OW0_ON(PERFECT) ((LDS_OW0) && (PERFECT))
+#ifndef LDS_OW0_BREAK
+#define LDS_OW0_BREAK 0
+#endif
 #ifndef LDS_ARENA_CAP
 #define LDS_ARENA_CAP 65536u
 #endif
@@ -607,6 +644,40 @@ inline uint  rd2_gi   (ulong w1) { return (uint)(w1 >> 25); }
 inline ulong rd2_w0(uint key, uint li) { return (ulong)key | ((ulong)li << 24); }
 inline ulong rd2_w1(uint ri, uint gi)  { return (ulong)ri  | ((ulong)gi << 25); }
 
+// W0-CHECKPOINT PAIR RECORD (LDS_PW0): the same 16 B, carrying the child's post-mix work
+// word 0 where the record above carries only its 24-bit key. apply_mix writes word 0 alone
+// and combine is XOR-plus-shift, so words 1..6 of a round-2 element are linear in the
+// parents' SEED words 1..6 -- storing word 0 lets round 2 skip both parent mixes, the child
+// mix, and two of the fourteen siphashes. See rd_lane2.
+//
+// Word 0's extra 40 bits come out of the bucket ADDRESS, the same resource the r2 -> r3
+// pack spends: IMPB of the key's 24 bits ARE the bucket index, so word 0 is stored with
+// them removed and the consumer puts them back from its own bucket. The kept low
+// 24 - IMPB key bits stay at the bottom, where the sub-mask filter and the spill rescan
+// read them.
+//   w0 = key low (24-IMPB) | word-0 bits 63..24 | gi bits 25..14
+//   w1 = li | ri<<25 | (gi low 14)<<50
+// 48 + 25 + 25 + 26 = 124 bits of 128 at IMPB=16, 123 at 17.
+inline ulong pw0_w0(ulong w0, uint gi, uint impb) {
+    const uint impKB = 24u - impb;
+    return (w0 & ((1ul << impKB) - 1ul)) | ((w0 >> 24) << impKB)
+         | ((ulong)(gi >> 14) << (64u - impb));
+}
+inline ulong pw0_w1(uint li, uint ri, uint gi) {
+    return (ulong)li | ((ulong)ri << 25) | ((ulong)(gi & 0x3FFFu) << 50);
+}
+// Inverse: word 0 whole again, with the block's own bucket back in the dropped bits.
+inline ulong pw0_word0(ulong r0, uint bucket, uint impb) {
+    const uint impKB = 24u - impb;
+    return (r0 & ((1ul << impKB) - 1ul)) | ((ulong)bucket << impKB)
+         | (((r0 >> impKB) & 0xFFFFFFFFFFul) << 24);
+}
+inline uint pw0_left (ulong r1) { return (uint)(r1)       & RD2_IDXMASK; }
+inline uint pw0_right(ulong r1) { return (uint)(r1 >> 25) & RD2_IDXMASK; }
+inline uint pw0_gi(ulong r0, ulong r1, uint impb) {
+    return (uint)(r1 >> 50) | ((((uint)(r0 >> (64u - impb))) & 0xFFFu) << 14);
+}
+
 // ROUND-2 -> ROUND-3 record, 72 B (9 u64) rather than 80. The `lead` field the generic
 // packed layout puts in `meta` is REDUNDANT here: lead is ctree[0], which is already
 // leaf 0 of the payload. Dropping it leaves 4 leaves (25 bits each) + gi (26) = 126
@@ -651,6 +722,35 @@ inline void rd_elem2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
     t2[0] = li; t2[1] = ri; out[0] = bh3_apply_mix(out, t2, 2u, 424u);
 }
 
+// The LINEAR LANE of the same rebuild: words 1..6 only, from 12 siphashes (k = 1..6 per
+// parent) and the combine's shift-XOR, masked at Lout(1) = 424. Both apply_mix calls above
+// write word 0 alone, and words 1..6 pass through the mix untouched, so this produces
+// exactly what rd_elem2 does for those words. Word 0 is not written -- under LDS_PW0 the
+// caller has already staged the stored checkpoint there.
+inline void rd_lane2(const ulong pp[4], uint li, uint ri, ulong out[7]) {
+    ulong x[7];
+    for (uint k = 1; k < 7u; ++k)
+        x[k] = bh3_siphash24(pp[0], pp[1], pp[2], pp[3], ((ulong)li << 3) + (ulong)k)
+             ^ bh3_siphash24(pp[0], pp[1], pp[2], pp[3], ((ulong)ri << 3) + (ulong)k);
+    for (uint i = 1; i < 6u; ++i) out[i] = (x[i] >> 24) | (x[i + 1] << 40);
+    out[6] = (x[6] >> 24) & ((1ul << 40) - 1ul);       // Lout(1) = 424: word 6 keeps 40 bits
+}
+
+// Words 1..6 of a node from its two children's words 1..6, for the lanes below. combine's
+// word i reads x[i] and x[i+1] alone, so word 0 never enters the lane; the masking is
+// bh3_combine's, term for term.
+inline void rd_combine_hi(const ulong a[7], const ulong b[7], uint Lout, ulong out[7]) {
+    ulong x[7];
+    for (uint i = 1; i < 7u; ++i) x[i] = a[i] ^ b[i];
+    for (uint i = 1; i < 7u; ++i) {
+        ulong v = (x[i] >> 24) | (i < 6u ? (x[i + 1] << 40) : 0ul);
+        uint base = 64u * i;
+        if (base >= Lout)           v = 0ul;
+        else if (Lout - base < 64u) v &= (((ulong)1 << (Lout - base)) - 1);
+        out[i] = v;
+    }
+}
+
 // Rebuild a ROUND-2 OUTPUT element from its four leaves: two rd_elem2 calls, combined at
 // Lout(2)=400 and mixed at Lmix(3)=400. Fourteen siphash rounds against the 48 B it saves
 // reading. Round 3's expand had this inline; the octo rung needs it callable.
@@ -661,6 +761,15 @@ inline void rd_elem3(const ulong pp[4], const uint l[4], ulong out[7]) {
     bh3_combine(a, b, 400u, out);
     uint t4[4] = { l[0], l[1], l[2], l[3] };
     out[0] = bh3_apply_mix(out, t4, 4u, 400u);
+}
+
+// The LINEAR LANE of that rebuild: 24 siphashes and no apply_mix at all, against 28 and
+// seven. Word 0 is not written -- under LDS_QW0 the caller staged the stored checkpoint.
+inline void rd_lane3(const ulong pp[4], const uint l[4], ulong out[7]) {
+    ulong a[7], b[7];
+    rd_lane2(pp, l[0], l[1], a);
+    rd_lane2(pp, l[2], l[3], b);
+    rd_combine_hi(a, b, 400u, out);
 }
 
 // Rebuild a ROUND-3 OUTPUT element from its eight leaves: two rd_elem3 calls, combined at
@@ -675,6 +784,15 @@ inline void rd_elem4(const ulong pp[4], const uint l[8], ulong out[7]) {
     rd_elem3(pp, hi4, b);
     bh3_combine(a, b, 376u, out);
     out[0] = bh3_apply_mix(out, l, 6u, 376u);
+}
+
+// The same lane one level further down: 48 siphashes and none of the fifteen mixes.
+inline void rd_lane4(const ulong pp[4], const uint l[8], ulong out[7]) {
+    ulong a[7], b[7];
+    uint lo4[4] = { l[0], l[1], l[2], l[3] }, hi4[4] = { l[4], l[5], l[6], l[7] };
+    rd_lane3(pp, lo4, a);
+    rd_lane3(pp, hi4, b);
+    rd_combine_hi(a, b, 376u, out);
 }
 
 // The leftContrib round 3 stored: a mix of the eight leaves ALONE over a zero element, so
@@ -856,10 +974,20 @@ void NAME(                                                                      
                 /* Unpack the 16 B pair record. Cheap field extraction only -- the     \
                    two seed derivations are deferred to the expand loop below. */      \
                 if (!(LDS_V2)) rec1 = in_belem[d + 1u];                               \
-                uint li = rd2_left(rec0), ri = rd2_right(rec1);                       \
-                lgi[pos] = rd2_gi(rec1);                                              \
+                if (PW0_ON(IMPB, PERFECT)) {                                          \
+                    /* Word 0 is READ, not derived: stage it here with this group's    \
+                       own bucket back in the dropped key bits, and the expand loop     \
+                       below rebuilds the linear lane alone. */                        \
+                    lwork[pos*(INW) + 0] = pw0_word0(rec0, bucket, (IMPB));           \
+                    lgi[pos] = pw0_gi(rec0, rec1, (IMPB));                            \
+                    lleaf[pos*(LEAFW) + 0] = pw0_left(rec1);                          \
+                    lleaf[pos*(LEAFW) + 1] = pw0_right(rec1);                         \
+                } else {                                                              \
+                    lgi[pos] = rd2_gi(rec1);                                          \
+                    lleaf[pos*(LEAFW) + 0] = rd2_left(rec0);                          \
+                    lleaf[pos*(LEAFW) + 1] = rd2_right(rec1);                         \
+                }                                                                     \
                 if (!(PERFECT)) lkey[pos] = key;                                      \
-                lleaf[pos*(LEAFW) + 0] = li; lleaf[pos*(LEAFW) + 1] = ri;             \
             } else if ((LMODE) == LMODE_RD3 && (INSTR) == 2u) {                       \
                 /* 16 B QUAD record, octo rungs: the same four leaves with the gi      \
                    packed out. Nothing indexes a round-2 element by gi there, and the  \
@@ -877,38 +1005,63 @@ void NAME(                                                                      
                    scalar loads where LMODE_EMIT below reads nine. Field extraction    \
                    only; the two round-2 rebuilds are deferred to the expand loop. */  \
                 ulong w1 = in_belem[d + 1u], w2 = in_belem[d + 2u];                   \
-                lgi[pos] = rd3_gi(w2);                                                 \
                 if (!(PERFECT)) lkey[pos] = key;                                       \
-                lleaf[pos*(LEAFW) + 0] = rd2_left(rec0);                               \
-                lleaf[pos*(LEAFW) + 1] = rd3_i1(w1);                                   \
-                lleaf[pos*(LEAFW) + 2] = rd3_i2(w1);                                   \
-                lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                   \
+                if (QW0_ON(INSTR)) {                                                    \
+                    /* Word 0 is READ, not derived, and stored verbatim -- its own low   \
+                       24 bits are the key, so nothing has to be put back and the        \
+                       filter above read it where it always was. The leaves and gi take  \
+                       the two words the packed r2 record already packs them into. */    \
+                    lwork[pos*(INW) + 0] = rec0;                                         \
+                    lgi[pos] = r3_gi(w2);                                                \
+                    lleaf[pos*(LEAFW) + 0] = r3_l0(w1);                                  \
+                    lleaf[pos*(LEAFW) + 1] = r3_l1(w1);                                  \
+                    lleaf[pos*(LEAFW) + 2] = r3_l2(w1, w2);                              \
+                    lleaf[pos*(LEAFW) + 3] = r3_l3(w2);                                  \
+                } else {                                                                 \
+                    lgi[pos] = rd3_gi(w2);                                               \
+                    lleaf[pos*(LEAFW) + 0] = rd2_left(rec0);                             \
+                    lleaf[pos*(LEAFW) + 1] = rd3_i1(w1);                                 \
+                    lleaf[pos*(LEAFW) + 2] = rd3_i2(w1);                                 \
+                    lleaf[pos*(LEAFW) + 3] = rd3_i3(w2);                                 \
+                }                                                                        \
             } else if ((LMODE) == LMODE_RD4) {                                        \
-                /* 32 B OCTO record: key, eight leaves, gi. Two 16 B loads where the   \
-                   packed round-4 input takes two; the work words, the lead and the    \
-                   leftContrib are all rebuilt in the expand loop from these leaves.   \
-                   lslot is kept because this round's references name parents by slot --  \
-                   half-local, so its top bit carries which half it came from (see        \
-                   LDS_OCTO_HI): a split set gives the same slot number in both. */       \
-                uint l8[8];                                                            \
+                /* 32 B OCTO record: eight leaves, plus either a key and a gi or the    \
+                   child's work word 0 (LDS_OW0). Two 16 B loads; the work words, the   \
+                   lead and the leftContrib are all rebuilt in the expand loop from      \
+                   those leaves. lslot is kept because this round's references name      \
+                   parents by slot -- half-local, so its top bit carries which half it   \
+                   came from (see LDS_OCTO_HI): a split set gives the same slot number   \
+                   in both. */                                                           \
+                uint l8[8]; ulong o1, o2, o3;                                          \
                 if (LDS_V2) {                                                          \
                     __global const ulong2* v = (__global const ulong2*)(in_belem + d); \
                     ulong2 q0 = v[0], q1 = v[1];                                       \
-                    oc_leaves(q0.x, q0.y, q1.x, q1.y, l8);                             \
-                    lgi[pos] = (uint)(q1.y >> 32);                                     \
+                    o1 = q0.y; o2 = q1.x; o3 = q1.y;                                   \
                 } else {                                                               \
-                    ulong w1 = in_belem[d + 1u], w2 = in_belem[d + 2u],                \
-                          w3 = in_belem[d + 3u];                                       \
-                    oc_leaves(rec0, w1, w2, w3, l8);                                   \
-                    lgi[pos] = (uint)(w3 >> 32);                                       \
+                    o1 = in_belem[d + 1u]; o2 = in_belem[d + 2u];                      \
+                    o3 = in_belem[d + 3u];                                             \
                 }                                                                      \
+                if (OW0_ON(PERFECT)) {                                                 \
+                    /* Word 0 is READ: stage it with the address key bits left zero, \
+                       which nothing below reads. The record carries no gi, so the       \
+                       staged SLOT orders the group -- unique within one, same order. */ \
+                    ow0_leaves(rec0, o1, o2, o3, l8);                                   \
+                    lwork[pos*(INW) + 0] = ow0_word0(rec0);                             \
+                    lgi[pos] = (uint)sl_;                                               \
+                } else {                                                                \
+                    oc_leaves(rec0, o1, o2, o3, l8);                                    \
+                    lgi[pos] = (uint)(o3 >> 32);                                        \
+                }                                                                       \
                 lslot[pos] = (uint)sl_ | ((bucket < in_half) ? 0u : LDS_OCTO_HI);       \
                 if (LDS_OCTO_CHECK) {                                                  \
                 /* The record's eight leaves must re-derive the element the record IS:  \
-                   rebuild it and check the key that produces against the stored one. */ \
+                   rebuild it and check that against everything the record stores. */    \
                   ulong pp_[4] = { pp4[0], pp4[1], pp4[2], pp4[3] }; ulong cc_[7];     \
                   rd_elem4(pp_, l8, cc_);                                              \
-                  if ((uint)(cc_[0] & 0xFFFFFFu) != key) atomic_inc(&drops[3]);        \
+                  ulong got = OW0_ON(PERFECT) ? ow0_w0(cc_[0], l8[0])                  \
+                                              : (cc_[0] & 0xFFFFFFul);                 \
+                  ulong want = OW0_ON(PERFECT) ? rec0 : (ulong)key;                    \
+                  if (got != want) atomic_inc(&drops[3]);                              \
                 }                                                                      \
                 if (!(PERFECT)) lkey[pos] = key;                                       \
                 for (uint i = 0; i < 8u; ++i) lleaf[pos*(LEAFW) + i] = l8[i];          \
@@ -1036,8 +1189,16 @@ void NAME(                                                                      
                arithmetic in the sub-mask-filtered staging loop. */                    \
             ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };                         \
             ulong cc[7];                                                              \
-            rd_elem2(pp, lleaf[pos*(LEAFW) + 0], lleaf[pos*(LEAFW) + 1], cc);         \
-            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
+            if (PW0_ON(IMPB, PERFECT)) {                                              \
+                /* Word 0 came out of the record and is already staged, so only the    \
+                   linear lane is derived: 12 siphashes and no mix at all, against 14  \
+                   and three. Words 1..6 are what rd_elem2 would have produced. */     \
+                rd_lane2(pp, lleaf[pos*(LEAFW) + 0], lleaf[pos*(LEAFW) + 1], cc);     \
+                for (uint w = 1; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];        \
+            } else {                                                                  \
+                rd_elem2(pp, lleaf[pos*(LEAFW) + 0], lleaf[pos*(LEAFW) + 1], cc);     \
+                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];        \
+            }                                                                         \
         }                                                                             \
         if (!ABL_HIT(2, LMODE) && (LMODE) == LMODE_RD3) {                                     \
             /* DEFERRED EXPAND, round 3: TWO round-2 rebuilds, combined at Lout(2)=400 \
@@ -1049,12 +1210,20 @@ void NAME(                                                                      
             uint t4[4];                                                                \
             t4[0] = lleaf[pos*(LEAFW) + 0]; t4[1] = lleaf[pos*(LEAFW) + 1];            \
             t4[2] = lleaf[pos*(LEAFW) + 2]; t4[3] = lleaf[pos*(LEAFW) + 3];            \
-            ulong a2[7], b2[7], cc[7];                                                 \
-            rd_elem2(pp, t4[0], t4[1], a2);                                            \
-            rd_elem2(pp, t4[2], t4[3], b2);                                            \
-            bh3_combine(a2, b2, 400u, cc);                                             \
-            cc[0] = bh3_apply_mix(cc, t4, 4u, 400u);                                   \
-            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
+            ulong cc[7];                                                               \
+            if (QW0_ON(INSTR)) {                                                       \
+                /* Word 0 came out of the record and is already staged, so only the     \
+                   linear lane is derived: 24 siphashes and no mix at all. */           \
+                rd_lane3(pp, t4, cc);                                                   \
+                for (uint w = 1; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];         \
+            } else {                                                                   \
+                ulong a2[7], b2[7];                                                     \
+                rd_elem2(pp, t4[0], t4[1], a2);                                         \
+                rd_elem2(pp, t4[2], t4[3], b2);                                         \
+                bh3_combine(a2, b2, 400u, cc);                                          \
+                cc[0] = bh3_apply_mix(cc, t4, 4u, 400u);                                \
+                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];         \
+            }                                                                          \
         }                                                                             \
         if (!ABL_HIT(2, LMODE) && (LMODE) == LMODE_RD4) {                             \
             /* DEFERRED EXPAND, round 4: two round-3 rebuilds, combined at Lout(3)=376 \
@@ -1068,8 +1237,15 @@ void NAME(                                                                      
             uint t8[8];                                                                \
             for (uint i = 0; i < 8u; ++i) t8[i] = lleaf[pos*(LEAFW) + i];             \
             ulong cc[7];                                                               \
-            rd_elem4(pp, t8, cc);                                                      \
-            for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];            \
+            if (OW0_ON(PERFECT)) {                                                     \
+                /* Word 0 came out of the record: 48 siphashes and not one of the       \
+                   fifteen mixes, against 56 and all of them. */                        \
+                rd_lane4(pp, t8, cc);                                                   \
+                for (uint w = 1; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];         \
+            } else {                                                                   \
+                rd_elem4(pp, t8, cc);                                                   \
+                for (uint w = 0; w < (INW); ++w) lwork[pos*(INW) + w] = cc[w];         \
+            }                                                                          \
             ulong lc = oc_contrib(t8);                                                 \
             llead[pos] = t8[0];                                                        \
             lleaf[pos*(LEAFW) + 0] = (uint)lc;                                         \
@@ -1165,8 +1341,11 @@ void NAME(                                                                      
                        atomic_inc beats a computed slot. Do not retry. */              \
                     /* No consumer, no atomic: on an octo build round 2's record has  \
                        no gi field and its reference row is not allocated, so the       \
-                       counter is not touched at all for that round. */                 \
-                    const bool needGi = !(LDS_OCTO) || (LMODE) != LMODE_RD2;           \
+                       counter is not touched at all for that round -- nor for round 3, \
+                       whose record spends its gi on the w0 checkpoint. */              \
+                    const bool needGi = !(LDS_OCTO)                                    \
+                        || ((LMODE) != LMODE_RD2                                       \
+                            && !((OUTSTR) == 4u && OW0_ON(PERFECT)));                  \
                     uint cgi = ABL_HIT(64, LMODE) ? pos                                \
                              : (needGi ? atomic_inc(gi_counter) : 0u);                 \
                     /* One predictable select per child; free (measured 2026-08-01). */ \
@@ -1179,13 +1358,22 @@ void NAME(                                                                      
                            re-derives the work state from these two indices, so the    \
                            work words and the leaf payload need not be stored at all.  \
                            ctree[0]/ctree[1] are the two parent seed indices. */       \
-                        if (LDS_V2)                                                   \
-                            *((__global ulong2*)(out_belem + od)) =                   \
-                                (ulong2)(rd2_w0(ckey, ctree[0]), rd2_w1(ctree[1], cgi)); \
-                        else {                                                        \
-                            out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);              \
-                            out_belem[od + 1u] = rd2_w1(ctree[1], cgi);               \
+                        ulong pr0, pr1;                                               \
+                        if (PW0_ON(IMPB, PERFECT)) {                                  \
+                            /* W0 CHECKPOINT: the child's whole post-mix word 0 rather \
+                               than its key, in the same 16 B -- the IMPB key bits the \
+                               bucket address already carries pay for the other 40. */ \
+                            ulong ck = c[0];                                          \
+                            if (LDS_PW0_BREAK) ck ^= (ulong)(cgi & 0xFFu) << 40;      \
+                            pr0 = pw0_w0(ck, cgi, (IMPB));                            \
+                            pr1 = pw0_w1(ctree[0], ctree[1], cgi);                    \
+                        } else {                                                      \
+                            pr0 = rd2_w0(ckey, ctree[0]);                             \
+                            pr1 = rd2_w1(ctree[1], cgi);                              \
                         }                                                             \
+                        if (LDS_V2)                                                   \
+                            *((__global ulong2*)(out_belem + od)) = (ulong2)(pr0, pr1); \
+                        else { out_belem[od + 0u] = pr0; out_belem[od + 1u] = pr1; }  \
                     } else if ((LMODE) == LMODE_RD2 && (OUTSTR) == 2u) {              \
                         /* QUAD RECORD WITHOUT gi, octo rungs: the same four leaves in \
                            2 u64. cgi is not even allocated for this record -- see the \
@@ -1198,9 +1386,21 @@ void NAME(                                                                      
                            round 3 rebuilds them from these same four leaves. Keyed on \
                            OUTSTR rather than a mode of its own, so r2's staging and    \
                            expand stay byte-identical between the two record formats. */ \
-                        out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);                  \
-                        out_belem[od + 1u] = rd3_w1(ctree[1], ctree[2]);              \
-                        out_belem[od + 2u] = rd3_w2(ctree[3], cgi);                   \
+                        if (QW0_ON(OUTSTR)) {                                         \
+                            /* W0 CHECKPOINT in the slot the key had: word 0's own low \
+                               24 bits ARE that key, so it goes in whole and the leaves \
+                               and gi move into the two words below, 64 + 64 + 62    \
+                               of 192. */                                              \
+                            ulong ck = c[0];                                          \
+                            if (LDS_QW0_BREAK) ck ^= (ulong)(cgi & 0xFFu) << 40;      \
+                            out_belem[od + 0u] = ck;                                  \
+                            out_belem[od + 1u] = r3_p0(ctree[0], ctree[1], ctree[2]); \
+                            out_belem[od + 2u] = r3_p1(ctree[2], ctree[3], cgi);      \
+                        } else {                                                      \
+                            out_belem[od + 0u] = rd2_w0(ckey, ctree[0]);              \
+                            out_belem[od + 1u] = rd3_w1(ctree[1], ctree[2]);          \
+                            out_belem[od + 2u] = rd3_w2(ctree[3], cgi);               \
+                        }                                                             \
                     } else if ((LMODE) == LMODE_RD2 && (IMPB)) {                      \
                         /* IMPLICIT BITS: the top IMPB key bits ARE cb, so word 0 is  \
                            stored as its kept low bits then its bits 63..24, and each \
@@ -1235,15 +1435,28 @@ void NAME(                                                                      
                         side_out[(size_t)cb * outcap_ + cpos] =                \
                             r3_p1(ctree[2], ctree[3], cgi);                           \
                     } else if ((LMODE) == LMODE_RD3 && (OUTSTR) == 4u) {              \
-                        /* OCTO RECORD: the eight leaves that determine this child, its \
-                           key and its gi, in 4 u64 where the packed round-3 output    \
-                           takes 8. The six work words, the lead and the leftContrib   \
-                           are all rebuilt by round 4 from these leaves. */             \
+                        /* OCTO RECORD: the eight leaves that determine this child in 4 \
+                           u64 where the packed round-3 output takes 8. The six work    \
+                           words, the lead and the leftContrib are all rebuilt by round \
+                           4 from those leaves; what rides alongside them is either the \
+                           key and the gi, or -- LDS_OW0 -- the child's work word 0,    \
+                           which deletes every mix in that rebuild. */                  \
                         __global ulong2* v = (__global ulong2*)(out_belem + od);       \
-                        v[0] = (ulong2)(oc_w0(ckey, ctree[0], ctree[1]),               \
-                                        oc_w1(ctree[1], ctree[2], ctree[3], ctree[4])); \
-                        v[1] = (ulong2)(oc_w2(ctree[4], ctree[5], ctree[6]),           \
-                                        oc_w3(ctree[6], ctree[7], cgi));               \
+                        if (OW0_ON(PERFECT)) {                                         \
+                            ulong ck = c[0];                                           \
+                            if (LDS_OW0_BREAK) ck ^= (ulong)(ctree[0] & 0xFFu) << 40;  \
+                            v[0] = (ulong2)(ow0_w0(ck, ctree[0]),                      \
+                                            ow0_w1(ctree[0], ctree[1], ctree[2],       \
+                                                   ctree[3]));                         \
+                            v[1] = (ulong2)(ow0_w2(ctree[3], ctree[4], ctree[5]),      \
+                                            ow0_w3(ctree[5], ctree[6], ctree[7]));     \
+                        } else {                                                       \
+                            v[0] = (ulong2)(oc_w0(ckey, ctree[0], ctree[1]),           \
+                                            oc_w1(ctree[1], ctree[2], ctree[3],        \
+                                                  ctree[4]));                          \
+                            v[1] = (ulong2)(oc_w2(ctree[4], ctree[5], ctree[6]),       \
+                                            oc_w3(ctree[6], ctree[7], cgi));           \
+                        }                                                              \
                     } else if ((LDS_V2) && ((LMODE) == LMODE_EMIT || (LMODE) == LMODE_RD3)) { \
                         __global ulong2* v = (__global ulong2*)(out_belem + od);      \
                         v[0] = (ulong2)(c[0], c[1]);                                  \
@@ -1336,6 +1549,11 @@ FUSED_LDS(round_fused_rd3o,  7, 6, 4, LMODE_RD3, 376u, 6u, 4u, 2u, 8u, 2u, 4u,
 // bit layout differs -- which is why these are their own kernels and not an OUTSTR case.
 // Compiled only where the host chose the format, because the pack shifts by LDS_IMPB.
 #if LDS_IMPB
+// Round 1 joins them for the W0 CHECKPOINT alone -- it reads no packed record and emits
+// the same 16 B. Its IMPB is round 2's, because both sides of the r1/r2 boundary have to
+// drop the same address bits; the host passes one -DLDS_IMPB for the whole program.
+FUSED_LDS_I(round_fused_seedi, 7, 7, 1, LMODE_SEED, 424u, 2u, 1u, 2u, 2u, 1u, 2u,
+          LDS_FCAP_R1, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
 FUSED_LDS_I(round_fused_rd2i, 7, 7, 2, LMODE_RD2, 400u, 4u, 2u, 4u, 4u, 2u, 8u,
           LDS_FCAP, LDS_FTAB, LDS_PERFECT_TAB, LDS_SPILL)
 FUSED_LDS_I(round_fused_7_6i, 7, 6, 4, LMODE_EMIT, 376u, 6u, 4u, 2u, 8u, 8u, 8u,

@@ -523,6 +523,24 @@ if(OpenCL_FOUND)
   add_test(NAME gpu_solver_noimpb COMMAND test_gpu_solver)
   set_tests_properties(gpu_solver_noimpb PROPERTIES TIMEOUT 1800
     ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_NO_IMPB=1")
+  # The pair record WITHOUT the w0 checkpoint. Round 1 writes it and round 2 reads it, so
+  # the two can only be gated together -- one build option turns off both sides at once.
+  add_test(NAME gpu_solver_nopw0 COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_nopw0 PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_CL_OPTS=-DLDS_PW0=0")
+  # The 24 B quad record, which only a card too small for the packed one selects, so no
+  # gate above reaches it -- and the same record without its w0 checkpoint.
+  add_test(NAME gpu_solver_quad COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_quad PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_QUAD=1")
+  add_test(NAME gpu_solver_noqw0 COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_noqw0 PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_QUAD=1;MXBM_CL_OPTS=-DLDS_QW0=0")
+  # The octo record without its w0 checkpoint. recover reads that record too, so the
+  # option has to reach three places at once; one -D is what makes that possible.
+  add_test(NAME gpu_solver_noow0 COMMAND test_gpu_solver)
+  set_tests_properties(gpu_solver_noow0 PROPERTIES TIMEOUT 1800
+    ENVIRONMENT "MXBM_ROWBUCKET=1;MXBM_OCTO=1;MXBM_QUAD=1;MXBM_ARENA=1;MXBM_CL_OPTS=-DLDS_OW0=0")
   # And the packed arena rung, which the pack makes legal by deleting the side plane
   # the pool had nowhere to live behind.
   add_test(NAME gpu_solver_arena COMMAND test_gpu_solver)
@@ -543,7 +561,7 @@ if(OpenCL_FOUND)
                          gpu_rounds_rowbucket gpu_solver_rowbucket
                          gpu_recover_rowbucket
                          gpu_solver_octo gpu_solver_octo_split
-                         gpu_solver_noimpb gpu_solver_arena
+                         gpu_solver_noimpb gpu_solver_nopw0 gpu_solver_arena
                          PROPERTIES DISABLED TRUE)
     message(STATUS "macOS: OpenCL LDS/row-bucket gates disabled "
                    "(Apple's OpenCL cannot build those kernels); Metal covers the "
