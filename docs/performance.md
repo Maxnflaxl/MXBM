@@ -868,7 +868,7 @@ The original "2.7× our lever" estimate divided a whole-solve clock deficit by a
 measured on a `MXBM_ROUND_REPS=2:24` replay timeline, priced against a denominator nobody
 had measured. Both terms were wrong, both optimistically.
 
-**The denominator.** `benchmarks/abl_bytes.sh` shows ablating round 2's payload removes
+**The denominator.** Ablating round 2's payload removes
 **1.47 GB**, not the 2.09 GB the derivation gave — that figure scaled round 2's
 *compulsory* write and charged the ablation with 268 MB of back-refs it never touches. Two
 mechanism questions closed with it: a 16 B store costs a full **32 B sector** (805 MB
@@ -932,7 +932,7 @@ looked like free bandwidth for a pipeline at 76–80 % of DRAM peak in rounds 3 
 `nvidia-smi -lmc 10501,10501` **applies at idle and is dropped the moment the workload
 runs** — six bracketed arms at stock all reported 10251 under load with
 `sw_power_cap` active, and the rung is still not taken at a 366 W cap where the cap does
-not bind. `benchmarks/mclk_rung.sh` reproduces this; its `MEM_MHz` column exists precisely
+not bind. The sweep recorded the achieved memory clock beside every point, precisely
 so the null cannot be mistaken for a measurement of the rung. What was measured is that
 the lever cannot be applied, not that it does not pay.
 

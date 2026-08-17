@@ -85,7 +85,7 @@ runs, which is a wrong number rather than a noisy one — and the arms are far e
 apart that the check is only ever asked while the miner itself is off the card.
 
 **The clock scripts carry the same guard, and need it more.** `benchmarks/oc_guard.sh`
-gives `mem_clock_ab.sh` and `mem_offset_sweep.sh` the same between-arm refusal, because a
+gives `mem_offset_sweep.sh` and `mem_offset_ab.sh` the same between-arm refusal, because a
 clock knob is **device-global**: a second process on the card does not merely take a share
 of the solves, it runs at the arm's clocks while doing so, so the arm measures two things
 at once. Its other half is the clock reading — `--query-gpu=clocks.mem` after a run
@@ -198,7 +198,16 @@ headless:
 | paired ABBA, 12 arms a side, post-warmup | **0.040 %** |
 | the same, run in **both** arm orderings (48 runs, ~30 min) | resolves **~0.05 %** at t ≈ 4 |
 
-The bottom row is the working protocol. Four things make it work:
+The bottom row is the working protocol, and `benchmarks/paired_ab.sh` is it:
+
+```sh
+benchmarks/paired_ab.sh old_binary new_binary        # ~25 min, resolves ~0.05 %
+SECS=90 BLOCKS=4 benchmarks/paired_ab.sh a b         # finer, slower
+ENV="MXBM_BB=17 MXBM_SM=0" benchmarks/paired_ab.sh a b   # on another rung
+sudo -v && CAP=120 benchmarks/paired_ab.sh a b       # under a power cap
+```
+
+Four things make it work:
 
 - **Count solves over a fixed window.** The printed median has 0.1 ms granularity — 0.35 %,
   coarser than the effects worth chasing — while ~1045 solves in 30 s resolves 0.1 %. Use
