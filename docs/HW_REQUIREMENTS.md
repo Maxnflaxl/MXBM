@@ -95,8 +95,11 @@ The row that matters is the third. **quad (16,1) is both smaller and faster than
 (14,3)** — 5.02 GiB at 38.4 ms against 6.24 at 40.0 — because a coarser geometry pays in
 scatter locality what the quad record pays in re-derivation arithmetic, and the arithmetic
 is cheaper. A ladder sorted by footprint would hand those cards the slower rung. packed
-(14,3) is kept below it only because its *single* allocation is smaller (2.76 GiB against
-2.90), which a `max_alloc`-bound backend can still need.
+(14,3) sits below it on a *single*-allocation argument — 2.76 GiB against 2.90 — but that
+argument does not survive the next row down: **quad (16,1) + dense caps is smaller on both
+axes** (4.29 GiB total, 2.37 single) and faster, so no card that fails it can pass packed
+(14,3). The row is unreachable wherever quad rungs are allowed, and exists for a backend
+where they are not.
 
 **Three mechanisms narrow every row of that table and add a row between each pair**, and
 all three are on both backends:
@@ -142,8 +145,8 @@ derives only the linear lane below it and runs no `apply_mix` at all. The quad r
 it on round 3's input; the octo rows on round 4's, since the 16 B round-2 record they read
 instead has no slack to put word 0 in.
 
-(The (15,2) and packed-(14,3) rows are still in the list, for the `max_alloc`-bound
-backend; on CUDA a card that fits them fits a faster row first.)
+(The (15,2) and packed-(14,3) rows are still in the list for a backend without the quad
+record; with it, a card that fits them fits a smaller and faster row first.)
 
 **OpenCL now runs every record on the ladder**, and so reaches the same floor. It stores
 all five reference rows where CUDA replays three of them away, which is the whole of the
@@ -180,11 +183,10 @@ memory and runs **8.9 % faster**. An arena rung also turns speculative entry off
 set has no pool region — so the delivered cost of the mechanism there is nearer 5 % than
 the 3.6 % an interleaved A/B measures for the caps alone.
 
-One row is out of time order and stays that way: **packed (14,3) at 38.5 ms sits above
-quad (15,2) at 37.8**, because its largest single allocation is 2.76 GiB against 2.90 —
-and a `max_alloc` ceiling that tight is the only way a card reaches the row at all. Before
-the quad record took the w0 checkpoint that row was faster as well as smaller; now only
-smaller.
+packed (14,3) at 38.5 ms sits above quad (15,2) at 37.8 and is **unreachable on this
+backend**: quad (16,1) + dense caps, the row above it, is smaller on total *and* on the
+single allocation *and* faster, so nothing can fail that row and reach this one. It is
+there for a backend without the quad record.
 
 The octo rungs now cost this backend what they cost CUDA — **2.00× the top rung against
 CUDA's 1.98×** — because round 4's rebuild here carries the same w0 checkpoint, and with

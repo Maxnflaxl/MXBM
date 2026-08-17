@@ -382,6 +382,44 @@ int main() {
         check(!pick(3.70 - 0.625, true).viable, "a 4 GB card does not");
     }
 
+    section("packed (14,3) is dominated, and that is why its position does not matter");
+    {
+        // The row sits out of time order on a single-allocation argument. That argument
+        // compares it against quad (16,1) and skips the row BETWEEN them -- quad (16,1) +
+        // dense caps, which beats it on total AND on the single allocation AND on time.
+        // So no card can fail that row and reach this one, on either backend, split or
+        // not: the position is unreachable rather than deliberate, and re-ordering it
+        // against quad (15,2) would change nothing. Delete this check only alongside a
+        // measurement, not alongside a re-ordering.
+        const uint32_t cap = kRbCapacity;
+        auto bytes = [&](uint32_t bb, bool quad, bool arena, bool replay,
+                         size_t& total, size_t& single, size_t& split) {
+            rowbucket_bytes(cap, bb, total, single, quad,
+                            rb_impb_ok(bb, 17u - bb, quad), arena, false, replay);
+            split = rowbucket_single_split(cap, bb, quad,
+                            rb_impb_ok(bb, 17u - bb, quad), arena, false, replay);
+            if (split > single) split = single;
+        };
+        for (int rp = 0; rp < 2; ++rp) {
+            size_t pt, ps, px, qt, qs, qx;
+            bytes(14u, /*quad=*/false, /*arena=*/false, rp != 0, pt, ps, px);  // packed (14,3)
+            bytes(16u, /*quad=*/true,  /*arena=*/true,  rp != 0, qt, qs, qx);  // quad (16,1)+dense
+            check(qt < pt,  "quad (16,1) + dense caps is smaller in total than packed (14,3)");
+            check(qs < ps,  "...and in the unsplit single allocation");
+            check(qx < px,  "...and in the split one, so it fits wherever packed (14,3) does");
+        }
+        // And it is still in the ladder, above quad (15,2), because a backend without the
+        // quad record (Metal) has no other (14,3) row to fall to.
+        int n = 0; const RbRung* r = rb_rungs(n);
+        int ip = -1, iq = -1;
+        for (int i = 0; i < n; ++i) {
+            if (r[i].bb == 14u && !r[i].quad && !r[i].arena && !r[i].octo) ip = i;
+            if (r[i].bb == 15u &&  r[i].quad && !r[i].arena && !r[i].octo) iq = i;
+        }
+        check(ip >= 0 && iq >= 0 && ip < iq,
+              "packed (14,3) is present and still above quad (15,2)");
+    }
+
     section("the octo record and the floor it reaches");
     {
         // Round 3's output is 96 % information-dense as stored -- 376 work bits + 25 lead

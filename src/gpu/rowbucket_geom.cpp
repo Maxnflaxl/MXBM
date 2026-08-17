@@ -58,12 +58,14 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // (16,1) at 4.76 GiB / 34.1 ms is both smaller and faster than packed (14,3) at 5.98 /
 // 38.52, so a footprint-sorted ladder would hand a card the slower rung.
 //
-// One row is deliberately out of time order: packed (14,3) sits ahead of quad (15,2)
-// despite 38.52 against 36.3, and its only justification is that its single allocation is
-// smaller (2.76 GiB against 2.90), which a max_alloc-bound backend can still need -- and
-// a ceiling that tight is the only way a card reaches the row at all. Both backends now
-// call the row below it faster: the quad record carries the w0 checkpoint, which needs no
-// implicit-bits pack, and that is worth -6.2 % at (15,2) on OpenCL (37.8 against 38.5).
+// packed (14,3) is out of time order and is also UNREACHABLE wherever quad rungs are
+// allowed: quad (16,1) + dense caps, the row directly above it, is smaller on total
+// (4.29 against 6.24 GiB), smaller on the single allocation (2.37 against 2.76, or 1.18
+// against 1.38 split) and faster on both backends, so no card can fail that row and pass
+// this one. It survives for allow_quad = false -- Metal -- where it is the smallest
+// packed rung; Metal passes no max_alloc, so the ceiling argument never applies there
+// either. Kept rather than deleted because a backend without the quad record still needs
+// a (14,3) row. Pinned by test_rowbucket_geom.
 //
 // An arena row is its neighbour's geometry at a dense cap: same kernels, same record,
 // ~22 % fewer record slots, plus the pool's fixed mechanism cost. Its pool lives behind
@@ -83,7 +85,7 @@ const RbRung* rb_rungs(int& n) {
         { 15u, 2u, false, true,  false },   // 5.56
         { 16u, 1u, true,  false, false },   // 4.76      34.1
         { 16u, 1u, true,  true,  false },   // 4.03      35.0
-        { 14u, 3u, false, false, false },   // 5.98      38.52  -- for max_alloc-bound backends
+        { 14u, 3u, false, false, false },   // 5.98      38.52  -- reached only without quad
         { 15u, 2u, true,  false, false },   // 4.39      36.3
         { 15u, 2u, true,  true,  false },   // 3.87      37.6
         { 14u, 3u, true,  false, false },   // 4.15      41.2
