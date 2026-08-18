@@ -89,6 +89,7 @@ re-hashes the commit and the citation dangles, which has already happened here.
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
+| 2026-08-18 | **29.10** | 265.0 W | nothing at stock — the [speculative-entry gate](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them) changes behavior only below 220 W, and the devfee work touches no kernel. Six runs, **0.0 % spread on both columns**, reproducing the 2026-08-16 pin to the digit; draw 10.5 W below it at identical clocks and work, a rig-day difference per the 08-14 precedent |
 | 2026-08-16 | **29.10** | 275.5 W | the packed `tab` word ([ledger](performance-research.md#the-census-and-the-chain-share-one-tab-word-and-a-barrier-goes-with-it)) — **69.00 → 69.20 sol/s**. −0.060 ms is under the print resolution; the finer `solves/s` line reads 34.33 → 34.44, i.e. −0.094 ms, agreeing with the interleaved −0.060. First pin with 0.0 % spread on both columns |
 | 2026-08-16 | **29.10** | 277.0 W | the block-exit barrier, then singleton-free staging ([barrier](performance-research.md#the-block-exit-barrier-is-removable-and-the-barrier-family-is-over-priced-10x), [singletons](performance-research.md#singleton-free-staging-the-prize-is-085-ms-and-the-prepass-that-finds-it-costs-076)) — **−0.20 ms, 68.60 → 69.00**. Covers two changes; separable only in the interleaved A/Bs (−0.048 and −0.089, summing to −0.137) |
 | 2026-08-15 | **29.30** | 271.1 W | the reference rows came out ([ledger](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib)) — **−2.00 ms, 64.20 → 68.60**, against −2.029 measured ABBA. Verified solutions/solve 2.01, unchanged |
@@ -119,6 +120,7 @@ retires levers this rig can see. Measured directly:
 | protocol | band |
 |---|---|
 | cross-session absolute | ~2.5 % — still the right caution for a published figure |
+| cross-session absolute, under a cap | **cap-dependent, up to ~5 % at 100–120 W** — three instances, both signs; shrinks toward the stock band above ~220 W |
 | one 30 s run against another, post-warmup | **0.112 %** (1σ, n = 30) |
 | paired ABBA, 12 arms a side | **0.040 %** |
 | both arm orderings (48 runs, ~30 min) | resolves **~0.05 %** at t ≈ 4 |
@@ -203,7 +205,14 @@ one for any single number in it. One column read 4–6 % low below 220 W and did
 reproduce on the same binary and script hours later; five explanations were priced and sum
 to ~0.8 % of a 5.5 % gap ([write-up](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it)).
 So: reproduce at least one cap with an interleaved A/B before publishing, and **never treat
-a difference between two sweeps as evidence about a kernel change.**
+a difference between two sweeps as evidence about a kernel change.** A third instance
+(2026-08-18) read *high* — +0.3 % at 285 W rising to +5.2 % at 100 W on binaries a
+three-cap bracket showed performance-identical — so the term is cap-dependent, runs in
+both directions, and reaches ~5 % at the low caps. Two corollaries: quote the
+cap-dependent row of the table in §3 for any capped absolute, and **a head-to-head cap
+table must come from one session** — a column of ours against a column of theirs taken
+weeks apart inherits the whole term at exactly the caps where the margins are a few
+percent.
 
 ---
 

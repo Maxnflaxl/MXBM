@@ -14,25 +14,26 @@ auditable alternative to the closed-source miners in the ecosystem.
 > (31.9 ms, 2026-08-17, 1.10× of the same-session CUDA).
 >
 > **Where MXBM wins, and where it does not.** Both miners were swept against each other
-> at identical board power limits, interleaved in one session — the only way the
-> comparison means anything ([the numbers](docs/performance.md#both-miners-under-the-same-cap)):
+> at identical board power limits, interleaved in one session (2026-08-18) — the only
+> way the comparison means anything ([the numbers](docs/performance.md#both-miners-under-the-same-cap)):
 >
 > | board cap | MXBM | lolMiner 1.98a | |
 > |---|---|---|---|
-> | 180 W | 52.1 sol/s · 0.290 sol/s/W | **52.4 sol/s · 0.291 sol/s/W** | level, lolMiner by 0.5 % |
-> | 210 W | **63.1 sol/s · 0.301 sol/s/W** | 53.9 sol/s · 0.257 sol/s/W | MXBM ahead on both |
-> | 285 W | **69.6 sol/s · 0.245 sol/s/W** | 53.7 sol/s · 0.226 sol/s/W | MXBM ahead on both |
+> | 180 W | **54.0 sol/s · 0.300 sol/s/W** | 53.3 sol/s · 0.296 sol/s/W | MXBM ahead on both |
+> | 210 W | **64.9 sol/s · 0.309 sol/s/W** | 54.2 sol/s · 0.259 sol/s/W | MXBM ahead on both |
+> | 285 W | **70.0 sol/s · 0.246 sol/s/W** | 53.8 sol/s · 0.229 sol/s/W | MXBM ahead on both |
 >
-> **MXBM has the higher ceiling — 69.6 sol/s against ~54.0, which lolMiner cannot reach
-> at any setting — and it leads on both speed and efficiency from roughly 181 W to the
-> 285 W stock limit.** (lolMiner's column is the 2026-07-30 sweep; MXBM's was swept end
-> to end 2026-08-16.)
-> Below that window lolMiner is still ahead, and its best cap is 140 W at +8 %, but the
-> gap narrows again toward the floor and is **gone by 100 W**, where the two are level;
-> closing the middle of that band is
-> [the current priority](docs/performance.md#why-we-lose-the-low-end-watts-buy-us-less-clock).
-> The two miners' best efficiency points are now level — 0.3009 sol/s/W at 210 W against
-> 0.2991 at 175 — and there MXBM does 21 % more work.
+> **MXBM has the higher ceiling — 70.0 sol/s against ~54.4, which lolMiner cannot reach
+> at any setting — and it leads on both speed and efficiency from roughly 177 W to the
+> 285 W stock limit.** In the band below that lolMiner is ahead on stock memory, at
+> worst by 7.5 % at 160 W, shrinking to 0.4 % by 175 W. At each miner's best
+> configuration — both ride the 5001 MHz memory rung where it pays — the band splits:
+> lolMiner by 2–3 % at 100–110 W, where its rung refund is larger, then its
+> store-everything design hits its bandwidth roofline and MXBM leads by **8.5 % at
+> 120 W** and **3.5 % at 140 W**, level at 160–175
+> ([the low band](docs/performance.md#the-low-band-on-the-current-kernel)).
+> The best efficiency points are level — 3.22–3.23 J/solution (rung 160 W / stock
+> 210 W) against lolMiner's 3.21 — and at its point MXBM does 30 % more work.
 >
 > **`--pl 210` is the setting to use.** Needs root; restored on exit. See
 > [usage.md](docs/usage.md#power-limit).
@@ -138,7 +139,7 @@ In rough priority order:
 
 | Next | What it delivers |
 |------|------------------|
-| **Efficiency at low power** | lolMiner did ~2.3× more useful work per core cycle under a cap, because it stores state where MXBM re-derives it and [under a cap the currency is instructions issued](docs/performance.md#-below-150-w-the-clock-gap-inverts-and-the-clock-explanation-stops-applying). That is now **1.4–1.7×**, and the throughput gap on stock memory is **−2 to −11 % across 100–160 W**, from −20 to −30 %. With each miner on its own best memory clock the band is no longer a deficit at all: MXBM leads at 120 and 140 W, ties at 160, and trails 5.7 % only at the 100 W floor. Two levers did most of it, both by deleting instructions rather than bytes: the [w0-checkpoint record](docs/performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits-076-ms-24-) and the [replayed reference rows](docs/performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) — each worth more under a cap than at stock. The obvious counter-design was built and measured dead: a [storing round 1 pays back in scattered L2 sectors exactly what the saved rebuild wins](docs/performance-research.md#the-h1-pipeline-built-and-killed-the-caps-currency-is-l2-sectors-not-dram-bytes). What remains is the issue economy itself |
+| **Efficiency at low power** | lolMiner did ~2.3× more useful work per core cycle under a cap, because it stores state where MXBM re-derives it and [under a cap the currency is instructions issued](docs/performance.md#-below-150-w-the-clock-gap-inverts-and-the-clock-explanation-stops-applying). That is now **1.4–1.7×**, and the stock-memory band reads **+3 % at the 100 W floor to −7.5 % at its 160 W worst** (one interleaved session, 2026-08-18), from −20 to −30 % at the start. With each miner on its own best memory clock the residual is two strips — 2–3 % at 100–110 W (lolMiner's rung refund is larger at the floor) and under 1 % at 155–177 W — with MXBM ahead **+8.5 % at 120 W** and **+3.5 % at 140 W** between them. A third lever joined the two below: [speculative entry's gate moved to its measured crossovers](docs/performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them) — its co-blocks cost 1–1.75 % everywhere the cap starves the core, and the crossover follows the memory clock. Two levers did most of it, both by deleting instructions rather than bytes: the [w0-checkpoint record](docs/performance-research.md#the-w0-checkpoint-pair-record-repriced-by-the-address-bits-076-ms-24-) and the [replayed reference rows](docs/performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) — each worth more under a cap than at stock. The obvious counter-design was built and measured dead: a [storing round 1 pays back in scattered L2 sectors exactly what the saved rebuild wins](docs/performance-research.md#the-h1-pipeline-built-and-killed-the-caps-currency-is-l2-sectors-not-dram-bytes). What remains is the issue economy itself |
 | **Smaller footprint** | **Done for now: a 1.90 GiB floor on both backends against a 3 GB design target** ([HW_REQUIREMENTS.md](docs/HW_REQUIREMENTS.md)) — the target and the card class behind it both cleared, from 2.4× over at the start. The [24 B quad record](docs/performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation), the implicit-bits record, the [dense-cap rungs](docs/performance-research.md#the-reach-composition-built-the-implicit-bits-reclaim-and-the-arena-as-a-rung) and the [32 B octo record](docs/performance-research.md#the-octo-record-the-last-thing-round-3s-output-had-left-to-give) got it there, and every rung below the packed ones then got **4–9 % faster at no footprint cost, on both backends** when its record started carrying [the child's word 0](docs/performance-research.md#the-w0-checkpoint-on-the-quad-record-the-record-holds-word-0-with-no-repacking), which deletes every `apply_mix` in the rebuild that reads it. Above the octo rungs, [recovery replays rounds 3 and 4](docs/performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) instead of storing a reference row per child, which takes the default rung to 6.17 GiB. **OpenCL floors at the same 1.90 GiB** — it stores all five rows above the octo rungs, and on them there is only one row to store |
 | **HIP backend (AMD)** | Not started. Both solvers are measured on NVIDIA only; AMD is untested |
 | **Per-GPU verification** | A two-card rig (3060 Ti + 4070 SUPER) ran [21 minutes on a pool](docs/performance.md#third-party-hardware--a-two-card-rig-2026-08-02), 42 shares, 42 accepted, and found two defects in per-card power control that are now fixed. Both cards chose CUDA, so the case the join exists for — two *different* backends live in one process — is still unexercised, as is the skip path on a card no backend can drive |

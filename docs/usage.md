@@ -572,9 +572,9 @@ power. Going below 220 W makes things *worse* on both counts, because by then th
 clock has fallen far enough that the parts of the board which do not scale with it are
 being paid for out of less work.
 
-**210 W is both MXBM's own efficiency peak and comfortably inside the window where it
-beats the alternative**; the crossing where lolMiner takes over on speed and efficiency
-is at ~181 W. The full curve, and both miners
+**200–210 W is both MXBM's own efficiency shelf and comfortably inside the window where
+it beats the alternative**; the crossing where lolMiner takes over on speed and
+efficiency is at ~177 W. The full curve, and both miners
 swept against each other at the same caps, is in
 [performance.md](performance.md#both-miners-under-the-same-cap).
 

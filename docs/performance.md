@@ -117,6 +117,7 @@ that makes ms/solve the quoted quantity.
 | 2026-08-16 | **OpenCL reaches the same 1.90 GiB floor, and gains the implicit-bits record** — the octo rung's round 4 wrote its reference row three rows past the end of a one-row allocation, and its references named a HALF-LOCAL slot, which means two different records in a split set — and a split set is every card the rung exists for. The implicit-bits record ported with it | — | — | — | −1.12 | **−3.3 %** | [the OpenCL floor](performance-research.md#opencl-reaches-the-same-190-gib-floor-two-bugs-in-the-octo-rung-both-about-addresses) *(an OPENCL row: no CUDA kernel changed, so the headline pin and the cap table are untouched. The ms figure is OpenCL's own (16,1) rung, 33.400 → 32.283 over twelve interleaved arms with non-overlapping ranges; the reach half takes that backend's floor from 4.04 GiB to CUDA's 1.90)* | — |
 | 2026-08-17 | **The w0 checkpoint reaches OpenCL** — round 1 stores the child's post-mix work word 0 in the same 16 B pair record, so round 2 derives the linear lane alone: 12 siphashes and no `apply_mix`, against 14 and three. A port rather than a new lever, and one the implicit-bits pack unlocked the week before by freeing the address bits that pay for word 0 | — | — | — | −0.745 | **−2.3 %** | [the OpenCL checkpoint](performance-research.md#the-w0-checkpoint-reaches-opencl-0745-ms-229--the-same-lever-at-the-same-size) *(an OPENCL row: no CUDA kernel changed, so the headline pin and the cap table are untouched. 32.600 → 31.855 over twelve interleaved arms with non-overlapping ranges; CUDA measured −0.76 ms for the identical change. Confirmed again by a one-sitting ladder re-measurement, where the eleven byte-identical rungs size the session offset at +1.26 % and correct the two changed rungs to −2.19 / −2.46 %)* | — |
 | 2026-08-17 | **And its quad and octo records, which are the bigger half** — round 2's 24 B quad record holds word 0 with no repacking, since word 0's own low 24 bits *are* the key it stored there; round 3's 32 B octo record buys word 0's 40 bits out of a `gi` nothing indexes and 14 key bits the bucket address carries. Rounds 3 and 4 then run the lane alone — 24 and 48 siphashes, and not one of the 22 `apply_mix` calls between them | — | — | — | −2.43 / −5.28 | **−6.3 / −8.6 %** | [the quad and octo ports](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records) *(an OPENCL REACH-RUNG row: no CUDA kernel changed and no shipping OpenCL rung did either, so the headline pin and the cap table are untouched. Quad (16,1) goes 38.933 → 36.500 and octo (16,1) 61.733 → 56.450, six interleaved arms a side each with non-overlapping ranges. CUDA measured −1.84 and −4.39 ms for the identical changes. Confirmed again off the four ladder rungs that did not change, session offset −0.73 %, corrected −6.63 % and −8.72 %. The OpenCL floor goes 68.5 → 63.0 ms)* | — |
+| 2026-08-18 | **Speculative entry's gate moves to its measured crossovers** — the co-blocks ride round 4 having idle issue capacity, which a cap removes, so spec turns off below 220 W on stock memory and below 150 W on a held 5001 memory rung, where the freed watts un-starve the core and the sign flips back. Match-first decouples onto the 130 W band it was measured in | 29.1 | 29.1 | **69.20 ± 0.3** | 0 at stock | **−1.75 % at 140/160 W, −0.99 % at 180, −0.22 % at 210; −0.71 % at 140 W on the rung** | [the spec gate](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them) *(a CAP-BAND row: the stock path is unchanged — spec stays on at 285 W — and the re-taken pin reproduces 29.10 / 69.20 with 0.0 % spread on both columns over six runs. The band deltas are position-balanced paired A/Bs, |t| ≥ 3.7 everywhere, with the 285 W arm as the applied-knob control (+1.03 %, spec's stock win). The head-to-head and low-band tables were re-measured the same session on the shipped defaults)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
@@ -519,11 +520,11 @@ this table is for, is a property of the power curve and does not move.*
 informative part, and it is a property of the board rather than of a build. Below the
 peak the core clock has dropped far enough that the parts of the board which do not scale
 with it — memory, uncore, leakage — are paid for out of less work. On the current kernels
-the peak sits at **210 W**, 0.3009 sol/s/W; at the driver's 100 W minimum the collapse is
-unmistakable, 23.2 sol/s and 0.2327 sol/s/W. The peak has moved right to left across
-builds — 240 W, then 220 with the w0-checkpoint record, then 210 with the singleton
-filter — because a lever that pays more under a cap than at stock lifts the left half of
-the curve more than the right; it is read from
+the peak is a flat **0.309–0.310 sol/s/W across 200–210 W**; at the driver's 100 W
+minimum the collapse is unmistakable, 24.5 sol/s and 0.2462 sol/s/W. The peak has moved
+right to left across builds — 240 W, then 220, then 210, now the 200–210 W shelf with
+the speculative-entry gate — because a lever that pays more under a cap than at stock
+lifts the left half of the curve more than the right; it is read from
 [the live table](#both-miners-under-the-same-cap), never from the historical one above.
 
 **Marginal return collapses well before stock.** Extra sol/s per extra watt, from the
@@ -531,147 +532,86 @@ live column:
 
 | step | 180→190 | 190→200 | 200→210 | 210→220 | 220→240 | 240→255 | 255→285 |
 |---|---|---|---|---|---|---|---|
-| sol/s per W | 0.390 | 0.340 | 0.370 | 0.270 | 0.080 | 0.060 | 0.043 |
+| sol/s per W | 0.380 | 0.415 | 0.295 | 0.140 | 0.080 | 0.063 | 0.037 |
 
-The last 45 W (240 → 285) buys 2.2 sol/s; the 20 W from 180 to 200 buys 7.3. The knee is
-sharp and it is at **220 W** — one rung above the efficiency peak, which sits at 210 W and
-is flat enough that 200, 210 and 220 W are within 1.2 % of each other. The right cap is an
-economic choice: **210–220 W for a rig that pays for electricity, 285 W only where power
-is free.**
+(190→200 and 200→210 straddle an instrument seam; their sum, 0.355 per W, is the
+robust figure.) The last 45 W
+(240 → 285) buys 2.05 sol/s; the 20 W from 180 to 200 buys 7.95. The knee is sharp and
+it is at **210–220 W** — at the top of the efficiency shelf, with 220 W already 2.6 %
+below the peak. The right cap is an economic choice: **200–210 W for a rig that pays
+for electricity, 285 W only where power is free.**
 
 ### Both miners under the same cap
 
-*(Measured 2026-07-28 with `benchmarks/compare_power.sh`.)*
+*(Measured **2026-08-18, one session end to end**. The 100–120, 200–255 and 285 W rows
+are `compare_power.sh` interleaved pairs — 60 s runs, two repeats, the miners
+alternating order at every point; the 140–210 W MXBM rows are the same day's 120 s
+`power_sweep.sh` on the shipped defaults, each inside 0.5 % of that session's paired
+A/B arms. Caps are set externally with `nvidia-smi -pl` for both miners; power is
+sampled from NVML for both, never from a miner's own report. One session because a
+head-to-head cap table assembled from two inherits the cap-dependent cross-session
+term, which reaches ~5 % at the low caps
+([method](benchmarking.md#3-how-small-a-difference-the-rig-can-resolve)).)*
 
-The sweep above compares MXBM's whole curve against lolMiner at one **uncapped** point.
-lolMiner 1.98a has `--pl` too — it is in the installed binary's help — so it has a curve
-of its own. This section is that measurement, and it revises the conclusion above.
-
-Both miners, same session, interleaved, alternating which goes first, caps set externally
-with `nvidia-smi -pl` so neither miner's own OC code is a variable. Power is sampled from
-NVML for both — never taken from either miner's own statistics block, which averages in
-its ramp and reads ~20 W low. Two repeats per cell; the spread within a cell is ±0.1 sol/s.
-
-**Re-measured 2026-07-30** on a second session, and extended down to the card's 100 W
-floor. The table below is that second session; the reproducibility check against the
-first is the subsection that follows.
-
-*(MXBM columns swept end to end 2026-08-16 on the singleton-filter build —
-`benchmarks/power_sweep.sh` over the full `LIMITS` list, 120 s points, single-miner
-session, clocks released, stock memory clock, headless. The lolMiner columns are the
-2026-07-30 measurement; its binary is unchanged. The two sessions carry the documented
-±2.5 % cross-session band between them, which is wider than several of the per-cap
-margins below and is why the crossings are quoted as bands.)*
-
-*(**Two points of this column are bracketed, which a swept column normally is not.** A
-sweep gives one unrepeated run per cap. 120 W and 180 W were also measured that session as
-interleaved ABBA arms against two other builds, and the sweep agrees with them to 0.2 % —
-63.9 ms against 63.4–64.6, and 38.8 against 38.775. An earlier attempt at the same sweep
-the same day read 4–6 % low at every cap below 220 W and could not be reproduced by any
-variation of the method; it is written up as an [instrument
-failure](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it)
-and is not the column below.)*
-
-*(**Scope: the packed `tab` word does not move this column.** It is compiled out below the
-130 W gate — all 28 match-first kernels are byte-identical to the previous build's — and
-above the gate it measures null, −0.14 % at 180 W over four interleaved arms a side with
-the ranges overlapping. A cap sweep taken after it read 2–4 % below this column, including
-at the three caps where the two binaries run the same code; that is the sweep's
-[per-session offset](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it),
-not a kernel change.)*
-
-*(**What moved, and what only appears to have moved.** Against the previous kernel's
-column this one gains 1.4–2.8 % from 140 to 210 W, which is the size of the singleton
-filter's own [in-session delta under a
-cap](performance-research.md#the-singleton-filter-pays-47x-more-under-a-cap-than-at-stock),
-and 0.6–0.9 % at 240–285 W, the size of its stock delta. **The 100 and 110 W gains are not
-attributable to anything**: below 130 W the filter is compiled out and the block-exit
-barrier measures null, so those two points differ by less than the cross-session band and
-should be read as unchanged.)*
-
-**Deleting the reference rows pays half again as much under a cap as it does at stock.**
-Against the same sweep on the previous kernel: **+10.3 % at 120 W, +8.7 % at 140,
-+8.1 % at 160, +8.4 % at 180 and +9.3 % at 190**, against **+6.6 % at 285 W** — and only
-+4.6 % at the 100 W floor, where the card is slow enough that the memory system is not
-the constraint either. The mechanism is the one the w0-checkpoint record established in
-the same direction: what came out is **stores and an atomic**, which are instructions, and
-**instructions are the one thing a clock-starved card cannot afford**. It is the second
-lever on this record worth more at a cap than at the board limit, and between them they
-moved both crossings from ~200 W to ~183 W — the singleton filter has since taken them to
-~181.
+*(The MXBM rows carry the shipped speculative-entry gate — off below 220 W on stock
+memory, the measured crossover
+([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
+lolMiner 1.98a is the unchanged reference binary.)*
 
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|
-| 100 W | 23.2 | 99.7 | 0.2327 | 23.05 | 99.3 | 0.2321 |
-| 110 W | 26.6 | 109.7 | 0.2426 | **27.75** | 109.2 | **0.2541** |
-| 120 W | 31.5 | 119.8 | 0.2630 | **33.40** | 119.5 | **0.2795** |
-| 140 W | 37.3 | 139.7 | 0.2670 | **40.45** | 139.6 | **0.2898** |
-| 160 W | 44.8 | 160.0 | 0.2800 | **47.60** | 160.1 | **0.2973** |
-| 175 W | 50.3 | 175.0 | 0.2874 | **52.25** | 174.7 | **0.2991** |
-| 180 W | 52.1 | 179.8 | 0.2898 | 52.35 | 179.6 | 0.2915 |
-| 190 W | **56.0** | 189.7 | **0.2952** | 53.05 | 189.8 | 0.2795 |
-| 200 W | **59.4** | 199.7 | **0.2974** | 54.00 | 199.6 | 0.2705 |
-| 210 W | **63.1** | 209.7 | **0.3009** | 53.90 | 209.6 | 0.2572 |
-| 220 W | **65.8** | 219.7 | **0.2995** | 54.35 | 219.4 | 0.2477 |
-| 240 W | **67.4** | 239.5 | **0.2815** | 53.75 | 236.6 | 0.2272 |
-| 255 W | **68.3** | 254.4 | **0.2684** | 53.90 | 237.5 | 0.2269 |
-| 285 W | **69.6** | 284.3 | **0.2448** | 53.65 | 237.4 | 0.2260 |
+| 100 W | **24.50** | 99.5 | **0.2462** | 23.75 | 99.5 | 0.2387 |
+| 110 W | 28.85 | 109.7 | 0.2630 | **30.30** | 109.1 | **0.2777** |
+| 120 W | 32.75 | 119.8 | 0.2734 | **33.95** | 119.2 | **0.2848** |
+| 140 W | 38.80 | 139.8 | 0.2775 | **41.50** | 139.7 | **0.2971** |
+| 160 W | 46.20 | 160.0 | 0.2887 | **49.95** | 160.1 | **0.3120** |
+| 175 W | 52.70 | 175.1 | 0.3010 | **52.90** | 174.6 | **0.3030** |
+| 180 W | **54.00** | 180.1 | **0.2999** | 53.25 | 179.7 | 0.2963 |
+| 190 W | **57.80** | 190.0 | **0.3043** | 54.25 | 189.6 | 0.2861 |
+| 200 W | **61.95** | 199.9 | **0.3100** | 54.40 | 199.6 | 0.2725 |
+| 210 W | **64.90** | 209.8 | **0.3094** | 54.20 | 209.5 | 0.2587 |
+| 220 W | **66.30** | 219.6 | **0.3018** | 53.35 | 219.6 | 0.2430 |
+| 240 W | **67.90** | 239.6 | **0.2834** | 53.80 | 234.7 | 0.2292 |
+| 255 W | **68.85** | 254.5 | **0.2705** | 53.70 | 235.1 | 0.2284 |
+| 285 W | **69.95** | 284.2 | **0.2461** | 53.75 | 235.1 | 0.2286 |
 
 ![Speed, efficiency and power drawn, both miners at the same caps](tools/power-curve.svg)
 
 **The result is three-part.** Crossings are interpolated from the table:
 
-- **Between ~101 W and ~181 W, lolMiner wins on both, and the margin peaks in the middle
-  of the range.** At 180 W it does 52.35 sol/s to MXBM's 52.1 (**+0.5 %**); at 160 W,
-  47.60 to 44.8 (**+6.3 %**); its best cap is **140 W at +8.4 %**. Below that the
-  advantage shrinks again — +6.0 % at 120 W, +4.3 % at 110 — and at the 100 W floor the
-  two meet: 23.05 against 23.2, MXBM nominally ahead by 0.7 %, which is a tie inside the
-  cross-session band rather than a win.
-- **From ~181 W to the 285 W stock limit, MXBM wins on both** — 5.6 % on speed and
-  efficiency alike at 190 W, 21.1 % and 20.9 % at 220, widening to 29.7 % speed at 285 W.
-  (Band computed on a fine grid by `docs/tools/plot_power.py`, which reads this same
-  table.)
-- **Both crossings land at the same place, and they have moved 2 W further left.** Speed
-  crosses at ~180.8 W and efficiency at ~181.0 W, against ~183.3 and ~183.6 on the
-  previous kernel, ~199.6 and ~199.8 the one before, and ~66 W apart before that with an
-  upper efficiency crossing at ~277 W. The upper one closed when the w0-checkpoint record
-  shipped; the lower one has now moved three times, every time because a lever paid more
-  under a cap than at stock. **The 175–185 W band is narrower than the ±2.5 % this
-  comparison carries between sessions**, so read the crossing as a band, not a point.
+- **lolMiner's stock-memory window is ~104 W to ~177 W, and both of its edges have
+  moved in.** Its best cap is **160 W at +7.5 %** (49.95 against 46.20); 140 W is
+  +6.5 %, and the lead is down to **0.4 % by 175 W**. Below ~104 W it inverts: at the
+  100 W floor MXBM is **ahead by 3.2 %**, outside the repeat spread. With each miner
+  at its best configuration the window shrinks to two strips — the ≤115 W floor at
+  2–3 % and 155–177 W at under 1 %, with MXBM ahead 8.5 % at 120 W and 3.5 % at 140
+  between them ([the low band](#the-low-band-on-the-current-kernel)).
+- **From ~177 W to the 285 W stock limit, MXBM wins on both** — +1.4 % on speed at
+  180 W, +6.5 % at 190, +19.7 % at 210, widening to **+30.1 %** at 285.
+- **Both crossings land together at ~177 W** — `docs/tools/plot_power.py` computes
+  **176.8 W** from a fine grid over this table, for speed and efficiency alike. The
+  175/180 W rows differ by less than the repeat spread on either side, so read the
+  crossing as a band around 177.
 
 Three facts behind it:
 
-**lolMiner barely responds to the cap at all.** From 285 W down to 180 W it moves 53.65 →
-52.35 sol/s — it gives up **2.4 %** of its speed for **24 %** less power. MXBM over the
-same range gives up 25 %. And above ~237 W the cap stops doing anything: the 240, 255 and
-285 W rows all draw 236.6–237.5 W, which is why it never reaches the board limit.
+**lolMiner barely responds to the cap at all — and it never reaches the board limit.**
+Its ceiling is **54.40 sol/s at a 200 W cap**; from there down to 180 W it gives up
+2.1 %, and above ~235 W the cap stops doing anything — its 240, 255 and 285 W rows all
+draw 234.7–235.1 W. MXBM at the 285 W board limit does **69.95, a 28.6 % higher
+ceiling** that lolMiner cannot reach at any setting.
 
-**Both miners have an interior efficiency optimum, and MXBM's is now the higher one.**
-MXBM peaks at **0.3009 sol/s/W at 210 W** (3.324 J/solution), lolMiner at **0.2991 at
-175 W** (3.343 J) — MXBM ahead by **0.6 %** at each miner's own best point, having been
-0.8 % behind on the previous kernel, 8.9 % the one before and 15.4 % the one before that.
-0.6 % is inside this measurement's repeatability, so it is a tie rather than a lead — but
-it is a tie at which MXBM's peak does **63.1 sol/s against 52.25**, **21 % more work for
-the same energy per solution**. Read both peaks as *regions*, not points: MXBM's 200, 210
-and 220 W rows sit within 1.2 % of each other and lolMiner's 160 and 175 W rows within
-0.6 %.
+**Both miners have an interior efficiency optimum, and today they are level.** MXBM's
+stock-memory peak is a flat **0.309–0.310 sol/s/W across 200–210 W**; its rung point
+(160 W + 5001 MHz) reads 3.219 J/sol, and lolMiner's best is **0.3120 at 160 W**
+(3.205 J/sol on its own sol/s definition) — the three sit within a percent, which is a
+tie under the own-definition caveat and the repeat spread. The difference is what the
+energy buys: at MXBM's peak the same joules-per-solution do **64.9 sol/s against
+49.95 — 30 % more work**.
 
-**Nothing is hiding below the sweep's left edge.** lolMiner's efficiency was still
-climbing at 180 W when the first sweep stopped, so its peak might have been unmeasured.
-Extending to the card's 100 W floor settles it: **both curves fall away monotonically
-below their peak**, and lolMiner falls *faster* — its advantage peaks at +8.4 % around
-140 W and is gone by 100 W.
-
-The sharpest form of what is left: **lolMiner at 175 W delivers 52.25 sol/s for 174.7 W,
-where MXBM needs 179.8 W to deliver 52.1.** Nearly the same throughput for 5 W less — a
-gap that was 35 W two kernels ago and 15 W one kernel ago.
-
-What MXBM keeps is the top end: **69.6 sol/s against a ceiling of ~54.0**, a **28.9 %**
-higher maximum throughput that lolMiner cannot reach at any setting.
-
-*(These comparisons are stock memory on both sides. Each miner's best configuration —
-MXBM on the 5001 rung with the low-power kernels — is [the low-band table
-below](#the-low-band-on-the-current-kernel).)*
+**Nothing is hiding below the sweep's left edge.** Both curves fall away monotonically
+below their efficiency peaks, and lolMiner's advantage vanishes at both ends of its own
+window — gone by 175 W above and inverted by ~104 W below.
 
 ### The sweep reproduces across sessions
 
@@ -732,29 +672,29 @@ Mean SM clock per cap:
 
 | cap | MXBM SM clock | lolMiner SM clock | gap |
 |---|---|---|---|
-| 100 W | 733 MHz | 435 MHz | **+298** |
-| 110 W | 876 MHz | 548 MHz | **+328** |
-| 120 W | 1008 MHz | 678 MHz | **+330** |
-| 140 W | 1198 MHz | 956 MHz | **+242** |
-| 160 W | 1464 MHz | 1556 MHz | −92 |
-| 175 W | 1669 MHz | 2392 MHz | **−723** |
-| 180 W | 1746 MHz | 2468 MHz | −722 |
-| 190 W | 1901 MHz | 2535 MHz | −634 |
-| 200 W | 2066 MHz | 2595 MHz | −529 |
-| 210 W | 2229 MHz | 2640 MHz | −411 |
-| 220 W | 2389 MHz | 2685 MHz | −296 |
-| 240 W | 2495 MHz | 2745 MHz | −250 |
-| 255 W | 2553 MHz | 2745 MHz | −192 |
-| 285 W | 2643 MHz | 2745 MHz | −102 |
+| 100 W | 802 MHz | 470 MHz | **+332** |
+| 110 W | 934 MHz | 605 MHz | **+329** |
+| 120 W | 1066 MHz | 737 MHz | **+329** |
+| 140 W | 1288 MHz | 992 MHz | **+296** |
+| 160 W | 1555 MHz | 1660 MHz | −105 |
+| 175 W | 1813 MHz | 2428 MHz | **−615** |
+| 180 W | 1874 MHz | 2477 MHz | −603 |
+| 190 W | 2055 MHz | 2545 MHz | −490 |
+| 200 W | 2239 MHz | 2601 MHz | −362 |
+| 210 W | 2396 MHz | 2650 MHz | −254 |
+| 220 W | 2428 MHz | 2693 MHz | −265 |
+| 240 W | 2520 MHz | 2745 MHz | −225 |
+| 255 W | 2578 MHz | 2749 MHz | −171 |
+| 285 W | 2664 MHz | 2751 MHz | −87 |
 
-*(MXBM's column is the 2026-08-16 sweep on the replayed-recovery build, sample means over
-each 120 s point; lolMiner's is the 2026-07-30 session. The clock deficit is a little
-wider than the previous kernel's at every cap, and the throughput gap is nonetheless much
-narrower — which is the point of the section.)*
+*(Both columns are the 2026-08-18 session that produced the head-to-head table, sample
+means over each point's steady state, MXBM on the shipped defaults. The same session
+also checked the memory clocks: both miners hold the full 10251 MHz throughout the
+band, so the split below is core-clock only.)*
 
 **Above 160 W the mechanism is traffic.** MXBM's kernels cost more power per clock, so a
-tightening cap takes clock away from us faster than from them — 102 MHz behind at stock,
-723 MHz behind at 175 W. MXBM moves
+tightening cap takes clock away from us faster than from them — 87 MHz behind at stock,
+615 MHz behind at 175 W. MXBM moves
 [10.73 GB/solve](benchmarks.md#where-the-time-and-energy-go) at geometry (16,1), while
 lolMiner selects a **4G** variant that fits the search in 4 GB and moves far less.
 Narrowing round 2's record so the solve moves 16 % fewer bytes buys **60 MHz at 285 W and
@@ -782,31 +722,34 @@ the footprint while moving the same bytes, so it stays a reach lever.
 #### ⚠ Below ~150 W the clock gap INVERTS, and the clock explanation stops applying
 
 Everything above is a story about clock: lolMiner clocks higher under a cap, and that is
-why it wins. **Below ~150 W that is not what happens.** At 140 W and under, **MXBM holds a
-240–330 MHz HIGHER SM clock than lolMiner and still loses on sol/s** — by 11 % at 140 W
-and 2 % at 100 W, where the same inversion cost 20–30 % two kernels ago. The sign flips
-between 140 and 160 W and the inversion is present at every point below it.
+why it wins. **Below ~150 W that is not what happens.** At 110–140 W, **MXBM holds a
+~300 MHz HIGHER SM clock than lolMiner and still loses on sol/s** — by 7.0 % at 140 W
+and 3.7 % at 120, where the same inversion cost 20–30 % two kernels ago. The sign flips
+between 140 and 160 W — and at the 100 W floor the inversion has now closed entirely:
+the same clock advantage finally buys the lead.
 
 | cap | clock gap | sol/s gap |
 |---|---|---|
-| 100 W | MXBM **+298 MHz** | lolMiner **+2.0 %** |
-| 120 W | MXBM **+330 MHz** | lolMiner **+7.7 %** |
-| 140 W | MXBM **+242 MHz** | lolMiner **+11.4 %** |
-| 160 W | −92 MHz | lolMiner +8.7 % |
-| 180 W | MXBM −722 MHz | lolMiner +1.8 % |
+| 100 W | MXBM **+332 MHz** | **MXBM +3.2 %** |
+| 120 W | MXBM **+329 MHz** | lolMiner **+3.7 %** |
+| 140 W | MXBM **+296 MHz** | lolMiner **+7.0 %** |
+| 160 W | −105 MHz | lolMiner +8.1 % |
+| 180 W | MXBM −603 MHz | **MXBM +1.4 %** |
 
 So in the bottom third of the range the deficit is **not a clock deficit** — it is work
 done per clock. The "bytes → watts → clock" chain cannot explain it: that predicts the
 miner moving fewer bytes clocks *higher* under a cap, and below ~150 W lolMiner clocks
-lower. **The per-cycle deficit is what the last two kernels have been closing**: at 100 W
-the same clock advantage now costs 2 % instead of 21 %, because both levers deleted
-instructions rather than bytes.
+lower. **The per-cycle deficit is what the shipped levers have been closing**: at 100 W
+the same clock advantage read −21 % two kernels ago, −2 % one kernel ago, and is **+3.2 %
+now** — every lever that got it there deleted instructions rather than bytes, the
+speculative-entry gate most recently
+([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
 
 **Mechanism, settled 2026-07-31.** lolMiner is not duty-cycling — 10 Hz clock sampling
-gives a broad but **unimodal** distribution, so it genuinely executes at a median 480 MHz
-at 100 W and still outsolves MXBM at 733 MHz — by ~22 % when this was measured, by 2.0 %
-now. The deficit was **~2.3× useful work per core cycle** and is **1.4–1.7×** on the
-current kernels (sol/s per MHz, 100–140 W). Below ~190 W everything is issue-bound (103.7 ms at 100 W is 2.94× stock
+gives a broad but **unimodal** distribution, so it genuinely executes near 470 MHz
+at 100 W — where it outsolved MXBM-at-733-MHz by ~22 % when this was measured, and is
+outsolved by MXBM-at-802-MHz by 3.2 % now. The deficit was **~2.3× useful work per core
+cycle** and is **1.4–1.65×** on the current kernels (sol/s per MHz, 100–140 W). Below ~190 W everything is issue-bound (103.7 ms at 100 W is 2.94× stock
 at 3.38× less clock — even the DRAM-bound rounds stop saturating DRAM, because the LSU
 rate scales with core clock), so the currency is instructions issued. Profiling lolMiner
 under `ncu` named the reason: a state-storing streaming design, 64 B/element,
@@ -849,12 +792,14 @@ Two other candidates died in the same week:
 **The practical conclusion, and what has since moved.** MXBM's advantage is a band:
 lolMiner below the crossing, MXBM between the crossings, and MXBM alone above the upper
 one at a ceiling lolMiner cannot reach at any setting. That shape still holds; the figures
-in it do not. On the current kernels the band is **~181 W to the 285 W stock limit** and the ceiling
-**69.6 sol/s against ~54.0** — see
+in it do not. On the current kernels the band is **~177 W to the 285 W stock limit** and
+the ceiling **69.95 sol/s against ~54.4** — see
 [both miners under the same cap](#both-miners-under-the-same-cap), which is the live
 table. The low-end verdict has moved furthest: "not supportable below 210 W" was true of
-the 07-29 build, and on stock memory the low band is now **a tie at the 100 W floor**
-with a worst case of **−8.4 % at 140 W**, against the −19 to −32 % of that build.
+the 07-29 build, and on stock memory the low band is now **a 3.2 % lead at the 100 W
+floor** with a worst case of **−7.5 % at 160 W**, against the −19 to −32 % of that
+build — and at best configuration the residual is the ≤115 W floor at 2–3 % and the
+155–177 W strip at under 1 % ([the low band](#the-low-band-on-the-current-kernel)).
 
 *Reopening: a no-replay 180 W A/B putting the whole-solve rate materially above
 92 MHz/GB; a narrowing worth more than 1.07 GB; or a machine where the compute GPU does
@@ -938,6 +883,21 @@ the lever cannot be applied, not that it does not pay.
 
 ### Below stock the OTHER rung pays: +8 to +20 % under caps below ~165 W
 
+Under a core power cap the memory clock does not scale, so the interface burns a fixed
+slice of a small budget on bandwidth nothing is using; at the 5001 MHz rung those watts
+come back as core clock. On the current kernel the rung is worth **+7 % at 160 W rising
+to +18 % at 100 W** with its crossover at ~167 W ([the low
+band](#the-low-band-on-the-current-kernel) has the full table); above the crossover it
+is a wall — the solver's own DRAM roofline. lolMiner rides the same rung to its own
+roofline, which arrives at ~110 W because its design moves ~17.7 GB/solve against our
+10.69. Guidance for capped rigs: below ~165 W, pair the cap with the rung —
+`sudo mxbm ... --pl <cap> --mclk 5001` (both restored on exit), or
+`sudo nvidia-smi -pl <cap> -lmc 5001,5001` once at boot on rigs that mine unprivileged.
+At or above ~180 W, never.
+
+<details>
+<summary>The 2026-07-31 sweep that established it — 18 ABBA arms, both miners</summary>
+
 The down-rung is the up-rung's mirror, and it is honored: `-lmc 5001,5001` held in
 every arm of an 18-arm ABBA-bracketed sweep (2026-07-31, miner loop, energy-counter
 draw; full table and mechanism in
@@ -989,55 +949,54 @@ already pin would be arms spent on a foregone answer.*
 
 ![Both miners at both memory rungs: speed and MXBM's J/solution against the cap](tools/mclk-curve.svg)
 
+</details>
+
 ### The low band on the current kernel
 
-Re-swept 2026-08-16 on the replayed-recovery build: `-lmc 5001,5001` held across
-`power_sweep.sh`, run forward 100→160 W and then reversed, 120 s points. The two arms
-agree to 2.9 % at 100 W and 0.0–1.1 % elsewhere; the table is their mean. The lolMiner
-column is its own best-per-cap from the 07-30 sweep. **The ~130 W gate splits this
-table**: 100 and 120 W run match-first × packed (17,0), 140 and 160 W run (16,1).
-
-*(**Scope: the rung column is one kernel behind.** It was swept before the singleton
-filter shipped, and the *vs stock memory* column is computed against the current stock
-sweep, so at 140 and 160 W — where the filter is live — it understates the rung by about
-what the filter is worth. At 100 and 120 W the filter is compiled out on both sides, so
-those two rows are like for like.)*
+Re-swept **2026-08-18, one session end to end with the head-to-head table above**:
+`-lmc 5001,5001` held across `power_sweep.sh`, forward then reversed (the arms agree to
+0.5 % at 120 W and above, 3.1 % at the 100 W floor), 120 s points, shipped defaults —
+speculative entry off below 150 W on the rung, its measured crossover
+([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
+The comparison column is **lolMiner at its own best configuration per cap**, measured
+in the same session: it rides the 5001 rung too, and below ~115 W rides it harder —
+its interface refund at the floor is larger than ours — but its store-everything design
+needs ~17.7 GB/solve, so on the rung it meets its own DRAM roofline and **plateaus at
+~34 sol/s from 110 W up**, where its best reverts to stock memory. The gap column is
+the interleaved pair where both miners run the rung (100–120 W) and column arithmetic
+above that.
 
 | cap | ms/solve | sol/s | J/sol | sol/s/W | vs stock memory | lolMiner best | gap |
 |---|---|---|---|---|---|---|---|
-| 100 W | 73.1 | 27.2 | 3.674 | 0.272 | +17.2 % | 28.85 | −5.7 % |
-| 120 W | 57.2 | 35.1 | 3.419 | 0.293 | +11.4 % | 34.05 | **+3.1 %** |
-| 140 W | 49.4 | 40.8 | 3.434 | 0.291 | +9.4 % | 39.75 | **+2.6 %** |
-| **160 W** | 42.5 | **47.4** | **3.368** | **0.297** | +5.8 % | 47.85 | −0.9 % |
+| 100 W | 69.4 | 28.85 | 3.465 | 0.289 | +17.8 % | 30.35 *(rung)* | **−3.0 %** |
+| 110 W | 61.2 | 32.85 | 3.347 | 0.299 | +13.9 % | 33.95 *(rung)* | **−2.1 %** |
+| 120 W | 54.6 | 36.80 | 3.258 | 0.307 | +12.4 % | 34.10 *(rung)* | **+8.5 %** |
+| 140 W | 46.7 | 42.95 | 3.257 | 0.307 | +10.7 % | 41.50 *(stock)* | **+3.5 %** |
+| **160 W** | 40.4 | **49.55** | **3.219** | **0.311** | +7.3 % | 49.95 *(stock)* | −0.8 % |
+| 175 W | 39.9 | 50.60 | 3.416 | 0.293 | −4.0 % | 52.90 *(stock)* | −0.4 % *(stock vs stock)* |
 
-**With each miner at its best configuration, the low band is no longer a deficit.** MXBM
-leads at 120 and 140 W, ties at 160, and is 5.7 % behind only at the 100 W floor. A
-fortnight ago this row read −13.0 / −4.1 / −5.4 / −8.2 %. Nothing about the rung changed;
-what changed is the kernel it runs, and the two levers that did it — the w0-checkpoint
-record and the replayed reference rows — both delete **instructions**, which is the
-currency [below ~150 W](#-below-150-w-the-clock-gap-inverts-and-the-clock-explanation-stops-applying).
+**With each miner at its best configuration the band splits at ~115 W.** Below it
+lolMiner leads by 2–3 % — the one place its bandwidth-light band advantage and its
+larger rung refund stack. From 120 W up the plateau caps it: MXBM leads by **8.5 % at
+120 W** and **3.5 % at 140**, is level at 160 and 175 (−0.8 and −0.4 %), and leads
+outright from ~177 W ([the head-to-head table](#both-miners-under-the-same-cap)). The
+residual deficits are the ≤115 W floor at 2–3 % and the 155–177 W strip at under 1 %.
 
-**The rung's margin over stock memory is a floor, and it is narrowing.** The 2026-07-31
-ABBA measured it at +16.7 / +16.8 / +12.1 / +9.3 % across these four caps; against the
-current stock column it reads +17.2 / +11.4 / +9.4 / +5.8 %. Half of that narrowing is an
-artefact — the rung has not been re-swept on the filter build, and at 140 and 160 W stock
-has. The other half is the direction to expect: every lever that pays more under a cap
-than at stock closes the gap the rung exists to fill, and the rung's own ceiling near
-47 sol/s does not move with the kernel.
+**The rung plateaus near 50.7 sol/s from 175 W up** — above ~172 W it stops drawing
+its cap (178 W observed at a 180 W limit): the memory watts the rung frees exceed what
+the core can absorb. The plateau was ~47 sol/s one kernel ago; levers that delete
+instructions pay more on the rung, where the core is the constraint, than at stock. The
+rung-versus-stock crossover sits at ~167 W.
 
-**The efficiency optimum favours stock memory, and it no longer even ties.** 3.368
-J/solution at 160 W + rung against **3.324 at 210 W on stock memory** — stock is 1.3 %
-ahead, where the two were level on the previous kernel. At that point stock memory
-delivers **63.1 sol/s against 47.4 — 33 % more throughput for less energy per
-solution.** The rung is not an efficiency recommendation; it is a
-recommendation for rigs that genuinely cannot supply more than ~160 W. Above ~165 W stock
-memory wins outright, because the rung plateaus near 47 sol/s whatever the cap.
+**The efficiency optimum is a tie between the rung and stock memory.** This sweep puts
+the rung at 160 W at **3.219 J/sol** against stock memory's 3.232 at 210 W — inside
+the arm spread — with stock delivering 31 % more throughput at its point (64.9 against
+49.55 sol/s). The recommendation is unchanged: 210 W on stock memory where the rig can
+supply it, the 160 W rung where it cannot. lolMiner's best point in the same session
+is 3.205 J/sol on its own sol/s definition, a tie with both.
 
-**The 140 W anomaly has closed.** On the previous kernel 140 W was *less* efficient than
-120 W — 3.73 against 3.68 J/sol, both arms agreeing, the only non-monotonic point in
-either sweep. It now reads 3.434 against 3.419, a 0.4 % inversion inside the arm spread
-rather than a 1.4 % one outside it. The geometry explanation was already excluded by
-measurement and remains excluded:
+The geometry below the ~130 W gate is unchanged and its A/B stands, at its recorded
+scope:
 
 | 5001 rung | (16,1), shipping | (17,0), forced | |
 |---|---|---|---|
@@ -1045,11 +1004,10 @@ measurement and remains excluded:
 | 160 W | 43.8 / 43.7 → **43.75** | 40.5 / 40.5 → **40.50** | **−7.4 %** |
 
 **The gate is in the right place.** The two geometries tie at 140 W and (16,1) wins
-clearly by 160 W, so the crossover sits just above the gate rather than well above it. The
-160 W arm is also that experiment's positive control: the same `MXBM_BB=17` that changes
-nothing at 140 W moves 160 W by 7.4 % with both arms identical to 0.1 sol/s. *(That A/B is
-the 2026-08-15 kernel; the geometries were not re-raced on the current one, and the dip it
-was chasing has since gone.)*
+clearly by 160 W, so the crossover sits just above the gate rather than well above it.
+The 160 W arm is also that experiment's positive control: the same `MXBM_BB=17` that
+changes nothing at 140 W moves 160 W by 7.4 % with both arms identical to 0.1 sol/s.
+*(The 2026-08-15 kernel; the geometries were not re-raced on the current one.)*
 
 
 ### The memory traffic is compulsory

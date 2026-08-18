@@ -28,6 +28,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [Measured results, 2026-08-14](#measured-results-2026-08-14) | **the implicit-bits pack generalized to (17,0)** and shipped under the low-power gate — −3.9/−4.7 % at 120/100 W + rung on top of match-first, SASS-identical at stock; the floor curve moves to 3.70 J/sol at 160 W and 3.76 at 120 W; a carveout drift fixed; **duty-cycled average power closed with mechanism** — the arbitrage is real but a resident context idles at 41–47 W in P2/P3 and the managed floor (31.7 W) sits above the 27.6 W break-even; kWG 288, PRMT rotates and uniform-datapath offload all null; **the stall structure holds no lever the shipped knobs do not** — r3's idle lanes ARE the sub-mask filter, half-used store sectors are the 16 B-store floor, and warp specialization needs a second ~19 KB staging area against r1's 448 B of headroom; **the reach composition built** — the implicit-bits allocation reclaimed (−0.36 GiB) and the overflow arena ported to a fit-ladder rung (+1.7 % for −1.07 GiB, no round losing a block), taking the CUDA floor 4.40 → **4.03 GiB**, and with the availability allowance re-derived (1 GiB → 640 MiB) that is a 5 GB card; **the octo record takes it to 1.90 GiB for +35 %** — round 3's output as its eight leaves, which kills three back-reference rows and then round 2's `gi` with them, six u64 per slot with no field nothing reads, clearing BeamHash III's stated 3 GB minimum; **the stock per-stage profile re-taken** — 32.39 ms attributed, the implicit-bits record's 1.5 ms landing where its mechanism says (r2 −0.94, r3 −0.52, nothing else past 0.06); **the octo record's two halves priced apart** — round 4's rebuild is a flat **+16 ms** on either input, so a reach lever that can never be a speed lever; **the solutions-per-solve multiplier is the algorithm's, not the solver's** — nothing dropped (four counters zero over 1,892 solves), nothing invalid produced (56,781 of 56,783 candidates verify over 28,305 solves), and `bb + sm + 7 = 24` makes the partition incapable of separating a colliding pair. Pinned at **2.006 ± 0.008**, which corrects the 1.98 this ledger quoted and moves the reference miner's solve time to **37.9 ms**; and **the stock census re-taken** — `sm__throughput` IS the integer pipe, so the currency is ALU-pipe slots on a half-width INT32 unit: entry at 98.7 %, r1+r2 at 76–78 % with issue slots half busy, r3+r4 at 76.5/82.7 % of DRAM peak with traffic exactly compulsory (12.30 GB). The barrier is top stall in round 2 as well as round 1, which falsifies the warp-specialization closure's premise without changing its verdict. Both leads the census pointed at are **zero** — **wider LOP3 LUT fusion** (SipHash's XORs are irreducibly 2-input, which empties the single-issue closure's exemption list) and **lane density in r3/r4 at stock** (memory-bound with an 18 %-idle ALU pipe; the (17,0) that would delete the filter costs ~23 % at stock) |
 | [Measured results, 2026-07-31](#measured-results-2026-07-31) | co-blocks, the third overlap mechanism; speculative entry ships; the solver reorganization — the proposal, condensed, and the probes that killed it; the CUDA match wins backported to OpenCL (−0.6 ms); two below-the-floor levers ship (−0.22 ms); the found-vs-verified gap is gone; **lolMiner measured under ncu — state-storing confirmed, its ceiling is a DRAM roofline**; the sort path's k1/k2 regression is half occupancy, half unexplained — generic stays; **the OpenCL small-card push (2026-08-01/02): the record-set split takes the floor from 11 GB to CUDA's 5.7 GiB, the 128-bit family −5.4 ms, speculative entry −0.35 ms — the fallback ends at 1.012× of CUDA** |
 | [Measured results, 2026-08-15](#measured-results-2026-08-15) | **every back-reference row deleted, −2.03 ms and −688 MiB** — recovery replays rounds 3 and 4 over the one bucket each child's record names, identifies the pair by content, and reads round 2's four leaves; both bucket hints ride in bits that provably reach nothing, and round 4's record drops to 8 B. The closure that held this back priced a third record set at +2.5 GB from the width of its neighbours; round 4's own plane costs 0.32 GiB. Gated leaf-for-leaf over 1426 solves; the pipe census — r1/r2 are 22 points under the ALU roofline and it is warp supply; store-versus-derive collapses to one exchange rate with h=2 a structural optimum; **round 3 stores a work word round 4 provably never reads** (identity test + whole-pipeline poisoning, both positive-controlled) — worth 268 MB and **nothing in time**, because halving r3's write sectors buys 4 % of the round, an implied ~3000 GB/s against a 656 GB/s bus: *price narrowings in memory instructions and sectors, never in bytes*; three corrections — the warp-supply target is **unreachable** (8 blocks × 256 threads is 64 warps, sm_89 allows 48) and worth ≈ −0.66 ms not −3.07; a fifth r2 block needs **≤48 registers as well as ≤19456 B shared**, and the register half is now measured solved (64 → 48, zero spill, +0.023 ms), so **shared is the sole gate** at a 4168 B deficit no *pair* of the available cuts reaches; **`drops[0]` has no writer**, so every four-counter gate has been three; **round 3's `apply_mix` costs 0.024 ms and round 1's 0.736**, bounding ALU restructuring to r1; **the w0-checkpoint pair record ships at −0.76 ms (−2.4 %)** — round 1 stores the child's post-mix word 0 and round 2 derives only the linear lane (12 siphashes, no mixes) in the SAME 16 B, because the address-implied key bits pay for word 0's extra 24: a re-derivation is priced against what its checkpoint costs to CARRY, so one that fits a packed record's slack is worth re-pricing even after losing in a form that had to grow the record — and it is the first lever here that pays MORE under a cap than at stock, **+11.9 % at 100 W against +3.3 % at 285**, moving both crossings to ~200 W and the efficiency peak to 220 W (3.642 J/sol); **two instruments were returning false greens** — `bench_rounds`/`test_gpu_solver` drive the OpenCL backend and cannot see a CUDA change, and a CONSTANT poison is invisible through `combine`'s pairwise XOR, so a control here must be element-dependent; **the block-exit barrier is gone for −0.048 ms, a tenth of the prediction, and that bounds its whole family** — a barrier's stall percentage is not its time cost when the SM holds other blocks; **singleton-free staging ships at −0.089 ms** — 12.8 % of a group is alone in its chain slot and therefore provably nobody's ancestor, worth **−0.85 ms** to skip against **+0.76** for the word-0 prepass that finds it, registers and shared byte-identical: a large prize and a larger question, which is only what it costs to learn which slots are singletons; **the packed `tab` word ships at −0.060 ms** — the census count and the chain head share one word, so the table is initialised once per group and a second barrier goes with the second clear, which with the block-exit barrier is two independent measurements of ~0.05 ms per `__syncthreads()`; **the 1.68 ms of bank conflicts is a ceiling on a pipe that is never the critical path** — a calibration against time shows the counter does not charge for a 64-bit access's two wavefronts, the solver's `l1tex` runs at 32–43 % of peak, and the strongest available layout change moves the count under 2 %, because the population is the chain walk's scattered reads; and **compile-time geometry (+0.26 % stock, +1.12 % at 120 W) and the FMA-pipe re-encoding are both dead** — a kernel parameter that reaches the SASS only as an instruction operand is already free, and ptxas has already moved 95.9 % of the carry-consuming high halves off the ALU pipe; and **the w0 checkpoint reaches the octo record for −4.39 ms (−7.93 %) at no footprint cost** — storing the child's word 0 deletes all 15 `apply_mix` calls and 8 of the 56 siphashes in `rebuild_r4`, paid for out of a `gi` nothing indexes any more and 14 key bits the bucket address already carries, so the record stays 32 B and the 1.90 GiB floor rung goes 61.14 → 56.97 ms; **and it reaches the quad record for −1.84 ms (−5.11 %), where word 0 needs no repacking at all** — the quad record's first u64 held the key, and word 0's own low 24 bits *are* that key, so it goes in whole and the leaves move down into the pack the packed record already uses, 190 bits of 192, with no implicit-bits pack and no perfect table required; every quad rung drops ~2 ms; **the walk's shared reads are free** — `combine` is an XOR, so the lane's own element can be read once per chain instead of once per step, which takes the inner loop from 12 `LDS` to 9 at unchanged occupancy and measures **+0.10 %**, because each round emits about as many children as it consumes and the walk therefore averages **one chain step per element**: there is nothing to amortise, which bounds that whole family; and **the GPU computes 99.3 % of a solve** — a steady-state solve is 25 null-stream dispatches (8 kernels, 14 memsets, 3 copies) and the entire non-kernel budget is **0.19 ms**, so there is no idle-GPU family; **and OpenCL reaches the same 1.90 GiB floor** — the octo rung's two remaining bugs were both about addresses, round 4 writing its reference row three rows past the end of a one-row allocation and a half-local slot number meaning two different records in a split set (which is *every* card this rung exists for), and the implicit-bits record ported with it for **−3.34 % and −0.36 GiB**, taking the two backends' floors from 4.04 / 1.90 GiB to the same number and unlocking a packed dense-cap rung that used to crash rather than step down; and **the instruction census: 68.8 % of every instruction the solver executes is SipHash**, 80.2 % inside the three ALU-pipe-bound rounds, at an ALU-pipe floor of **8.84 ms of 28.37** -- so the ALU-bound half accounts completely as hash 8.84, every other ALU instruction **1.98**, warp supply and non-ALU issue 4.18, and the whole instruction-count family is bounded by that 1.98 ms with no named region reaching 0.3. Taken by joining `nvdisasm -g` line info to `ncu` per-instruction counts at 100 % opcode agreement, positive-controlled at both ends (entry predicted 2.41 ms against 2.48; `apply_mix` at 23.3 % of round 3's instructions costs +0.024 ms to delete entirely). With it, **round 2's warp ceiling is shown unreachable by geometry** -- sm_89 permits 66.7 B of shared per thread at 48 warps and round 2 runs at 92.3, an invariant under scaling the group and the block together, so shared bytes per staged element and warp supply are one currency and not two; and **abandoning a dud solve early is bounded at 0.10 ms** -- the population is pinned at 2^25 in every round with drops zero, so no round before the terminal one carries a statistic correlated with yield, and the ceiling is the terminal round's own 0.77 ms on the 13.5 % of solves that yield nothing, which closes axis 2 on all three of the correlation theorem's channels; and **the w0 checkpoint reaches OpenCL for -0.745 ms (-2.29 %)** -- a revival rather than a new idea, since the pack that pays for it shipped there the same week, and it lands at CUDA's own -0.76 ms / -2.4 % on the identical change. Confirmed twice: twelve interleaved arms with non-overlapping ranges, and a one-sitting re-measurement of the ladder where the eleven byte-identical rungs size the session offset at +1.26 % and correct the two changed ones to -2.19 / -2.46 %; **and it reaches that backend's quad and octo records for -6.25 % and -8.56 %**, the two biggest instances of the lever anywhere -- CUDA got -1.84 and -4.39 ms from the identical changes, and a deeper re-derivation on a slower backend is where a checkpoint that deletes every `apply_mix` in it should pay most. Confirmed again off the four rungs that did not change (session offset -0.73 %, corrected -6.63 % and -8.72 %), controlled at both boundaries, and it moves nine of the fourteen ladder rungs -- including the OpenCL floor, 68.5 -> 63.0 ms -- so **the octo rungs now cost this backend what they cost CUDA, 2.00x the top rung against 1.98x**, where the gap was 1.9x against 1.8x while only CUDA had the record |
+| [Measured results, 2026-08-18](#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them) | **the speculative-entry gate moves to its measured crossovers and ships** — nospec −1.75 % at 140/160 W, −0.99 % at 180 and −0.22 % at 210, against spec +0.79 % at 240 and +1.03 % at stock, so the stock-memory gate goes 130 → 220 W; **the crossover is a function of the memory clock, not the cap alone** — on a held 5001 rung the freed watts un-starve the core and spec wins again at 160 W (+1.81 %) while losing at 140 (−0.71 %), so a down-rung observed at startup carries its own 150 W crossover, and match-first decouples onto the 130 W band it was measured in; **a third swept-column session offset, the first reading HIGH** — a 15-cap sweep read +0.3 % (285 W) rising to +5.2 % (100 W) over the published column on binaries a three-cap bracket shows performance-identical (±0.2 %, |t| < 1.5), so the cap-dependent cross-session term reaches ~5 % at the low caps, a head-to-head column assembled from two sessions inherits it, and the chain-walk unroll is null under caps too — the 2–4.7× cap multiplier prices *dynamic* instructions, never static footprint; **the head-to-head re-baselined in one session, both configurations** — stock-config: the worst point is 160 W at −9.1 % (not 140 at −8.4), 100 W is a +3.2 % lead, both miners hold 10251 MHz memory while the reference runs its core at roughly half our clock and still wins the band, which names the deficit a power-split/issue-count mismatch; best-config (5001 rung): MXBM +21.5 % at 100 W, +8.4 % at 110 and 120, +3.1 % at 140, a −0.8 % tie at 160, the rung plateau lifted ~47 → 50.7 sol/s on the current kernel, and the remaining best-config deficit is a ~165–180 W window at ≈ −2.4 % |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -4127,8 +4128,10 @@ looking for untested assumptions; three A/Bs and a profile, all at 120/100 W + r
 ride on r4 having idle issue capacity — true while r4 is DRAM-bound, false once a cap
 makes every round issue-bound. Measured in the miner loop, ABBA: **nospec −1.76 % at
 120 W, −1.87 % at 100 W**, spec keeping its win at stock and at the 285 W rung point.
-The gate reuses the observed-limit plumbing next to `kRbLowPowerW`; 140–160 W is
-unmeasured and keeps the default. CUDA only.
+The gate reuses the observed-limit plumbing next to `kRbLowPowerW`. CUDA only. The
+mid-band was measured on 2026-08-18 and the gate moved to the measured crossovers —
+see [speculative entry under a
+cap](#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them).
 
 **Closed: `kWG 288`** (removes the 9-passes-for-8.25 expand tail) is a wash under caps
 (+0.0/+0.3/+0.4 %) and +0.24 % at stock, re-measured on current kernels.
@@ -4154,6 +4157,49 @@ Harvesting the 11 ms needs an organization whose sponge is occupancy — the par
 pipeline — which is why it cannot be grafted in piecemeal.
 
 </details>
+
+### Speculative entry under a cap: both crossovers measured, and the gate moves to them
+
+*(2026-08-18. `paired_ab.sh` with wrapper arms toggling `MXBM_NO_SPEC` at runtime — the
+spec buffers only, match-first untouched — SECS=60, one position-balanced block per
+point, caps set externally, KAT 3/3 and drops 0 on both arms, every point in one
+session.)*
+
+The floor-program entry above turned spec off below 130 W and said 140–160 W was
+unmeasured. Measured, the stock-memory crossover is nowhere near 130 — and the memory
+clock moves it:
+
+| point | spec → nospec | t | core clock, spec → nospec |
+|---|---|---|---|
+| 140 W | **−1.75 %** | −12.7 | 1248 → 1296 MHz |
+| 160 W | **−1.75 %** | −14.8 | 1495 → 1555 |
+| 180 W | **−0.99 %** | −9.7 | 1818 → 1871 |
+| 210 W | **−0.22 %** | −3.7 | 2330 → 2400 |
+| 240 W | +0.79 % | every arm identical (2023 vs 2007 solves, sd 0 both sides) | 2518 → 2542 |
+| 285 W stock | +1.03 % | +39.8 | positive control: spec's shipped win reproduced, so the knob demonstrably applied |
+| 5001 rung, 140 W | **−0.71 %** | −15.6 | 1572 → 1707 |
+| 5001 rung, 160 W | **+1.81 %** | +24.1 | 2242 → 2330 |
+
+The mechanism the floor measurement named, now confirmed from both sides. Spec's
+co-blocks ride round 4 having idle issue capacity; under a cap they displace work the
+card can no longer spare, and the clock column prices the displacement directly —
+dropping them returns 48–135 MHz of core. On a held 5001 rung the freed memory watts
+un-starve the core (2242 MHz at 160 W against stock memory's 1495) and bandwidth is
+halved, so r4 is DRAM-bound again and spec's win comes back **below** the stock
+crossover: the crossover is a function of the memory clock, not of the cap alone.
+
+**Shipped**: the gate becomes two measured crossovers — `kSpecMinPowerW` 130 → **220**
+on stock memory, and `kSpecMinPowerRungW` **150** when the memory clock observed at
+startup is ≤ 5100 MHz (a held rung reports its lock even on an idle card; the > 600 MHz
+guard excludes the idle P-state, so an unlocked card reads as stock). Match-first is
+decoupled onto its own `kMatchFirstMaxPowerW` at the 130 W band it was measured in —
+these arms toggled only the spec buffers, so match-first above 130 W stays unmeasured.
+The policy line printed in all three regimes asserts the patch applied.
+
+What it buys at the caps a capped rig runs: **−1.75 % ms/solve at 140 and 160 W,
+−1 % at 180, −0.2 % at 210**, nothing at or above 220, and −0.7 % at 140 W on the
+rung. The 175–200 W rows in the head-to-head table are re-measured with the shipped
+default rather than interpolated.
 
 ### The full-pipeline eco mock: −29 % at the 100 W floor, −13 % at 120 W — alive at the deep floor only
 <details>
@@ -6272,6 +6318,34 @@ So the swept difference is a **per-session offset on the sweep**, twice now, in 
 band. The bar above stands and is worth restating in its strong form: a swept column may
 be compared with *itself*, never with another session's — and where a per-cap conclusion
 matters, the cap gets a bracketed pair.
+
+**A third instance (2026-08-18) shows the offset runs in both directions and grows as
+the cap falls.** A full 15-cap sweep of the shipping binary read *above* the published
+column at every point — +0.3 % at 285 W rising monotonically to +5.2 % at 100 W — a
+shape with a mechanism ready to explain it (two instruction-deleting kernel changes had
+shipped since the column, and instructions are the capped card's currency). Bracketed
+pairs at three caps, the published column's binary against the shipping one, killed it:
+**−0.18 % at 140 W, +0.15 % at 120, −0.06 % at 190**, every |t| < 1.5 against a 0.040 %
+null floor. The binaries are performance-identical and the entire column difference is
+the session. Three consequences:
+
+- **The flat ~2.5 % cross-session band understates the low caps.** Cap-column absolutes
+  carry a *cap-dependent* session term that has now been observed at −4.4 % and +5.2 %
+  at the 100–120 W points. A candidate mechanism — a fixed power limit makes the
+  operating point power-bound, so leakage (silicon temperature, ambient) moves the MHz
+  each watt buys, while at stock the V/F ceiling absorbs it — fits the monotonic shape
+  but is unproven; what is established is the size and the sign varying by session.
+- **The chain-walk `#pragma unroll 1` is null under caps too.** The same brackets close
+  the only stock-rung kernel change in the span (with the tab word — already null under
+  a cap in-session — and the quad/octo w0 records, which are off the stock rung, along
+  for the ride) at **±0.2 % at 120/140/190 W**. The cap multiplier on instruction
+  deletion — 2× to 4.7× on this record — is a multiplier on *dynamic* work, and the
+  unroll deleted static footprint whose dynamic chase was already length one. **Price
+  cap candidates in dynamic instructions and sectors, never in footprint.**
+- **A head-to-head column assembled from two sessions inherits the term.** The cap
+  table's MXBM column (08-16) and its reference column (07-30) sit a session apart, so
+  the per-cap margins between the crossings are known only to within this band. Where a
+  margin drives a decision, both miners get measured in one session, interleaved.
 
 The clock-lock row is worth keeping separately. It is the third independent confirmation
 that [the governor outranks the lock](#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs) — under a 120 W cap, `-lgc 2600 -lmc 10251` and released
