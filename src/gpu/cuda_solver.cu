@@ -452,14 +452,13 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
     CARVE((fused_round<MXBM_R2_ARGS, false, false, false, false, 17u>));
     CARVE((fused_round<MXBM_R3_ARGS, false, false, false, false, 17u>));
     CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true, 0u>));
-#if MXBM_PAIR_W0
-    // Round 1 writing the w0-checkpoint record: its IMPB follows round 2's, so the
-    // packed instantiations are the ones that launch at stock.
+    // Round 1 at the rung's IMPB -- the instantiations that launch at stock. IMPB keys
+    // both the w0-checkpoint format (with MXBM_PAIR_W0) and the reference-row elision,
+    // so these exist whether or not the checkpoint does.
     CARVE((fused_round<MXBM_R1_ARGS, false, false, false, false, 16u>));
     CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true,  16u>));
     CARVE((fused_round<MXBM_R1_ARGS, false, false, false, false, 17u>));
     CARVE((fused_round<MXBM_R1_ARGS, false, false, false, true,  17u>));
-#endif
     CARVE((fused_round<MXBM_R4_ARGS, false, false, false, true>));
     // The round-4 variant that hosts the next nonce's entry as co-blocks.
     CARVE((fused_round<MXBM_R4_ARGS, false, false, true>));
@@ -469,12 +468,10 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
     if (p_->arena) {
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 0u, true>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  0u, true>));
-#if MXBM_PAIR_W0
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 16u, true>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  16u, true>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, false, 17u, true>));
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  17u, true>));
-#endif
         CARVE((fused_round<MXBM_R4_ARGS,  false, false, false, false, 0u, true>));
         CARVE((fused_round<MXBM_R4_ARGS,  false, false, false, true,  0u, true>));
         CARVE((fused_round<MXBM_R2Q_ARGS, false, false, false, false, 0u, true>));
@@ -683,20 +680,16 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
     #define ROUND_X(...) ROUND(__VA_ARGS__)
     #define ROUND_XNR(...) ROUND_NR(__VA_ARGS__)
-#if MXBM_PAIR_W0
-    // The w0-checkpoint pair record: round 1 writes it and round 2 reads it, so both are
-    // given the SAME implied-bit count, derived from the condition round 2's own arm
-    // below tests. Zero everywhere the packed r2 -> r3 record is off -- the address bits
-    // are what pay for word 0, so without them the record does not fit 16 B.
-    const uint32_t pw0b = (!I.octo && !I.quad && I.impb) ? (I.bb == 17u ? 17u : 16u) : 0u;
-    if (I.octo)           ROUND_XNR(1, 0u,  MXBM_R1_ARGS)
-    else if (pw0b == 17u) ROUND_X(1, 17u, MXBM_R1_ARGS)
-    else if (pw0b == 16u) ROUND_X(1, 16u, MXBM_R1_ARGS)
-    else                  ROUND_X(1, 0u,  MXBM_R1_ARGS)
-#else
-    if (I.octo) ROUND_XNR(1, 0u, MXBM_R1_ARGS)
-    else        ROUND_X(1, 0u, MXBM_R1_ARGS)
-#endif
+    // Round 1 rides the rung's implied-bit count, derived from the condition round 2's
+    // own arm below tests, so writer and reader agree on the r1 -> r2 layout: the
+    // w0-checkpoint record with MXBM_PAIR_W0, the plain pair record without. IMPB != 0
+    // also tells round 1 the rung writes no reference row (refRows is 0), so it stays
+    // nonzero either way.
+    const uint32_t r1b = (!I.octo && !I.quad && I.impb) ? (I.bb == 17u ? 17u : 16u) : 0u;
+    if (I.octo)          ROUND_XNR(1, 0u,  MXBM_R1_ARGS)
+    else if (r1b == 17u) ROUND_X(1, 17u, MXBM_R1_ARGS)
+    else if (r1b == 16u) ROUND_X(1, 16u, MXBM_R1_ARGS)
+    else                 ROUND_X(1, 0u,  MXBM_R1_ARGS)
     // Rounds 2 and 3 come in a matched pair -- r2's OUTSTR is r3's INSTR -- so they
     // switch together or the second reads a record the first never wrote. The
     // implicit-bits pairs are the same strides with the pack folded into the
