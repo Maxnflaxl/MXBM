@@ -241,11 +241,10 @@ What it is not is an efficiency setting: 3.368 J/solution at 160 W against 210 W
 on stock memory, and at that point stock does **63.1 sol/s against 47.4** — 33 % more
 work for less energy per solution.
 
-The rung's margin over stock memory is a floor rather than a measurement: the 2026-07-31
-ABBA read +16.7/+16.8/+12.1/+9.3 % across these caps and against the current stock column
-it reads +17.2/+11.4/+9.4/+5.8 %, but the rung has not been re-swept since the singleton
-filter shipped and stock has. The mechanism, the A/Bs behind each step and lolMiner's own
-rung sweep are in
+The absolute rows above are the 2026-08-16 sweep. The head-to-head conclusions are from
+the 2026-08-18 re-baseline, which re-raced both miners in one session at both
+configurations; the mechanism, the A/Bs behind each step and lolMiner's own rung sweep
+are in
 [performance.md](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
 
 ```sh
@@ -253,6 +252,10 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 ```
 
 Both settings are restored on exit. Above ~165 W the rung is a wall — do not use it there.
+
+One more thing for a capped rig: **use the CUDA path, not the OpenCL fallback.** The
+fallback's gap grows as the cap drops — roughly 9 % behind at stock, 15 % at 140 W,
+29 % at 100 W ([the curve](performance.md#the-opencl-backend-under-caps)).
 
 ---
 

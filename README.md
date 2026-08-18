@@ -10,7 +10,7 @@ auditable alternative to the closed-source miners in the ecosystem.
 > **Status: GPU solver working, optimization ongoing.** MXBM mines against a real
 > Beam pool over TLS: live jobs in, verified solutions out, shares accepted. On an
 > RTX 4070 Ti SUPER the CUDA backend does **69.20 sol/s** (29.10 ms/solve, the
-> locked-clock pin, re-taken 2026-08-16) and the portable OpenCL one **63.0**
+> locked-clock pin, re-taken 2026-08-18) and the portable OpenCL one **63.0**
 > (31.9 ms, 2026-08-17, 1.10× of the same-session CUDA).
 >
 > **Where MXBM wins, and where it does not.** Both miners were swept against each other

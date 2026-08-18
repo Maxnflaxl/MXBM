@@ -124,6 +124,7 @@ retires levers this rig can see. Measured directly:
 | one 30 s run against another, post-warmup | **0.112 %** (1σ, n = 30) |
 | paired ABBA, 12 arms a side | **0.040 %** |
 | both arm orderings (48 runs, ~30 min) | resolves **~0.05 %** at t ≈ 4 |
+| paired, under a power cap | **~0.07 %** (24 × 60 s at 140 W) — no bias, but per-run scatter runs ~4× stock, so keep the full 24 runs for any sub-0.3 % claim; on the 5001 memory rung the scatter returns to stock levels |
 
 `benchmarks/paired_ab.sh` is the bottom row:
 

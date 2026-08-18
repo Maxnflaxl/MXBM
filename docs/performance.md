@@ -1009,6 +1009,31 @@ The 160 W arm is also that experiment's positive control: the same `MXBM_BB=17` 
 changes nothing at 140 W moves 160 W by 7.4 % with both arms identical to 0.1 sol/s.
 *(The 2026-08-15 kernel; the geometries were not re-raced on the current one.)*
 
+### The OpenCL backend under caps
+
+The fallback's first cap curve (2026-08-18): `--solver opencl`, one session, 60 s per
+point after a two-minute warmup, stock memory, coarse grid — single-session absolute
+figures, so they carry the cross-session band, not the paired harness's.
+
+| cap | sol/s | ms/solve | J/solution |
+|---|---|---|---|
+| 100 W | 20.8 | 96.7 | 4.79 |
+| 110 W | 24.3 | 82.5 | 4.52 |
+| 120 W | 27.6 | 73.6 | 4.34 |
+| 140 W | 34.0 | 58.7 | 4.12 |
+| 160 W | 40.6 | 49.1 | 3.95 |
+| 175 W | 45.7 | 43.6 | 3.83 |
+| 190 W | 50.7 | 39.4 | 3.74 |
+| 210 W | 57.4 | 34.8 | **3.65** |
+| 240 W | 61.1 | 32.9 | 3.92 |
+| 285 W | 63.6 | 31.6 | 4.46 |
+
+**The fallback's deficit against CUDA widens as the cap drops**: ~1.09× at stock,
+~1.15× at 140 W, ~1.29× at 100 W — the cap multiplier pricing the backend's larger
+dynamic instruction count. Its efficiency floor (3.65 J/solution at 210 W, against
+CUDA's 3.23) never crosses under CUDA's, so a capped rig should run the CUDA path
+wherever the card allows it. Speculative entry and its gate are CUDA-only; nothing on
+this curve depends on them.
 
 ### The memory traffic is compulsory
 
