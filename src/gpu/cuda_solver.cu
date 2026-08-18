@@ -344,7 +344,8 @@ const CudaSolver::DeviceInfo& CudaSolver::device() const { return p_->info; }
 unsigned CudaSolver::bucket_bits() const { return p_->bb; }
 void CudaSolver::request_abort() { p_->abort_.store(true, std::memory_order_relaxed); }
 
-CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
+CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz)
+    : p_(new Impl) {
     // Bind THIS thread to the chosen device before any allocation. CUDA's current
     // device is per-thread, which is why solve() sets it again below: the engine
     // runs solve() on a worker thread that never saw this constructor, and would
@@ -504,31 +505,40 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w) : p_(new Impl) {
 
     // Speculative-entry buffers are best-effort: a card without the extra 0.39 GiB (or
     // a user setting MXBM_NO_SPEC=1) simply runs the entry pass standalone, as before.
-    // Under a low cap the co-blocks displace r4 work the card can no longer spare --
-    // every round is issue-bound there -- so the observed power limit gates it too
-    // (kSpecMinPowerW; measured -1.8 % at 120 and 100 W).
-    const bool specLowPower =
-        kSpecMinPowerW != 0 && power_limit_w != 0 && power_limit_w < kSpecMinPowerW;
-    if (specLowPower)
-        std::fprintf(stderr, "CUDA: board power limit %u W is below %u W: speculative "
-                     "entry off (it costs ~2%% there)\n", power_limit_w, kSpecMinPowerW);
-    // Same threshold, opposite sign: the elements alone in their chain slot pay a
+    // Under a cap the co-blocks displace r4 work the card can no longer spare -- the
+    // rounds turn issue-bound -- so the observed power limit gates it too, with the
+    // observed memory clock choosing which crossover applies: a down-locked rung
+    // un-starves the core (spec pays again above kSpecMinPowerRungW), while stock
+    // memory keeps every round issue-bound up to kSpecMinPowerW. mem_clock_mhz > 600
+    // distinguishes a held rung, which reports its lock even before kernels run, from
+    // an unlocked card idling near 405.
+    const bool lowRungMem = mem_clock_mhz > 600 && mem_clock_mhz <= kSpecRungMclkMHz;
+    const unsigned specMinW = lowRungMem ? kSpecMinPowerRungW : kSpecMinPowerW;
+    const bool specOff =
+        specMinW != 0 && power_limit_w != 0 && power_limit_w < specMinW;
+    if (specOff)
+        std::fprintf(stderr, "CUDA: board power limit %u W is below %u W%s: speculative "
+                     "entry off (it costs 1-2%% there)\n", power_limit_w, specMinW,
+                     lowRungMem ? " on this memory rung" : "");
+    // Match-first has its own band: the elements alone in their chain slot pay a
     // rebuild no walk reads, and skipping them costs the shared memory that holds r1's
     // fifth block. That trade loses at stock and wins once the rebuild bills at full
     // issue rate. Both variants are instantiated; MXBM_MATCH_FIRST=1 forces it on.
     // ...and on the octo rungs, for a third reason: what it skips for an element alone in
     // its chain slot is there the eight-leaf rebuild, which is most of the round. Measured
     // -6.5 % there, against a loss at stock.
-    p_->matchFirst = specLowPower || p_->octo || (MXBM_MATCH_FIRST != 0);
+    const bool mfLowPower = kMatchFirstMaxPowerW != 0 && power_limit_w != 0
+                         && power_limit_w < kMatchFirstMaxPowerW;
+    p_->matchFirst = mfLowPower || p_->octo || (MXBM_MATCH_FIRST != 0);
     // MXBM_MFIRST=0|1 forces it either way; without it the variant is only reachable by
-    // presenting a board limit under kSpecMinPowerW.
+    // presenting a board limit under kMatchFirstMaxPowerW.
     if (const char* e = std::getenv("MXBM_MFIRST")) p_->matchFirst = atoi(e) != 0;
-    if (specLowPower)
+    if (mfLowPower)
         std::fprintf(stderr, "CUDA: ... and match-first rebuild skipping on\n");
     // ...and off on the arena rungs too, for the opposite reason: a card takes one of
     // those because it is short of memory, and speculation's dedicated entry buffer is
     // 0.36 GiB of exactly that. Its co-blocks would also need pool metadata of their own.
-    if (!std::getenv("MXBM_NO_SPEC") && !specLowPower && !p_->arena) {
+    if (!std::getenv("MXBM_NO_SPEC") && !specOff && !p_->arena) {
         p_->specElem   = dalloc<uint64_t>(p_->nslots);
         p_->specCounts = dalloc<uint32_t>(p_->nb);
         p_->specPp     = dalloc<uint64_t>(4);
@@ -753,8 +763,9 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
                 I.counts[inSet], I.elem[inSet], r4C, r4E,
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS);
       } else if (I.matchFirst) {
-          // No co-blocks arm: speculation and match-first never coexist -- spec is off
-          // below kSpecMinPowerW and match-first is on below the same threshold.
+          // No co-blocks arm: on the default policy paths speculation and match-first
+          // never coexist -- match-first turns on below kMatchFirstMaxPowerW, which
+          // sits under both speculative-entry crossovers.
           fused_round<MXBM_R4_ARGS, false, false, false, true>
             <<<I.nb << I.sm, kWG>>>(I.bb, I.sm, I.cap, I.cap, r4Off,
                 I.counts[inSet], I.elem[inSet], r4C, r4E,

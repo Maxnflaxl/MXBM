@@ -616,6 +616,11 @@ int main(int argc, char** argv) {
         // order `pos` indexes -- because a mixed rig can cap its cards apart.
         const gpu::PowerLimit cpl = have_nvml ? gpu::nvml_power_limit(pos) : gpu::PowerLimit{};
         const unsigned cpl_w = cpl.valid ? cpl.current_w : 0u;
+        // The memory clock, observed the same way for the same reason: a rung MXBM
+        // applied (--mclk) and one locked outside it look the same, because a held
+        // lock reports its value even on an idle card.
+        const gpu::Telemetry ctl = have_nvml ? gpu::nvml_sample(pos) : gpu::Telemetry{};
+        const unsigned cmclk_mhz = ctl.have_mem ? ctl.mem_clock_mhz : 0u;
 
         std::unique_ptr<miner::Solver> s;
         std::string sname, why;
@@ -626,7 +631,7 @@ int main(int argc, char** argv) {
         // path's rate on the same card (docs/performance.md).
         if (c.backend == gpu::Backend::Cuda) {
             try {
-                auto cs = std::make_unique<gpu::CudaSolver>(c.cuda_index, cpl_w);
+                auto cs = std::make_unique<gpu::CudaSolver>(c.cuda_index, cpl_w, cmclk_mhz);
                 sname = cs->device().name;   // the real name, not a bare "GPU 0"
                 smem = cs->device().global_mem;
                 driver = "Cuda";

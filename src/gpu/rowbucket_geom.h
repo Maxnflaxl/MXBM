@@ -112,13 +112,23 @@ constexpr uint32_t kRbCapacity = (1u << 25) + (1u << 25) / 32;    // 34,603,008
 // 0 disarms. Figures: docs/performance-research.md.
 constexpr unsigned kRbLowPowerW = 130;
 
-// Below this board power limit, speculative entry co-scheduling is off. The co-blocks
-// win rides on round 4 having idle issue capacity: true while r4 is DRAM-bound, false
-// once a cap makes every round issue-bound. The threshold covers only the measured
-// band; a mid-band measurement moves it, not the mechanism. 0 disarms, like
-// kRbLowPowerW above. CUDA only -- the OpenCL port's floor behaviour is unmeasured
-// and keeps its default. Figures: docs/performance-research.md.
-constexpr unsigned kSpecMinPowerW = 130;
+// Below these board power limits, speculative entry co-scheduling is off. The
+// co-blocks' win rides on round 4 having idle issue capacity: true while r4 is
+// DRAM-bound, false once a cap makes every round issue-bound. Two thresholds because
+// the memory clock decides which regime a given cap lands in: on a down-locked rung
+// (<= kSpecRungMclkMHz) the freed memory watts un-starve the core and halve the
+// bandwidth, so r4 is DRAM-bound again well below the stock-memory crossover. Both
+// crossovers are bracketed A/Bs; the band between neighbouring measured caps is
+// interpolation. 0 disarms either. CUDA only -- the OpenCL port's floor behaviour is
+// unmeasured and keeps its default. Figures: docs/performance-research.md.
+constexpr unsigned kSpecMinPowerW     = 220;   // stock memory
+constexpr unsigned kSpecMinPowerRungW = 150;   // memory locked at or below the 5001 rung
+constexpr unsigned kSpecRungMclkMHz   = 5100;  // "on a down-rung" boundary for the above
+
+// Below this board power limit, match-first rebuild skipping is on. Deliberately
+// separate from the speculative-entry thresholds: match-first is measured only in
+// this band, in composition with the (17,0) selection above. 0 disarms.
+constexpr unsigned kMatchFirstMaxPowerW = 130;
 
 // The row-bucket geometry decision, with the device reduced to the two numbers it
 // actually turns on. Pure, so docs/HW_REQUIREMENTS.md's "which cards get the fast path"

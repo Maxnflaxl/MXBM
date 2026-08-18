@@ -35,10 +35,13 @@ public:
     static std::vector<DeviceInfo> enumerate();
 
     // `index` is a CUDA device index. Throws std::runtime_error on failure.
-    // `power_limit_w`: the board limit observed at startup (0 = unknown), read by
-    // the geometry policy -- currently DISARMED (kRbLowPowerW in rowbucket_geom.h).
-    // When armed, selection happens once, here; a later cap change never re-selects.
-    explicit CudaSolver(int index = 0, unsigned power_limit_w = 0);
+    // `power_limit_w`: the board limit observed at startup (0 = unknown), read by the
+    // geometry, match-first and speculative-entry policies (rowbucket_geom.h).
+    // Selection happens once, here; a later cap change never re-selects.
+    // `mem_clock_mhz`: the memory clock observed at startup (0 = unknown); a held
+    // down-rung moves the speculative-entry crossover (kSpecMinPowerRungW).
+    explicit CudaSolver(int index = 0, unsigned power_limit_w = 0,
+                        unsigned mem_clock_mhz = 0);
     ~CudaSolver() override;
     CudaSolver(const CudaSolver&) = delete;
     CudaSolver& operator=(const CudaSolver&) = delete;
