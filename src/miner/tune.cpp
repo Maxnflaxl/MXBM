@@ -107,7 +107,7 @@ bool tune_stored_rung(const std::string& device_key, unsigned& mhz_out,
     } catch (...) { return false; }
 }
 
-int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
+int run_tune(std::unique_ptr<Solver>& solver, Stats& stats, const std::string& device_key,
              const TuneConfig& cfg, std::atomic<bool>& stop) {
     const gpu::PowerLimit pl0 = gpu::nvml_power_limit(cfg.device);
     if (!pl0.valid) {
@@ -188,6 +188,21 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
             restore.mem = true;
         }
         if (!settle(5, stop)) return false;
+        if (cfg.remake) {
+            // Rebuild against the state just applied (see TuneConfig::remake), after
+            // the settle: a memory-clock write takes a moment to land, and a solver
+            // constructed against the pre-transition clock reads the wrong rung.
+            // Old solver first so the two allocations never coexist.
+            if (cfg.live) cfg.live->store(nullptr, std::memory_order_relaxed);
+            solver.reset();
+            solver = cfg.remake();
+            if (!solver) {
+                ui::console::error("--tune: rebuilding the solver for this point "
+                                   "failed; aborting");
+                return false;
+            }
+            if (cfg.live) cfg.live->store(solver.get(), std::memory_order_relaxed);
+        }
         std::atomic<bool> done{false};
         std::vector<double> draws;
         std::vector<unsigned> mems;
@@ -201,7 +216,7 @@ int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
         });
         unsigned long long e0 = 0, e1 = 0;
         const bool e_ok = gpu::nvml_total_energy_mj(e0, cfg.device);
-        const BenchmarkResult r = run_benchmark(solver, stats, per, stop);
+        const BenchmarkResult r = run_benchmark(*solver, stats, per, stop);
         done.store(true, std::memory_order_relaxed);
         sampler.join();
         if (mclk) {

@@ -15,6 +15,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -172,15 +174,27 @@ struct TuneConfig {
     // the user chose a memory clock themselves (--mclk) -- theirs stands -- or
     // chose an explicit grid.
     bool rung_pass = true;
+    // Reconstruct the solver at each measured point, after the cap (and any rung
+    // lock) has landed on the card. Construction is where the cap-keyed choices
+    // are made -- the low-power geometry preference, the speculative-entry gate --
+    // so a point measured on a startup-time solver is a point of a different
+    // program. The old solver is destroyed first so the two allocations never
+    // coexist (overlapping them would step a small card down a rung). Empty =
+    // keep the one solver for the whole sweep.
+    std::function<std::unique_ptr<Solver>()> remake;
+    // Where the sweep publishes the solver it is currently driving, for the
+    // caller's SIGINT hook; null while a swap is in flight.
+    std::atomic<Solver*>* live = nullptr;
 };
 
 // Runs the sweep on `solver` (single-device: device 0's limit, like --pl). Needs NVML
 // write permission -- the first act is a no-op write of the limit already on the card,
 // so a permission failure exits before anything changed. Restores the original limit
 // on every path it controls, including Ctrl+C via `stop`. `device_key` names the store
-// entry ("<name>@<pci>"); it must match what --pl auto builds. Returns a process exit
-// code; 0 means the table printed and the store was written.
-int run_tune(Solver& solver, Stats& stats, const std::string& device_key,
+// entry ("<name>@<pci>"); it must match what --pl auto builds. With `cfg.remake` set,
+// `solver` is replaced at every measured point (see TuneConfig). Returns a process
+// exit code; 0 means the table printed and the store was written.
+int run_tune(std::unique_ptr<Solver>& solver, Stats& stats, const std::string& device_key,
              const TuneConfig& cfg, std::atomic<bool>& stop);
 
 // The stored knee for `device_key`, or 0 when the store or the entry is absent.

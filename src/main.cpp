@@ -918,22 +918,50 @@ int main(int argc, char** argv) {
             }
         }
         // Same Ctrl+C contract as the benchmark: stop the sweep, cut the solve in
-        // flight -- and run_tune itself restores the power limit on that path.
+        // flight -- and run_tune itself restores the power limit on that path. The
+        // solver pointer is atomic because the sweep replaces the solver per point
+        // (cfg.remake below) and publishes the live one through cfg.live.
         static std::atomic<bool>* s_tstop = nullptr;
-        static miner::Solver* s_tsolver = nullptr;
+        static std::atomic<miner::Solver*> s_tsolver{nullptr};
         std::atomic<bool> stop{false};
         s_tstop = &stop;
-        s_tsolver = solver.get();
+        s_tsolver.store(solver.get(), std::memory_order_relaxed);
         std::signal(SIGINT, [](int) {
             if (s_tstop) s_tstop->store(true, std::memory_order_relaxed);
-            if (s_tsolver) s_tsolver->request_abort();
+            if (miner::Solver* s = s_tsolver.load(std::memory_order_relaxed))
+                s->request_abort();
         });
+        tcfg.live = &s_tsolver;
+#ifdef MXBM_HAVE_CUDA
+        // Rebuild the solver at each tune point so the cap-keyed construction
+        // choices (geometry preference, speculative entry) match a daily run at
+        // that cap. CUDA only -- the OpenCL solver takes no such inputs, and
+        // rebuilding it would recompile its kernels at every point for nothing.
+        if (dev_driver == "Cuda" && !solver_positions.empty()
+            && solver_positions.front() < cards.size()) {
+            const unsigned rpos = solver_positions.front();
+            const int rcuda = cards[rpos].cuda_index;
+            tcfg.remake = [rpos, rcuda]() -> std::unique_ptr<miner::Solver> {
+                const gpu::PowerLimit rpl = gpu::nvml_power_limit(rpos);
+                const gpu::Telemetry rtl = gpu::nvml_sample(rpos);
+                try {
+                    return std::make_unique<gpu::CudaSolver>(
+                        rcuda, rpl.valid ? rpl.current_w : 0u,
+                        rtl.have_mem ? rtl.mem_clock_mhz : 0u);
+                } catch (const std::exception& e) {
+                    ui::console::error(std::string("--tune: solver reconstruction "
+                                                   "failed (") + e.what() + ")");
+                    return nullptr;
+                }
+            };
+        }
+#endif
         // Same key derivation as --pl auto: NVML's name first, the active
         // solver's as fallback, so store and lookup agree on any backend.
         const std::string nname = gpu::nvml_device_name((unsigned)device_index);
         const std::string key = (nname.empty() ? dev_name : nname) + "@"
                               + gpu::nvml_pci_address((unsigned)device_index);
-        const int rc = miner::run_tune(*solver, stats, key, tcfg, stop);
+        const int rc = miner::run_tune(solver, stats, key, tcfg, stop);
         // Same epilogue as the benchmark: if some OTHER OC knob (--cclk with --tune
         // is legitimate) still has a restore pending, SIGINT must keep triggering it.
         if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();

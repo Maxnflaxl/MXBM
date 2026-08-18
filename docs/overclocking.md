@@ -80,7 +80,8 @@ temperature to watch, which is its own argument for leaving headroom.
 `--tune` is the power sweep as a first-class mode. Three properties it holds:
 
 - **The right loop.** Every point runs the exact `Engine` path mining runs, CPU-verified
-  sol/s — not a pipeline replay.
+  sol/s — not a pipeline replay. The solver is also rebuilt at every point, so each cap
+  is measured exactly as a daily run at that cap would behave.
 - **The current build.** The sweep lives inside the shipping binary.
 - **A drift gauge.** After both passes the first point is re-measured; past ±1.5 % the
   table is flagged. Un-gauged sweeps on the reference card have disagreed by 2 %/arm
