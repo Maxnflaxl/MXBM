@@ -21,15 +21,25 @@ The fee is charged in **time**, not in shares. There is no per-share cut and
 no skimming of your submissions: your shares go to your pool, the fee's
 shares go to the fee pool, and the two are never mixed.
 
-Only time you are **actually mining** counts. The clock accrues while your
-pool has given the miner a job to work on; time spent connecting, waiting on
-a dead pool, or between reconnects is free. A round that gets cut short
-settles only the seconds it really spent, so the remainder stays owed rather
-than being silently forgiven or double-charged.
+Only time you are **actually mining** counts. Two things must both hold for
+the clock to run: your pool has given the miner a job, and a device is
+solving it. So none of the following is charged:
 
-If the fee pool has not sent a job when a round comes due, the round is
+- time spent connecting, waiting on a dead pool, or between reconnects;
+- a miner paused with the `p` key;
+- a card stopped by its thermal limit;
+- a solver backing off after an error;
+- a machine suspended and resumed.
+
+A round that gets cut short settles only the time it really spent, so the
+remainder stays owed rather than being silently forgiven or double-charged.
+A round that overruns settles the overrun too, down to the fraction of a
+second, rather than rounding in the developer's favour.
+
+If the fee pool has no current job when a round comes due, the round is
 **deferred**, not run — burning your hashrate on a job the miner does not
-have would cost you time and pay the developer nothing.
+have, or on one left over from a connection that has since dropped, would
+cost you time and pay the developer nothing.
 
 ## Raising it: `--dev-fee`
 
@@ -148,12 +158,14 @@ See [`src/miner/devfee.h`](../src/miner/devfee.h) for the design. The moving
 parts are:
 
 - **`FeeAccrual`** — turns mining time into fee debt and decides when a round
-  is owed. Pure arithmetic, no threads.
+  is owed. Pure arithmetic, no threads, sub-second throughout.
 - **`JobRouter`** — holds the latest job from each connection and dispatches
   whichever belongs to the active one. Both pools feed it continuously, so
   switching in either direction is instant and lossless: when a round ends you
   resume on the newest job from your pool, not the stale one the round
-  interrupted.
+  interrupted. A slot is dropped when its connection disconnects, and ages out
+  if no job arrives for two minutes, so neither the fee clock nor a fee round
+  runs on work from a pool that is no longer there.
 - **`DevFee`** — owns the fee's stratum connection and the scheduler thread
   that drives the other two.
 

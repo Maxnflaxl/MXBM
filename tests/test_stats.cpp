@@ -249,5 +249,33 @@ int main() {
               "the 60 s window starts sampling at 60 s, attempts rate alongside it");
     }
 
+    // -- solve liveness: the developer fee's accrual gate (miner/devfee.cpp) --
+    {
+        using secs = std::chrono::seconds;
+        Stats s;
+        long long fake_ms = 0;
+        install_fake_clock(s, fake_ms);
+
+        // A miner that has never solved is not mining, so nothing is owed.
+        check(!s.attempted_within(secs{30}), "no attempt ever: not mining");
+
+        s.record_attempt(2);
+        // Positive control. Were this stuck false, the fee would quietly stop
+        // charging and every counter would still read plausible.
+        check(s.attempted_within(secs{30}), "a solve just now reads as mining");
+
+        fake_ms = 29000;
+        check(s.attempted_within(secs{30}), "still mining inside the grace window");
+
+        // Past the window: a pause, a thermal stop or a solver backoff all
+        // stop attempts, and the fee clock has to stop with them.
+        fake_ms = 31000;
+        check(!s.attempted_within(secs{30}), "attempts stopped: not mining");
+
+        fake_ms = 31500;
+        s.record_attempt(2);
+        check(s.attempted_within(secs{30}), "and mining again once solves resume");
+    }
+
     return summary("stats");
 }

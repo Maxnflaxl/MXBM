@@ -117,6 +117,27 @@ void test_accrual_carries_and_floors_debt() {
     check(c.debt_seconds() == 0.0, "an overrunning round floors the debt at zero");
 }
 
+void test_accrual_keeps_sub_second_time() {
+    section("accrual: sub-second");
+    using fsecs = std::chrono::duration<double>;
+
+    // The scheduler measures its own tick rather than assuming one second, so
+    // partial seconds have to reach the debt intact.
+    FeeAccrual a(one_percent_hourly());
+    a.add_mining_time(fsecs{1.5});
+    check(a.debt_seconds() > 0.0149 && a.debt_seconds() < 0.0151,
+          "fractional mining time accrues fractional debt");
+
+    // A round overshoots its nominal length by however much the scheduler wait
+    // overruns. Truncating that to whole seconds would leave the remainder
+    // owed and charge it again next round -- above the advertised rate.
+    FeeAccrual b(one_percent_hourly());
+    b.add_mining_time(secs{7200});   // 72 s owed
+    b.settle(fsecs{36.4});
+    check(b.debt_seconds() > 35.59 && b.debt_seconds() < 35.61,
+          "a round settles its overshoot, not a truncated second");
+}
+
 void test_router_dispatches_only_the_active_origin() {
     section("router: dispatch gating");
     std::vector<Dispatched> got;
@@ -188,6 +209,38 @@ void test_router_defers_a_switch_it_cannot_serve() {
           "the fee pool's first job is dispatched once it is the active origin");
 }
 
+void test_router_forgets_a_dropped_connection() {
+    section("router: clear and freshness");
+    std::vector<Dispatched> got;
+    JobRouter router([&](const stratum::Job& j, const std::string& p, Origin o) {
+        got.push_back(Dispatched{j.id, p, o});
+    });
+
+    router.offer(make_job("dev-1"), "beef", Origin::Dev);
+    check(router.has(Origin::Dev), "an offered job is present");
+    check(router.fresh(Origin::Dev, secs{60}), "...and fresh");
+    // Any elapsed time at all exceeds a zero budget, which is what proves the
+    // age is compared rather than ignored -- no sleeping needed.
+    check(!router.fresh(Origin::Dev, secs{0}), "a zero max_age ages any job out");
+
+    // A slot still "present" across an outage would let a fee round mine a
+    // job from a pool that has already dropped.
+    router.clear(Origin::Dev);
+    check(!router.has(Origin::Dev), "a dropped connection's job is forgotten");
+    check(!router.fresh(Origin::Dev, secs{60}), "a cleared slot is never fresh");
+    check(router.active() == Origin::Main, "clearing does not move the solver");
+
+    router.offer(make_job("dev-2"), "beef", Origin::Dev);
+    check(router.has(Origin::Dev), "the reconnect's first job restores it");
+
+    // The user's side clears on disconnect too, which is what stops the fee
+    // clock while their pool is down.
+    router.offer(make_job("main-1"), "a1f", Origin::Main);
+    check(router.has(Origin::Main), "the user's pool has a job");
+    router.clear(Origin::Main);
+    check(!router.has(Origin::Main), "and loses it when the connection drops");
+}
+
 void test_shipped_configuration_is_coherent() {
     section("shipped configuration");
     const DevFeeSchedule s = devfee_schedule();
@@ -256,9 +309,11 @@ int main() {
     test_accrual_reaches_a_round_at_the_stated_rate();
     test_accrual_only_counts_time_it_is_given();
     test_accrual_carries_and_floors_debt();
+    test_accrual_keeps_sub_second_time();
     test_router_dispatches_only_the_active_origin();
     test_router_switches_in_both_directions();
     test_router_defers_a_switch_it_cannot_serve();
+    test_router_forgets_a_dropped_connection();
     test_shipped_configuration_is_coherent();
     test_login_names_the_round_after_the_users_worker();
     return summary("devfee");

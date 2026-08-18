@@ -69,7 +69,8 @@ public:
     void set_devfee_active(bool active);
 
     // One completed fee slice: the fee is charged in time, not in shares.
-    void record_devfee_slice(std::chrono::seconds elapsed);
+    // Sub-second, so a round's overshoot past its nominal length is counted.
+    void record_devfee_slice(std::chrono::duration<double> elapsed);
 
     // "host:port" and the TCP+TLS handshake duration in milliseconds.
     void record_connect(const std::string& hostport, long long connect_ms);
@@ -77,6 +78,12 @@ public:
     void record_disconnect();
 
     // -- consumer -------------------------------------------------------------
+
+    // Whether any device completed a solve within `age`. Attempts stop for a
+    // user pause, a thermal pause, a solver backoff and a wedged device alike,
+    // so one query covers every way the GPU can be idle. The developer fee
+    // accrues only while it holds (miner/devfee.cpp).
+    bool attempted_within(std::chrono::seconds age) const;
 
     // One found share, as the consumer sees it. Age rather than a timestamp:
     // Stats never reads wall-clock time (see now_fn).

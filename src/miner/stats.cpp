@@ -175,10 +175,18 @@ void Stats::set_devfee_active(bool active) {
     devfee_active_ = active;
 }
 
-void Stats::record_devfee_slice(std::chrono::seconds elapsed) {
+void Stats::record_devfee_slice(std::chrono::duration<double> elapsed) {
     std::lock_guard<std::mutex> lock(mutex_);
-    devfee_seconds_ += (double)elapsed.count();
+    devfee_seconds_ += elapsed.count();
     ++devfee_slices_;
+}
+
+bool Stats::attempted_within(std::chrono::seconds age) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // attempts_ is append-only per solve, so the back entry is the newest.
+    // Empty means nothing has ever solved -- not mining.
+    if (attempts_.empty()) return false;
+    return now_fn() - attempts_.back().t <= age;
 }
 
 void Stats::record_connect(const std::string& hostport, long long connect_ms) {

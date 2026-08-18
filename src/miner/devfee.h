@@ -67,17 +67,19 @@ std::string devfee_login(const std::string& dev_address,
 
 // Accrual clock: turns time spent mining into fee debt, in seconds owed.
 // Pure and thread-free so the arithmetic can be tested without waiting an
-// hour (tests/test_devfee.cpp). The caller only feeds it ticks during which
-// the user's pool had a job, so a session waiting on a dead pool is not
-// charged. Debt carries across slices: a round cut short stays owed.
+// hour (tests/test_devfee.cpp). The caller only feeds it time during which the
+// user's pool had a job AND a device was solving, so a dead pool, a pause or a
+// solver backoff is not charged. Debt carries across slices: a round cut short
+// stays owed. Sub-second throughout -- truncating a round's overshoot would
+// leave it unsettled and charge above the stated rate.
 class FeeAccrual {
 public:
     explicit FeeAccrual(DevFeeSchedule schedule);
 
-    void add_mining_time(std::chrono::seconds dt);
+    void add_mining_time(std::chrono::duration<double> dt);
     bool slice_due() const;                    // debt has reached a full slice
     std::chrono::seconds slice_len() const;
-    void settle(std::chrono::seconds spent);   // floors at zero; never goes negative
+    void settle(std::chrono::duration<double> spent);   // floors at zero
     double debt_seconds() const;
 
 private:
@@ -105,13 +107,23 @@ public:
     void set_active(Origin origin);
 
     Origin active() const;
-    bool has(Origin origin) const;   // this origin has sent at least one job
+    bool has(Origin origin) const;   // this origin has a job cached right now
+
+    // Drops `origin`'s cached job. Wired to both connections' on_disconnect:
+    // a job from a pool that has since dropped is neither mineable nor
+    // something to accrue fee debt against.
+    void clear(Origin origin);
+
+    // has(), plus the job arrived within `max_age` -- the half-dead socket
+    // that never reports a disconnect.
+    bool fresh(Origin origin, std::chrono::seconds max_age) const;
 
 private:
     struct Slot {
         stratum::Job job{};
         std::string nonceprefix;
         bool present = false;
+        std::chrono::steady_clock::time_point at{};
     };
     Slot& slot(Origin origin);
     const Slot& slot(Origin origin) const;

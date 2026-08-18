@@ -90,9 +90,9 @@ std::string devfee_login(const std::string& dev_address,
 
 FeeAccrual::FeeAccrual(DevFeeSchedule schedule) : schedule_(schedule) {}
 
-void FeeAccrual::add_mining_time(std::chrono::seconds dt) {
-    if (dt.count() <= 0) return;
-    debt_s_ += schedule_.rate * (double)dt.count();
+void FeeAccrual::add_mining_time(std::chrono::duration<double> dt) {
+    if (dt.count() <= 0.0) return;
+    debt_s_ += schedule_.rate * dt.count();
 }
 
 bool FeeAccrual::slice_due() const {
@@ -103,8 +103,8 @@ bool FeeAccrual::slice_due() const {
 
 std::chrono::seconds FeeAccrual::slice_len() const { return schedule_.slice(); }
 
-void FeeAccrual::settle(std::chrono::seconds spent) {
-    debt_s_ -= (double)spent.count();
+void FeeAccrual::settle(std::chrono::duration<double> spent) {
+    debt_s_ -= spent.count();
     // An overrun settles the excess rather than banking negative debt.
     if (debt_s_ < 0.0) debt_s_ = 0.0;
 }
@@ -129,6 +129,7 @@ void JobRouter::offer(const stratum::Job& job, const std::string& nonceprefix, O
     s.job = job;
     s.nonceprefix = nonceprefix;
     s.present = true;
+    s.at = std::chrono::steady_clock::now();
     // Dispatch under the lock: a set_active() racing between the unlock and the
     // dispatch could deliver its own job first and let this older one land on
     // top, leaving the solver on the inactive pool. Safe to hold -- dispatch_
@@ -154,6 +155,19 @@ bool JobRouter::has(Origin origin) const {
     return slot(origin).present;
 }
 
+void JobRouter::clear(Origin origin) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // The active origin is left alone: a dropped pool reconnects, and moving
+    // the solver on a blip would cost more than the idle seconds it saves.
+    slot(origin).present = false;
+}
+
+bool JobRouter::fresh(Origin origin, std::chrono::seconds max_age) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const Slot& s = slot(origin);
+    return s.present && (std::chrono::steady_clock::now() - s.at) <= max_age;
+}
+
 // -- DevFee -------------------------------------------------------------------
 
 DevFee::DevFee(JobRouter& router, Stats& stats, DevFeePool pool, DevFeeSchedule schedule)
@@ -174,6 +188,12 @@ void DevFee::start() {
     client_.on_result = [this](const stratum::Result& r) {
         if (r.id == "login") return;   // the fee connection's own handshake; not share traffic
         stats_.record_result(r.code, Origin::Dev);
+    };
+    client_.on_disconnect = [this] {
+        // Not stats_.record_disconnect(): that counter is the user's pool.
+        // Dropping the slot makes the next round defer rather than mine the
+        // job this connection died holding.
+        router_.clear(Origin::Dev);
     };
 
     client_.connect(pool_.host, pool_.port, pool_.tls);
@@ -214,15 +234,29 @@ bool DevFee::wait_or_stop(std::chrono::seconds d) {
 void DevFee::scheduler_main() {
     FeeAccrual accrual(schedule_);
     constexpr std::chrono::seconds kTick{1};
+    // Outlasts the slowest backend's single solve, so a working miner is never
+    // read as idle.
+    constexpr std::chrono::seconds kSolveGrace{30};
 
+    auto last = std::chrono::steady_clock::now();
     while (true) {
         if (wait_or_stop(kTick)) return;
 
-        // Only time the user is actually mining counts toward the fee: with no
-        // job from their pool nothing is being earned, so nothing is owed.
-        if (!router_.has(Origin::Main)) continue;
+        // Measured rather than assumed: the wait overshoots under load.
+        // Advanced before the gates below, so a resumed pool is not credited
+        // the outage it was down for.
+        const auto now = std::chrono::steady_clock::now();
+        std::chrono::duration<double> dt = now - last;
+        last = now;
+        // A suspended host resumes with hours on the clock and mined none.
+        if (dt > kTick * 2) dt = std::chrono::duration<double>(kTick);
 
-        accrual.add_mining_time(kTick);
+        // Only time the user is actually earning counts: their pool has live
+        // work, and a device is solving it.
+        if (!router_.has(Origin::Main)) continue;
+        if (!stats_.attempted_within(kSolveGrace)) continue;
+
+        accrual.add_mining_time(dt);
         if (!accrual.slice_due()) continue;
 
         run_slice(accrual);
@@ -231,12 +265,16 @@ void DevFee::scheduler_main() {
 }
 
 void DevFee::run_slice(FeeAccrual& accrual) {
-    if (!router_.has(Origin::Dev)) {
-        // The fee pool has not sent a job yet. Defer: the debt stays owed and
-        // the next tick retries, rather than burning time on a job we lack.
+    // Pools push jobs continuously, so one this old means the fee connection
+    // is gone whether or not the socket has said so.
+    constexpr std::chrono::seconds kDevJobMaxAge{120};
+
+    if (!router_.fresh(Origin::Dev, kDevJobMaxAge)) {
+        // Defer: the debt stays owed and the next tick retries, rather than
+        // spending the user's time on a job no pool would accept.
         if (!warned_no_dev_job_ && on_note) {
             warned_no_dev_job_ = true;
-            on_note("dev fee pool has not sent a job yet - fee round deferred");
+            on_note("dev fee pool has no current job - fee round deferred");
         }
         return;
     }
@@ -250,13 +288,13 @@ void DevFee::run_slice(FeeAccrual& accrual) {
     router_.set_active(Origin::Dev);
     wait_or_stop(len);   // a stop request cuts the round short; the restore below still runs
     router_.set_active(Origin::Main);
-    const auto spent = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now() - t0);
+    const std::chrono::duration<double> spent = std::chrono::steady_clock::now() - t0;
 
     stats_.set_devfee_active(false);
     stats_.record_devfee_slice(spent);
     accrual.settle(spent);
-    if (on_slice_end) on_slice_end(spent);
+    if (on_slice_end)
+        on_slice_end(std::chrono::duration_cast<std::chrono::seconds>(spent));
 }
 
 } } // namespace mxbm::miner

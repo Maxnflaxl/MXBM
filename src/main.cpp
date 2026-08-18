@@ -1149,9 +1149,12 @@ int main(int argc, char** argv) {
         router.offer(j, client.current_nonceprefix(), miner::Origin::Main);
     };
 
-    client.on_disconnect = [&stats]() {
+    client.on_disconnect = [&stats, &router]() {
         ui::console::disconnected();
         stats.record_disconnect();
+        // Stops the fee clock for the outage: with the pool gone the user is
+        // earning nothing, so nothing is owed until it sends work again.
+        router.clear(miner::Origin::Main);
     };
 
     // Developer fee. Announced at startup either way, so "does this binary
