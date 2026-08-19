@@ -278,6 +278,50 @@ __device__ __forceinline__ void st_em(uint32_t* p, uint32_t v) { __stcs((unsigne
 template<class T> __device__ __forceinline__ void st_em(T* p, T v) { *p = v; }
 #endif
 
+// MXBM_PAIRED_EMIT: the 64 B scatters (rounds 2 and 3) write each record as four
+// ST.128, and a scattered 16 B store half-fills its 32 B sector whatever it carries --
+// so the four stores cost four L1->L2 sector transactions for two distinct sectors.
+// The coalescer merges same-instruction same-sector lanes, so two active emitter
+// lanes that exchange record halves and addresses over shuffles can fill one
+// record's sector per instruction between them: the same four ST.128 then cost two
+// transactions per element. Bytes, records and recovery are untouched.
+#ifndef MXBM_PAIRED_EMIT
+#define MXBM_PAIRED_EMIT 0
+#endif
+#if MXBM_PAIRED_EMIT
+__device__ __forceinline__ void pair_emit64(uint64_t* __restrict__ base, size_t od,
+                                            uint64_t r0, uint64_t r1, uint64_t r2,
+                                            uint64_t r3, uint64_t r4, uint64_t r5,
+                                            uint64_t r6, uint64_t r7) {
+    const unsigned m     = __activemask();
+    const unsigned lane  = threadIdx.x & 31u;
+    const unsigned rank  = (unsigned)__popc(m & ((1u << lane) - 1u));
+    const unsigned prank = rank ^ 1u;
+    const bool     solo  = prank >= (unsigned)__popc(m);
+    const int      plane = solo ? (int)lane : (int)__fns(m, 0, (int)prank + 1);
+    const bool     lo    = (rank & 1u) == 0u;
+    // Each lane passes the half its partner will store: the pair-lower lane needs
+    // the partner's words 0,1,4,5 and supplies its own 2,3,6,7, and vice versa.
+    // The partner's SLOT travels rather than its pointer: an address that
+    // round-trips through the shuffle as an integer loses its state space and the
+    // stores come out generic instead of STG.
+    const uint64_t s0 = __shfl_sync(m, lo ? r2 : r0, plane);
+    const uint64_t s1 = __shfl_sync(m, lo ? r3 : r1, plane);
+    const uint64_t s2 = __shfl_sync(m, lo ? r6 : r4, plane);
+    const uint64_t s3 = __shfl_sync(m, lo ? r7 : r5, plane);
+    const uint64_t po = __shfl_sync(m, (uint64_t)od, plane);
+    ulonglong2* v  = reinterpret_cast<ulonglong2*>(base + od);
+    ulonglong2* pv = reinterpret_cast<ulonglong2*>(base + (size_t)po);
+    // A solo lane (odd active count) is its own partner for words 0,1,4,5 and takes
+    // the high-lane role for 2,3,6,7, which lands all eight words of its own record.
+    const bool hi34 = !lo || solo;
+    st_em(lo   ? v + 0 : pv + 1, lo   ? make_ulonglong2(r0, r1) : make_ulonglong2(s0, s1));
+    st_em(lo   ? v + 2 : pv + 3, lo   ? make_ulonglong2(r4, r5) : make_ulonglong2(s2, s3));
+    st_em(hi34 ? v + 1 : pv + 0, hi34 ? make_ulonglong2(r2, r3) : make_ulonglong2(s0, s1));
+    st_em(hi34 ? v + 3 : pv + 2, hi34 ? make_ulonglong2(r6, r7) : make_ulonglong2(s2, s3));
+}
+#endif
+
 // MXBM_ABL_DERIVE: attribution only, RESULTS ARE INTENTIONALLY WRONG. Bit 0 replaces
 // round 1's seed derivation, bit 1 round 2's 14-siphash rebuild, with a cheap spread.
 // This is the one ablation that answers "how much of r1/r2's distance from their DRAM
@@ -1428,18 +1472,23 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                             static_assert(OUTW == 7 || !IMPB, "pack is 400-bit");
                             constexpr uint32_t impKB = 24u - IMPB;
                             constexpr uint64_t impM  = (1ull << impKB) - 1u;
-                            st_em(v + 0, make_ulonglong2(
-                                (c.w[0] & impM) | ((c.w[0] >> 24) << impKB)
-                                                | (c.w[1] << (impKB + 40)),
-                                (c.w[1] >> IMPB) | (c.w[2] << (64 - IMPB))));
-                            st_em(v + 1, make_ulonglong2(
-                                (c.w[2] >> IMPB) | (c.w[3] << (64 - IMPB)),
-                                (c.w[3] >> IMPB) | (c.w[4] << (64 - IMPB))));
-                            st_em(v + 2, make_ulonglong2(
-                                (c.w[4] >> IMPB) | (c.w[5] << (64 - IMPB)),
-                                (c.w[5] >> IMPB) | (c.w[6] << (64 - IMPB))));
-                            st_em(v + 3, make_ulonglong2(r3_p0(ctree[0], ctree[1], ctree[2]),
-                                                         r3_p1(ctree[2], ctree[3], cgi)));
+                            const uint64_t e0 = (c.w[0] & impM) | ((c.w[0] >> 24) << impKB)
+                                                                | (c.w[1] << (impKB + 40));
+                            const uint64_t e1 = (c.w[1] >> IMPB) | (c.w[2] << (64 - IMPB));
+                            const uint64_t e2 = (c.w[2] >> IMPB) | (c.w[3] << (64 - IMPB));
+                            const uint64_t e3 = (c.w[3] >> IMPB) | (c.w[4] << (64 - IMPB));
+                            const uint64_t e4 = (c.w[4] >> IMPB) | (c.w[5] << (64 - IMPB));
+                            const uint64_t e5 = (c.w[5] >> IMPB) | (c.w[6] << (64 - IMPB));
+                            const uint64_t e6 = r3_p0(ctree[0], ctree[1], ctree[2]);
+                            const uint64_t e7 = r3_p1(ctree[2], ctree[3], cgi);
+#if MXBM_PAIRED_EMIT
+                            pair_emit64(out_belem, od, e0, e1, e2, e3, e4, e5, e6, e7);
+#else
+                            st_em(v + 0, make_ulonglong2(e0, e1));
+                            st_em(v + 1, make_ulonglong2(e2, e3));
+                            st_em(v + 2, make_ulonglong2(e4, e5));
+                            st_em(v + 3, make_ulonglong2(e6, e7));
+#endif
                         } else {
                             st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));
                             st_em(v + 1, make_ulonglong2(c.w[2], c.w[3]));
@@ -1482,7 +1531,17 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                     } else if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
                         // LM_RD3 differs from LM_EMIT only in how it READ its input; what
                         // round 3 writes for round 4 is byte-identical either way.
+                        // Word 5 in the emitting block's INPUT bucket's place: at
+                        // Lout(4) = 288 the shift drops everything above bit 311, so this
+                        // word cannot reach round 4's output and round 4 reads it only to
+                        // XOR it into a result that masks it away. replay_r3 reads it.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
+#if MXBM_PAIRED_EMIT && !MXBM_POISON_W
+                        pair_emit64(out_belem, od,
+                                    c.w[0], c.w[1], c.w[2], c.w[3],
+                                    c.w[4], (uint64_t)bucket,
+                                    ((uint64_t)cgi << 32) | (uint64_t)ctree[0], contribOut);
+#else
                         ulonglong2* v = reinterpret_cast<ulonglong2*>(out_belem + od);
 #if MXBM_POISON_W
                         // Poison rather than zero: a reader must corrupt, not coincide.
@@ -1494,14 +1553,11 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
 #else
                         st_em(v + 0, make_ulonglong2(c.w[0], c.w[1]));
                         st_em(v + 1, make_ulonglong2(c.w[2], c.w[3]));
-                        // Word 5 in the emitting block's INPUT bucket's place: at
-                        // Lout(4) = 288 the shift drops everything above bit 311, so this
-                        // word cannot reach round 4's output and round 4 reads it only to
-                        // XOR it into a result that masks it away. replay_r3 reads it.
                         st_em(v + 2, make_ulonglong2(c.w[4], (uint64_t)bucket));
 #endif
                         st_em(v + 3, make_ulonglong2(((uint64_t)cgi << 32) | (uint64_t)ctree[0],
                                                contribOut));
+#endif
                     } else if constexpr (LMODE == LM_USE && OUTSTR == 1) {
                         st_em(out_belem + od, t5_rec(c.w[0], bucket));
                     } else {
