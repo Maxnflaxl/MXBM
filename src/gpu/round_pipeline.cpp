@@ -54,11 +54,9 @@ uint32_t inwords_for(int r) {
     static const uint32_t T[5] = {7u, 7u, 7u, 6u, 5u};
     return T[r - 1];
 }
-// Compacted sort path (DEFAULT): fixed-width mix (round_mix_c6/c5) + fixed-width
-// match variants (round_match_sorted_{7_6,6_5,5_1}) shrink the dominant gather/emit
-// to the [7,7,6,5,1] significant-word schedule -- measured 224->214 ms (~4.4%),
-// byte-identical goldens. Set MXBM_NO_COMPACT to fall back to full-width stride-7.
-bool use_compact() { static bool v = (std::getenv("MXBM_NO_COMPACT") == nullptr); return v; }
+// Compacted sort path: fixed-width mix and match variants shrink the dominant
+// gather/emit to the [7,7,6,5,1] significant-word schedule -- measured
+// 224->214 ms (~4.4%), byte-identical goldens.
 
 // Row-bucket geometry. bucketBits sets the bucket count; submaskBits sets how many
 // times each bucket is rescanned by the staging loop (2^submaskBits) and hence the
@@ -108,8 +106,6 @@ FusedConsts fused_consts_for(int r) {
         default: return {288u, 9u, 2u, 0u, 0u};   // r4: contrib in, nothing out
     }
 }
-
-bool compact_active();   // defined below; gates the compacted sort path
 
 // Packed row-bucket element strides (u64 per element), indexed by the round that
 // READS them. Record = [work: inwords | meta: 1 | leaf payload: ceil(uints/2)]:
@@ -408,7 +404,6 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     // (synthetic tests that hand-build a Budget) falls back to elems_per_round --
     // those tests supply their own non-overflowing data, so no headroom is needed.
     p.capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
-    p.compact  = compact_active();   // compacted stride/kernels for the sort path
 
     // Each resident element is 7 x uint64 (56 B) of work state, matching
     // kSeedElemBytes. PING-PONG: round r reads work[r&1] and writes work[(r+1)&1];
@@ -507,12 +502,6 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
     }
 }
 
-// Compaction is only meaningful on the sort path (it feeds the fixed-width match
-// variants); never activate it under legacy/LDS, which read work at stride 7.
-bool use_sort_match();   // defined below
-bool use_lds_match();    // defined below
-bool compact_active() { return use_compact() && use_sort_match() && !use_lds_match(); }
-
 void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
     uint32_t capacity = pb.capacity;
@@ -522,25 +511,12 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     cl_mem leavesMem = pb.leaves[r & 1].get();   // E3a: work[r]'s materialized prefix
     cl_mem pairsMem  = pb.sort_pairs[0].get();   // D3: fused (key,index) sort pairs
 
-    // Compaction: fixed-width in-place mix by round. inwords_for(r) = [_,7,7,6,5]
-    // for r=2..5; r2,r3 (7) reuse stock round_mix, r4 (6) / r5 (5) use narrowed
-    // variants. Same signature as round_mix, so only the kernel name changes.
-    // Fully-constant variants (INW *and* padNum *and* Lmix baked in) are the default:
-    // see ROUND_MIX_K in round.cl for why, and for the 27 ms it was costing round 4.
-    // MXBM_MIX_RUNTIME falls back to the partially-constant kernels, which is what the
-    // A/B was run against and what makes the win re-measurable.
-    static const bool runtimeMix = std::getenv("MXBM_MIX_RUNTIME") != nullptr;
-    const char* mixName = "round_mix";
-    if (pb.compact) {
-        if (!runtimeMix) {
-            static const char* kK[6] = { "", "", "round_mix_k2", "round_mix_k3",
-                                         "round_mix_k4", "round_mix_k5" };
-            mixName = kK[r];
-        }
-        else if (r == 4) mixName = "round_mix_c6";
-        else if (r == 5) mixName = "round_mix_c5";
-    }
-    Kernel k = rt.kernel(prog, mixName);
+    // Fixed-width in-place mix by round: fully-constant variants (INW *and* padNum
+    // *and* Lmix baked in) -- see ROUND_MIX_K in round.cl for why, and for the 27 ms
+    // a runtime Lmix was costing round 4.
+    static const char* kMixK[6] = { "", "", "round_mix_k2", "round_mix_k3",
+                                    "round_mix_k4", "round_mix_k5" };
+    Kernel k = rt.kernel(prog, kMixK[r]);
     rt.set_arg(k.get(), 0, N);
     rt.set_arg(k.get(), 1, capacity);
     rt.set_arg(k.get(), 2, padNum);
@@ -823,15 +799,11 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
 
     auto tEm = clk::now();
     {
-        // Compaction: fixed-width match variant by round (r3:7->6, r4:6->5,
-        // r5:5->1). r1,r2 stay full-width. All variants share this signature.
-        // Fully-constant variants are the default: Lout, lead_identity and the leaf
-        // widths are as compile-time-knowable as the work widths already were. See
-        // MATCH_SORTED_K in sort.cl. MXBM_MATCH_RUNTIME restores the partially-constant
-        // kernels, which is what the A/B was measured against.
-        static const bool runtimeMatch = std::getenv("MXBM_MATCH_RUNTIME") != nullptr;
+        // Fixed-width match variant by round (r3:7->6, r4:6->5, r5:5->1), fully
+        // constant: Lout, lead_identity and the leaf widths are as compile-time-
+        // knowable as the work widths already were. See MATCH_SORTED_K in sort.cl.
         const char* matchName = "round_match_sorted";
-        if (pb.compact) {
+        {
             // MEASURED, and not what was expected: the constants win for r3/r4/r5
             // (-1.6 / -0.9 / -1.2 ms) and LOSE for r1/r2 (+2.8 / +2.3), reproducibly,
             // across every interleaved run. They are therefore used only where they pay.
@@ -839,7 +811,7 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
             // unrolling it (or deleting it, at 0) is worth real time, and 2/4 for r1/r2,
             // where it is not and something else costs more. That "something else" is
             // unexplained; see docs/performance.md.
-            if (!runtimeMatch && r >= 3) {
+            if (r >= 3) {
                 static const char* kK[6] = { "", "", "", "round_match_k3",
                                              "round_match_k4", "round_match_k5" };
                 matchName = kK[r];
@@ -848,15 +820,12 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
             // regression keeps un-selected. 1 = plain k1/k2 (re-measures the
             // regression); 2 = the occupancy-pinned k1p/k2p (the ballast
             // experiment -- same constants, the generic kernel's residency).
-            else if (!runtimeMatch && r <= 2) {
+            else {
                 static const int k12 = std::getenv("MXBM_MATCH_K12")
                                      ? atoi(std::getenv("MXBM_MATCH_K12")) : 0;
                 if (k12 == 1) matchName = (r == 1) ? "round_match_k1"  : "round_match_k2";
                 if (k12 == 2) matchName = (r == 1) ? "round_match_k1p" : "round_match_k2p";
             }
-            else if (r == 3) matchName = "round_match_sorted_7_6";
-            else if (r == 4) matchName = "round_match_sorted_6_5";
-            else if (r == 5) matchName = "round_match_sorted_5_1";
         }
         // Round 1 index-only: derives both parents from their seed indices instead of
         // reading a work buffer round1_mix_seeds_idx never wrote. Takes one extra
@@ -1040,7 +1009,7 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
     cl_mem outSlotsMem = outSlots.get();
     cl_mem countersMem = pb.counters.get();
 
-    if (pb.compact) {
+    {
         // r5 children are stored at outwords_for(5) = 1 word; the all-zero marker
         // collapses to word0 == 0 (upper words were 0 under Lout=24 anyway).
         Kernel k = rt.kernel(prog, "survivor_scan_s");
@@ -1051,14 +1020,6 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
         rt.set_arg(k.get(), 3, sizeof(cl_mem), &outSlotsMem);
         rt.set_arg(k.get(), 4, cap);
         rt.set_arg(k.get(), 5, sizeof(cl_mem), &countersMem);
-        rt.run1d(k.get(), N);
-    } else {
-        Kernel k = rt.kernel(prog, "survivor_scan");
-        rt.set_arg(k.get(), 0, N);
-        rt.set_arg(k.get(), 1, sizeof(cl_mem), &workMem);
-        rt.set_arg(k.get(), 2, sizeof(cl_mem), &outSlotsMem);
-        rt.set_arg(k.get(), 3, cap);
-        rt.set_arg(k.get(), 4, sizeof(cl_mem), &countersMem);
         rt.run1d(k.get(), N);
     }
 

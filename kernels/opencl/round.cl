@@ -77,41 +77,16 @@ __kernel void round_mix(uint N, uint capacity, uint padNum, uint Lmix,
     // D3 fusion: emit the sort pair from the freshly-mixed key (no key_extract pass).
     pairs_out[(size_t)g] = ((ulong)g << 32) | (uint)(e[0] & 0xFFFFFFu);
 }
-// COMPACTION variants: work stored at INW = inwords_for(r) significant words. The
-// upper (7-INW) words are 0 in the uncompacted layout (prior round's bh3_combine
-// masked them to Lout) and apply_mix folds only e[0..6] (rotl(0)=0), so reading INW
-// words + zero-filling is bit-exact. INW is a COMPILE-TIME constant so the read
-// loop fully unrolls -- a runtime stride here cost +24 ms (mix regressed 50->74),
-// the same unrolling-killer that sank runtime-width match. r2,r3 (INW=7) reuse the
-// stock round_mix unchanged; only r4 (6) and r5 (5) need a narrowed variant.
-#define ROUND_MIX_C(NAME, INW)                                                  \
-__kernel void NAME(uint N, uint capacity, uint padNum, uint Lmix,               \
-                   __global ulong* work,                                        \
-                   __global const uint* leaves_in,                             \
-                   __global ulong* pairs_out) {                                 \
-    uint g = (uint)get_global_id(0);                                           \
-    if (g >= N) return;                                                        \
-    uint tree[9];                                                             \
-    for (uint i = 0; i < padNum; ++i) tree[i] = leaves_in[(size_t)g*BH3_MAX_LEAVES + i]; \
-    ulong e[7];                                                               \
-    for (int k = 0; k < 7; ++k) e[k] = 0ul;                                   \
-    for (int k = 0; k < (INW); ++k) e[k] = work[(size_t)g*(INW) + k];          \
-    e[0] = bh3_apply_mix(e, tree, padNum, Lmix);                              \
-    work[(size_t)g*(INW)] = e[0];                                             \
-    pairs_out[(size_t)g] = ((ulong)g << 32) | (uint)(e[0] & 0xFFFFFFu);        \
-}
-ROUND_MIX_C(round_mix_c6, 6)   // r4 input: 6 significant words
-ROUND_MIX_C(round_mix_c5, 5)   // r5 input: 5 significant words
-
-// FULLY CONSTANT variants: padNum and Lmix baked in as well as INW.
+// COMPACTED, FULLY CONSTANT variants: work stored at INW = inwords_for(r)
+// significant words, with padNum and Lmix baked in as well. The upper (7-INW)
+// words are 0 in the uncompacted layout (prior round's bh3_combine masked them
+// to Lout) and apply_mix folds only e[0..6] (rotl(0)=0), so reading INW words +
+// zero-filling is bit-exact. All three MUST be compile-time constants so the
+// loops fully unroll -- a runtime stride cost +24 ms (mix regressed 50->74),
+// and a runtime Lmix cost round 4 alone 27.0 ms against 7.6 / 7.6 / 7.8 for
+// r2 / r3 / r5, while r5 does MORE of the work (padNum 9 against 6).
 //
-// WHY. INW was made compile-time above because a runtime stride cost +24 ms, and the
-// same reasoning was never carried to the other two. It should have been, and round 4
-// is where it shows: mix measures 27.0 ms there against 7.6 / 7.6 / 7.8 for r2 / r3 /
-// r5 -- while r5 does MORE of the work (padNum 9 against 6). Not the leaf read (a fixed
-// contiguous 9-leaf read left r4 at 30 ms), not work volume, not a branch.
-//
-// The suspect is inside bh3_apply_mix, which is called with runtime Lmix:
+// The Lmix mechanism is inside bh3_apply_mix, which then sees a runtime Lmix:
 //
 //     uint word = (Lmix + i*25u) >> 6;      t[word] |= v << sh;
 //

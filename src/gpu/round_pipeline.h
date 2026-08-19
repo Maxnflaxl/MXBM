@@ -11,12 +11,6 @@ namespace mxbm { namespace gpu {
 
 struct PipelineBuffers {
     uint32_t capacity = 0;      // elems per round (= budget.elems_per_round)
-    // Compaction: when true, the sort path stores work at the significant-word
-    // schedule [7,7,6,5,1] and dispatches the fixed-width mix/match variants
-    // (round_mix_c*, round_match_sorted_*, survivor_scan_s). Set once at
-    // alloc_pipeline from the active path so every kernel agrees on the stride;
-    // white-box tests that hand-drive the legacy stride-7 kernels clear it.
-    bool compact = false;
     // Fused row-bucket path selected for this allocation (see want_rowbucket in
     // round_pipeline.cpp: MXBM_ROWBUCKET forces on, MXBM_NO_ROWBUCKET forces off,
     // else auto-select when device memory clears the ~12 GB / 3.3 GB single-alloc

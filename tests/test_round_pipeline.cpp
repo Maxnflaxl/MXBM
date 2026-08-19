@@ -6,11 +6,11 @@
 //      from-scratch CPU chain of 5x cpu_round, comparing every round's GPU
 //      `out` count against the CPU count EXACTLY, plus 0 bucket/pair drops.
 //
-// Both sections build on already-reviewed, unmodified T2-T4 building blocks
-// (mix_seeds/mix_level/scatter/match/run_single_round) -- this file adds and
-// exercises ONLY survivor_scan (kernel + host wrapper) and run_pipeline (the
-// new driver). Per the task's own framing: if (b) ever mismatches, the bug
-// is in THIS file's driver/chaining, not in T2-T4's kernels.
+// Both sections build on already-reviewed, unmodified building blocks
+// (mix_seeds/mix_level/run_single_round) -- this file adds and exercises ONLY
+// survivor_scan (kernel + host wrapper) and run_pipeline (the driver). Per the
+// task's own framing: if (b) ever mismatches, the bug is in THIS file's
+// driver/chaining, not in the round kernels.
 #include "gpu/cl_runtime.h"
 #include "gpu/round_pipeline.h"
 #include "generated/mxbm_kernels.h"
@@ -120,7 +120,10 @@ static void test_r5_survivor(Runtime& rt) {
     uint64_t cpuMixedW0 = 0;
     {
         bh3::Elem e0, e1;
-        for (int w = 0; w < 7; ++w) { e0.w[w] = h.w[w]; e1.w[w] = h.w[w]; }
+        // A genuine r5 input has words 5..6 == 0 (round 4's combine masked them to
+        // Lout=288); the raw seed borrowed as staging material does not, so zero
+        // them here -- the element's r5 shape is its 5 significant words.
+        for (int w = 0; w < 7; ++w) { e0.w[w] = (w < 5) ? h.w[w] : 0; e1.w[w] = e0.w[w]; }
         bh3::apply_mix(e0, leaves0.data(), (uint32_t)leaves0.size(), ref::Lmix(5));
         bh3::apply_mix(e1, leaves1.data(), (uint32_t)leaves1.size(), ref::Lmix(5));
         check_eq_u64(e0.w[0], e1.w[0], "r=5: both staged elements mix to the exact same w[0] (sanity, CPU-side)");
@@ -139,29 +142,19 @@ static void test_r5_survivor(Runtime& rt) {
 
     PipelineBuffers pb = alloc_pipeline(rt, bud);
     check(pb.capacity == capacity, "r=5: pipeline capacity == 16");
-    // This section hand-stages work buffers at stride 7 and drives the legacy
-    // scatter()/match() kernels directly, so pin the uncompacted layout: mix_level
-    // and survivor_scan otherwise honor pb.compact (default on) and would read the
-    // r5 element at stride 5 / output at stride 1, misaligning the manual staging.
-    pb.compact = false;
 
     // Stage raw (pre-mix) work at work[5] slots 0 and 1 -- IDENTICAL (per
     // CORRECTION 3: full duplication, not merely equal work with distinct
-    // leaves).
-    std::vector<uint64_t> work5((size_t)capacity * 7, 0);
-    for (int w = 0; w < 7; ++w) { work5[0 * 7 + w] = h.w[w]; work5[1 * 7 + w] = h.w[w]; }
+    // leaves). The sort path stores round 5's input at the compacted stride
+    // inwords_for(5) = 5 significant words -- a real r5 element's words 5..6
+    // are zero (masked by round 4's combine at Lout=288), so dropping them is
+    // bit-exact and the GPU-vs-CPU w[0] check below would catch it if not.
+    const uint32_t inW5 = 5;
+    std::vector<uint64_t> work5((size_t)capacity * inW5, 0);
+    for (uint32_t w = 0; w < inW5; ++w) { work5[0 * inW5 + w] = h.w[w]; work5[1 * inW5 + w] = h.w[w]; }
     rt.write(pb.work[(5) & 1].get(), work5.size() * 8, work5.data());
     rt.write(pb.left.get(),  h.left.size()  * 4, h.left.data());
     rt.write(pb.right.get(), h.right.size() * 4, h.right.data());
-
-    // Level-4 row's own lead (row 3 == in_lead_off for r=5, since
-    // in_lead_off=(r-2)*capacity=3*capacity): both slots share the identical
-    // subtree, so their lead (tree[0] == the first leaf in pre-order ==
-    // leaves0[0]) is identical too -- written explicitly (not left at the
-    // zero-init default) so match()'s tie-break reads a deliberate value.
-    std::vector<uint32_t> lead(5 * (size_t)capacity, 0u);
-    lead[3 * (size_t)capacity + 0] = leaves0[0];
-    lead[3 * (size_t)capacity + 1] = leaves0[0];
 
     // (E3a) Materialize each staged element's 9-leaf prefix into leaves[5&1]
     // (AoS, stride 9) so round_mix reads it directly instead of the old back-ref
@@ -174,55 +167,52 @@ static void test_r5_survivor(Runtime& rt) {
     }
 
     const uint32_t N = 2;   // round 5's own resident element count (the 2 staged slots)
-    mix_level(rt, pb, /*r=*/5, N);
+    // One full round through the shipping driver: mix_level (which also fuses the
+    // (key,index) sort pair into sort_pairs[0]) -> match_sorted.
+    RoundStats stats;
+    uint32_t outN = run_single_round(rt, pb, bud, /*r=*/5, N, stats);
 
-    // Confirm the GPU's own mix agrees with the CPU sanity check above --
-    // both slots' full 7-word Elem must be byte-identical after mixing
-    // (round_mix only rewrites w[0]; w[1..6] were staged identical and are
-    // untouched).
+    // Confirm the GPU's own mix agrees with the CPU sanity check above -- both
+    // slots' 5 significant words must be byte-identical after mixing (the mix
+    // only rewrites w[0]; the rest were staged identical and are untouched).
+    // The mixed input is still intact in work[5&1]: the match reads it, never
+    // writes it.
     {
-        std::vector<uint64_t> mixed(2 * 7);
+        std::vector<uint64_t> mixed(2 * inW5);
         rt.read(pb.work[(5) & 1].get(), mixed.size() * 8, mixed.data());
         bool identical = true;
-        for (int w = 0; w < 7; ++w) if (mixed[0 * 7 + w] != mixed[1 * 7 + w]) identical = false;
-        check(identical, "r=5: GPU-mixed slot0 and slot1 are byte-identical (all 7 words)");
+        for (uint32_t w = 0; w < inW5; ++w)
+            if (mixed[0 * inW5 + w] != mixed[1 * inW5 + w]) identical = false;
+        check(identical, "r=5: GPU-mixed slot0 and slot1 are byte-identical (all 5 significant words)");
         check_eq_u64(mixed[0], cpuMixedW0, "r=5: GPU-mixed w[0] == the CPU sanity check's w[0]");
         std::printf("  r=5: GPU-mixed w[0] slot0=0x%016llx slot1=0x%016llx\n",
-                    (unsigned long long)mixed[0], (unsigned long long)mixed[7]);
+                    (unsigned long long)mixed[0], (unsigned long long)mixed[inW5]);
     }
 
-    scatter(rt, pb, bud, N, /*workIndex=*/5);
-    {
-        uint32_t counters[4];
-        rt.read(pb.counters.get(), sizeof counters, counters);
-        check(counters[1] == 0u, "r=5: scatter counters[1] (bucket_drops) == 0");
-    }
-
-    uint32_t pair_drops = 0;
-    uint32_t outN = match(rt, pb, bud, /*r=*/5, /*inN=*/N, pair_drops);
-    std::printf("  r=5: match produced outN=%u pair_drops=%u (expect outN=1: the one colliding pair)\n", outN, pair_drops);
-    check(pair_drops == 0u, "r=5: match counters[2] (pair_drops) == 0");
+    std::printf("  r=5: match produced outN=%u pair_drops=%u (expect outN=1: the one colliding pair)\n",
+                outN, stats.pair_drops);
+    check(stats.bucket_drops == 0u, "r=5: bucket_drops == 0 (the sort path caps nothing per key)");
+    check(stats.pair_drops == 0u, "r=5: pair_drops == 0");
     check(outN == 1u, "r=5: match produced EXACTLY 1 child (the one colliding pair)");
 
     // The child landed in pb.work[0] (r==5's special-case out_work), NOT
-    // pb.work[6] (which doesn't exist -- CORRECTION 1).
-    std::vector<uint64_t> childWork(7, 0);
-    rt.read(pb.work[(0) & 1].get(), childWork.size() * 8, childWork.data());
-    bool isZero = true;
-    for (int w = 0; w < 7; ++w) if (childWork[w] != 0ull) isZero = false;
-    check(isZero, "r=5: the one child's work is ALL-ZERO across all 7 words (bh3_combine(x,x,24): XOR==0)");
+    // pb.work[6] (which doesn't exist -- CORRECTION 1), stored at the compacted
+    // output stride outwords_for(5) = 1 word.
+    uint64_t childW0 = ~0ull;
+    rt.read(pb.work[(0) & 1].get(), 8, &childW0);
+    check(childW0 == 0ull, "r=5: the one child's work is ALL-ZERO (bh3_combine(x,x,24): XOR==0)");
 
     // Back-ref row 4 (out_off=(r-1)*capacity=4*capacity): left/right must be
-    // {0,1} with left = the SMALLER slot (both leads tie, so match()'s
+    // {0,1} with left = the SMALLER slot (both leads tie, so the match's
     // tie-break falls to slot order).
-    std::vector<uint32_t> allLeft(5 * (size_t)capacity), allRight(5 * (size_t)capacity), allLead(5 * (size_t)capacity);
+    std::vector<uint32_t> allLeft(5 * (size_t)capacity), allRight(5 * (size_t)capacity);
     rt.read(pb.left.get(),  allLeft.size()  * 4, allLeft.data());
     rt.read(pb.right.get(), allRight.size() * 4, allRight.data());
     const uint32_t outOff = (5 - 1) * capacity;   // 4*capacity
     check(allLeft[outOff + 0] == 0u && allRight[outOff + 0] == 1u,
           "r=5: survivor's back-ref row 4 == {left=0, right=1} (left = smaller slot, tie-break on equal lead)");
-    std::printf("  r=5: survivor back-ref left=%u right=%u lead=%u\n",
-                allLeft[outOff + 0], allRight[outOff + 0], allLead[outOff + 0]);
+    std::printf("  r=5: survivor back-ref left=%u right=%u\n",
+                allLeft[outOff + 0], allRight[outOff + 0]);
 
     // -----------------------------------------------------------------
     // survivor_scan over pb.work[0] (CORRECTION 1: the round-5 OUTPUT, NOT

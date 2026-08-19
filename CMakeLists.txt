@@ -483,22 +483,6 @@ if(OpenCL_FOUND)
   # solve() end to end over the same search; same timeout rationale.
   set_tests_properties(gpu_solver PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_NO_ROWBUCKET=1")
 
-  # Phase-D3: the sort-based collision finder (key_extract -> radix sort ->
-  # run-scan emit) is now the DEFAULT, so the plain gpu_rounds/gpu_solver gates
-  # above already exercise it. These extra gates re-run the SAME golden binaries
-  # through the LEGACY atomic-bucket scatter+match (MXBM_LEGACY_MATCH=1) so both
-  # collision paths stay byte-identical-to-goldens under CI. Reuses the existing
-  # executables -- just an env-var-flipped invocation held to the suite.
-  add_test(NAME gpu_rounds_legacy COMMAND test_gpu_rounds)
-  set_tests_properties(gpu_rounds_legacy PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LEGACY_MATCH=1")
-  add_test(NAME gpu_solver_legacy COMMAND test_gpu_solver)
-  set_tests_properties(gpu_solver_legacy PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LEGACY_MATCH=1")
-  # P2c: the SAME goldens through the LDS-local match (round_scatter_lds ->
-  # round_collide_lds). Byte-identical is the equivalence gate for the rewrite.
-  add_test(NAME gpu_rounds_lds COMMAND test_gpu_rounds)
-  set_tests_properties(gpu_rounds_lds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LDS_MATCH=1")
-  add_test(NAME gpu_solver_lds COMMAND test_gpu_solver)
-  set_tests_properties(gpu_solver_lds PROPERTIES TIMEOUT 1800 ENVIRONMENT "MXBM_LDS_MATCH=1")
   # P2 STEP C: the SAME goldens through the FUSED row-bucket pipeline (round1_mix_
   # scatter_fat -> round_fused_lds x4 -> round5_fused_lds). Byte-identical goldens
   # are the equivalence gate; the win is ~215 -> ~148 ms/solve.
