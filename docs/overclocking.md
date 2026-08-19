@@ -23,7 +23,8 @@ same operating point mining will use.
 
 Three measured facts that decide what to set:
 
-- **A rig that pays for electricity should cap.** ~220 W is the reference card's knee;
+- **A rig that pays for electricity should cap.** ~220 W is where the reference card's
+  curve flattens;
   `--tune` finds your card's own ([the curves](performance.md#power-and-efficiency)).
 - **Below ~170 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
   GDDR6X): worth −8.5 to −14.4 % ms/solve and the efficiency record. At ~180 W and above
@@ -88,7 +89,7 @@ temperature to watch, which is its own argument for leaving headroom.
   from heat-soak alone.
 
 **Four passes**, ~25 min by default: coarse (6 points across the driver's band, high to
-low, discarded warmup first), fine (~10 W steps around the knee), rung (the capped
+low, discarded warmup first), fine (~10 W steps around the recommendation), rung (the capped
 points re-measured at the card's low memory rung), and efficiency-refining (brackets the
 best sol/s-per-watt point found, on whichever memory clock it sits).
 
@@ -99,18 +100,19 @@ actually *held*: a refused rung prints REFUSED and is dropped, never counted as 
 not pay". The verdict adds "below ~X W, add `--mclk <rung>`", X interpolated from this
 card's own sign change — recommended, never auto-applied.
 
-The recommendation has two numbers: the **knee** — climbing from the lowest cap, the
-highest one where each extra watt still returns at least `--tune-knee` sol/s (default
-0.07/W, the one number that is a preference rather than a measurement) — and the
-**best-efficiency point** (max sol/s per *measured* watt of draw, not per cap-watt).
-Both are printed; the knee is stored per card (`~/.config/mxbm/tune.json`, keyed by
-name@PCI) and `--pl auto` applies it on any later launch.
+The verdict has two numbers: the **recommended `--pl`** — climbing from the lowest cap,
+the highest one where each extra watt still returns at least `--tune-min-gain` sol/s
+(default 0.07/W, the one number that is a preference rather than a measurement) — and
+the **best-efficiency point** (max sol/s per *measured* watt of draw, not per cap-watt).
+Both are printed; the recommendation is stored per card
+(`~/.config/mxbm/tune.json`, keyed by name@PCI) and `--pl auto` applies it on any later
+launch.
 
 Root is needed exactly as for `--pl` — every NVML write is. The intended flow is `sudo
 mxbm --tune` **once** (the store lands in the *invoking* user's config dir and is
 chowned back), then daily runs with `--pl auto`. That still needs root to *apply* the
 limit, so on a rig that mines unprivileged: read the recommendation once, then put
-`sudo nvidia-smi -pl <knee>` in the boot sequence.
+`sudo nvidia-smi -pl <watts>` in the boot sequence.
 
 `--tune` refuses a simultaneous `--pl` — it drives the limit itself — but allows the
 other OC knobs. Ctrl+C aborts and restores the limit that was on the card, as does every

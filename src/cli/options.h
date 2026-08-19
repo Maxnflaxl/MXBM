@@ -124,13 +124,20 @@ struct Options {
     std::string benchmark;
     int benchmark_seconds = 0;
 
+    // --report: benchmark this card, fold in its power curve (measuring one first
+    // when no curve from THIS build is stored), and print a paste-ready markdown
+    // block. A mode like --benchmark: no pool, exits when done. miner/report.h.
+    bool report = false;
+    int  report_seconds = 120;   // --report-seconds
+    std::string report_out;      // --report-out FILE; empty = terminal only
+
     // --tune: sweep power caps in the miner loop, recommend --pl/--mclk values
     // (miner/tune.h). A mode like --benchmark: no pool, exits when done, needs
-    // root. --pl "auto" (stored in power_limit above) applies the stored knee.
+    // root. --pl "auto" (stored in power_limit above) applies the stored value.
     bool tune = false;
     int  tune_seconds = 60;      // --tune-seconds: measured seconds per power point
     std::string tune_caps;       // --tune-caps: watts list ("100,140,220"); empty = auto
-    double tune_knee = 0.07;     // --tune-knee: sol/s per W below which watts stop paying
+    double tune_min_gain = 0.07;  // --tune-min-gain: sol/s per W below which watts stop paying
     std::string config_path, json_profile;  // --config PATH, --profile NAME (with --json)
     bool use_json_config = false;    // --json
     bool version_requested = false, help_requested = false;
@@ -152,6 +159,8 @@ struct Options {
         bool tstop = false, tstart = false, tmode = false;
         bool statsformat = false, vstats = false, hstats = false;
         bool watchdog = false, benchmark = false, benchmark_seconds = false;
+        bool report = false, report_seconds = false, report_out = false;
+        bool tune_caps = false, tune_seconds = false;
         bool list_devices = false, apihost = false, devices_by_pcie = false;
         bool power_limit = false, no_oc_reset = false;
         bool core_clock = false, mem_clock = false, core_offset = false;

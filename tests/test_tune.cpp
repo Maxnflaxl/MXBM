@@ -1,13 +1,18 @@
 // The --tune recommendation, pinned as pure arithmetic -- no GPU, no NVML, no
 // sweep. run_tune() is the measurement harness around exactly these two functions,
 // so a regression here is a wrong `--pl auto` on every rig that trusted a tune.
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+
+#include "miner/report.h"
 #include "miner/tune.h"
 #include "check.h"
 using namespace mxbm;
 using namespace mxbm::miner;
 
 int main() {
-    section("tune_verdict: the knee stops where a watt stops paying");
+    section("tune_verdict: the recommendation stops where a watt stops paying");
     {
         // Shaped like the reference card's measured curve (docs/performance.md,
         // "Power and efficiency"): steep to ~220 W, flat above it. With the 0.07
@@ -20,7 +25,7 @@ int main() {
             {285, 267.0, 56.4, 33.3},
         };
         const TuneVerdict v = tune_verdict(pts, 0.07);
-        check(v.knee_w == 220, "knee at 220 W: the 285 W step returns 0.04 sol/s per W");
+        check(v.recommended_w == 220, "220 W: the 285 W step returns 0.04 sol/s per W");
         // Efficiency is priced on measured DRAW (267 at the 285 cap), and this
         // curve peaks in the middle, not at the floor: 0.164 at 100 W, 0.254 at
         // 190, 0.245 at 220 -- matching the measured peak-near-200 W shape.
@@ -29,35 +34,35 @@ int main() {
         // Order independence: the sweep runs high-to-low, the verdict must not care.
         std::vector<TunePoint> rev(pts.rbegin(), pts.rend());
         const TuneVerdict vr = tune_verdict(rev, 0.07);
-        check(vr.knee_w == v.knee_w && vr.eff_w == v.eff_w, "point order is irrelevant");
+        check(vr.recommended_w == v.recommended_w && vr.eff_w == v.eff_w, "point order is irrelevant");
     }
 
     section("tune_verdict: edges hold");
     {
-        check(tune_verdict({}, 0.07).knee_w == 0, "no points -> no recommendation");
+        check(tune_verdict({}, 0.07).recommended_w == 0, "no points -> no recommendation");
         const TuneVerdict one = tune_verdict({{220, 219.0, 53.8, 37.3}}, 0.07);
-        check(one.knee_w == 220 && one.eff_w == 220, "one point -> that point, both roles");
+        check(one.recommended_w == 220 && one.eff_w == 220, "one point -> that point, both roles");
         // A failed point (sol_s <= 0: solver threw, window aborted) is dropped, not
         // treated as a real zero that would poison the marginal on both sides.
         const TuneVerdict drop = tune_verdict({{160, 159.0, 39.0, 51.5},
                                                {190, 0.0, 0.0, 0.0},
                                                {220, 219.0, 53.8, 37.3}}, 0.07);
-        check(drop.knee_w == 220, "a failed point vanishes: 160->220 still pays (0.25/W)");
-        // The knee walk BREAKS at the first failing step -- the curve is concave, so
+        check(drop.recommended_w == 220, "a failed point vanishes: 160->220 still pays (0.25/W)");
+        // The walk BREAKS at the first failing step -- the curve is concave, so
         // a later step that happens to pay again (noise) must not resurrect it.
         const TuneVerdict concave = tune_verdict({{100, 0.0, 40.0, 0.0},
                                                   {150, 0.0, 41.0, 0.0},
                                                   {200, 0.0, 46.0, 0.0}}, 0.07);
-        check(concave.knee_w == 100, "first failing step ends the climb for good");
+        check(concave.recommended_w == 100, "first failing step ends the climb for good");
         // Draw unknown (no NVML power field): the CAP prices efficiency instead.
         const TuneVerdict nodraw = tune_verdict({{100, 0.0, 16.3, 0.0},
                                                  {220, 0.0, 53.8, 0.0}}, 0.07);
         check(nodraw.eff_w == 220, "cap-priced fallback: 53.8/220 beats 16.3/100");
     }
 
-    section("tune_refine_caps: pass 2 brackets the coarse knee, bounded");
+    section("tune_refine_caps: pass 2 brackets the coarse verdict, bounded");
     {
-        // The reference band's coarse grid with its knee mid-list: refine the two
+        // The reference band's coarse grid with the verdict mid-list: refine the two
         // intervals touching 248 -- (211,248) and (248,285) -- at 10 W steps.
         const std::vector<TunePoint> coarse = {
             {100, 0, 18, 0}, {137, 0, 30, 0}, {174, 0, 43, 0},
@@ -69,9 +74,9 @@ int main() {
 
         // Knee at an end of the grid: only one interval exists to refine.
         check(tune_refine_caps(coarse, 285) == std::vector<unsigned>({258, 268, 278}),
-              "knee at the top: refine below it only");
+              "verdict at the top: refine below it only");
         check(tune_refine_caps(coarse, 100) == std::vector<unsigned>({110, 120, 130}),
-              "knee at the floor: refine above it only");
+              "verdict at the floor: refine above it only");
 
         // The step widens rather than the sweep growing: a 185 W bracket at 10 W
         // steps would be 18 points, so it opens to 25 W and stays at 7.
@@ -80,11 +85,11 @@ int main() {
         check(w.size() == 7 && w.front() == 125 && w.back() == 275,
               "an oversized bracket widens the step (25 W) instead of the sweep");
 
-        // Nothing to refine: a lone point, an unknown knee, a bracket under one step.
+        // Nothing to refine: a lone point, an unknown cap, a bracket under one step.
         check(tune_refine_caps({{220, 0, 54, 0}}, 220).empty(),
               "a single point has no bracket");
         check(tune_refine_caps(coarse, 200).empty(),
-              "a knee that is not a measured cap refines nothing");
+              "a cap that was never measured refines nothing");
         check(tune_refine_caps({{100, 0, 18, 0}, {105, 0, 19, 0}, {110, 0, 20, 0}},
                                105).empty(),
               "a bracket narrower than one step is already refined");
@@ -144,8 +149,65 @@ int main() {
         check(tune_default_caps(0, 285).empty(), "no reported minimum -> no candidates");
         check(tune_default_caps(285, 285).empty(), "empty band -> no candidates");
         // A band too narrow to hold six distinct integers collapses; the caller
-        // (run_tune) refuses to place a knee on fewer than two points.
+        // (run_tune) refuses to place a recommendation on fewer than two points.
         check(tune_default_caps(100, 103).size() >= 2, "narrow band still keeps its ends");
+    }
+
+    section("report_curve_fresh: a curve belongs to the build that measured it");
+    {
+        check(report_curve_fresh("v0.8.401 [007ed0f]", "v0.8.401 [007ed0f]"),
+              "same build -> the stored curve stands");
+        check(!report_curve_fresh("v0.8.400 [a28db16]", "v0.8.401 [007ed0f]"),
+              "any other build -> re-measure, the kernels may have moved");
+        check(!report_curve_fresh("", "v0.8.401 [007ed0f]"),
+              "a curve from before the field existed cannot claim a build");
+        // Without a git count every local build prints the same string, so equality
+        // would stop meaning "same code" exactly where it matters most.
+        check(!report_curve_fresh("v0.8.0 [nogit]", "v0.8.0 [nogit]"),
+              "an unstamped build never matches itself");
+    }
+
+    section("report paths: where half an hour of sweeping ends up");
+    {
+        // A fixed config dir so the expectations are about the naming, not the rig.
+        const std::string root = std::string(std::filesystem::temp_directory_path()) + "/mxbm-pathtest";
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root);
+#ifndef _WIN32
+        setenv("XDG_CONFIG_HOME", root.c_str(), 1);
+#endif
+        const std::string def = report_default_path("NVIDIA GeForce RTX 4070 Ti SUPER", false);
+        check(def.find("/mxbm/report-nvidia-geforce-rtx-4070-ti-super-") != std::string::npos
+              && def.size() > 3 && def.substr(def.size() - 3) == ".md",
+              "the card names its own file, slugged; no PCI address in it");
+        check(report_default_path("anything", true).find("report-rig-") != std::string::npos,
+              "a run covering several cards writes one file for the rig");
+        check(report_default_path("", false).find("report-gpu-") != std::string::npos,
+              "a nameless card still gets a filename");
+        // Punctuation and runs of it collapse rather than reaching the filesystem.
+        check(report_default_path("Radeon(TM) RX 7900 XTX!!", false)
+                  .find("report-radeon-tm-rx-7900-xtx-") != std::string::npos,
+              "punctuation collapses to single hyphens and the tail is trimmed");
+
+        std::string err;
+        const std::string abs = report_resolve_path(root + "/a/b/given.md", "card", false, err);
+        check(abs == root + "/a/b/given.md" && err.empty(), "an absolute path is honoured");
+        check(std::filesystem::is_directory(root + "/a/b"), "missing parents are created");
+
+        const std::string into = report_resolve_path(root, "NVIDIA X", false, err);
+        check(into.find(root + "/report-nvidia-x-") == 0,
+              "a directory gets the default FILENAME inside it, not overwritten by one");
+
+        const std::string rel = report_resolve_path("rel-report.md", "card", false, err);
+        check(!rel.empty() && rel[0] == '/' && rel.find("rel-report.md") != std::string::npos,
+              "a relative path resolves against the working directory");
+
+        std::string werr;
+        check(report_write(abs, "hello", werr) && werr.empty(), "the file is written");
+        std::ifstream back(abs);
+        std::string got; std::getline(back, got);
+        check(got == "hello", "and it holds what was written");
+        std::filesystem::remove_all(root);
     }
 
     return summary("tune");

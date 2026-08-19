@@ -5,6 +5,8 @@
 #include <chrono>
 #include <atomic>
 #include <csignal>
+#include <fstream>
+#include <functional>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -27,11 +29,13 @@
 #include "miner/engine.h"
 #include "miner/devfee.h"
 #include "miner/benchmark.h"
+#include "miner/report.h"
 #include "miner/tune.h"
 #include "miner/watchdog.h"
 #include "miner/thermal.h"
 #include "version.h"
 #include "gpu/nvml.h"
+#include "gpu/telemetry_window.h"
 #include "gpu/overclock.h"
 #include "gpu/budget.h"           // the VRAM reserve the pipeline is sized against
 #include "gpu/device_join.h"      // which backend drives which physical card
@@ -73,6 +77,34 @@ bool from_hex_strict(const std::string& hex, uint8_t* out, size_t out_len) {
     }
     return true;
 }
+
+// Ctrl+C for the modes that measure instead of mine (--benchmark, --tune,
+// --report): set the stop flag and cut the solve in flight, so the wait is bounded
+// by a round rather than by a whole solve.
+//
+// Restoring the handler is the destructor's job. SIGINT goes back to whoever should
+// own it -- the overclock restore hook while a setting is still on the card, else
+// the default disposition -- and doing it here is what keeps a mode's failure path
+// identical to its success path.
+std::atomic<bool>*           g_stop = nullptr;
+std::atomic<miner::Solver*>* g_live = nullptr;
+
+struct MeasureSignals {
+    MeasureSignals(std::atomic<bool>& stop, std::atomic<miner::Solver*>& live) {
+        g_stop = &stop;
+        g_live = &live;
+        std::signal(SIGINT, [](int) {
+            if (g_stop) g_stop->store(true, std::memory_order_relaxed);
+            if (g_live)
+                if (miner::Solver* s = g_live->load(std::memory_order_relaxed))
+                    s->request_abort();
+        });
+    }
+    ~MeasureSignals() {
+        if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
+        else                               std::signal(SIGINT, SIG_DFL);
+    }
+};
 
 } // namespace
 
@@ -147,10 +179,32 @@ int main(int argc, char** argv) {
     }
 
     const bool benchmark_mode = !opts.benchmark.empty();
+    // Every mode that measures instead of mining: no pool, one card, exits when
+    // done. Grouped so the checks below and the device work further on say it once.
+    const bool measure_mode = benchmark_mode || opts.tune || opts.report;
     // --tune drives the power limit itself, point by point; a fixed --pl under it
     // would be overwritten by the first sweep step and silently lied about. The
     // other OC knobs (--cclk, --coff, ...) are ALLOWED: tuning the curve of an
     // undervolted card is a legitimate ask, and they hold still across the sweep.
+    if (opts.report && (benchmark_mode || opts.tune)) {
+        std::fputs("--report already runs both; drop --benchmark/--tune\n", stderr);
+        return 1;
+    }
+    // The --tune knobs configure --tune. --report sweeps at the defaults on purpose:
+    // its output is a figure other people read, and a hand-picked grid produces a
+    // verdict that looks like a full sweep's without the refining passes behind it.
+    if (opts.report && (opts.seen.tune_caps || opts.seen.tune_seconds)) {
+        std::fputs("--tune-caps and --tune-seconds configure --tune; --report always "
+                   "sweeps at the defaults. Run --tune directly to choose a grid\n", stderr);
+        return 1;
+    }
+    // --report may sweep, and a sweep sets the limit point by point. A fixed --pl
+    // under it would be overwritten by the first step and silently lied about.
+    if (opts.report && !opts.power_limit.empty()) {
+        std::fputs("--report measures the power curve itself; drop --pl "
+                   "(other OC flags may stay)\n", stderr);
+        return 1;
+    }
     if (opts.tune && !opts.power_limit.empty()) {
         std::fputs("--tune sets the power limit itself; drop --pl (other OC flags may stay)\n", stderr);
         return 1;
@@ -164,11 +218,11 @@ int main(int argc, char** argv) {
     // is exempt for the same reason --version is: it answers a question about
     // the machine, not about a mining run, and demanding a wallet address to
     // answer "which cards do I have" would be absurd.
-    if (!opts.seen.algo && !benchmark_mode && !opts.list_devices) {
+    if (!opts.seen.algo && !measure_mode && !opts.list_devices) {
         std::fputs("unsupported algo (pass --algo BEAM-III, or set ALGO in your config)\n", stderr);
         return 1;
     }
-    if (opts.pools.empty() && !benchmark_mode && !opts.list_devices && !opts.tune) {
+    if (opts.pools.empty() && !measure_mode && !opts.list_devices) {
         std::fputs("missing --pool (or config with POOLS)\n", stderr);
         return 1;
     }
@@ -469,7 +523,7 @@ int main(int argc, char** argv) {
                     + (have_nvml ? gpu::nvml_pci_address(pos) : std::string());
 #endif
             std::string date;
-            const unsigned w = key.empty() ? 0u : miner::tune_stored_knee(key, date);
+            const unsigned w = key.empty() ? 0u : miner::tune_stored_pl(key, date);
             if (w) {
                 // At this card's list position: oc_apply reads --pl as a per-GPU
                 // list, so a bare number caps GPU 0 and leaves the rest at stock.
@@ -549,7 +603,7 @@ int main(int argc, char** argv) {
                 // selected device (each per-GPU list entry lands at its own
                 // position), benchmark and tune only to the card they measure.
                 std::vector<unsigned> oc_targets;
-                if (benchmark_mode || opts.tune)
+                if (measure_mode)
                     oc_targets.push_back(device_index >= 0 ? (unsigned)device_index : 0u);
                 else
                     oc_targets.assign(selected_devices.begin(), selected_devices.end());
@@ -593,10 +647,18 @@ int main(int argc, char** argv) {
     // when neither can drive it. The first card that yields a solver is the
     // primary. --benchmark and --tune stop after it -- allocating gigabytes on
     // cards they will never measure is cost without product.
-    for (size_t k = 0; k < selected_devices.size(); ++k) {
-        if ((benchmark_mode || opts.tune) && k > 0) break;
-        const unsigned pos = selected_devices[k];
-        if (pos >= cards.size()) continue;
+    // One card's solver, by the rule above. Factored out because --report drives it
+    // once per card in turn, rebuilding between cards so two allocations never
+    // coexist -- on a rig of small cards, overlapping them would step one down a rung.
+    struct BuiltSolver {
+        std::unique_ptr<miner::Solver> s;
+        std::string name;
+        unsigned long long mem = 0;
+        const char* driver = nullptr;
+    };
+    auto make_solver = [&](unsigned pos) -> BuiltSolver {
+        BuiltSolver out;
+        if (pos >= cards.size()) return out;
         const gpu::JoinedCard& c = cards[pos];
         const std::string tag = "Device " + std::to_string(pos) + " (" + c.name + ")";
         // Skipped with the reason, never constructed into a first-kernel-launch
@@ -606,7 +668,7 @@ int main(int argc, char** argv) {
             // nothing was denied, so there is nothing to report.
             if (!c.reason.empty())
                 ui::console::error(tag + ": " + c.reason + ". Continuing without it.");
-            continue;
+            return out;
         }
         // Mines, but its identity is not fully pinned -- said out loud because the
         // consequence lands on hardware settings rather than on hashrate.
@@ -663,19 +725,68 @@ int main(int argc, char** argv) {
             gpu_attempt_failed = true;
             ui::console::error(tag + ": could not be initialised (" + why
                                + ") - continuing without it");
-            continue;
+            return out;
         }
+        out.s = std::move(s);
+        out.name = sname;
+        out.mem = smem;
+        out.driver = driver;
+        return out;
+    };
+
+    // The sweep's own per-point rebuild, for the card at `pos`. Rebuilding is what
+    // makes a swept point a point of the program that would actually run at that cap:
+    // the geometry preference and the speculative-entry gate are chosen at
+    // construction. CUDA only -- the OpenCL solver takes no such inputs, and
+    // rebuilding it would recompile its kernels at every point for nothing.
+    //
+    // Bound per card rather than once: --report walks several, and a remake pinned to
+    // the first would rebuild on the wrong silicon for every card after it.
+    // `driver` is what the RUNNING solver is, not what the join chose: a card whose
+    // CUDA constructor threw is being driven by the OpenCL path, and rebuilding it as
+    // a CudaSolver would swap the program mid-sweep.
+    auto make_remake = [&](unsigned pos,
+                           const std::string& driver) -> std::function<std::unique_ptr<miner::Solver>()> {
+#ifdef MXBM_HAVE_CUDA
+        if (driver == "Cuda" && pos < cards.size() && cards[pos].cuda_index >= 0) {
+            const int rcuda = cards[pos].cuda_index;
+            return [pos, rcuda]() -> std::unique_ptr<miner::Solver> {
+                const gpu::PowerLimit rpl = gpu::nvml_power_limit(pos);
+                const gpu::Telemetry rtl = gpu::nvml_sample(pos);
+                try {
+                    return std::make_unique<gpu::CudaSolver>(
+                        rcuda, rpl.valid ? rpl.current_w : 0u,
+                        rtl.have_mem ? rtl.mem_clock_mhz : 0u);
+                } catch (const std::exception& e) {
+                    ui::console::error(std::string("solver reconstruction failed (")
+                                       + e.what() + ")");
+                    return nullptr;
+                }
+            };
+        }
+#else
+        (void)pos; (void)driver;
+#endif
+        return {};
+    };
+
+    for (size_t k = 0; k < selected_devices.size(); ++k) {
+        // A measuring mode drives one card at a time, so only the first is built
+        // here; --report rebuilds per card as it walks the rest.
+        if (measure_mode && k > 0) break;
+        BuiltSolver b = make_solver(selected_devices[k]);
+        if (!b.s) continue;
         if (!solver) {
-            worker_label = sname;
-            dev_name = sname;
-            dev_mem = smem;
-            dev_driver = driver;
-            solver = std::move(s);
+            worker_label = b.name;
+            dev_name = b.name;
+            dev_mem = b.mem;
+            dev_driver = b.driver;
+            solver = std::move(b.s);
         } else {
-            extra_labels.push_back(sname);
-            extra_solvers.push_back(std::move(s));
+            extra_labels.push_back(b.name);
+            extra_solvers.push_back(std::move(b.s));
         }
-        solver_positions.push_back(pos);
+        solver_positions.push_back(selected_devices[k]);
     }
 #endif
 #ifdef MXBM_HAVE_METAL
@@ -836,7 +947,7 @@ int main(int argc, char** argv) {
     // A failed connect is not fatal: client.run()'s reconnect loop keeps
     // retrying below. login() runs unconditionally so the api_key credential
     // is stored even then, giving that loop something to re-login with.
-    if (!benchmark_mode && !opts.tune) {
+    if (!measure_mode) {
         if (opts.substituted_user)
             ui::console::error("No --user given for " + opts.pools[0].host +
                                "; sending \"" + opts.pools[0].user +
@@ -882,24 +993,23 @@ int main(int argc, char** argv) {
     // --pl value, store it for --pl auto, exit. Placed exactly like --benchmark
     // and for the same reason: a curve measured in any other loop is a curve of
     // a different program (the 2026-07-31 lesson, docs/performance-research.md).
-    if (opts.tune) {
-        if (!solver) {
-            ui::console::error("--tune needs a working solver backend; none is available");
-            return 1;
-        }
-        if (!have_nvml) {
-            ui::console::error("--tune needs NVML (an NVIDIA driver) to drive the power "
-                               "limit; none is available here");
-            return 1;
-        }
-        miner::TuneConfig tcfg;
-        // The card the solver was constructed on -- the sweep's writes and its
-        // measurements must target the same silicon.
-        tcfg.device = device_index >= 0 ? (unsigned)device_index : 0u;
+    // The measuring modes share their whole setup -- the same card, the same Ctrl+C
+    // contract, and (for the two that sweep) the same TuneConfig, so --report's
+    // curve is --tune's curve and not a second implementation of one.
+    const unsigned measure_dev = device_index >= 0 ? (unsigned)device_index : 0u;
+    // Atomic because a sweep replaces the solver at every point and publishes the
+    // live one here for the signal handler to abort.
+    static std::atomic<miner::Solver*> s_live{nullptr};
+    std::atomic<bool> stop{false};
+    miner::TuneConfig tcfg;
+    std::string measure_key;
+    if (measure_mode) {
+        s_live.store(solver.get(), std::memory_order_relaxed);
+        tcfg.device = measure_dev;
         tcfg.seconds_per_point = opts.tune_seconds;
-        tcfg.knee_marginal = opts.tune_knee;
+        tcfg.min_gain = opts.tune_min_gain;
         // An explicit cap list is a chosen grid: measure exactly those points, no
-        // second pass. The default grid gets the knee-refining pass.
+        // refining passes. The default grid gets them.
         tcfg.refine = opts.tune_caps.empty();
         // The rung pass runs in default mode only, and never over a user's own
         // --mclk: a chosen memory clock stands, exactly like a chosen grid.
@@ -917,55 +1027,108 @@ int main(int argc, char** argv) {
                 pos = comma + 1;
             }
         }
-        // Same Ctrl+C contract as the benchmark: stop the sweep, cut the solve in
-        // flight -- and run_tune itself restores the power limit on that path. The
-        // solver pointer is atomic because the sweep replaces the solver per point
-        // (cfg.remake below) and publishes the live one through cfg.live.
-        static std::atomic<bool>* s_tstop = nullptr;
-        static std::atomic<miner::Solver*> s_tsolver{nullptr};
-        std::atomic<bool> stop{false};
-        s_tstop = &stop;
-        s_tsolver.store(solver.get(), std::memory_order_relaxed);
-        std::signal(SIGINT, [](int) {
-            if (s_tstop) s_tstop->store(true, std::memory_order_relaxed);
-            if (miner::Solver* s = s_tsolver.load(std::memory_order_relaxed))
-                s->request_abort();
-        });
-        tcfg.live = &s_tsolver;
-#ifdef MXBM_HAVE_CUDA
-        // Rebuild the solver at each tune point so the cap-keyed construction
-        // choices (geometry preference, speculative entry) match a daily run at
-        // that cap. CUDA only -- the OpenCL solver takes no such inputs, and
-        // rebuilding it would recompile its kernels at every point for nothing.
-        if (dev_driver == "Cuda" && !solver_positions.empty()
-            && solver_positions.front() < cards.size()) {
-            const unsigned rpos = solver_positions.front();
-            const int rcuda = cards[rpos].cuda_index;
-            tcfg.remake = [rpos, rcuda]() -> std::unique_ptr<miner::Solver> {
-                const gpu::PowerLimit rpl = gpu::nvml_power_limit(rpos);
-                const gpu::Telemetry rtl = gpu::nvml_sample(rpos);
-                try {
-                    return std::make_unique<gpu::CudaSolver>(
-                        rcuda, rpl.valid ? rpl.current_w : 0u,
-                        rtl.have_mem ? rtl.mem_clock_mhz : 0u);
-                } catch (const std::exception& e) {
-                    ui::console::error(std::string("--tune: solver reconstruction "
-                                                   "failed (") + e.what() + ")");
-                    return nullptr;
-                }
-            };
+        tcfg.live = &s_live;
+        // The store key, the same derivation --pl auto uses: NVML's name first, the
+        // active solver's as fallback, so store and lookup agree on any backend.
+        const std::string nname = gpu::nvml_device_name(measure_dev);
+        measure_key = (nname.empty() ? dev_name : nname) + "@"
+                    + gpu::nvml_pci_address(measure_dev);
+    }
+
+    if (opts.tune) {
+        if (!solver) {
+            ui::console::error("--tune needs a working solver backend; none is available");
+            return 1;
         }
-#endif
-        // Same key derivation as --pl auto: NVML's name first, the active
-        // solver's as fallback, so store and lookup agree on any backend.
-        const std::string nname = gpu::nvml_device_name((unsigned)device_index);
-        const std::string key = (nname.empty() ? dev_name : nname) + "@"
-                              + gpu::nvml_pci_address((unsigned)device_index);
-        const int rc = miner::run_tune(solver, stats, key, tcfg, stop);
-        // Same epilogue as the benchmark: if some OTHER OC knob (--cclk with --tune
-        // is legitimate) still has a restore pending, SIGINT must keep triggering it.
-        if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
-        else                               std::signal(SIGINT, SIG_DFL);
+        if (!have_nvml) {
+            ui::console::error("--tune needs NVML (an NVIDIA driver) to drive the power "
+                               "limit; none is available here");
+            return 1;
+        }
+        MeasureSignals sig(stop, s_live);
+        return miner::run_tune(solver, stats, measure_key, tcfg, stop);
+    }
+
+    // --report: the benchmark below plus this card's power curve, as one
+    // paste-ready block. Placed with the other measuring modes for the same
+    // reason -- everything it reports must come from the loop mining drives.
+    if (opts.report) {
+        // A report describes ONE card. On a rig, which card is a choice the user has
+        // to make out loud: a block that silently covered device 0 would be read as a
+        // rig figure, and the other cards were idle while it was taken.
+        if (cards.size() > 1 && opts.devices.empty()) {
+            ui::console::error("--report measures one GPU at a time, and this rig has "
+                               + std::to_string(cards.size())
+                               + ". Say which, or ask for all of them:");
+            size_t widest = 0;
+            for (const gpu::JoinedCard& c : cards) widest = std::max(widest, c.name.size());
+            for (size_t i = 0; i < cards.size(); ++i) {
+                std::string row = "    --devices " + std::to_string(i) + "    " + cards[i].name;
+                if (!cards[i].pci.empty())
+                    row.append(widest - cards[i].name.size() + 2, ' ').append("(" + cards[i].pci + ")");
+                ui::console::info(row);
+            }
+            ui::console::info("    --devices ALL  every card, one after another (~"
+                              + std::to_string(miner::tune_estimated_minutes(tcfg, 6))
+                              + " min each)");
+            return 1;
+        }
+
+        MeasureSignals sig(stop, s_live);
+        std::string collected;
+        int rc = 0;
+        // One card at a time, rebuilt between cards. Sequential on purpose: two
+        // cards measured at once would each be reporting the other's contention.
+        for (size_t i = 0; i < selected_devices.size(); ++i) {
+            const unsigned pos = selected_devices[i];
+            if (pos >= cards.size()) continue;
+            if (solver_positions.empty() || solver_positions.front() != pos) {
+                solver.reset();          // free the previous card before taking the next
+                s_live.store(nullptr, std::memory_order_relaxed);
+                BuiltSolver b = make_solver(pos);
+                if (!b.s) { rc = 1; continue; }
+                dev_name   = b.name;
+                dev_driver = b.driver;
+                solver     = std::move(b.s);
+                solver_positions.assign(1, pos);
+                s_live.store(solver.get(), std::memory_order_relaxed);
+            }
+            if (selected_devices.size() > 1)
+                ui::console::info("=== GPU " + std::to_string(pos) + " of "
+                                  + std::to_string(cards.size()) + ": " + dev_name
+                                  + " (" + std::to_string(i + 1) + " of "
+                                  + std::to_string(selected_devices.size()) + ") ===");
+            const std::string nname = gpu::nvml_device_name(pos);
+            miner::ReportConfig rcfg;
+            rcfg.device          = pos;
+            rcfg.seconds         = opts.report_seconds;
+            rcfg.device_key      = (nname.empty() ? dev_name : nname) + "@"
+                                 + gpu::nvml_pci_address(pos);
+            rcfg.device_name     = dev_name;
+            rcfg.backend         = dev_driver.empty() ? std::string("unknown") : dev_driver;
+            rcfg.have_nvml       = have_nvml;
+            rcfg.device_position = pos;
+            rcfg.device_count    = cards.empty() ? 1u : (unsigned)cards.size();
+            rcfg.tune            = tcfg;
+            rcfg.tune.device     = pos;
+            rcfg.tune.remake     = make_remake(pos, dev_driver);
+            rc |= miner::run_report(solver, stats, rcfg, stop, &collected);
+            if (stop.load(std::memory_order_relaxed)) break;
+        }
+        // Always saved: a report that only ever existed in a closed terminal cost the
+        // user half an hour of sweeping. --report-out only chooses where.
+        if (!collected.empty()) {
+            std::string err;
+            const std::string path = miner::report_resolve_path(
+                opts.report_out, dev_name, selected_devices.size() > 1, err);
+            if (path.empty() || !miner::report_write(path, collected, err))
+                ui::console::error("Could not save the report (" + err
+                                   + "); the block above is the same text");
+            else
+                ui::console::info("Saved to " + path);
+        }
+        ui::console::info("Report it at https://github.com/maxnflaxl/MXBM/issues/new"
+                          "?template=benchmark-report.yml - nothing was uploaded.");
         return rc;
     }
 
@@ -989,25 +1152,15 @@ int main(int argc, char** argv) {
         }
         ui::console::info(line);
 
-        // Ctrl+C ends the run and still prints the summary. request_abort()
-        // cuts short a solve in flight, bounding the wait by a round.
-        static std::atomic<bool>* s_stop = nullptr;
-        static miner::Solver* s_solver = nullptr;
-        std::atomic<bool> stop{false};
-        s_stop = &stop;
-        s_solver = solver.get();
-        std::signal(SIGINT, [](int) {
-            if (s_stop) s_stop->store(true, std::memory_order_relaxed);
-            if (s_solver) s_solver->request_abort();
-        });
+        // Ctrl+C ends the run and still prints the summary; the guard's destructor
+        // hands SIGINT back to the OC restore hook on every exit from here.
+        MeasureSignals sig(stop, s_live);
 
         ui::Ticker ticker;
         ticker.start(stats, opts.shortstats, opts.longstats, opts.digits, opts.timeprint, opts.apiport);
-        // The card's own energy counter, bracketing the run: exact joules, no
-        // sampling. e_ok stays false on non-NVIDIA/pre-Volta and the line below
-        // is simply not printed.
-        unsigned long long e0 = 0, e1 = 0;
-        const bool e_ok = have_nvml && gpu::nvml_total_energy_mj(e0);
+        // Telemetry over the whole run: the same window --tune and --report use, so
+        // the efficiency line here is the same measurement they quote.
+        gpu::TelemetryWindow tw(measure_dev);
         miner::BenchmarkResult r;
         try {
             r = miner::run_benchmark(*solver, stats, opts.benchmark_seconds, stop);
@@ -1016,24 +1169,13 @@ int main(int argc, char** argv) {
             // often out of memory: available() saw free VRAM that another
             // process has since taken. Report it rather than core-dumping.
             ticker.stop();
-            // Hand SIGINT back to whoever should own it: the OC restore hook while a
-            // power limit is still on the card, else the default disposition. Without
-            // this the window between here and process exit would drop a Ctrl+C and
-            // leave the card capped.
-            if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
-            else                               std::signal(SIGINT, SIG_DFL);
             ui::console::error(std::string("Benchmark failed: ") + e.what());
             ui::console::info("If another process is using the GPU, stop it and retry: "
                               "a full BeamHash III search needs ~5.7 GiB free at the smallest geometry.");
             return 1;
         }
         ticker.stop();
-        // Hand SIGINT back to whoever should own it: the OC restore hook while a
-        // power limit is still on the card, else the default disposition. Without
-        // this the window between here and process exit would drop a Ctrl+C and
-        // leave the card capped.
-        if (gpu::oc_has_pending_restore()) gpu::oc_install_restore_hooks();
-        else                               std::signal(SIGINT, SIG_DFL);
+        const gpu::TelemetrySummary t = tw.close(r.elapsed_s);
 
         // sol/s is the headline pools quote, but it is the product of solves
         // and solutions-per-solve, so print both; p5/p95 show run stability.
@@ -1048,21 +1190,25 @@ int main(int argc, char** argv) {
             "  %.1f ms/solve median   (p5 %.1f, p95 %.1f)",
             r.median_ms, r.p5_ms, r.p95_ms);
         ui::console::info(line);
+        if (t.have_sm || t.have_temp) {
+            std::snprintf(line, sizeof line, "  %u MHz core, %u MHz memory, %u C (medians)",
+                          t.sm_clock_mhz, t.mem_clock_mhz, t.temp_c);
+            ui::console::info(line);
+        }
         // Efficiency from the energy counter, when the card has one: exact
-        // joules over the whole window, so J/solution carries no sampling error
-        // -- the number the power-sweep docs integrate 5 Hz samples to estimate.
-        if (e_ok && gpu::nvml_total_energy_mj(e1) && e1 > e0
-            && r.elapsed_s > 0.0 && r.solutions > 0) {
-            const double joules = (double)(e1 - e0) / 1000.0;
+        // joules over the whole window, so J/solution carries no sampling error.
+        if (t.have_energy && r.solutions > 0) {
             std::snprintf(line, sizeof line,
                 "  %.0f J total   (%.1f W mean, %.2f J/solution - from the card's energy counter)",
-                joules, joules / r.elapsed_s, joules / (double)r.solutions);
+                t.joules, t.power_w, t.joules / (double)r.solutions);
             ui::console::info(line);
         }
         if (r.solves < 100) {
             ui::console::info("  note: fewer than 100 solves - too few to quote a margin; "
                               "use --benchmark-seconds to run longer");
         }
+        ui::console::info("  (`--report` produces this plus the power curve, as a "
+                          "paste-ready block)");
         return 0;
     }
 

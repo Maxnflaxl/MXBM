@@ -21,8 +21,17 @@ QUICK START
 
 To check the card without a pool or a wallet, with no network involved:
 
-       ./benchmark.sh            # 120 seconds; on Windows: benchmark.bat
-       ./benchmark.sh 300        # longer
+       ./mxbm --benchmark BEAM-III --benchmark-seconds 120
+
+To send us how it performs -- especially if it is slow, or refuses to start --
+one command produces the whole report, ready to paste into an issue:
+
+       ./mxbm --report
+
+It benchmarks the card, then measures its power/speed curve (about half an
+hour; needs root, or an Administrator terminal on Windows) and prints
+hardware, throughput, telemetry and the curve as one block. Nothing is
+uploaded. A second run reuses the curve as long as the binary has not changed.
 
 Anything you add on the command line is passed through, so
 `./mine_beam.sh --pl 220` runs the same pool with a 220 W board cap.

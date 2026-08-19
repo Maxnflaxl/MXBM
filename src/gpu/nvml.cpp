@@ -55,6 +55,11 @@ nvmlReturn_t (*p_energy)(nvmlDevice_t, unsigned long long*) = nullptr;
 nvmlReturn_t (*p_meminfo)(nvmlDevice_t, unsigned long long*) = nullptr;
 // NVML_FEATURE_DISABLED/ENABLED out-param.
 nvmlReturn_t (*p_display)(nvmlDevice_t, int*) = nullptr;
+// Compute processes on the card, and why the clocks are where they are. Both are
+// what a benchmark has to declare about itself: a co-tenant moves the number rather
+// than adding noise to it, and a throttle other than the power cap voids a run.
+nvmlReturn_t (*p_procs)(nvmlDevice_t, unsigned*, void*) = nullptr;
+nvmlReturn_t (*p_throttle)(nvmlDevice_t, unsigned long long*) = nullptr;
 // Supported memory clocks: count is in/out (capacity in, entries written out).
 nvmlReturn_t (*p_memclocks)(nvmlDevice_t, unsigned*, unsigned*) = nullptr;
 // Power limit: values are milliwatts throughout NVML's interface.
@@ -138,6 +143,14 @@ bool nvml_init() {
     bind(p_energy,         "nvmlDeviceGetTotalEnergyConsumption");
     bind(p_meminfo,        "nvmlDeviceGetMemoryInfo");
     bind(p_display,        "nvmlDeviceGetDisplayActive");
+    // v3 takes the wider nvmlProcessInfo_t; v2 and the unversioned name are the
+    // older layouts. Only the COUNT is read, and every version reports that the
+    // same way -- an insufficient-size return with the count filled in.
+    bind(p_procs,          "nvmlDeviceGetComputeRunningProcesses_v3");
+    if (!p_procs) bind(p_procs, "nvmlDeviceGetComputeRunningProcesses_v2");
+    if (!p_procs) bind(p_procs, "nvmlDeviceGetComputeRunningProcesses");
+    bind(p_throttle,       "nvmlDeviceGetCurrentClocksEventReasons");
+    if (!p_throttle) bind(p_throttle, "nvmlDeviceGetCurrentClocksThrottleReasons");
     bind(p_memclocks,      "nvmlDeviceGetSupportedMemoryClocks");
     bind(p_pl_get,         "nvmlDeviceGetPowerManagementLimit");
     bind(p_pl_default,     "nvmlDeviceGetPowerManagementDefaultLimit");
@@ -308,6 +321,28 @@ bool nvml_memory_info(unsigned index, uint64_t& free_bytes, uint64_t& total_byte
     if (p_meminfo(d, m) != NVML_SUCCESS) return false;
     total_bytes = m[0];
     free_bytes  = m[1];
+    return true;
+}
+
+bool nvml_compute_process_count(unsigned index, unsigned& count) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_procs || !d) return false;
+    // Ask for room for nothing: NVML then writes the count and returns
+    // INSUFFICIENT_SIZE, or SUCCESS with 0 when the card is idle. Never reading the
+    // array is what makes the struct-layout differences between versions moot.
+    unsigned n = 0;
+    const nvmlReturn_t rc = p_procs(d, &n, nullptr);
+    if (rc != NVML_SUCCESS && rc != NVML_ERROR_INSUFFICIENT_SIZE) return false;
+    count = n;
+    return true;
+}
+
+bool nvml_clock_event_reasons(unsigned index, unsigned long long& mask) {
+    nvmlDevice_t d = dev_at(index);
+    if (!g_ready || !p_throttle || !d) return false;
+    unsigned long long v = 0;
+    if (p_throttle(d, &v) != NVML_SUCCESS) return false;
+    mask = v;
     return true;
 }
 

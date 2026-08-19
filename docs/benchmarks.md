@@ -81,7 +81,7 @@ of two curves instead of a curve against a point. Capping lolMiner improves its 
 substantially, and that is already priced into the numbers above.
 
 **What this does not show.** The two miners' `sol/s` are separate counters whose
-relationship is [an open question](benchmarking.md#1-the-problem-with-comparing-reported-sols)
+relationship is [an open question](benchmarking.md#1-why-reported-sols-is-not-comparable)
 — MXBM reports CPU-verified solutions and lolMiner's basis is undocumented, a distinction
 worth ~17 % inside our own pipeline. The watts are trustworthy across miners because one
 instrument measured both; the sol/s columns are each miner against itself. Accepted pool
@@ -140,7 +140,7 @@ any setting.
 The head-to-head was re-measured **in one session on 2026-08-18** — both miners
 interleaved, caps set externally, MXBM on the shipped defaults — because a cap table
 assembled from two sessions inherits a cap-dependent term that reaches ~5 % at the low
-caps ([method](benchmarking.md#3-how-small-a-difference-the-rig-can-resolve)). It runs
+caps ([method](performance-research.md#how-small-a-difference-the-rig-can-resolve)). It runs
 down to the card's **100 W floor**, which settles the question of whether lolMiner had
 a better efficiency point hiding below the old 120 W left edge: it does not. Both
 curves fall away monotonically below their peak.
@@ -326,23 +326,15 @@ Build first — see [building.md](building.md).
 
 | What | Command | Needs root |
 |---|---|---|
-| Throughput (and the A/B number for a CUDA change) | `mxbm --benchmark BEAM-III --benchmark-seconds 120` | no |
-| Throughput + power + J/sol | `benchmarks/power_bench.sh 120 myrun -- --solver cuda` | no |
-| Power/speed curve | `benchmarks/power_sweep.sh` | yes (`nvidia-smi -pl`) |
+| **Everything below in one block** — hardware, throughput, telemetry, power curve | `mxbm --report` | for the curve only |
+| Throughput, clocks, temperature and J/sol | `mxbm --benchmark BEAM-III --benchmark-seconds 120` | no |
+| Power/speed curve for your own card | `mxbm --report` (or `--tune` for the recommendation alone) | yes |
 | Per-stage time and power | `benchmarks/stage_power.sh` | no |
-| Kernel counters (DRAM bytes, stalls) | `CLOCKS=none TARGET=miner ./cuda/profile.sh` | no, once the module option below is set |
-| Pipeline A/B for a code change | `./cuda/pipeline 700` | no |
 | **Correctness gate for a CUDA change** | `./build/tests/test_cuda_solver` — 3/3 goldens on 22 configurations | no |
-| Any rung of the VRAM ladder, on any card | `MXBM_BB=14 MXBM_QUAD=1 MXBM_ARENA=1 mxbm --benchmark BEAM-III` | no |
-| Drop counters (entry/stage/out/walk) and the arena's spill total | prefix any run with `MXBM_DROP_STATS=1` | no |
-| Positive control for those counters | `MXBM_CAP_SIGMA=-6` undershoots the bucket reservation and makes `entry` fill | no |
-| Positive control for the singleton filter | build at `-DMXBM_SPILL=0 -DMXBM_FCAP=64`; `drops stage` is then the staged count less a constant, and `MXBM_SOLO=0` vs `=2` differ by the elements refused | no |
 
-Nsight needs GPU counter access, which is admin-restricted by default and lifted
-permanently here by `NVreg_RestrictProfilingToAdminUsers=0` in
-`/etc/modprobe.d/nvidia-profiling.conf` — check with `grep RmProfilingAdminOnly
-/proc/driver/nvidia/params` (0 = unrestricted). Installing that file takes one reboot;
-running the profiler afterwards takes neither root nor a reboot.
+The kernel-level instruments — Nsight counters, the pipeline A/B, the VRAM-ladder
+rungs, the drop counters and their positive controls — are catalogued in
+[performance-research.md](performance-research.md#instruments-diagnostic-and-ablation-flags).
 
 Run on an **idle GPU**. A benchmark taken while something else is using the card measures
 contention, not the miner — a lolMiner run taken while MXBM was mining read 25–27 sol/s
@@ -452,27 +444,23 @@ Particularly wanted:
 ### One command
 
 ```sh
-benchmarks/collect_report.sh
+mxbm --report
 ```
 
-It runs a two-minute benchmark, samples telemetry while it runs, and prints a
-paste-ready markdown block — hardware, driver, sol/s, power, efficiency. Nothing is
-uploaded; it only writes to your terminal. Add the power curve with:
+It benchmarks the card for two minutes, then measures its power/speed curve, and
+prints a paste-ready markdown block — hardware, driver, sol/s, telemetry, efficiency
+and the whole curve. Nothing is uploaded; it only writes to your terminal, and to a
+file with `--report-out report.md`.
 
-```sh
-SWEEP=1 benchmarks/collect_report.sh      # needs sudo for nvidia-smi -pl
-```
+The curve is the valuable half and it takes about half an hour, so it is measured
+once and reused: a later `--report` on the same binary reads it back in two minutes.
+A new build re-measures, because a curve taken on different kernels describes a
+different program. Setting the power limit needs root (`sudo mxbm --report`), or an
+Administrator terminal on Windows — without it you still get everything except the
+curve, and that is still a useful report.
 
-Then open an issue with the **Benchmark report** template and paste it in.
-
-### If you would rather not run a script
-
-Paste whatever you have. The minimum that makes a report usable:
-
-- GPU model, VRAM, driver version, OS
-- `mxbm --benchmark BEAM-III --benchmark-seconds 120` output in full
-- whether anything else was using the GPU
-- any overclock, undervolt or power limit applied
+Then open an issue with the **Benchmark report** template and paste it in. If MXBM
+refuses to start on your card, the refusal message is the report — send that.
 
 ### What happens to it
 
@@ -495,7 +483,7 @@ Each row is at the card's **stock** power cap.
 
 ‡ Both re-taken 2026-08-17, interleaved in one session at released clocks, 30 s a run,
 two arms each. The CUDA row therefore reads ~0.7 % faster than the 29.10 ms
-[locked-clock pin](benchmarking.md#the-named-reference-lgc-2600) — the pin trades boost for
+[locked-clock pin](performance-research.md#the-named-reference-lgc-2600) — the pin trades boost for
 reproducibility, and the published headline is the pin. What the pair is for is the ratio:
 **1.10×**, where the same pair read 1.012× on 2026-08-02. OpenCL has since gained the
 implicit-bits record and the w0-checkpoint pair record against CUDA's several.

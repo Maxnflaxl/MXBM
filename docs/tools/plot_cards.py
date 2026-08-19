@@ -179,7 +179,7 @@ def render(series):
                           "binds and the cap does not.", 10, cl.MUTED)
     c.text(L, B_BOT + 62, "Generated from the tables in docs/performance.md by "
                           "docs/tools/plot_cards.py. Contribute a card with "
-                          "benchmarks/collect_report.sh.", 10, cl.MUTED)
+                          "mxbm --report.", 10, cl.MUTED)
     return c.render()
 
 

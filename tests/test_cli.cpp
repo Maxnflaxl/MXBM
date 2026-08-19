@@ -411,15 +411,22 @@ int main() {
         Options ot; std::string et;
         check(parse_args(2,(char**)t1,ot,et), "--tune parses with nothing else");
         check(ot.tune && ot.seen.algo, "--tune is a mode and satisfies --algo itself");
-        check(ot.tune_seconds == 60 && ot.tune_caps.empty() && ot.tune_knee == 0.07,
-              "tune defaults: 60 s per point, driver-band caps, 0.07 sol/s per W knee");
+        check(ot.tune_seconds == 60 && ot.tune_caps.empty() && ot.tune_min_gain == 0.07,
+              "tune defaults: 60 s per point, driver-band caps, 0.07 sol/s per W");
 
         const char* t2[] = {"mxbm","--tune","--tune-seconds","30",
-                            "--tune-caps","100,160,220","--tune-knee","0.05"};
+                            "--tune-caps","100,160,220","--tune-min-gain","0.05"};
         Options ot2; std::string et2;
         check(parse_args(8,(char**)t2,ot2,et2), "tune knobs parse");
         check(ot2.tune_seconds == 30 && ot2.tune_caps == "100,160,220"
-              && ot2.tune_knee == 0.05, "tune knobs land");
+              && ot2.tune_min_gain == 0.05, "tune knobs land");
+        // --report sweeps at the defaults; the grid knobs belong to --tune. main()
+        // enforces it, so what the parser owes is the record that they were typed.
+        const char* ar[] = {"mxbm", "--report", "--tune-caps", "100,220"};
+        cli::Options orp; std::string erp;
+        check(cli::parse_args(4, (char**)ar, orp, erp)
+              && orp.report && orp.seen.tune_caps,
+              "--report with --tune-caps parses; the conflict is main's to reject");
 
         const char* t3[] = {"mxbm","--tune","--tune-seconds","5"};
         Options ot3; std::string et3;

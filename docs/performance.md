@@ -126,7 +126,7 @@ that makes ms/solve the quoted quantity.
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
 The CUDA row is six 120 s runs at stock 285 W, headless, at **0.0 % spread on both
-columns** — [the pin and its lineage](benchmarking.md#the-named-reference-lgc-2600).
+columns** — [the pin and its lineage](performance-research.md#the-named-reference-lgc-2600).
 
 [^drift]: Absolute figures carry a ~2.5 % cross-session band ([how far they
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions));
@@ -326,7 +326,7 @@ own build and running it headless the same day reads **33.30 to the
 digit at 270.4 W** — so the compositor was costing **0.20 ms and ~6 W**, and the
 intervening commits are time-neutral. The geometry is unchanged across the move —
 still `(16,1)`, the miner reporting `reserving 64 MB (headless)`. Full lineage:
-[benchmarking.md](benchmarking.md#the-named-reference-lgc-2600).
+[the pin](performance-research.md#the-named-reference-lgc-2600).
 
 **Re-pinned at 32.00 on 2026-08-13** (the implicit-bits record):
 six runs, 0.0 % spread, 2610 / 10251, 281.4 W, 67 °C, headless. The draw now sits
@@ -403,7 +403,7 @@ way:
 power-limited rig, which is most rigs, that reads as a loss.
 
 **It is not one. That table compares two different operating points, and at equal
-power MXBM wins both.** Reproduce with `benchmarks/power_bench.sh`,
+power MXBM wins both.** Reproduce with `mxbm --report`,
 `benchmarks/stage_power.sh` and `benchmarks/power_sweep.sh`.
 
 ### The card is at its power limit, in every kernel
@@ -495,7 +495,7 @@ row says 57.5 where a long run of the same build says 56.4. The ms/solve column 
 shape is what the section is about. They are left as measured rather than rescaled:
 
 *Measured on the build of 2026-07-25, i.e. before the group-cap change took stock from
-35.1 to 34.1 ms. Every row would shift down by roughly that much; the knee, which is what
+35.1 to 34.1 ms. Every row would shift down by roughly that much; the bend, which is what
 this table is for, is a property of the power curve and does not move.*
 
 | board limit | sol/s | ms/solve | measured | SM clock | sol/s/W | J/solution | Δ speed | Δ efficiency |
@@ -536,7 +536,7 @@ live column:
 
 (190→200 and 200→210 straddle an instrument seam; their sum, 0.355 per W, is the
 robust figure.) The last 45 W
-(240 → 285) buys 2.05 sol/s; the 20 W from 180 to 200 buys 7.95. The knee is sharp and
+(240 → 285) buys 2.05 sol/s; the 20 W from 180 to 200 buys 7.95. The bend is sharp and
 it is at **210–220 W** — at the top of the efficiency shelf, with 220 W already 2.6 %
 below the peak. The right cap is an economic choice: **200–210 W for a rig that pays
 for electricity, 285 W only where power is free.**
@@ -551,7 +551,7 @@ A/B arms. Caps are set externally with `nvidia-smi -pl` for both miners; power i
 sampled from NVML for both, never from a miner's own report. One session because a
 head-to-head cap table assembled from two inherits the cap-dependent cross-session
 term, which reaches ~5 % at the low caps
-([method](benchmarking.md#3-how-small-a-difference-the-rig-can-resolve)).)*
+([method](performance-research.md#how-small-a-difference-the-rig-can-resolve)).)*
 
 *(The MXBM rows carry the shipped speculative-entry gate — off below 220 W on stock
 memory, the measured crossover

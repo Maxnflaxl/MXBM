@@ -10,22 +10,22 @@ body:
         RTX 4070 Ti SUPER, so every result from other hardware tells us something we
         cannot measure ourselves.
 
-        The quickest way to fill this in:
+        The quickest way to fill this in — one command, no repository checkout:
 
         ```sh
-        benchmarks/collect_report.sh
+        mxbm --report
         ```
 
-        It runs a two-minute benchmark, samples telemetry, and prints a paste-ready
-        block. Nothing is uploaded. If you would rather not run it, fill in what you
-        have — a partial report still helps.
+        It benchmarks the card, measures its power/speed curve, and prints a
+        paste-ready block. Nothing is uploaded. Without root it still produces
+        everything except the curve, and a partial report helps too.
 
         **A report where MXBM is slow, or refuses to start, is the most valuable kind.**
   - type: textarea
     id: report
     attributes:
       label: Report
-      description: Paste the output of `benchmarks/collect_report.sh`, or your own figures.
+      description: Paste the output of `mxbm --report`, or your own figures.
       placeholder: |
         ### Hardware
         | GPU | ... |

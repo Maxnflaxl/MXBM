@@ -91,6 +91,36 @@ bool nvml_memory_info(unsigned index, uint64_t& free_bytes, uint64_t& total_byte
 // which sizes the card as headless -- the smaller reserve.
 bool nvml_display_active(unsigned index = 0);
 
+// How many compute processes hold this device, MXBM's own included. A benchmark
+// sharing the card measures contention, not the miner -- a co-tenant does not add
+// noise, it moves the number -- so a published figure has to be able to say. False
+// (count untouched) when the query is unsupported, which is not the same as zero.
+bool nvml_compute_process_count(unsigned index, unsigned& count);
+
+// The driver's clocks-event bitmask: why the clocks are where they are right now.
+// Sampled across a run it says whether a figure was taken at the power cap (expected,
+// and what MXBM runs against) or against a thermal or reliability limit (which voids
+// it). Bit names are in kClockEventNames. False when unsupported.
+bool nvml_clock_event_reasons(unsigned index, unsigned long long& mask);
+
+// The bits worth naming, low to high, as NVML defines them. GpuIdle is omitted: it
+// says the card was not working, which the sol/s figure already reports.
+struct ClockEventBit { unsigned long long bit; const char* name; };
+inline const ClockEventBit* clock_event_names(unsigned& count) {
+    static const ClockEventBit kBits[] = {
+        {0x0000000000000002ULL, "app_clocks_setting"},
+        {0x0000000000000004ULL, "sw_power_cap"},
+        {0x0000000000000008ULL, "hw_slowdown"},
+        {0x0000000000000010ULL, "sync_boost"},
+        {0x0000000000000020ULL, "sw_thermal"},
+        {0x0000000000000040ULL, "hw_thermal"},
+        {0x0000000000000080ULL, "hw_power_brake"},
+        {0x0000000000000100ULL, "display_clock_setting"},
+    };
+    count = (unsigned)(sizeof kBits / sizeof kBits[0]);
+    return kBits;
+}
+
 // The card's cumulative energy counter in MILLIJOULES, monotonic since driver
 // load (nvmlDeviceGetTotalEnergyConsumption, Volta+). Bracket a window, diff,
 // divide: exact joules, no sampling error, no root to read. False (mj

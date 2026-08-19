@@ -45,22 +45,30 @@ std::string usage_text() {
         "  --watchdogscript PATH  script to run when ACTION is script\n"
         "  --benchmark ALGO       offline benchmark (no pool, no wallet); ALGO is BEAM-III\n"
         "  --benchmark-seconds N  stop the benchmark after N seconds (default: until Ctrl+C)\n"
+        "  --report               benchmark this card and print a paste-ready report for\n"
+        "                         the project: hardware, throughput, telemetry, and this\n"
+        "                         card's power curve. Measures the curve first (--tune,\n"
+        "                         ~25 min, needs root) unless this build already stored\n"
+        "                         one. Nothing is uploaded.\n"
+        "                         --report-seconds N  benchmark length (default: 120)\n"
+        "                         --report-out FILE   also write the block to a file\n"
         "  --tune                 measure this card's power/speed curve and recommend a\n"
 #ifdef _WIN32
         "                         --pl value (needs admin, ~25 min, no pool): a coarse pass\n"
 #else
         "                         --pl value (needs root, ~25 min, no pool): a coarse pass\n"
 #endif
-        "                         across the card's band, ~10 W steps around the knee, the\n"
-        "                         card's low memory rung at the capped points -- so the\n"
-        "                         verdict can also say when to add --mclk -- and a final\n"
-        "                         refinement around the best-efficiency point. Stored per\n"
-        "                         card; apply the wattage with --pl auto.\n"
+        "                         across the card's band, ~10 W steps around the best\n"
+        "                         cap found, the card's low memory clock at the capped\n"
+        "                         points -- so the verdict can also say when to add\n"
+        "                         --mclk -- and a final refinement around the\n"
+        "                         best-efficiency point. Stored per card; apply the\n"
+        "                         wattage with --pl auto.\n"
         "                         --tune-seconds N   seconds per power point (default: 60)\n"
         "                         --tune-caps LIST   exactly these watt points, single pass\n"
         "                                            (\"100,140,220\"; default: 6 across the\n"
         "                                            band + the refining second pass)\n"
-        "                         --tune-knee X      sol/s per extra watt below which more\n"
+        "                         --tune-min-gain X  sol/s per extra watt below which more\n"
         "                                            power stops paying (default: 0.07)\n"
         "  --solver cuda|metal|opencl|gpu|ref|auto\n"
         "                         solver backend. gpu = any GPU (CUDA, then Metal, then\n"
@@ -449,6 +457,7 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
                 return false;
             }
             out.tune_seconds = (int)v;
+            out.seen.tune_seconds = true;
             continue;
         }
         if (arg == "--tune-caps") {
@@ -469,17 +478,18 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
                 pos = comma + 1;
             }
             out.tune_caps = spec;
+            out.seen.tune_caps = true;
             continue;
         }
-        if (arg == "--tune-knee") {
-            if (i + 1 >= argc) { err = "missing value for --tune-knee\n\n" + usage_text(); return false; }
+        if (arg == "--tune-min-gain") {
+            if (i + 1 >= argc) { err = "missing value for --tune-min-gain\n\n" + usage_text(); return false; }
             char* end = nullptr;
             double v = std::strtod(argv[++i], &end);
             if (!end || *end != '\0' || !(v > 0.0)) {
-                err = "invalid --tune-knee (sol/s per watt, must be > 0)\n\n" + usage_text();
+                err = "invalid --tune-min-gain (sol/s per watt, must be > 0)\n\n" + usage_text();
                 return false;
             }
-            out.tune_knee = v;
+            out.tune_min_gain = v;
             continue;
         }
         // The clock and fan knobs. Same list grammar as --pl; the only
@@ -717,6 +727,31 @@ bool parse_args(int argc, char** argv, Options& out, std::string& err) {
             }
             out.benchmark_seconds = (int)v;
             out.seen.benchmark_seconds = true;
+            continue;
+        }
+        if (arg == "--report") {
+            out.report = true;
+            out.seen.report = true;
+            // A mode that names its own work, exactly like --benchmark and --tune.
+            algo = "BEAM-III";
+            continue;
+        }
+        if (arg == "--report-seconds") {
+            if (i + 1 >= argc) { err = "missing value for --report-seconds\n\n" + usage_text(); return false; }
+            char* end = nullptr;
+            long v = std::strtol(argv[++i], &end, 10);
+            if (!end || *end != '\0' || v < kBenchmarkSecondsMin) {
+                err = "invalid --report-seconds (must be an integer >= 1)\n\n" + usage_text();
+                return false;
+            }
+            out.report_seconds = (int)v;
+            out.seen.report_seconds = true;
+            continue;
+        }
+        if (arg == "--report-out") {
+            if (i + 1 >= argc) { err = "missing value for --report-out\n\n" + usage_text(); return false; }
+            out.report_out = argv[++i];
+            out.seen.report_out = true;
             continue;
         }
         if (arg == "--dev-fee") {

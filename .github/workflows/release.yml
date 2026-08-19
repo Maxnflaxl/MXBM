@@ -77,7 +77,6 @@ jobs:
           cp packaging/mxbm.cfg              "$D/mxbm.cfg"
           cp packaging/user_config.json      "$D/user_config.json"
           cp packaging/mine_beam.sh          "$D/mine_beam.sh"
-          cp packaging/benchmark.sh          "$D/benchmark.sh"
           cp packaging/emergency.sh          "$D/emergency.sh"
           chmod +x "$D"/mxbm "$D"/*.sh
 
@@ -189,7 +188,6 @@ jobs:
           cp packaging/mxbm.cfg              "$D/mxbm.cfg"
           cp packaging/user_config.json      "$D/user_config.json"
           cp packaging/mine_beam.bat         "$D/mine_beam.bat"
-          cp packaging/benchmark.bat         "$D/benchmark.bat"
           cp packaging/emergency.bat         "$D/emergency.bat"
 
           touch "$D/logs/.keep"

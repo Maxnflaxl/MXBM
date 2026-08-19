@@ -177,14 +177,14 @@ requirements, including the per-backend VRAM thresholds, are in
 **[docs/benchmarks.md](docs/benchmarks.md)** publishes the measured results —
 MXBM against lolMiner 1.98a on the same card, the power/efficiency curve, and
 where each millisecond goes — plus how to reproduce any of it. `benchmarks/`
-holds the harnesses: `power_bench.sh` (sol/s and J/sol), `stage_power.sh`
-(per-kernel time and power attribution), `power_sweep.sh` (the speed/power
-curve; needs root) and `collect_report.sh` (a paste-ready report).
+holds the cross-miner harnesses: `stage_power.sh` (per-kernel time and power
+attribution), `power_sweep.sh` and `compare_power.sh` (both miners at identical
+board settings; need root).
 
 Running MXBM on a card that is not yet
-[listed](docs/benchmarks.md#benchmarked-devices)? `benchmarks/collect_report.sh`
-produces a paste-ready report in one command, and there is an issue template waiting
-for it.
+[listed](docs/benchmarks.md#benchmarked-devices)? **`mxbm --report`** benchmarks it,
+measures its power curve and prints a paste-ready block — one command, no checkout,
+nothing uploaded — and there is an issue template waiting for it.
 
 Comparing miners is harder than it looks: reported `sol/s` is implementation-defined,
 and MXBM measures a 17 % spread between "solutions found" and "solutions that verify"

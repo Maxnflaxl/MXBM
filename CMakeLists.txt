@@ -136,8 +136,11 @@ target_link_libraries(test_cli PRIVATE mxbm_nvml mxbm_ui)   # options.cpp valida
 add_test(NAME cli COMMAND test_cli)
 
 # The --tune recommendation arithmetic, header-only on purpose: a GPU-free test can
-# then pin the knee/efficiency logic that decides what --pl auto applies.
-add_executable(test_tune tests/test_tune.cpp)
+# then pin the recommendation/efficiency logic that decides what --pl auto applies.
+# The report's path helpers are pinned here too: they decide where half an hour of
+# sweeping ends up, and they are pure enough to test without a GPU.
+add_executable(test_tune tests/test_tune.cpp src/miner/report_paths.cpp
+                         src/miner/user_paths.cpp)
 target_include_directories(test_tune PRIVATE tests src)
 add_test(NAME tune COMMAND test_tune)
 
@@ -191,16 +194,19 @@ add_test(NAME api COMMAND test_api)
 # NVML telemetry and the board power limit: dlopen'd at runtime, so no build-time
 # NVIDIA dependency. Compiled unconditionally -- it reports nothing, and applies
 # nothing, on a machine without the driver.
-add_library(mxbm_nvml STATIC src/gpu/nvml.cpp src/gpu/overclock.cpp)
+add_library(mxbm_nvml STATIC src/gpu/nvml.cpp src/gpu/overclock.cpp
+                             src/gpu/telemetry_window.cpp)
 target_include_directories(mxbm_nvml PUBLIC src)
-target_link_libraries(mxbm_nvml PUBLIC ${CMAKE_DL_LIBS})
+target_link_libraries(mxbm_nvml PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
 
 add_executable(test_overclock tests/test_overclock.cpp)
 target_include_directories(test_overclock PRIVATE tests src)
 target_link_libraries(test_overclock PRIVATE mxbm_nvml)
 add_test(NAME overclock COMMAND test_overclock)
 
-add_executable(mxbm src/main.cpp src/cli/options.cpp src/miner/tune.cpp)
+add_executable(mxbm src/main.cpp src/cli/options.cpp src/miner/tune.cpp
+                    src/miner/report.cpp src/miner/report_paths.cpp
+                    src/miner/user_paths.cpp)
 target_link_libraries(mxbm PRIVATE mxbm_nvml)
 target_include_directories(mxbm PRIVATE third_party)   # tune.cpp: nlohmann/json
 # Direct, not transitive: main.cpp asks the geometry question itself (restart notice).

@@ -82,6 +82,9 @@ immediately; only a *missing* one defers to the config.
 |------|---------|---------|
 | `--benchmark BEAM-III` | Solve synthetic jobs and report sol/s. No pool, no wallet. Uses one device. | |
 | `--benchmark-seconds N` | Stop the benchmark after N seconds. | until Ctrl+C |
+| `--report` | Benchmark this card, measure its power curve, and print a paste-ready report (see [Reporting](#reporting-send-us-how-your-card-does)). No pool. | |
+| `--report-seconds N` | Length of the report's benchmark. | 120 |
+| `--report-out PATH` | Where to save the report. A directory saves the default filename inside it. | `~/.config/mxbm/report-<gpu>-<date>.md` |
 
 `--benchmark` names the algorithm itself, so it satisfies `--algo` on its own:
 
@@ -97,6 +100,74 @@ watts and J/solution read from the counter itself — exact, not integrated from
 power samples — which is the number to compare when the question is efficiency
 rather than speed.
 
+### Reporting: send us how your card does
+
+```sh
+sudo mxbm --report
+```
+
+One command, and the only one worth remembering if you are reporting a result. It
+benchmarks the card for two minutes through the same solve path mining uses, samples
+telemetry over the run, measures the card's power/speed curve, and prints the whole
+thing as a markdown block ready to paste into a
+[benchmark report issue](https://github.com/maxnflaxl/MXBM/issues/new?template=benchmark-report.yml).
+Nothing is uploaded.
+
+**The report is always saved**, and the path is printed when it is:
+
+```
+Saved to /home/you/.config/mxbm/report-nvidia-geforce-rtx-4070-ti-super-2026-08-20.md
+```
+
+It lands next to the tune store, named after the card and the day — so a report that
+took half an hour to measure survives closing the terminal. A second run on the same
+day replaces it. `--report-out` chooses somewhere else: an absolute or relative path
+(relative to where you ran it), `~/` expands, missing directories are created, and
+naming a *directory* saves the default filename inside it. Under `sudo` the file lands
+in your own config directory and is owned by you, not root.
+
+It also records three things a person filling in a form usually cannot, and each of
+which decides whether a figure means anything: whether a display was attached to the
+card, whether another process was using it, and what the clocks were limited by.
+
+**The curve takes about half an hour and is measured once.** A later `--report` on the
+same binary reads it back and finishes in two minutes; a different build re-measures,
+because a curve taken on different kernels describes a different program. Measuring it
+needs root (or an Administrator terminal on Windows) — without that you still get
+everything except the curve, and that is still a useful report.
+
+`--report` always sweeps at the defaults: `--tune-caps` and `--tune-seconds` configure
+`--tune` and are refused here, since a hand-picked grid produces a verdict that reads
+like a full sweep's without the refining passes behind it. Use `--tune` directly when
+you want to choose the grid.
+
+**On a multi-GPU rig a report covers one card at a time.** With more than one card
+`--report` will not guess which one — it lists them and stops, because a block that
+silently covered device 0 reads as a rig figure and the other cards were idle while it
+was taken:
+
+```
+--report measures one GPU at a time, and this rig has 2. Say which, or ask for all of them:
+    --devices 0    NVIDIA GeForce RTX 4070 Ti SUPER  (1:0)
+    --devices 1    NVIDIA GeForce RTX 3060 Ti        (2:0)
+    --devices ALL  every card, one after another (~30 min each)
+```
+
+```sh
+sudo mxbm --report --devices 1                       # one card
+sudo mxbm --report --devices ALL --report-out rig.md # every card, in turn
+```
+
+`--devices ALL` walks the cards **one after another, never together** — two cards
+measured at once would each be reporting the other's contention — and collects every
+block into one file, so a rig is still one paste. Each card costs its own sweep, so
+budget roughly half an hour per card on the first run.
+
+Both the console line and the report's own GPU row name which card was measured and how
+many the rig has, so a single-card block cannot be mistaken for a rig-wide one. Curves
+are stored per card (keyed by name and PCI address), so identical cards in different
+slots keep their own — which is the point, since cooling differs between slots.
+
 ### Tuning: measure your own card
 
 The [power-limit table below](#power-limit) is the reference card's curve; `--tune`
@@ -108,18 +179,18 @@ sudo mxbm --tune
 
 About 25 minutes, in four passes: a discarded warmup, then six coarse points across
 the band your driver reports (60 s each, live mining path, CPU-verified sol/s) to
-locate the knee's neighbourhood; a second pass at ~10 W steps bracketing it — the
-coarse grid can only place the knee to within its own spacing, and the fine pass is
+locate the best cap's neighbourhood; a second pass at ~10 W steps bracketing it — the
+coarse grid can only place it to within its own spacing, and the fine pass is
 what distinguishes, say, 220 from 248; a third pass at your card's **low memory
 rung** (picked from the driver's own supported-clock list, held-clock verified every
 arm) at the capped points, because under a low cap the memory interface burns watts
 for bandwidth the slowed core cannot use, and on the reference card giving them back
 was worth 8–14 %; and a fourth pass that refines around the best-efficiency point
 found so far, on whichever memory clock it sits — the coarse spacing blurs the
-efficiency optimum exactly as it blurs the knee. All passes feed one verdict. Last, the first point is measured again
+efficiency optimum exactly as it blurs the recommendation. All passes feed one verdict. Last, the first point is measured again
 as a drift gauge — if the card heated enough during the sweep to move the numbers by
 more than ±1.5 %, the table says so instead of pretending. It prints the curve plus
-three recommendations: the **knee** (the highest limit where each extra watt still
+three recommendations: the **recommended `--pl`** (the highest limit where each extra watt still
 returns at least 0.07 sol/s — above it you are buying watts, not speed), the
 **best-efficiency point** (most sol/s per measured watt, which may land *on the
 rung*), and — when the rung measured faster — the cap **below which to add
@@ -137,10 +208,10 @@ paying band, it prints a one-line reminder to consider `--mclk` (recommended, ne
 auto-applied: locking a memory clock you did not ask for is a hardware setting nobody
 requested). Re-run `--tune` after driver updates or cooling changes. On a rig that
 does not mine as root, read the recommendation once and put
-`sudo nvidia-smi -pl <knee> -lmc <rung>,<rung>` in the boot sequence instead. Knobs:
+`sudo nvidia-smi -pl <watts> -lmc <rung>,<rung>` in the boot sequence instead. Knobs:
 `--tune-seconds N` (per point, default 60), `--tune-caps "100,160,220"` (exactly these
 points, which also skips the refinement and rung passes — a chosen grid means the grid
-you chose), `--tune-knee X` (the sol/s-per-watt bar, default 0.07 — the one number
+you chose), `--tune-min-gain X` (the sol/s-per-watt bar, default 0.07 — the one number
 that is a preference, not a measurement). `--tune` refuses a simultaneous `--pl` but
 allows the other OC flags — and a given `--mclk` disables the rung pass: a chosen
 memory clock stands. Ctrl+C aborts and restores the previous limit and memory clock.
