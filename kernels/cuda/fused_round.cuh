@@ -338,38 +338,12 @@ __device__ __forceinline__ void abl_spread(uint32_t a, uint32_t b, bh3::Elem& e)
     for (int w = 0; w < 7; ++w) { x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ull; e.w[w] = x; }
 }
 
-// MXBM_WARPAGG: hand out the dense per-round id `gi` one atomic per WARP instead of one
-// per lane. Every emit needs a unique id and they all come from a single u32, so a fully
-// active warp would serialise into 32 L2 round-trips on one address. Aggregating keeps gi
-// a permutation of [0,count) and makes the ids CONSECUTIVE within a warp, which is
-// strictly better for the back-ref writes that index on them.
-//
-// BUT PTXAS ALREADY DOES IT (verified 2026-07-29 with cuobjdump -sass on the shipping
-// archive; an earlier version of this comment said the SASS showed "a plain ATOMG.E.ADD
-// per lane, with no aggregation prologue", which is false). Round 2 packed, 0x98f0-0x9a90:
-// VOTEU.ANY -> FLO.U32 (leader) -> POPC (group size) -> @P0 ATOMG.E.ADD of the popcount
-// -> SR_LTMASK + POPC (rank) -> SHFL.IDX (broadcast). ptxas and not NVVM: -ptx emits a
-// bare atom.global.add.u32, -cubin emits the idiom. The negative control is the bucket
-// atomic at 0x9810, whose address is lane-varying and which gets no prologue at all.
-//
-// So MXBM_WARPAGG=1 stacks a SECOND aggregation on ptxas's, which is why it measures
-// +0.3 ms. Leave it off; it is not a lead.
-//
-// It does change which id a given emit gets, and gi is the tie-break when two elements
-// share a lead (LEADTIE_PROBE: ~17 per solve out of 134 M). The KAT gate is what settles
-// that -- note the existing order is already nondeterministic run to run.
-#ifndef MXBM_WARPAGG
-#define MXBM_WARPAGG 0
-#endif
+// Dense per-round id `gi`: one atomic per lane, uncontended in SASS because ptxas
+// itself emits the warp-aggregation idiom for a uniform-address atomic (VOTEU ->
+// FLO leader -> POPC group size -> one ATOMG of the popcount -> SHFL broadcast);
+// aggregating by hand would stack a second aggregation on ptxas's own.
 __device__ __forceinline__ uint32_t gi_alloc(uint32_t* __restrict__ ctr) {
-#if MXBM_WARPAGG
-    auto g = cooperative_groups::coalesced_threads();
-    uint32_t base = 0;
-    if (g.thread_rank() == 0) base = atomicAdd(ctr, g.size());
-    return g.shfl(base, 0) + g.thread_rank();
-#else
     return atomicAdd(ctr, 1u);
-#endif
 }
 
 // MXBM_R3_QUAD: round 2 emits a 24 B QUAD RECORD -- key, four leaves and gi -- and round
