@@ -346,63 +346,6 @@ __kernel void NAME(uint N, uint Lout, uint lead_identity,                       
         }                                                                      \
     }                                                                          \
 }
-// INDEX-ONLY round 1 (MXBM_IDXONLY): derive both parents instead of reading them.
-//
-// Pairs with round1_mix_seeds_idx, which stores no work and no leaves. Round 1's element
-// is seed_element(pp, idx) mixed at 448 over the tree {idx}, and `idx` IS what the sort
-// pair carries, so in_work and leaves_in are not read at all here.
-//
-// The trade only works because the LEFT element is derived once per outer iteration
-// rather than once per pair -- it is invariant across the inner loop. Deriving both
-// inside the inner loop would double the seed work for no reason.
-//
-// lead_identity holds at round 1 (an element's lead IS its own index), so the canonical
-// ordering collapses from the two-term comparison to `sb < sa`, and the child's leaf
-// prefix is exactly {left, right} -- s_in=1, s_out=2 folded in.
-__kernel void round_match_seed(uint N, uint Lout, uint lead_identity,
-                               uint out_off, uint out_capacity,
-                               __global const ulong* sorted_pairs,
-                               __global const uint* offsets,
-                               __global const ulong* in_work,     /* unused */
-                               __global ulong* out_work,
-                               __global uint* all_left, __global uint* all_right,
-                               __global uint* counters,
-                               __global const uint* leaves_in,    /* unused */
-                               __global uint* leaves_out,
-                               uint s_in, uint s_out,
-                               __global const ulong* pp4) {
-    uint g = get_global_id(0);
-    if (g >= N) return;
-    uint ka = sort_key(sorted_pairs[g]);
-    if (g > 0 && sort_key(sorted_pairs[g - 1]) == ka) return;
-    uint m = 1;
-    while (g + m < N && sort_key(sorted_pairs[g + m]) == ka) ++m;
-    ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
-    uint o = offsets[g];
-    for (uint a = 0; a < m; ++a) {
-        uint sa = sort_index(sorted_pairs[g + a]);
-        ulong ea[7]; uint t1a[1] = { sa };
-        bh3_seed_element(pp, sa, ea);
-        ea[0] = bh3_apply_mix(ea, t1a, 1u, 448u);
-        for (uint bb = a + 1; bb < m; ++bb) {
-            uint sb = sort_index(sorted_pairs[g + bb]);
-            ulong eb[7]; uint t1b[1] = { sb };
-            bh3_seed_element(pp, sb, eb);
-            eb[0] = bh3_apply_mix(eb, t1b, 1u, 448u);
-            ulong ec[7];
-            uint left = sa, right = sb;
-            if (sb < sa) { left = sb; right = sa; bh3_combine(eb, ea, 424u, ec); }
-            else         {                        bh3_combine(ea, eb, 424u, ec); }
-            uint oi = o++;
-            if (oi < out_capacity) {
-                for (int w = 0; w < 7; ++w) out_work[(size_t)oi*7 + w] = ec[w];
-                all_left[out_off + oi] = left; all_right[out_off + oi] = right;
-                leaves_out[(size_t)oi*BH3_MAX_LEAVES + 0] = left;
-                leaves_out[(size_t)oi*BH3_MAX_LEAVES + 1] = right;
-            } else atomic_inc(&counters[2]);
-        }
-    }
-}
 
 // MEASURED, and NOT what the mix result predicted: constant-folding these wins for
 // r3/r4/r5 and LOSES for r1/r2, reproducibly, on every interleaved run.

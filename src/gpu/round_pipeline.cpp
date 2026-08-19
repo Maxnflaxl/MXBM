@@ -463,20 +463,11 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     return p;
 }
 
-// Index-only round 1. Opt-in while it is being measured; the seed kernel and the round-1
-// match read this same function so they cannot disagree.
-bool idxonly_r1() { static bool v = (std::getenv("MXBM_IDXONLY") != nullptr); return v; }
-
 void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t pp[4]) {
     cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    // Index-only round 1: the seed kernel stores only the sort pair, and the match that
-    // consumes it derives both parents. The two MUST switch together -- see
-    // idxonly_r1() -- or the match reads a work buffer nobody wrote.
-    Kernel k = rt.kernel(prog, idxonly_r1() ? "round1_mix_seeds_idx" : "round1_mix_seeds");
+    Kernel k = rt.kernel(prog, "round1_mix_seeds");
 
     uint64_t pp4[4] = { pp[0], pp[1], pp[2], pp[3] };
-    // Kept on the buffers rather than local to this call: the index-only round-1 match
-    // derives its parents and needs the SAME prePow this kernel seeded from.
     pb.pp = rt.alloc(CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof pp4, pp4);
     cl_mem ppMem   = pb.pp.get();
     cl_mem workMem = pb.work[1].get();
@@ -827,11 +818,6 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
                 if (k12 == 2) matchName = (r == 1) ? "round_match_k1p" : "round_match_k2p";
             }
         }
-        // Round 1 index-only: derives both parents from their seed indices instead of
-        // reading a work buffer round1_mix_seeds_idx never wrote. Takes one extra
-        // argument (the prePow), so it is dispatched after the shared set_arg block.
-        const bool seedMatch = (r == 1) && idxonly_r1();
-        if (seedMatch) matchName = "round_match_seed";
         Kernel k = rt.kernel(prog, matchName);
         uint32_t Lout = lout_for(r);
         uint32_t leadIdentity = (r == 1) ? 1u : 0u;
@@ -858,7 +844,6 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
         rt.set_arg(k.get(), 13, sizeof(cl_mem), &leavesOut);
         rt.set_arg(k.get(), 14, sIn);
         rt.set_arg(k.get(), 15, sOut);
-        if (seedMatch) { cl_mem ppMem = pb.pp.get(); rt.set_arg(k.get(), 16, sizeof(cl_mem), &ppMem); }
         rt.run1d(k.get(), (size_t)((N + kSortWG - 1) / kSortWG) * kSortWG, kSortWG);
     }
 

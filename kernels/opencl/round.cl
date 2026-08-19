@@ -11,32 +11,6 @@
 // index (begin+g)*7 -- not the batch-local g*7 -- since callers may drive
 // this over multiple begin/count batches that all land in the same
 // consolidated work buffer.
-// INDEX-ONLY round 1 (MXBM_IDXONLY): emit the sort pair and NOTHING else.
-//
-// A round-1 element is seed_element(pp, idx) mixed with the single-leaf tree {idx} at
-// Lmix=448 -- fully determined by its own index, which the sort pair already carries in
-// its high 32 bits. Storing it costs 56 B/element of work plus a 4 B leaf write that
-// lands in its own 32 B sector of the 36 B leaf stride: ~1.9 GB + ~1.1 GB of writes per
-// solve, and 2x56 B of scattered reads per candidate pair in the match that follows.
-// round_match_seed derives it instead. This is the sort path's version of the
-// re-derivation that was worth -12.1 ms of 114.8 on the row-bucket path.
-//
-// Nothing else reads round 1's work or leaves: mix_level only runs for r >= 2, and
-// leaves[1] is overwritten by match(2) before round 3 reads it.
-__kernel void round1_mix_seeds_idx(__global const ulong* pp4, uint begin, uint count,
-                                   __global ulong* work, __global uint* leaves_out,
-                                   uint capacity, __global ulong* pairs_out) {
-    uint g = (uint)get_global_id(0);
-    if (g >= count) return;
-    uint idx = begin + g;
-    ulong pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
-    ulong e[7];
-    bh3_seed_element(pp, idx, e);
-    uint tree1[1] = { idx };
-    e[0] = bh3_apply_mix(e, tree1, 1u, 448u);
-    pairs_out[(size_t)idx] = ((ulong)idx << 32) | (uint)(e[0] & 0xFFFFFFu);
-}
-
 __kernel void round1_mix_seeds(__global const ulong* pp4, uint begin, uint count,
                                __global ulong* work /* seed-work buffer, absolute */,
                                __global uint* leaves_out /* AoS leaves for work[1]: leaf i at g*BH3_MAX_LEAVES+i */,
