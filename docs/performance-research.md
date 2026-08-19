@@ -162,7 +162,7 @@ positive control:
 <summary>Details</summary>
 
 Diagnostic environment variables: `MXBM_ROWBUCKET` / `MXBM_NO_ROWBUCKET`,
-`MXBM_LEGACY_MATCH`, `MXBM_LDS_MATCH`, `MXBM_NO_COMPACT`, `MXBM_SORT_PROFILE`,
+`MXBM_SORT_PROFILE`,
 `MXBM_MATCH_K12` (sort path: 1 = the constant k1/k2 for r1/r2, 2 = the
 occupancy-pinned k1p/k2p; ballast size via `MXBM_CL_OPTS="-DKPIN_UINTS=N"` — both
 measured losses, kept as instruments),
@@ -231,7 +231,7 @@ undershoot the mean and are the positive control that makes each drop channel fi
 `MXBM_OCC` prints the worst bucket occupancy
 in units of the reservation's sigma, `MXBM_ROUND_REPS="R:N"` and `MXBM_ENTRY_REPS=N` replay
 one stage in place for per-round attribution. Build flags: `-DMXBM_STCS=1` (streaming
-stores), `-DMXBM_WARPAGG=1` (warp-aggregated `gi`), `-DMXBM_CPASYNC=1`, `-DMXBM_WG=N`,
+stores), `-DMXBM_WG=N`,
 `-DMXBM_FCAP=N` (group cap → occupancy), `-DMXBM_R2_FULL=1`.
 `-DMXBM_SOLO=0|1|2` splits the singleton filter into its two halves — 0 off, 1 the prepass
 alone, 2 the shipping pair — so the cost and the prize are separable in one ABBA;
@@ -1848,8 +1848,8 @@ applied to one of the three constants.
 
 Interleaved, 15 solves each, goldens byte-identical and drops zero on every run.
 `bh3_apply_mix` itself is untouched — it is on the never-modify list with `bh3_combine`
-and `bh3_siphash24`; being `inline`, it simply receives literals now. `MXBM_MIX_RUNTIME`
-restores the old kernels so the A/B stays re-measurable.
+and `bh3_siphash24`; being `inline`, it simply receives literals now. The old
+partially-constant kernels have since been removed from the tree; git holds them.
 
 **The generalisable part:** a constant that is *known per round* but *passed at runtime*
 is not a small inefficiency here — it can be a 3× cliff, because it decides whether a
@@ -1900,7 +1900,7 @@ the fix, not the diagnosis.
 <details>
 <summary>Details</summary>
 
-*(Built, gated, measured, reverted to opt-in 2026-07-28. `MXBM_IDXONLY`.)*
+*(Built, gated, measured, reverted 2026-07-28; the opt-in has since been removed from the tree.)*
 
 The row-bucket path's largest single win of its kind was
 [re-deriving round-1 seeds from indices](#seed-re-derivation): **−12.1 ms of 114.8**. The
@@ -8306,7 +8306,7 @@ stride 8 u64 -> 16 u32 banks, gcd(16,32) = 16 -> 16-way conflict   (16 B aligned
 The chain walk reads `a[0..6]` and `b[0..6]` per matched pair — **92 M shared loads per
 round**, the dominant shared traffic. Trading 2-way for 16-way conflicts there to enable a
 4-instruction async copy in staging is not close. That leaves the 8 B path, which is not
-the fast path, and it measured accordingly. Retained behind `-DMXBM_CPASYNC=1`.
+the fast path, and it measured accordingly. Since removed from the tree; git holds it.
 
 **Block size.** The staged group is `mean_bucket / 2^submaskBits` = **264** elements
 against a 256-thread block, so one warp of eight runs a second loop iteration with 8 of
