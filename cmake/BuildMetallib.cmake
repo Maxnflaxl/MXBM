@@ -14,9 +14,11 @@
 set(MXBM_METAL_WG      "" CACHE STRING "Metal threadgroup size (default 256)")
 set(MXBM_METAL_FCAP    "" CACHE STRING "Metal per-group stage cap (default 320)")
 set(MXBM_METAL_R1FCAP  "" CACHE STRING "Metal round-1 stage cap (default 288)")
-# Attribution build. RESULTS ARE INTENTIONALLY WRONG when non-zero; the goldens will
-# fail, which is the point -- it isolates what a stage costs, it does not mine.
-set(MXBM_METAL_ABL_DERIVE "" CACHE STRING "Ablate a re-derivation (2 = round 2's rebuild)")
+# Attribution build: pass -DMXBM_METAL_ABL_DERIVE=2 at configure time to ablate a
+# re-derivation (2 = round 2's rebuild). RESULTS ARE INTENTIONALLY WRONG when
+# non-zero; the goldens will fail, which is the point -- it isolates what a stage
+# costs, it does not mine. Deliberately NOT a cached option: ablation scaffolding
+# does not belong in the ccmake list beside real tuning knobs.
 
 function(mxbm_build_metallib OUT_LIB)
   set(MXBM_METAL_DEFS "")
