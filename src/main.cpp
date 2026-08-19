@@ -254,7 +254,38 @@ int main(int argc, char** argv) {
         }
     }
 
-    ui::console::banner();
+    // What this BUILD can drive, which is the question a bug report keeps needing and
+    // no runtime probe can answer: a machine with no CUDA card and a binary with no
+    // CUDA support look identical from the device table alone.
+    {
+        std::string built, missing;
+        // ASCII throughout: console::banner pads its rows by byte count, and it is
+        // the one block that has to render identically in any terminal and any log.
+        auto add = [](std::string& to, const std::string& what) {
+            if (!to.empty()) to += ", ";
+            to += what;
+        };
+#ifdef MXBM_HAVE_CUDA
+        add(built, std::string("CUDA ") + MXBM_CUDA_VERSION);
+#else
+        add(missing, "CUDA");
+#endif
+#ifdef MXBM_OPENCL_VERSION
+        add(built, std::string("OpenCL ") + MXBM_OPENCL_VERSION);
+#elif defined(MXBM_HAVE_OPENCL)
+        add(built, "OpenCL");   // a find module that reports no version
+#else
+        add(missing, "OpenCL");
+#endif
+#ifdef MXBM_HAVE_METAL
+        add(built, "Metal");
+#else
+        add(missing, "Metal");
+#endif
+        if (built.empty()) built = "none - CPU reference only";
+        if (!missing.empty()) built += "   (not built: " + missing + ")";
+        ui::console::banner(built, miner::devfee_schedule().rate);
+    }
 
     // Flags that are accepted but not yet implemented get a console
     // acknowledgment rather than silently doing nothing.

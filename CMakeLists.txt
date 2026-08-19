@@ -299,7 +299,10 @@ if(CMAKE_CUDA_COMPILER)
       $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=--warn-on-spills>)
   target_compile_features(mxbm_cuda PRIVATE cuda_std_17)
   target_link_libraries(mxbm PRIVATE mxbm_cuda)
-  target_compile_definitions(mxbm PRIVATE MXBM_HAVE_CUDA)
+  # The toolkit the binary was BUILT against -- the banner reports it, because a
+  # runtime probe reports the driver instead and the two answer different questions.
+  target_compile_definitions(mxbm PRIVATE MXBM_HAVE_CUDA
+                             MXBM_CUDA_VERSION="${CMAKE_CUDA_COMPILER_VERSION}")
 
   add_executable(test_cuda_solver tests/test_cuda_solver.cu)
   target_include_directories(test_cuda_solver PRIVATE tests src)
@@ -365,7 +368,13 @@ if(OpenCL_FOUND)
   target_sources(mxbm_gpu PRIVATE src/gpu/gpu_solver.cpp)
 
   target_link_libraries(mxbm PRIVATE mxbm_gpu)
+  # The API level the headers expose: the OpenCL analogue of MXBM_CUDA_VERSION above,
+  # and likewise a property of the build, not of the installed ICD. Some find modules
+  # report none, so the banner falls back to a bare "OpenCL".
   target_compile_definitions(mxbm PRIVATE MXBM_HAVE_OPENCL)
+  if(OpenCL_VERSION)
+    target_compile_definitions(mxbm PRIVATE MXBM_OPENCL_VERSION="${OpenCL_VERSION}")
+  endif()
 
   add_executable(test_cl_smoke tests/test_cl_smoke.cpp)
   target_include_directories(test_cl_smoke PRIVATE tests src)

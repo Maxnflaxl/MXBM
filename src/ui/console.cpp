@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <functional>
 #include <ctime>
 #include <mutex>
 
@@ -186,9 +187,70 @@ void close_log() {
     if (g_log) { std::fclose(g_log); g_log = nullptr; }
 }
 
-void banner() {
-    std::string text = std::string("MXBM ") + mxbm::version() + " — open BeamHash III miner";
-    print_line(text);
+void banner(const std::string& backends, double devfee_rate) {
+    if (g_silence >= 3) return;
+    // ASCII only, and a fixed 57-column interior. Box-drawing and half-block glyphs
+    // depend on the terminal font having them at full cell height; this renders the
+    // same everywhere, including in a log file someone pastes into an issue. The
+    // padding below counts bytes, so a multi-byte character in `backends` would short
+    // the row -- another reason callers keep it ASCII.
+    constexpr int kInner = 57;
+    static const char* const kArt[] = {
+        " __  __ __  __  ____   __  __ ",
+        "|  \\/  |\\ \\/ / | __ ) |  \\/  |",
+        "| |\\/| | \\  /  |  _ \\ | |\\/| |",
+        "| |  | | /  \\  | |_) || |  | |",
+        "|_|  |_|/_/\\_\\ |____/ |_|  |_|",
+    };
+    const std::string rule(kInner, '-');
+    // One row, filled out to the interior.
+    auto raw = [&](std::string body) {
+        if ((int)body.size() < kInner) body.append(kInner - body.size(), ' ');
+        print_line("|" + body + "|");
+    };
+    // One centred row. Content wider than the interior wraps at a space rather than
+    // being cut -- the version and the backend list are both build-dependent, and a
+    // truncated row would read as complete.
+    std::function<void(std::string)> emit = [&](std::string body) {
+        while ((int)body.size() > kInner) {
+            size_t cut = body.rfind(' ', kInner);
+            if (cut == std::string::npos || cut < 2) cut = kInner;
+            raw(std::string((kInner - cut) / 2, ' ') + body.substr(0, cut));
+            size_t next = body.find_first_not_of(' ', cut);
+            if (next == std::string::npos) return;
+            body = body.substr(next);
+        }
+        raw(std::string((kInner - body.size()) / 2, ' ') + body);
+    };
+    // The wordmark centres as a block, on the width of its widest line: centring each
+    // line on its own would shear the glyphs apart.
+    size_t art_w = 0;
+    for (const char* line : kArt) {
+        std::string t(line);
+        t.erase(t.find_last_not_of(' ') + 1);
+        if (t.size() > art_w) art_w = t.size();
+    }
+    const std::string art_pad((kInner - (int)art_w) / 2, ' ');
+    print_line("+" + rule + "+");
+    raw("");
+    for (const char* line : kArt) raw(art_pad + line);
+    emit(mxbm::version());
+    raw("");
+    emit("BeamHash III  (Beam)");
+    raw("");
+    emit("Backends in this build:");
+    emit(backends);
+    raw("");
+    emit("Open source, Apache-2.0.");
+    emit("github.com/maxnflaxl/MXBM");
+    if (devfee_rate > 0.0) {
+        char fee[64];
+        std::snprintf(fee, sizeof fee, "Developer fee: %g%%  (--dev-fee to raise)",
+                      devfee_rate * 100.0);
+        emit(fee);
+    }
+    raw("");
+    print_line("+" + rule + "+");
     print_line("");
 }
 

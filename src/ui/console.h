@@ -49,7 +49,15 @@ bool open_log(const std::string& path, std::string* resolved_path = nullptr);
 // Flushes and closes the transcript. Safe to call when no log is open.
 void close_log();
 
-void banner();
+// The startup block. Printed once, to the screen and (when a transcript is open,
+// which main() arranges first) to the log, so a pasted log carries the same header a
+// screenshot does -- which is the version, the licence and what this binary can
+// actually drive.
+//
+// `backends` is what the BUILD contains, not what the machine has: main() owns those
+// macros and console does not. Suppressed at --silence 3, where only the statistics
+// block survives.
+void banner(const std::string& backends, double devfee_rate);
 
 // -- startup sequence: hardware, then pool ----------------------------------
 

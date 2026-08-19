@@ -568,7 +568,7 @@ is a wall of text on a screen you only glance at. `--silence N` turns that down:
 | 0 | everything (default) |
 | 1 | no `New job received` lines |
 | 2 | no job lines, and no per-share lines — each accepted share becomes a `*` on the average-speed line |
-| 3 | the statistics block only; even the average-speed line is gone |
+| 3 | the statistics block only; even the average-speed line and the startup banner are gone |
 
 ```
 Average speed (15s): 56.53 sol/s***
@@ -584,6 +584,12 @@ worth interrupting for, and they are rare enough not to flood anything.
 `--silence` applies to the `--log` transcript exactly as it applies to the
 screen: the file records what was displayed, so what you watch live and what you
 read afterwards are the same thing. To keep more in the file, lower the level.
+
+The startup banner is part of that transcript — the log opens before it is
+printed, so a pasted log carries the same header a screenshot does: version,
+licence, and which backends this binary was *built* with. That last line answers a
+question no runtime probe can: a machine with no CUDA card and a binary with no
+CUDA support look identical from the device table alone.
 
 ### Logging to a file
 
