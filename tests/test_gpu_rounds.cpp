@@ -24,7 +24,7 @@
 // each survivor's 104-byte encoding against tests/vectors/beamhash3-kat.md
 // is deferred to Phase C.
 //
-// compute_budget() sizes every round's work/backref buffers AND match()'s
+// compute_budget() sizes every round's work/backref buffers AND the match's
 // out_capacity to the SAME elems_per_round (== 2^25 on any device with
 // enough memory for the full resident set -- see tests/test_budget.cpp's
 // "M3Max keeps full 2^25" case), so a round whose TRUE collision count

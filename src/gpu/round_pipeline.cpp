@@ -190,9 +190,6 @@ bool rowbucket_viable(Runtime& rt, const Budget& b) {
     if (std::getenv("MXBM_NO_ROWBUCKET")) return false;
     const bool forced = (std::getenv("MXBM_ROWBUCKET") != nullptr);
     if (forced) return true;
-    // An explicit alternate collision path (legacy / LDS) opts out of the auto
-    // default -- those paths read the flat work[] layout the row-bucket alloc omits.
-    if (std::getenv("MXBM_LEGACY_MATCH") || std::getenv("MXBM_LDS_MATCH")) return false;
     uint32_t capacity = b.capacity != 0 ? b.capacity : b.elems_per_round;
     if (capacity == 0) return false;
     const DeviceInfo& d = rt.device();
@@ -428,15 +425,11 @@ PipelineBuffers alloc_pipeline(Runtime& rt, const Budget& b) {
     p.left  = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
     p.right = rt.alloc(CL_MEM_READ_WRITE, backrefBytes);
 
-    p.bucket_count = rt.alloc(CL_MEM_READ_WRITE, (size_t)b.num_buckets * 4);
-    p.bucket_slots = rt.alloc(CL_MEM_READ_WRITE, (size_t)b.num_buckets * b.slots_per_bucket * 4);
-
     p.counters = rt.alloc(CL_MEM_READ_WRITE, 4 * 4);
 
-    // Phase-D3 sort scratch. Always allocated: mix_seeds/round_mix now fuse the
-    // (key,index) sort pair into sort_pairs[0] (no separate key_extract pass), so
-    // even the legacy path writes it. ~512 MB (pairs) + 256 MB (hist+scan) at 2^25
-    // capacity, comfortably inside the headroom the 6->2 work-buffer reclaim freed.
+    // Sort scratch: mix_seeds/round_mix fuse the (key,index) sort pair into
+    // sort_pairs[0] (no separate key_extract pass). ~512 MB (pairs) + 256 MB
+    // (hist+scan) at 2^25 capacity.
     {
         const size_t pairBytes = (size_t)p.capacity * sizeof(uint64_t);
         for (int i = 0; i < 2; ++i) p.sort_pairs[i] = rt.alloc(CL_MEM_READ_WRITE, pairBytes);
@@ -518,142 +511,10 @@ void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N) {
     rt.run1d(k.get(), N);
 }
 
-void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int workIndex) {
-    // Zero bucket_count (arrival counters) and counters (incl. counters[1] =
-    // bucket_drops) before every scatter pass -- round_scatter's atomic_inc
-    // accumulates onto whatever is already there.
-    rt.fill_u32(pb.bucket_count.get(), 0u, b.num_buckets);
-    rt.fill_u32(pb.counters.get(), 0u, 4);
-
-    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog, "round_scatter");
-
-    uint32_t bucketBits = b.bucket_bits;
-    uint32_t slots       = b.slots_per_bucket;
-    cl_mem workMem        = pb.work[workIndex & 1].get();
-    cl_mem bucketCountMem = pb.bucket_count.get();
-    cl_mem bucketSlotsMem = pb.bucket_slots.get();
-    cl_mem countersMem    = pb.counters.get();
-
-    rt.set_arg(k.get(), 0, N);
-    rt.set_arg(k.get(), 1, bucketBits);
-    rt.set_arg(k.get(), 2, slots);
-    rt.set_arg(k.get(), 3, sizeof(cl_mem), &workMem);
-    rt.set_arg(k.get(), 4, sizeof(cl_mem), &bucketCountMem);
-    rt.set_arg(k.get(), 5, sizeof(cl_mem), &bucketSlotsMem);
-    rt.set_arg(k.get(), 6, sizeof(cl_mem), &countersMem);
-    rt.run1d(k.get(), N);
-}
-
-uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, uint32_t& pair_drops) {
-    (void)inN;  // round_match iterates buckets (already sized by scatter()), not raw elements.
-
-    // Zero only counters[0] (out_count) and counters[2] (pair_drops); leave
-    // counters[1] (bucket_drops, owned by scatter) and [3] (spare) as-is.
-    uint32_t counters[4];
-    rt.read(pb.counters.get(), sizeof counters, counters);
-    counters[0] = 0u;
-    counters[2] = 0u;
-    rt.write(pb.counters.get(), sizeof counters, counters);
-
-    cl_program prog = rt.cached_program({std::string(kBh3ClSource), std::string(kRoundClSource)}, "");
-    Kernel k = rt.kernel(prog, "round_match");
-
-    uint32_t Lout         = lout_for(r);
-    uint32_t bucketBits   = b.bucket_bits;
-    uint32_t slots        = b.slots_per_bucket;
-    uint32_t leadIdentity = (r == 1) ? 1u : 0u;
-    uint32_t inLeadOff    = (r >= 2) ? (uint32_t)(r - 2) * pb.capacity : 0u;
-    uint32_t outOff       = (uint32_t)(r - 1) * pb.capacity;
-    uint32_t outCapacity  = pb.capacity;
-
-    // Round r's own resident elements live in pb.work[r]; its children
-    // become round r+1's resident elements, in pb.work[r+1] -- except r==5,
-    // which has no round 6 and reuses pb.work[0] (see match()'s doc comment
-    // in round_pipeline.h).
-    cl_mem bucketCountMem = pb.bucket_count.get();
-    cl_mem bucketSlotsMem = pb.bucket_slots.get();
-    cl_mem inWorkMem      = pb.work[r & 1].get();
-    cl_mem outWorkMem     = pb.work[((r < (int)kNumRounds) ? r + 1 : 0) & 1].get();
-    // round_match still declares all_lead_in / all_lead but reads and writes neither
-    // (see round.cl: "all_lead dropped ... in_lead_off/all_lead_in unused now"), so
-    // both are bound to `left` rather than keeping a 5*capacity array alive for them.
-    cl_mem leadMem        = pb.left.get();
-    cl_mem leftMem        = pb.left.get();
-    cl_mem rightMem       = pb.right.get();
-    cl_mem countersMem    = pb.counters.get();
-
-    rt.set_arg(k.get(), 0, Lout);
-    rt.set_arg(k.get(), 1, bucketBits);
-    rt.set_arg(k.get(), 2, slots);
-    rt.set_arg(k.get(), 3, leadIdentity);
-    rt.set_arg(k.get(), 4, inLeadOff);
-    rt.set_arg(k.get(), 5, outOff);
-    rt.set_arg(k.get(), 6, outCapacity);
-    rt.set_arg(k.get(), 7, sizeof(cl_mem), &bucketCountMem);
-    rt.set_arg(k.get(), 8, sizeof(cl_mem), &bucketSlotsMem);
-    rt.set_arg(k.get(), 9, sizeof(cl_mem), &inWorkMem);
-    rt.set_arg(k.get(), 10, sizeof(cl_mem), &outWorkMem);
-    rt.set_arg(k.get(), 11, sizeof(cl_mem), &leadMem);
-    rt.set_arg(k.get(), 12, sizeof(cl_mem), &leftMem);
-    rt.set_arg(k.get(), 13, sizeof(cl_mem), &rightMem);
-    rt.set_arg(k.get(), 14, sizeof(cl_mem), &leadMem);
-    rt.set_arg(k.get(), 15, sizeof(cl_mem), &countersMem);
-
-    // LOCAL-MEMORY BUCKET STAGING (Phase-D winner): one workgroup per bucket
-    // cooperatively stages this bucket's `slots` keys + element indices into two
-    // dynamic __local uint arrays (args 16,17) with a coalesced pass, then the W
-    // work-items split the O(k^2) all-pairs scan (row i owned by work-item i%W)
-    // entirely out of __local. Split width W is set to ~mean bucket occupancy so
-    // there is about one outer row per work-item with minimal idle lanes: D0
-    // found W=mean (32) beats the naive W=slots (64), which left half the group
-    // idle since mean k = elems/num_buckets ~ 32 << slots. global = num_buckets*W
-    // is a whole multiple of W as OpenCL requires.
-    const DeviceInfo& dev = rt.device();
-
-    // Guard the dynamic __local request (two uint arrays of `slots`) against the
-    // device's per-workgroup local memory. At slots 64 this is 512 B vs a 48 KB
-    // limit -- trivially safe -- but a hand-built Budget with huge slots must
-    // fail loudly here rather than launch with a silently-clamped shared buffer.
-    const size_t localBytes = (size_t)slots * sizeof(uint32_t) * 2u;
-    if (dev.local_mem != 0 && localBytes > dev.local_mem)
-        throw ClError(CL_INVALID_WORK_GROUP_SIZE,
-                      "round_match staging: __local " + std::to_string(localBytes) +
-                      " B exceeds device local mem " + std::to_string(dev.local_mem) + " B");
-
-    uint32_t mean = (b.num_buckets != 0u) ? (b.elems_per_round / b.num_buckets) : slots;
-    uint32_t W = (mean != 0u) ? mean : 1u;
-    if (W > slots) W = slots;                                  // never exceed staged slots
-    if (dev.max_work_group != 0 && W > dev.max_work_group)     // respect device group cap
-        W = (uint32_t)dev.max_work_group;
-    if (W == 0u) W = 1u;
-
-    rt.set_arg(k.get(), 16, (size_t)slots * sizeof(uint32_t), nullptr);
-    rt.set_arg(k.get(), 17, (size_t)slots * sizeof(uint32_t), nullptr);
-
-    // E3a: grow leaf prefixes. Parents live in work[r] -> leaves[r&1]; children go
-    // to work[r+1] -> leaves[(r+1)&1]. s_out==0 for r==5 (its output isn't mixed).
-    cl_mem leavesInMem  = pb.leaves[r & 1].get();
-    cl_mem leavesOutMem = pb.leaves[(r + 1) & 1].get();
-    uint32_t sIn  = sleaves_for(r);
-    uint32_t sOut = (r < (int)kNumRounds) ? sleaves_for(r + 1) : 0u;
-    rt.set_arg(k.get(), 18, sizeof(cl_mem), &leavesInMem);
-    rt.set_arg(k.get(), 19, sizeof(cl_mem), &leavesOutMem);
-    rt.set_arg(k.get(), 20, sIn);
-    rt.set_arg(k.get(), 21, sOut);
-
-    rt.run1d(k.get(), (size_t)b.num_buckets * W, W);
-
-    rt.read(pb.counters.get(), sizeof counters, counters);
-    pair_drops = counters[2];
-    return (counters[0] < outCapacity) ? counters[0] : outCapacity;
-}
-
 // ===========================================================================
-// Phase-D3: sort-based collision finder (host driver for kernels/opencl/sort.cl).
-// The DEFAULT collision path (MXBM_LEGACY_MATCH opts back into scatter+match);
-// replaces scatter()+match() with (sort pair fused into mix) -> tiled radix sort
-// -> collision run-scan -> coalesced emit.
+// Phase-D3: sort-based collision finder (host driver for kernels/opencl/sort.cl):
+// (sort pair fused into mix) -> tiled radix sort -> collision run-scan ->
+// coalesced emit.
 // ===========================================================================
 namespace {
 constexpr uint32_t kSortWG = 256u;
@@ -740,11 +601,10 @@ cl_mem radix_sort_pairs(Runtime& rt, cl_program prog, PipelineBuffers& pb, uint3
 }
 } // namespace
 
-// Sort-based replacement for scatter()+match(): identical child multiset (same
-// equal-24-bit-key collisions, same (lead,slot)-canonical children), just emitted
-// coalesced from sorted runs instead of scattered from atomic buckets. `bucket_
-// drops` is always 0 (the sort caps nothing per key); pair_drops reports children
-// beyond pb.capacity, same as match(). Returns the capacity-clamped child count.
+// The sort-path collision finder: (lead,slot)-canonical children over every
+// equal-24-bit-key pair, emitted coalesced from sorted runs. `bucket_drops` is
+// always 0 (the sort caps nothing per key); pair_drops reports children beyond
+// pb.capacity. Returns the capacity-clamped child count.
 uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
                       uint32_t N, uint32_t& pair_drops) {
     (void)b;
@@ -856,11 +716,6 @@ uint32_t match_sorted(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r,
     return (total < outCapacity) ? total : outCapacity;
 }
 
-// Phase-D3: the sort-based collision finder is the DEFAULT collision path
-// (it beats scatter+match and is the coalescing foundation for further tuning);
-// set MXBM_LEGACY_MATCH to fall back to the old atomic-bucket scatter+match.
-// One source of truth, read once, shared by alloc_pipeline and run_single_round.
-bool use_sort_match() { static bool v = (std::getenv("MXBM_LEGACY_MATCH") == nullptr); return v; }
 bool use_lds_match()  { static bool v = (std::getenv("MXBM_LDS_MATCH") != nullptr); return v; }
 
 // P2c: LDS-local match. round_scatter_lds buckets work[r] (+slot+lead) into
@@ -930,43 +785,15 @@ uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int
         stats.in = inN; stats.out = outN; stats.bucket_drops = bd; stats.pair_drops = pd;
         return outN;
     }
-    // Phase-D3: route to the sort-based collision finder by default. Mix is
-    // unchanged (still E3a leaf-prefix mix); only scatter+match is replaced.
-    const bool useSort = use_sort_match();
-    if (useSort) {
-        auto tMixS = clk::now();
-        if (r >= 2) mix_level(rt, pb, r, inN);
-        stats.t_mix_ms = (r >= 2) ? ms_since(tMixS) : 0.0;
-        auto tMatchS = clk::now();
-        uint32_t pd = 0;
-        uint32_t outNs = match_sorted(rt, pb, b, r, inN, pd);
-        stats.t_match_ms = ms_since(tMatchS);
-        stats.t_scatter_ms = 0.0;
-        stats.in = inN; stats.out = outNs; stats.bucket_drops = 0u; stats.pair_drops = pd;
-        return outNs;
-    }
-
     auto tMix = clk::now();
     if (r >= 2) mix_level(rt, pb, r, inN);
     stats.t_mix_ms = (r >= 2) ? ms_since(tMix) : 0.0;
-
-    auto tScatter = clk::now();
-    scatter(rt, pb, b, inN, /*workIndex=*/r);
-    stats.t_scatter_ms = ms_since(tScatter);
-
-    uint32_t counters[4];
-    rt.read(pb.counters.get(), sizeof counters, counters);
-    uint32_t bucket_drops = counters[1];
-
     auto tMatch = clk::now();
-    uint32_t pair_drops = 0;
-    uint32_t outN = match(rt, pb, b, r, inN, pair_drops);
+    uint32_t pd = 0;
+    uint32_t outN = match_sorted(rt, pb, b, r, inN, pd);
     stats.t_match_ms = ms_since(tMatch);
-
-    stats.in = inN;
-    stats.out = outN;
-    stats.bucket_drops = bucket_drops;
-    stats.pair_drops = pair_drops;
+    stats.t_scatter_ms = 0.0;
+    stats.in = inN; stats.out = outN; stats.bucket_drops = 0u; stats.pair_drops = pd;
     return outN;
 }
 
@@ -978,8 +805,8 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
     if (N == 0) return 0u;
 
     // Zero only counters[3] (repurposed here as the survivor count); leave
-    // [0..2] (owned by scatter()/match()) untouched -- same read-modify-write
-    // idiom match() already uses for its own slots.
+    // [0..2] (owned by the round kernels) untouched -- same read-modify-write
+    // idiom match_sorted uses for its own slots.
     uint32_t counters[4];
     rt.read(pb.counters.get(), sizeof counters, counters);
     counters[3] = 0u;

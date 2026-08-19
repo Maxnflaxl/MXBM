@@ -23,18 +23,15 @@ struct PipelineBuffers {
                                 // sized 9*capacity uint (max S). leaves[r&1] holds work[r]'s prefix.
     Mem left, right;            // consolidated: uint[5*capacity] each; round k at (k-1)*capacity
     // NOTE: there is no `lead` array. It used to be a third row of the same shape, but
-    // an element's lead IS leaf 0 of its own prefix, so round_match stopped writing it
+    // an element's lead IS leaf 0 of its own prefix, so the match stopped writing it
     // ("all_lead dropped") -- the allocation just outlived the write by several rounds
     // of cleanup. Worth 20 B/element on the sort path.
     Mem pp;                     // ulong[4] prePow; mix_seeds writes it.
-    Mem bucket_count;           // uint[num_buckets]
-    Mem bucket_slots;           // uint[num_buckets*slots_per_bucket]
     Mem counters;               // uint[4]: {out_count, bucket_drops, pair_drops, spare}
 
-    // Phase-D3 sort-based collision finder scratch (allocated only when
-    // MXBM_SORT_MATCH is set; see match_sorted() in round_pipeline.cpp). The
-    // sort replaces scatter+match with a stable radix sort of (key,index) pairs
-    // then a coalesced run-scan emit -- see kernels/opencl/sort.cl.
+    // Sort-path collision finder scratch (see match_sorted() in
+    // round_pipeline.cpp): a stable radix sort of (key,index) pairs then a
+    // coalesced run-scan emit -- see kernels/opencl/sort.cl.
     Mem sort_pairs[2];          // ulong[capacity] ping-pong (key,index) pairs
     Mem sort_scan;              // uint[capacity] collision counts -> prefix-sum offsets
     Mem sort_hist;             // uint[256 * ceil(capacity/256)] radix bin-major histogram
@@ -163,13 +160,6 @@ void mix_seeds(Runtime& rt, PipelineBuffers& pb, const Budget& b, const uint64_t
 // computed internally from r via the round table.
 void mix_level(Runtime& rt, PipelineBuffers& pb, int r, uint32_t N);
 
-// Scatter: radix-bucket pb.work[workIndex]'s N mixed elements by the top
-// b.bucket_bits of their 24-bit collision key (round_scatter kernel), so the
-// sortless all-pairs match (T4) only searches within a bucket. Zeroes
-// pb.bucket_count and pb.counters via fill_u32 first; counters[1] accumulates
-// bucket_drops -- elements whose bucket was already at b.slots_per_bucket
-// capacity when they arrived.
-void scatter(Runtime& rt, PipelineBuffers& pb, const Budget& b, uint32_t N, int workIndex);
 
 // Per-round counts + per-phase GPU timing (ms). run1d() clFinish()es after
 // every kernel, so a host-side steady_clock around each phase call is an
@@ -182,42 +172,21 @@ struct RoundStats {
     double t_mix_ms = 0.0, t_scatter_ms = 0.0, t_match_ms = 0.0;
 };
 
-// Match: sortless all-pairs collision search within every scattered bucket
-// (round_match kernel). Reads pb.work[r] (round r's fully mixed resident
-// elements -- already scatter()'d into pb.bucket_count/pb.bucket_slots over
-// the SAME buffer); for every colliding pair within a bucket, combines the
-// (lead,slot)-ordered pair at Lout(r) and writes the child into pb.work[r+1]
-// (round r's children become round r+1's own resident elements) plus a
-// consolidated back-ref triple (left/right slot + lead) at
-// pb.left/right/lead row (r-1)*capacity. r==5 has no round 6 to feed -- its
-// children land in pb.work[0], the pipeline's only otherwise-idle work slot
-// (mix_seeds writes seeds directly into pb.work[1], never uses work[0]);
-// this keeps PipelineBuffers' shape untouched, deferring what (if anything)
-// further consumes r==5's children to a later task. Zeroes counters[0]
-// (out_count) and counters[2] (pair_drops) before launching -- counters[1]
-// (scatter's bucket_drops) and [3] are left untouched; launches over
-// b.num_buckets work-items; returns the capacity-clamped child count and
-// reports the raw pair_drops (children beyond pb.capacity, silently dropped
-// by the kernel) via the out-param. `inN` is accepted for interface symmetry
-// with mix_level/scatter -- round_match itself iterates buckets (already
-// sized by the prior scatter() call), not raw input elements.
-uint32_t match(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, uint32_t& pair_drops);
 
 // One full round: mix (r==1's mix -- round1_mix_seeds -- is the CALLER's
 // responsibility, already landed in pb.work[1] before this runs; r>=2 mixes
-// pb.work[r] in place via mix_level) -> scatter(pb.work[r]) -> match. Fills
-// `stats` (in/out/bucket_drops/pair_drops) and returns the same child count
-// as match().
+// pb.work[r] in place via mix_level) -> match_sorted. Fills `stats`
+// (in/out/bucket_drops/pair_drops) and returns the child count.
 uint32_t run_single_round(Runtime& rt, PipelineBuffers& pb, const Budget& b, int r, uint32_t inN, RoundStats& stats);
 
-// Survivor scan: after round 5's match() writes its children into
-// pb.work[0] (its r==5 special-case out_work -- see match()'s doc comment
-// above), scan those N children for the ALL-ZERO work vector (survivor_scan
+// Survivor scan: after round 5's match writes its children into
+// pb.work[0] (the r==5 special-case out_work: there is no round 6, and
+// work[0] is the pipeline's only otherwise-idle work slot), scan those N children for the ALL-ZERO work vector (survivor_scan
 // kernel, kernels/opencl/round.cl) -- the deterministic signature of two
 // byte-identical round-4 elements having collided (bh3_combine is XOR-based:
 // a==b -> zero, at any Lout). Zeroes ONLY counters[3] (repurposed here as
 // the survivor count) via a targeted read-modify-write first, mirroring
-// match()'s own idiom for counters[0]/[2] -- else a second call on the same
+// match_sorted's own idiom for counters[2] -- else a second call on the same
 // PipelineBuffers would accumulate onto a stale count; counters[0..2] are
 // left untouched. Allocates its own `cap`-sized device buffer for the
 // survivor slot list (a one-shot, end-of-run scan, not a per-round hot
@@ -236,8 +205,7 @@ uint32_t survivor_scan(Runtime& rt, PipelineBuffers& pb, uint32_t N,
 // round 5 -- see tests/test_round_pipeline.cpp section (b)), every
 // remaining round is recorded as an honest {in=0,out=0,bucket_drops=0,
 // pair_drops=0} WITHOUT dispatching a kernel -- a global_work_size==0
-// launch is invalid OpenCL, and mix_level/scatter (T2/T3, unmodified) do
-// not themselves guard against it. Logs one line per round
+// launch is invalid OpenCL, and mix_level does not itself guard against it. Logs one line per round
 // ("  r%d: in=%u out=%u bucketDrops=%u pairDrops=%u\n") -- honest drop
 // reporting, not just success counts.
 //
