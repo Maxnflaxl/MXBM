@@ -10,12 +10,6 @@
 // emitted child. See "compile-time round constants" in docs/performance.md.
 #include "bh3_records.cuh"
 #include <cooperative_groups.h>
-#if MXBM_CPASYNC
-#include <cuda_pipeline.h>
-#endif
-#ifndef MXBM_CPASYNC
-#define MXBM_CPASYNC 0
-#endif
 
 namespace mxbm { namespace cuda {
 
@@ -679,8 +673,6 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     static_assert(!IMPB || MXBM_PERFECT_TAB,
                   "IMPB: bits 23..8 of a packed rec0 are work bits, so a full-key "
                   "compare would reject true partners");
-    static_assert(!IMPB || !MXBM_CPASYNC,
-                  "IMPB repacks the record; the cp.async raw copy cannot carry it");
     static_assert(!IMPB || LMODE != LM_EMIT || INSTR == 8,
                   "IMPB's unpack is a fixed 4 x ulonglong2, so the record it reads must "
                   "have been written at stride 8. A wider one (MXBM_R2_FULL) compiles "
@@ -732,7 +724,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     // See MXBM_COOP. The unpack it splits across four lanes is the IMPB one, and MFIRST
     // would need the chain built before the record is read.
     constexpr bool COOP = (MXBM_COOP != 0) && LMODE == LM_EMIT && IMPB != 0
-                       && !MFIRST && !SUBPASS && !MXBM_CPASYNC && !NARROW6;
+                       && !MFIRST && !SUBPASS && !NARROW6;
     // Reference bindings: the body below is textually what it was when these were the
     // kernel's own __shared__ declarations, and the bindings keep it that way.
     auto& lwork  = shm.lwork;
@@ -991,18 +983,6 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             // 22% of its warp-active cycles on the MIO queue, which is memory-INSTRUCTION
             // issue rather than bandwidth, so instruction count is the thing to cut here.
             static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
-#if MXBM_CPASYNC
-            // cp.async: global -> shared without a register round-trip, and without the
-            // warp stalling on the load before it can store. Global-latency stalls are
-            // now the top stall in this kernel (52.8% long_scoreboard), which is exactly
-            // what this is for. 8 B granularity: lwork's stride is INW u64, so the shared
-            // destination is only 16 B aligned for even pos.
-            #pragma unroll
-            for (int w = 0; w < INW; ++w)
-                __pipeline_memcpy_async(&lwork[lwx(pos, w)], &in_belem[d + w], 8);
-            __pipeline_commit();
-            const uint64_t p0 = in_belem[d + INW], p1 = r3_word8(in_belem, d, side_in + idx_);
-#else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             ulonglong2 q0 = v[0], q1 = v[1], q2 = v[2], q3 = v[3];
             uint64_t p0, p1;
@@ -1027,7 +1007,6 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                 stw(pos,6,q3.x);
                 p0 = q3.y; p1 = r3_word8(in_belem, d, side_in + idx_);
             }
-#endif
             const uint32_t l0 = r3_l0(p0);
             lgi[pos] = r3_gi(p1);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
@@ -1053,12 +1032,6 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             // INW-generic: this branch serves LM_USE (INW=6) and LM_RAW (INW=7), and
             // hardcoding three ulonglong2 loads silently dropped word 6 for the latter.
             static_assert(INSTR % 2 == 0, "vectorised path needs an even record stride");
-#if MXBM_CPASYNC
-            #pragma unroll
-            for (int w = 0; w < INW; ++w)
-                __pipeline_memcpy_async(&lwork[lwx(pos, w)], &in_belem[d + w], 8);
-            __pipeline_commit();
-#else
             const ulonglong2* v = reinterpret_cast<const ulonglong2*>(in_belem + d);
             #pragma unroll
             for (int j = 0; j < INW/2; ++j) {
@@ -1066,7 +1039,6 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                 lwork[lwx(pos, 2*j)] = q.x; lwork[lwx(pos, 2*j + 1)] = q.y;
             }
             if constexpr (INW & 1) lwork[lwx(pos, INW-1)] = in_belem[d + INW-1];
-#endif
             const uint64_t meta = in_belem[d + INW];
             lgi[pos] = (uint32_t)(meta >> 32); llead[pos] = (uint32_t)meta;
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
@@ -1075,10 +1047,6 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                     (uint32_t)(in_belem[d + INW + 1 + (i >> 1)] >> ((i & 1u) * 32u));
         }
     }
-#if MXBM_CPASYNC
-    if constexpr (LMODE == LM_EMIT || LMODE == LM_USE || LMODE == LM_RAW)
-        __pipeline_wait_prior(0);      // all in-flight copies land before the barrier
-#endif
     __syncthreads();
     if constexpr (MXBM_SPILL) {
         if (gcount > FCAP && !counted) {

@@ -91,7 +91,7 @@ valid. Check with `cuobjdump -sass | grep LDG.E.128` rather than assuming.
 
 | lever | result |
 |---|---|
-| `cp.async` staging (`-DMXBM_CPASYNC=1`) | 35.0 → 35.3 ms |
+| `cp.async` staging (since removed from the tree) | 35.0 → 35.3 ms |
 | block size 288 / 320 / 384 (`-DMXBM_WG`) | 35.1 → 35.5 / 35.6 / 36.9 |
 | remove the pair record (`-DMXBM_R2_FULL=1`) | 35.0 → 39.2 ms |
 | more occupancy (2 → 3 blocks/SM on r3) | no change |
