@@ -24,6 +24,6 @@ WALLET=12cafbe121b5f063d2c63152058575479a2826a41fd4176296dae2e8ad3fc9ffc60.donat
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
 
 # Anything you add on the command line is passed straight through, so
-#   ./mine_beam.sh --pl 220
-# runs this pool with a 220 W board cap. See readme.txt.
+#   ./mine_beam.sh --pl auto
+# runs this pool with the board cap --tune found. See readme.txt.
 ./mxbm --algo BEAM-III --pool "$POOL" --user "$WALLET" "$@"

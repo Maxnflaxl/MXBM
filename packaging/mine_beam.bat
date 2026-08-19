@@ -25,7 +25,7 @@ rem #################################
 cd /d "%~dp0"
 
 rem Anything you add on the command line is passed straight through, so
-rem   mine_beam.bat --pl 220
-rem runs this pool with a 220 W board cap. See readme.txt.
+rem   mine_beam.bat --pl auto
+rem runs this pool with the board cap --tune found. See readme.txt.
 mxbm.exe --algo BEAM-III --pool "%POOL%" --user "%WALLET%" %*
 pause
