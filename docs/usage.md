@@ -36,7 +36,7 @@ immediately; only a *missing* one defers to the config.
 
 | Flag | Meaning | Default |
 |------|---------|---------|
-| `--pass x` | Accepted and ignored. Pools' instructions commonly say to pass one, so it is not an error — but BeamHash III's stratum login carries the address alone, so no password is ever sent. | none |
+| `--pass x` | Accepted and ignored — BeamHash III's stratum login carries the address alone, so no password is ever sent. | none |
 | `--tls [0\|1]` | Enable/disable TLS to the pool. | on; off for a loopback pool |
 | `--solver cuda\|opencl\|gpu\|ref\|auto` | Solver backend. `gpu` = any GPU (CUDA preferred), `cuda`/`opencl` pin one, `ref` = CPU reference. | auto |
 | `--dev-fee PCT` | Raise the developer fee above its built-in rate, as a percentage. Raise-only. | built-in rate |
@@ -106,67 +106,51 @@ rather than speed.
 sudo mxbm --report
 ```
 
-One command, and the only one worth remembering if you are reporting a result. It
-benchmarks the card for two minutes through the same solve path mining uses, samples
-telemetry over the run, measures the card's power/speed curve, and prints the whole
-thing as a markdown block ready to paste into a
+The only command worth remembering if you are reporting a result. It benchmarks the card
+for two minutes through the same solve path mining uses, samples telemetry over the run,
+measures the card's power/speed curve, and prints the whole thing as a markdown block
+ready to paste into a
 [benchmark report issue](https://github.com/maxnflaxl/MXBM/issues/new?template=benchmark-report.yml).
-Nothing is uploaded.
+Nothing is uploaded. It also records three things a person filling in a form usually
+cannot, and each decides whether a figure means anything: whether a display was attached
+to the card, whether another process was using it, and what the clocks were limited by.
 
-**The report is always saved**, and the path is printed when it is:
-
-```
-Saved to /home/you/.config/mxbm/report-nvidia-geforce-rtx-4070-ti-super-2026-08-20.md
-```
-
-It lands next to the tune store, named after the card and the day — so a report that
-took half an hour to measure survives closing the terminal. A second run on the same
-day replaces it. `--report-out` chooses somewhere else: an absolute or relative path
-(relative to where you ran it), `~/` expands, missing directories are created, and
-naming a *directory* saves the default filename inside it. Under `sudo` the file lands
-in your own config directory and is owned by you, not root.
-
-It also records three things a person filling in a form usually cannot, and each of
-which decides whether a figure means anything: whether a display was attached to the
-card, whether another process was using it, and what the clocks were limited by.
-
-**The curve takes about half an hour and is measured once.** A later `--report` on the
+**The curve takes about half an hour, and is measured once.** A later `--report` on the
 same binary reads it back and finishes in two minutes; a different build re-measures,
 because a curve taken on different kernels describes a different program. Measuring it
 needs root (or an Administrator terminal on Windows) — without that you still get
 everything except the curve, and that is still a useful report.
 
-`--report` always sweeps at the defaults: `--tune-caps` and `--tune-seconds` configure
-`--tune` and are refused here, since a hand-picked grid produces a verdict that reads
-like a full sweep's without the refining passes behind it. Use `--tune` directly when
-you want to choose the grid.
+**The report is always saved**, and the path is printed:
+
+```
+Saved to /home/you/.config/mxbm/report-nvidia-geforce-rtx-4070-ti-super-2026-08-20.md
+```
+
+It lands next to the tune store, named after the card and the day; a second run on the
+same day replaces it. `--report-out` chooses somewhere else — an absolute or relative
+path, `~/` expands, missing directories are created, and naming a *directory* saves the
+default filename inside it. Under `sudo` the file is owned by you, not root.
 
 **On a multi-GPU rig a report covers one card at a time.** With more than one card
-`--report` will not guess which one — it lists them and stops, because a block that
-silently covered device 0 reads as a rig figure and the other cards were idle while it
-was taken:
-
-```
---report measures one GPU at a time, and this rig has 2. Say which, or ask for all of them:
-    --devices 0    NVIDIA GeForce RTX 4070 Ti SUPER  (1:0)
-    --devices 1    NVIDIA GeForce RTX 3060 Ti        (2:0)
-    --devices ALL  every card, one after another (~30 min each)
-```
+`--report` lists them and stops rather than guessing, because a block that silently
+covered device 0 would read as a rig figure:
 
 ```sh
 sudo mxbm --report --devices 1                       # one card
 sudo mxbm --report --devices ALL --report-out rig.md # every card, in turn
 ```
 
-`--devices ALL` walks the cards **one after another, never together** — two cards
-measured at once would each be reporting the other's contention — and collects every
-block into one file, so a rig is still one paste. Each card costs its own sweep, so
-budget roughly half an hour per card on the first run.
-
-Both the console line and the report's own GPU row name which card was measured and how
-many the rig has, so a single-card block cannot be mistaken for a rig-wide one. Curves
+`--devices ALL` walks the cards one after another — never together, since two cards
+measured at once each report the other's contention — and collects every block into one
+file, so a rig is still one paste. Budget half an hour per card on the first run. Curves
 are stored per card (keyed by name and PCI address), so identical cards in different
-slots keep their own — which is the point, since cooling differs between slots.
+slots keep their own; cooling differs between slots.
+
+`--report` always sweeps at the defaults: `--tune-caps` and `--tune-seconds` configure
+`--tune` and are refused here, since a hand-picked grid produces a verdict that reads
+like a full sweep's without the refining passes behind it. Use `--tune` directly when you
+want to choose the grid.
 
 ### Tuning: measure your own card
 
@@ -177,44 +161,42 @@ produces the same table for **your** card, then recommends a wattage:
 sudo mxbm --tune
 ```
 
-About 25 minutes, in four passes: a discarded warmup, then six coarse points across
-the band your driver reports (60 s each, live mining path, CPU-verified sol/s) to
-locate the best cap's neighbourhood; a second pass at ~10 W steps bracketing it — the
-coarse grid can only place it to within its own spacing, and the fine pass is
-what distinguishes, say, 220 from 248; a third pass at your card's **low memory
-rung** (picked from the driver's own supported-clock list, held-clock verified every
-arm) at the capped points, because under a low cap the memory interface burns watts
-for bandwidth the slowed core cannot use, and on the reference card giving them back
-was worth 8–14 %; and a fourth pass that refines around the best-efficiency point
-found so far, on whichever memory clock it sits — the coarse spacing blurs the
-efficiency optimum exactly as it blurs the recommendation. All passes feed one verdict. Last, the first point is measured again
-as a drift gauge — if the card heated enough during the sweep to move the numbers by
-more than ±1.5 %, the table says so instead of pretending. It prints the curve plus
-three recommendations: the **recommended `--pl`** (the highest limit where each extra watt still
-returns at least 0.07 sol/s — above it you are buying watts, not speed), the
-**best-efficiency point** (most sol/s per measured watt, which may land *on the
-rung*), and — when the rung measured faster — the cap **below which to add
-`--mclk <rung>`**, a threshold measured on your card, not copied from ours. The
-result is stored per card in `~/.config/mxbm/tune.json` — in *your* config dir even
+About 25 minutes, in four passes plus a drift gauge:
+
+| pass | what it measures | why |
+|---|---|---|
+| coarse | six points across the band your driver reports, 60 s each, live mining path, CPU-verified sol/s | locates the best cap's neighbourhood |
+| fine | ~10 W steps bracketing it | the coarse grid places the peak only to within its own spacing; this is what distinguishes 220 from 248 |
+| rung | the capped points again at your card's low memory rung — picked from the driver's own supported-clock list, held-clock verified every arm | under a low cap the memory interface burns watts for bandwidth the slowed core cannot use |
+| efficiency | refines around the best sol/s-per-watt point found, on whichever memory clock it sits | the coarse spacing blurs the efficiency optimum exactly as it blurs the recommendation |
+| drift gauge | the first point, measured a second time | past ±1.5 % the table says the card heat-soaked rather than pretending it did not |
+
+It prints the curve and three recommendations: the **recommended `--pl`** (the highest
+limit where each extra watt still returns at least 0.07 sol/s — above it you are buying
+watts, not speed), the **best-efficiency point** (most sol/s per measured watt, which may
+land on the rung), and — when the rung measured faster — the cap **below which to add
+`--mclk <rung>`**, a threshold measured on your card rather than copied from ours.
+
+The result is stored per card in `~/.config/mxbm/tune.json` — in *your* config dir even
 under sudo — so later runs can just say:
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl auto
 ```
 
-`--pl auto` prints the stored value and its measurement date, so a stale tune is
-visible — and when the stored rung data says the resolved cap is inside the rung's
-paying band, it prints a one-line reminder to consider `--mclk` (recommended, never
-auto-applied: locking a memory clock you did not ask for is a hardware setting nobody
-requested). Re-run `--tune` after driver updates or cooling changes. On a rig that
-does not mine as root, read the recommendation once and put
-`sudo nvidia-smi -pl <watts> -lmc <rung>,<rung>` in the boot sequence instead. Knobs:
-`--tune-seconds N` (per point, default 60), `--tune-caps "100,160,220"` (exactly these
-points, which also skips the refinement and rung passes — a chosen grid means the grid
-you chose), `--tune-min-gain X` (the sol/s-per-watt bar, default 0.07 — the one number
-that is a preference, not a measurement). `--tune` refuses a simultaneous `--pl` but
-allows the other OC flags — and a given `--mclk` disables the rung pass: a chosen
-memory clock stands. Ctrl+C aborts and restores the previous limit and memory clock.
+`--pl auto` prints the stored value and its measurement date, so a stale tune is visible;
+when the resolved cap is inside the rung's paying band it also prints a one-line reminder
+to consider `--mclk`, recommended but never auto-applied. Re-run after driver updates or
+cooling changes. On a rig that does not mine as root, read the recommendation once and
+put `sudo nvidia-smi -pl <watts> -lmc <rung>,<rung>` in the boot sequence instead.
+
+Knobs: `--tune-seconds N` (per point, default 60), `--tune-caps "100,160,220"` (exactly
+these points, which also skips the refinement and rung passes), `--tune-min-gain X` (the
+sol/s-per-watt bar, default 0.07 — the one number that is a preference, not a
+measurement). `--tune` refuses a simultaneous `--pl` but allows the other OC flags; a
+given `--mclk` disables the rung pass. Ctrl+C aborts and restores the previous limit and
+memory clock.
+
 
 ### Multiple pools (failover)
 
@@ -354,12 +336,8 @@ written for a later MXBM — or for another miner — still loads.
 
 ## Dashboard and monitoring API
 
-`--apiport N` serves two things on the same port:
-
-| Path | |
-|------|--|
-| `/` (or `/index.html`) | A live dashboard, for a browser |
-| `/summary` | A JSON snapshot, for scripts and monitoring |
+`--apiport N` serves two things on the same port: a live dashboard at `/` for a browser,
+and a JSON snapshot at `/summary` for scripts and monitoring.
 
 ```sh
 mxbm --json --profile rig1 --apiport 8080
@@ -367,146 +345,16 @@ mxbm --json --profile rig1 --apiport 8080
 
 Then open <http://localhost:8080/>.
 
-### The dashboard
+The dashboard charts hashrate, share difficulty, power (with an optional energy-cost
+axis), clocks and temperature, and is entirely self-contained — no CDN, no external
+fonts — because rigs often sit on isolated networks.
 
-Three tables — session rates, pool/share state, device telemetry — above a set
-of charts:
+**The API is unauthenticated.** It does not expose your wallet address, but it does
+reveal your hardware, hashrate, pool and uptime, so treat the port as
+trusted-network-only; `--apihost 127.0.0.1` restricts it to the rig itself.
 
-| Chart | Shows |
-|-------|-------|
-| hashrate | 15s, 60s and pool-credited rate |
-| shares found | every share as a dot at its achieved difficulty, on a log axis, against the target it cleared |
-| power | watts, plus a cost axis once you enter an energy price |
-| clocks | core and memory, on separate axes (they differ ~4×, so one axis would flatten both) |
-| temperature / fan | |
-
-Hover any chart for exact values at that point, coloured to match each line.
-
-The page is entirely self-contained — no CDN, no external fonts, no requests
-anywhere but this miner's own `/summary` — because rigs often sit on isolated
-networks. Enter your energy price on the power chart to get a cost axis and
-cost-per-hour/day/month figures; the price is remembered in your browser.
-
-Two things worth knowing about the charts:
-
-- **Chart history lives in the browser tab**, accumulated from page load at one
-  sample per two seconds, and restarts on reload. MXBM reports windowed *rates*
-  and running counters, not a stored time series. The one exception is the
-  shares-found chart, which the miner backs with its own log and which is
-  therefore complete the moment the page opens.
-- **Axes never zoom tighter than ±3%** of the value. Without that floor, a
-  quantity that is genuinely steady renders as violent noise — measured power
-  moves about 0.4% peak-to-peak and would otherwise fill the whole chart.
-
-### `/summary`
-
-```sh
-curl http://localhost:8080/summary
-```
-
-```json
-{
-  "Software": "MXBM 0.5.126 [2ecb9d4]",
-  "Mining":  { "Algorithm": "BeamHash III" },
-  "Session": {
-    "Uptime_Human": "0h 0m 56s", "Uptime_s": 56,
-    "Speed_15s": 52.13, "Speed_60s": 51.45, "Speed_Session": 54.50,
-    "Pool_Speed_Session": 90.39,
-    "Accepted": 10, "Stale": 0, "Rejected": 0,
-    "Best_Share": 7390.32,
-    "Job_Difficulty": 512.0, "Job_Id": "58481"
-  },
-  "Workers": [{
-    "Index": 0, "Name": "NVIDIA GeForce RTX 4070 Ti SUPER",
-    "Performance": 51.45, "Iterations_s": 26.5,
-    "Power_W": 284.37, "Core_Clock_MHz": 2730, "Mem_Clock_MHz": 10251,
-    "Temp_C": 65, "Fan_Pct": 54
-  }],
-  "Stratum": { "Current_Pool": "de.beam.herominers.com:1130", "Latency_ms": 17, "Reconnects": 0 },
-  "DevFee":  { "Rate": 0.01, "Active": false, "Rounds": 2, "Seconds": 72.0,
-               "Accepted": 1, "Stale": 0, "Rejected": 0 },
-  "Session_Stats": {
-    "Speed_15s": { "N": 304, "Mean": 55.94, "Stddev": 3.27, "Min": 24.9, "Max": 61.5 },
-    "Speed_60s": { "N": 65, "Mean": 55.89, "Stddev": 2.30, "Min": 39.7, "Max": 58.9 },
-    "Iterations_s": { "N": 65, "Mean": 29.4, "Stddev": 1.21, "Min": 20.9, "Max": 31.0 },
-    "Power_W": { "N": 9000, "Mean": 284.4, "Stddev": 3.06, "Min": 61.0, "Max": 361.2 },
-    "Core_Clock_MHz": { "N": 9000, "Mean": 2730, "Stddev": 40.1, "Min": 2100, "Max": 2775 },
-    "Mem_Clock_MHz": { "N": 9000, "Mean": 10251, "Stddev": 0.0, "Min": 10251, "Max": 10251 },
-    "Temp_C": { "N": 9000, "Mean": 65.2, "Stddev": 3.9, "Min": 38, "Max": 71 },
-    "Fan_Pct": { "N": 0, "Mean": null, "Stddev": null, "Min": null, "Max": null }
-  },
-  "Recent_Shares": [
-    { "Age_s": 53.68, "Difficulty": 624.27, "Target": 512.0, "Dev": false }
-  ]
-}
-```
-
-Notes on fields whose behaviour is not obvious from the name:
-
-- **`Session.*` counters exclude developer-fee shares.** Those live in
-  `DevFee`, in a separate ledger. `Best_Share` and `Pool_Speed_Session` are
-  likewise yours alone.
-- **Telemetry fields are `null`, not `0`,** when the platform cannot supply
-  them — a laptop reporting power but not fan speed should read as "fan
-  unknown", which `0` would misreport as "fan stopped".
-- **`DevFee` is always present**, all-zero in a build that charges no fee, so a
-  consumer can tell "no fee" from "MXBM too old to report one".
-- **`Recent_Shares`** is the last 128 shares, oldest first. `Target` is the
-  difficulty *that share* cleared, captured when it was found — not
-  `Session.Job_Difficulty`, which is only the current one. Pool vardiff moves
-  the target through a session, so pairing an old share with the current target
-  would misreport how hard it actually was.
-- **`Age_s`, not a timestamp.** MXBM never reads wall-clock time internally, so
-  it reports ages; a consumer with a clock converts trivially, and a relative
-  figure survives clock skew.
-- `Latency_ms` is `-1` until the first share round-trip is measured, rather
-  than being remapped to 0.
-- **`Speed_*` and `Pool_Speed_Session` measure the same thing two ways** — see
-  [Speed vs pool rate](#speed-vs-pool-rate).
-- **`Session_Stats` covers the whole run**, where everything else in the
-  response is an instant. One entry per sampled field, keyed by the field it
-  summarises, holding the sample count, mean, sample standard deviation
-  (`n-1`), and the extremes. It is what tells you whether a rate is *steady*,
-  which no single reading can, and it is accumulated by the miner — the
-  dashboard's charts only hold ~30 minutes and start over on reload, so an
-  hour-old thermal spike is gone from them but not from here.
-
-  Three things worth knowing before quoting these:
-
-  - **`N` counts samples, not seconds.** They are folded on the read path, at
-    most one per second, so the count follows how often the miner was
-    *observed*: the console ticker contributes one per tick, an open dashboard
-    one per poll. Nothing is watching, nothing accumulates.
-  - **A window is only sampled once it has filled.** `Speed_15s` is 0.0 for the
-    first 15 seconds of a session; sampling that would pin `Min` at zero for
-    the whole run. So `Speed_15s` starts at 15 s uptime and `Speed_60s` at 60 s.
-  - **No median**, because these are constant-memory accumulators that keep no
-    samples. `Mean` and `Min`/`Max` are exact; a median needs the series.
-
-  A field the platform never supplied reports `N: 0` with the rest `null` —
-  same null-not-zero rule as the telemetry fields above.
-
-### Reaching it from another machine
-
-The server binds all interfaces by default, so on a firewalled host you only need
-to open the port — scoped to your LAN rather than to everything:
-
-```sh
-sudo ufw allow from 192.168.1.0/24 to any port 8080 proto tcp comment 'MXBM dashboard'
-```
-
-**The API is unauthenticated**, and it is a small hand-rolled HTTP server, so
-treat the port as trusted-network-only. It does not expose your wallet address,
-but it does reveal your hardware, hashrate, pool and uptime. MXBM prints the
-address it bound at startup, so which of these you are running is never a guess.
-
-`--apihost 127.0.0.1` restricts the listener to the rig itself — no other machine
-can reach it, with or without a firewall rule. That plus an SSH tunnel is the
-setup that exposes nothing:
-
-```sh
-ssh -N -L 8080:localhost:8080 user@rig
-```
+Every field, the dashboard's charts, and how to reach it from another machine are in
+**[api.md](api.md)**.
 
 ## Console output
 
@@ -528,7 +376,7 @@ nothing without the bar it had to clear — and pool vardiff moves that bar
 throughout a session, so the same "8.0k" is a different achievement at
 different times. The multiplier is plain ASCII `x` so the line stays greppable
 through `tee` and log shippers. Where no target is known yet, the suffix is
-omitted rather than printing a meaningless ratio.
+omitted.
 
 Press Ctrl+C to stop.
 
@@ -624,7 +472,9 @@ grep -o 'Average speed (15s): [0-9.]*' logs/mxbm_*.log | awk '{print $NF}' | sor
   awk '{v[NR]=$1} END {print "n="NR, "median="v[int(NR/2)], "min="v[1], "max="v[NR]}'
 ```
 
-`--digits` raises the precision of those figures if two decimals is not enough.
+`--digits` raises the precision of those figures if two decimals is not enough. For
+mean and standard deviation without any parsing, the API reports them directly — see
+[`Session_Stats`](api.md#summary).
 
 ### Power limit
 
@@ -633,48 +483,45 @@ The single most valuable setting on an NVIDIA card, and the reason it exists her
 bound the miner, it picks its operating point. On the reference RTX 4070 Ti SUPER,
 measured:
 
-| `--pl` | sol/s | draw | sol/s/W |
+**`--pl 210` is the setting to use** on the reference RTX 4070 Ti SUPER — the top of a
+flat efficiency shelf, and comfortably inside the window where MXBM beats the
+alternative, whose crossing is at ~177 W:
+
+| `--pl` | sol/s | sol/s/W | |
 |---|---|---|---|
-| 180 | 51.4 | 179.9 W | 0.286 |
-| 190 | 55.0 | 189.8 W | 0.290 |
-| 200 | 58.3 | 199.8 W | 0.292 |
-| 210 | 61.9 | 209.7 W | 0.295 |
-| **220** | **65.2** | **219.7 W** | **0.297** — the efficiency peak, and recommended |
-| 240 | 66.9 | 239.6 W | 0.279 |
-| 255 | 67.8 | 254.5 W | 0.266 |
-| 285 (stock) | 69.2 | 284.4 W | 0.243 — fastest |
+| 160 W | 46.2 | 0.2887 | |
+| 180 W | 54.0 | 0.2999 | |
+| **210 W** | **64.9** | **0.3094** | the efficiency shelf, and recommended |
+| 240 W | 67.9 | 0.2834 | |
+| 285 W *(stock)* | **69.95** | 0.2461 | fastest |
 
-Dropping the limit from 285 W to 220 W costs 6 % of throughput and saves 23 % of the
-power. Going below 220 W makes things *worse* on both counts, because by then the core
-clock has fallen far enough that the parts of the board which do not scale with it are
-being paid for out of less work.
+Dropping from 285 W to 210 W costs 7 % of throughput and saves 26 % of the power. Going
+below the shelf makes things *worse* on both counts: the core clock has fallen far
+enough that the parts of the board which do not scale with it are being paid for out of
+less work.
 
-**200–210 W is both MXBM's own efficiency shelf and comfortably inside the window where
-it beats the alternative**; the crossing where lolMiner takes over on speed and
-efficiency is at ~177 W. The full curve, and both miners
-swept against each other at the same caps, is in
-[performance.md](performance.md#both-miners-under-the-same-cap).
+The full curve — every cap from the driver's 100 W floor up, and both miners swept
+against each other at the same caps — is in
+[performance.md](performance.md#both-miners-under-the-same-cap). These numbers are one
+card's; `sudo mxbm --tune` measures yours ([Tuning](#tuning-measure-your-own-card)).
 
-These numbers are one card's. To get this table for *your* card — and a wattage
-recommendation derived from it — run `sudo mxbm --tune` once
-([Tuning](#tuning-measure-your-own-card)).
-
-**Running capped below ~170 W? Drop the memory clock too.** Under a low cap the
-GDDR interface burns watts for bandwidth the slowed core cannot use; on the reference
-card the 5001 MHz rung returns them as core clock — **8–14 % more sol/s at the same
-wall power** between 100 and 160 W, and the best efficiency the card has ever
-measured (**3.70 J/solution** at 160 W). Pair the two through the miner itself — one command, and
-both settings are restored when it exits:
+**Running capped below ~165 W? Drop the memory clock too.** Under a low cap the GDDR
+interface burns watts for bandwidth the slowed core cannot use; the 5001 MHz rung returns
+them as core clock — **+7 % sol/s at 160 W rising to +18 % at the 100 W floor**, at the
+same wall power. Pair the two through the miner itself — one command, and both settings
+are restored when it exits:
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 ```
 
 On a rig that doesn't run the miner as root, set the card once instead
-(`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. At
-165 W and above the rung *loses* — badly at stock — so this is strictly a low-cap
-pairing, and it does not reach 210 W on energy per solution. Details in
-[performance.md](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
+(`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. The
+crossover is ~167 W and above ~180 W the rung is a wall, so this is strictly a low-cap
+pairing. On energy per solution it only ties the shelf — 3.219 J/solution at 160 W on
+the rung against 3.232 at 210 W on stock memory, where the card does 31 % more work.
+Details in
+[performance.md](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w).
 
 ```
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 210
@@ -729,8 +576,8 @@ Total             12.60    284
 | `state` | `mining` or `paused` (see [Thermal protection](#thermal-protection)) |
 
 The first twelve are the default set, which is what you get without the flag.
-**There are no presets** — a bare word that is not a field name is an error that
-lists the fields, rather than a table you did not ask for.
+**There are no presets**; a word that is not a field name is an error listing the
+fields.
 
 `--vstats` turns the table on its side, one column per GPU plus a Total, which
 reads better on a narrow terminal or a rig with many cards:
@@ -795,8 +642,8 @@ not assumed), 64 MB headless.
 
 `--keepfree MB` replaces that reserve outright. `--keepfree 0` takes everything
 the driver reports free; a large value hands memory back to the desktop. It is
-not capped: if you ask for more than the pipeline can work with, MXBM says so and
-refuses to start rather than mining a partial search that finds nothing —
+not capped: ask for more than the pipeline can work with and MXBM refuses to start
+rather than mine a partial search that finds nothing —
 
 ```
 GPU has too little memory for BeamHash III: it can host only 11834786 of the
@@ -827,8 +674,8 @@ Detected devices (indices are in PCI order, and mean the same card in --devices 
 ```
 
 `--devices ALL` (the default) or `--devices 0,2` picks by those indices. An index that
-does not exist is an error naming how many were found, not a silent fallback to card 0 —
-a rig config that quietly mines the wrong card is worse than one that refuses to start.
+does not exist is an error naming how many were found — a rig that quietly mines the
+wrong card is worse than one that refuses to start.
 
 **Indices are in PCI order**, which is what makes `--devices 1` and `--pl 240,*,260`
 refer to the same physical card. CUDA's own enumeration defaults to fastest-first and
@@ -917,7 +764,7 @@ is unambiguous. A device is called hung after **90 seconds** without completing 
 first job — or one whose pool has dropped — is never mistaken for a crashed one. That
 matters most under the default action: a watchdog that cannot tell those apart restarts
 healthy rigs exactly when a restart helps least. A card that recovers on its own is
-reported again if it stalls later, rather than being written off after the first time.
+reported again if it stalls later.
 
 `exit` is the default because it is the only action that actually recovers an NVIDIA
 card: a wedged CUDA context generally cannot be torn down by the process that wedged it,
@@ -968,8 +815,6 @@ Restore order is the reverse of apply order: the fan goes back to the driver's c
 first, so the card is cooling itself normally while the clocks come down, and the power
 limit is put back last, so nothing is ever unlocked into a clock the old limit would not
 have allowed.
-For mean and standard deviation without any parsing, the API reports them
-directly — see `Session_Stats` above.
 
 ### Speed vs pool rate
 

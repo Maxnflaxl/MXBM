@@ -352,7 +352,7 @@ on stock memory; in between it trails — worst at 160 W (−7.5 %) — and at e
 best configuration the residual is 2–3 % at 100–110 W and under 1 % at 155–177 W, with
 MXBM ahead at 120–140 W. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
-[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w).
+[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w).
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces. BeamHash III yields

@@ -843,45 +843,51 @@ ncu](performance-research.md#lolminer-measured-under-ncu-the-state-storing-desig
 
 </details>
 
-### Above stock: the curve continues to ~311 W, and the memory rung is unreachable
+### Above stock: the curve continues to ~321 W, and the memory rung is unreachable
 
-*(Measured 2026-07-29, current build, 60 s arms, bracketed. Every power sweep in this
-document stops at the 285 W stock limit; the board's own maximum is 366 W, so the top of
-the curve had never been measured.)*
+*(Re-measured **2026-08-20**, shipping build, headless, 90 s arms, the whole sweep run
+ascending and then descending so thermal drift cancels. Arms agree to ≤0.14 % at every
+rung and the 285 W bracket reproduced 70.5 / 70.6 either side. Every power sweep
+elsewhere in this document stops at the 285 W stock limit; the board's own maximum is
+366 W.)*
 
 | cap | ms/solve | sol/s | SM clock | **drawn** | sol/s/W | vs stock |
 |---|---|---|---|---|---|---|
-| 285 W *(stock)* | 33.8 | 58.7 | 2685 MHz | 284.0 W | 0.2067 | — |
-| 300 W | 33.5 | 59.2 | 2715 | 299.1 | 0.1979 | −4.2 % |
-| **315 W** | **33.3** | **59.6** | **2745** | 309.4 | 0.1926 | −6.8 % |
-| 330 W | 33.3 | 59.6 | 2745 | **311.2** | 0.1915 | −7.3 % |
-| 366 W | 33.2 | 59.7 | 2745 | **311.2** | 0.1918 | −7.2 % |
+| 285 W *(stock)* | 28.7 | 70.55 | 2660 MHz | 284.4 W | 0.2481 | — |
+| 300 W | 28.5 | 70.85 | 2700 | 299.3 | 0.2367 | −4.6 % |
+| **315 W** | **28.3** | **71.35** | **2720** | 314.3 | 0.2270 | −8.5 % |
+| 330 W | 28.25 | 71.55 | 2740 | **319.9** | 0.2237 | −9.8 % |
+| 366 W | 28.25 | 71.55 | 2740 | **321.9** | 0.2223 | −10.4 % |
 
-**MXBM saturates at ~311 W.** The 330 W and 366 W caps draw the same 311.2 W and return
-the same clock, so above ~315 W the cap stops binding — the mirror of the behaviour this
-document records for [lolMiner at ~236 W](#both-miners-under-the-same-cap). The 285 W
-bracket reproduced exactly (33.8 / 58.7 before and after), and thermals are not the limit
-at any rung: 68 °C at 366 W against a 64 °C stock baseline.
+**MXBM saturates at ~321 W.** The 330 W and 366 W caps draw the same ~320 W, hold the
+same 2740 MHz and return the same 71.55 sol/s, so above ~315 W the cap stops binding —
+the mirror of the behaviour this document records for
+[lolMiner at ~236 W](#both-miners-under-the-same-cap). Thermals are not the limit at any
+rung: 68 °C at 366 W against 65 °C at stock.
 
-**`--pl 315` is the operating point above stock**, worth **+1.5 % speed for +8.9 % power**.
-The marginal return over 285 → 315 W is **0.035 sol/s per W**, which is *higher* than the
-0.027 this document records for the 270 → 285 step — the curve does not roll off above
-stock the way extrapolating the sub-stock sweep would suggest. It is still a goal-2 lever
-bought at a goal-3 cost, and 220 W remains the recommendation for a rig that pays for
-electricity.
+**`--pl 315` is the operating point above stock**, worth **+1.1 % speed for +10.5 %
+power**. The marginal return over 285 → 315 W is **0.027 sol/s per W**, which is *below*
+the 0.037 this document records for the 255 → 285 step — the curve rolls off above stock
+rather than continuing straight, so extrapolating the sub-stock sweep overstates what is
+there. It is a goal-2 lever bought at a goal-3 cost, and 210 W remains the recommendation
+for a rig that pays for electricity.
+
+**This sweep is a later session than [the head-to-head table](#both-miners-under-the-same-cap)**
+and carries the cross-session term the method note prices: its 285 W point reads 70.55
+against that table's 69.95, **+0.9 %**, on the same binary. Read the rungs against each
+other, not against the caps below 285 W in the tables above.
 
 **The 10501 MHz memory rung is not reachable, and this is a mechanism rather than a
 null.** The card advertises it (`nvidia-smi -q -d SUPPORTED_CLOCKS` lists
 10501/10251/5001/810/405) and every figure ever published here was taken at 10251, so it
 looked like free bandwidth for a pipeline at 76–80 % of DRAM peak in rounds 3 and 4.
 `nvidia-smi -lmc 10501,10501` **applies at idle and is dropped the moment the workload
-runs** — six bracketed arms at stock all reported 10251 under load with
-`sw_power_cap` active, and the rung is still not taken at a 366 W cap where the cap does
-not bind. The sweep recorded the achieved memory clock beside every point, precisely
-so the null cannot be mistaken for a measurement of the rung. What was measured is that
-the lever cannot be applied, not that it does not pay.
+runs**, and the rung is still not taken at a 366 W cap where the cap does not bind — all
+ten arms of this sweep reported 10251 under load. The sweep records the achieved memory
+clock beside every point, precisely so the null cannot be mistaken for a measurement of
+the rung. What is measured is that the lever cannot be applied, not that it does not pay.
 
-### Below stock the OTHER rung pays: +8 to +20 % under caps below ~165 W
+### Below stock the OTHER rung pays: +7 to +18 % under caps below ~165 W
 
 Under a core power cap the memory clock does not scale, so the interface burns a fixed
 slice of a small budget on bandwidth nothing is using; at the 5001 MHz rung those watts
@@ -1326,7 +1332,7 @@ curve's shape and its own efficiency peak are what transfer.
 ### The memory rung's crossover is a property of the card, not of the algorithm
 
 The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER
-([the record](#below-stock-the-other-rung-pays-8-to-20--under-caps-below-165-w)).
+([the record](#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w)).
 On the 4070 SUPER it pays only below **~121 W**, and above that it is expensive:
 
 | cap W | draw W | sol/s | ms/solve | sol/s/W |

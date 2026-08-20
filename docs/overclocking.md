@@ -1,8 +1,6 @@
-# Overclocking — design decisions
+# Overclocking
 
-The six knobs, the design they follow, and what to set. The measurements behind every
-claim here — NVML probe tables, competitor verification, the sweep evidence — are in
-`docs-internal/OC_RESEARCH.md` (in-repo research notes, not shipped).
+The six knobs, and what to set.
 
 `--pl` is the knob whose value is [measured](performance.md#both-miners-under-the-same-cap)
 rather than assumed: the card runs pinned at its limit in every kernel, so the limit picks
@@ -23,12 +21,12 @@ same operating point mining will use.
 
 Three measured facts that decide what to set:
 
-- **A rig that pays for electricity should cap.** ~220 W is where the reference card's
-  curve flattens;
-  `--tune` finds your card's own ([the curves](performance.md#power-and-efficiency)).
-- **Below ~170 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
-  GDDR6X): worth −8.5 to −14.4 % ms/solve and the efficiency record. At ~180 W and above
-  the rung loses badly — strictly a low-cap pairing.
+- **A rig that pays for electricity should cap.** `--pl 210` is the top of the
+  reference card's efficiency shelf; `--tune` finds your card's own
+  ([the curves](performance.md#both-miners-under-the-same-cap)).
+- **Below ~165 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
+  GDDR6X): worth +7 % sol/s at 160 W rising to +18 % at the 100 W floor. The crossover
+  is ~167 W and above ~180 W the rung is a wall — strictly a low-cap pairing.
 - **Undervolting (`--cclk` + `--coff`) does nothing under a power cap** — the governor
   outranks the lock, on either knob, at any offset
   ([measured](performance-research.md#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs)).
@@ -133,54 +131,10 @@ old limit would not have permitted.
 
 NVML's memory offset follows the `GPUMemoryTransferRateOffset` convention: MHz of
 transfer rate, twice the memory clock — `--moff 200` moves the clock +100 MHz
-(measured; details in `docs-internal/OC_RESEARCH.md`). The unit is
+(measured). The unit is
 *not* silently halved on input: `--moff` means what it means to every other tool that
 sets this knob, so a value copied from a community guide does the same thing here. The
 statistics block reports the resulting clock, so the doubling is visible while mining.
-
-## Decisions
-
-### 1. Privilege model: the whole miner runs under sudo
-
-Matching lolMiner. Chosen 2026-07-25. The reason it wins is **automatic
-restore-on-exit**: a card left at +1200 memory after a crash corrupts whatever runs
-next, and only an in-process owner of the settings can put them back on a signal. A
-**privileged child process** (fork an OC owner, drop privileges before opening a socket)
-keeps restore *and* keeps the TLS/JSON/stratum code unprivileged — strictly better, and
-**deferred, not rejected**. The cost being accepted meanwhile: the stratum TLS client
-and JSON parser run as root.
-
-### 2. Flags: lolMiner-compatible names
-
-Someone moving over should not have to relearn these. Multi-GPU comma/`*` syntax parsed
-from the start so it never becomes a breaking change. Two details settled in the
-implementation:
-
-- **A lock and an offset are undone differently.** An offset is restored by writing the
-  previous value back; a lock is undone by an explicit reset call, because it took clock
-  management away from the driver. Getting that backwards leaves a card pinned after
-  exit; `test_overclock` pins it.
-- **The fan is restored to AUTO**, not to the percentage read at startup — that
-  percentage was chosen for a cold idle card.
-
-### 3. When OC is requested but cannot be applied
-
-**Warn loudly and continue at stock**, and the message names the cause (`insufficient
-permission — re-run under sudo`). A miner that failed to apply OC still mines correctly,
-just slower: degrading is acceptable; being quiet about it is not.
-
-### 4. Restore stock settings on exit, by default
-
-Including on `SIGINT`/`SIGTERM`. `--no-oc-reset` opts out. Restore is idempotent and
-does not require a clean exit.
-
-### 5. Clamps: use the band the driver reports
-
-`nvmlDeviceGetPowerManagementLimitConstraints` reports the card's own permitted band, so
-MXBM clamps `--pl` to that and *says* it clamped — a clamped setting that looked applied
-would misattribute every measurement taken after it. The CLI checks only syntax; watts
-are validated at apply time, where the installed card is visible. The clock offsets have
-no such clamp: the driver's ranges there are register width, not recommendations.
 
 ## Community OC settings
 
@@ -188,8 +142,7 @@ hashrate.no lists `--coff 300 --cclk 2205 --moff 2000 --pl 300` for this card �
 for lolMiner's kernels. Do not adopt it wholesale: the undervolt half is a measured null
 under any cap, `--moff 2000` is +1000 MHz of *actual clock* (past the driver's ceiling),
 and a locked 2600 MHz already costs MXBM 2.6 % of throughput, so 2205 needs measuring,
-not trusting. One knob at a time; the knob-by-knob analysis is in
-`docs-internal/OC_RESEARCH.md`.
+not trusting. One knob at a time.
 
 ## Stability canaries
 

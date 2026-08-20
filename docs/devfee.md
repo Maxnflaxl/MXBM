@@ -154,28 +154,8 @@ raises the rate.
 
 ## Implementation
 
-See [`src/miner/devfee.h`](../src/miner/devfee.h) for the design. The moving
-parts are:
-
-- **`FeeAccrual`** — turns mining time into fee debt and decides when a round
-  is owed. Pure arithmetic, no threads, sub-second throughout.
-- **`JobRouter`** — holds the latest job from each connection and dispatches
-  whichever belongs to the active one. Both pools feed it continuously, so
-  switching in either direction is instant and lossless: when a round ends you
-  resume on the newest job from your pool, not the stale one the round
-  interrupted. A slot is dropped when its connection disconnects, and ages out
-  if no job arrives for two minutes, so neither the fee clock nor a fee round
-  runs on work from a pool that is no longer there.
-- **`DevFee`** — owns the fee's stratum connection and the scheduler thread
-  that drives the other two.
-
-Each solved job carries an `Origin` (`src/miner/origin.h`) naming the
-connection it came from, all the way through the solver to submission. That
-is a correctness requirement, not bookkeeping: a round can end while a solve
-for it is still running, and routing by "which pool is active now" would send
-the finished dev-pool solution to your pool, which would reject it as an
-unknown job id.
-
-Tests are in [`tests/test_devfee.cpp`](../tests/test_devfee.cpp) (accrual
-cadence, debt carry, and pool switching in both directions) and the
-`Origin` round-trip case in [`tests/test_engine.cpp`](../tests/test_engine.cpp).
+The fee's moving parts — the accrual arithmetic, the job router that keeps both pools
+live so a switch in either direction is lossless, and the `Origin` tag that routes a
+solve back to the pool whose job it came from — are described in
+[architecture.md](architecture.md). Tests are in
+[`tests/test_devfee.cpp`](../tests/test_devfee.cpp).

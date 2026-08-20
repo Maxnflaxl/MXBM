@@ -37,7 +37,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 SRC = os.path.join(REPO, "docs", "performance.md")
 OUT = os.path.join(HERE, "power-curve.svg")
 SECTION = "### Both miners under the same cap"
-ABOVE = "### Above stock: the curve continues to ~311 W, and the memory rung is unreachable"
+ABOVE = "### Above stock: the curve continues to ~321 W, and the memory rung is unreachable"
 
 W, H = 1000, 720
 L, R = 74, 34                      # left axis gutter, right margin
@@ -46,7 +46,9 @@ B_TOP, B_BOT = 352, 486            # panel B: sol/s/W
 C_TOP, C_BOT = 538, 624            # panel C: watts actually drawn
 
 MX, LOL = cl.SERIES[0], cl.SERIES[1]        # blue, orange -- validated pair
-SAT_TOL = 1.5                               # W: points this close count as one
+SAT_TOL = 2.5                               # W: points this close count as one --
+                                            # set by the arm spread on a saturated rung,
+                                            # where the cap no longer holds the draw steady
 
 
 def parse():
@@ -217,10 +219,10 @@ def render(rows, above=()):
             for i, (x, y) in enumerate(pts):
                 p.c.marker(xs(x), p.ys(y), colour, 4, cl.SURFACE,
                            "cap %g W: %g (drew %g W)" % (x, y, rows[i][who][0]))
-        # MXBM above stock: same entity, so same hue -- dashed, because it is a
-        # different session and has no comparator. It carries its OWN 285 W point
-        # rather than joining the head-to-head one, so the small step between the
-        # two IS the cross-session spread, shown instead of hidden.
+        # MXBM above stock: same entity and the same build, so same hue -- dashed,
+        # because it is a later session and has no comparator. It carries its OWN
+        # 285 W point rather than joining the head-to-head one, so the step between
+        # the two IS the cross-session term (+0.9 %), shown instead of hidden.
         if above:
             apts = [(a["cap"], a[akey]) for a in above]
             p.c.polyline([(xs(x), p.ys(y)) for x, y in apts], MX, dash="6 4")
