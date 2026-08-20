@@ -110,7 +110,7 @@ is derived from the run's own solutions-per-solve):
 | 175 W | 52.7 | 38.5 | 175.1 W | 1813 MHz | 0.3010 | 3.32 |
 | 180 W | 54.0 | 37.4 | 180.1 W | 1874 MHz | 0.2999 | 3.34 |
 | 190 W | 57.8 | 34.7 | 190.0 W | 2055 MHz | 0.3043 | 3.29 |
-| 200 W | 61.4 | 32.7 | 199.8 W | 2219 MHz | **0.3073** | **3.25** |
+| 200 W | 61.2 | 32.8 | 199.9 W | 2213 MHz | 0.3062 | 3.27 |
 | **210 W** | **64.9** | 31.0 | 209.8 W | 2396 MHz | **0.3094** | **3.23** |
 | 220 W | 66.3 | ~30.3 | 219.6 W | 2428 MHz | 0.3018 | 3.31 |
 | 240 W | 67.9 | ~29.6 | 239.6 W | 2520 MHz | 0.2834 | 3.53 |
@@ -129,8 +129,8 @@ efficiency on stock memory, at worst by 7.5 % at 160 W and down to 0.4 % by 175 
 limit MXBM is ahead on both, by 24 % at 220 W and 26 % at 240 W.
 lolMiner barely responds to a cap at all — its ceiling is 54.4 sol/s at a 200 W cap,
 and above ~235 W the cap does nothing. Its best efficiency (0.3120 sol/s/W at 160 W,
-3.21 J/solution on its own counter) and MXBM's best (0.309–0.310 across 200–210 W,
-3.23 J/solution) are level within the repeat spread and the own-definition caveat — and
+3.21 J/solution on its own counter) and MXBM's best (0.3094 at 210 W, 3.23 J/solution)
+are level within the repeat spread and the own-definition caveat — and
 at MXBM's point the same energy per solution does **64.9 sol/s against 49.95, 30 % more
 work**.
 What MXBM has is the ceiling: 69.95 sol/s against ~54.4, which lolMiner cannot reach at
@@ -160,7 +160,7 @@ observed.
 
 Two things worth knowing before you cap your own card:
 
-- **Efficiency peaks at 200–210 W and gets *worse* below it.** At 180 W the core clock
+- **Efficiency peaks at 210 W and gets *worse* below it.** At 180 W the core clock
   has fallen to 1874 MHz and the parts of the board that do not scale with it — memory,
   uncore, leakage — are being paid for out of less work. Lower is not always better, and
   the head-to-head sweep shows this holds all the way down to the card's 100 W floor.

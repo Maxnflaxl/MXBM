@@ -342,8 +342,8 @@ and the CUDA one is a locked-clock pin while the OpenCL one is not.
 
 The card is power-limited, not thermally limited, in every kernel, so the board power
 limit is the most valuable knob on it: **at 210 W the solver does 64.9 sol/s for 209.8 W,
-against 69.95 at 284 W** — 93 % of the speed for 74 % of the power, and 200–210 W is
-also the efficiency shelf (**3.23 J/solution**). Below ~167 W the memory clock is the
+against 69.95 at 284 W** — 93 % of the speed for 74 % of the power, and 210 W is
+also the efficiency peak (**3.23 J/solution**). Below ~167 W the memory clock is the
 second knob: `--mclk 5001` is worth +7 % at 160 W rising to +18 % at 100 W, and its
 160 W point matches stock memory's 210 W on energy per solution (3.22 against 3.23 J)
 at a third less throughput. Against an *equally capped* lolMiner, MXBM wins on

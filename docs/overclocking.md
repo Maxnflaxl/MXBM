@@ -21,8 +21,8 @@ same operating point mining will use.
 
 Three measured facts that decide what to set:
 
-- **A rig that pays for electricity should cap.** `--pl 210` is the top of the
-  reference card's efficiency shelf; `--tune` finds your card's own
+- **A rig that pays for electricity should cap.** `--pl 210` is the reference card's
+  efficiency peak; `--tune` finds your card's own
   ([the curves](performance.md#both-miners-under-the-same-cap)).
 - **Below ~165 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
   GDDR6X): worth +7 % sol/s at 160 W rising to +18 % at the 100 W floor. The crossover

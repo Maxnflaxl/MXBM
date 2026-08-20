@@ -520,10 +520,10 @@ this table is for, is a property of the power curve and does not move.*
 informative part, and it is a property of the board rather than of a build. Below the
 peak the core clock has dropped far enough that the parts of the board which do not scale
 with it — memory, uncore, leakage — are paid for out of less work. On the current kernels
-the peak is a flat **0.309–0.310 sol/s/W across 200–210 W**; at the driver's 100 W
-minimum the collapse is unmistakable, 24.5 sol/s and 0.2462 sol/s/W. The peak has moved
-right to left across builds — 240 W, then 220, then 210, now the 200–210 W shelf with
-the speculative-entry gate — because a lever that pays more under a cap than at stock
+the peak is **210 W at 0.3094 sol/s/W**, with 200 W a full 1.0 % below it and 220 W
+2.5 % below; at the driver's 100 W minimum the collapse is unmistakable, 24.5 sol/s and
+0.2462 sol/s/W. The peak has moved right to left across builds — 240 W, then 220, now
+210 with the speculative-entry gate — because a lever that pays more under a cap than at stock
 lifts the left half of the curve more than the right; it is read from
 [the live table](#both-miners-under-the-same-cap), never from the historical one above.
 
@@ -532,14 +532,14 @@ live column:
 
 | step | 180→190 | 190→200 | 200→210 | 210→220 | 220→240 | 240→255 | 255→285 |
 |---|---|---|---|---|---|---|---|
-| sol/s per W | 0.380 | 0.415 | 0.295 | 0.140 | 0.080 | 0.063 | 0.037 |
+| sol/s per W | 0.380 | 0.340 | 0.370 | 0.140 | 0.080 | 0.063 | 0.037 |
 
-(190→200 and 200→210 straddle an instrument seam; their sum, 0.355 per W, is the
-robust figure.) The last 45 W
-(240 → 285) buys 2.05 sol/s; the 20 W from 180 to 200 buys 7.95. The bend is sharp and
-it is at **210–220 W** — at the top of the efficiency shelf, with 220 W already 2.6 %
-below the peak. The right cap is an economic choice: **200–210 W for a rig that pays
-for electricity, 285 W only where power is free.**
+(The 190→200 and 200→210 split is inside this rig's resolution; the 20 W span they
+cover, **0.355 per W**, is the figure to quote.) The last 45 W
+(240 → 285) buys 2.05 sol/s; the 20 W from 180 to 200 buys 7.20. The bend is sharp and
+it is at **210–220 W** — immediately past the peak, with 220 W already 2.5 % below it.
+The right cap is an economic choice: **210 W for a rig that pays for electricity,
+285 W only where power is free.**
 
 ### Both miners under the same cap
 
@@ -568,7 +568,7 @@ lolMiner 1.98a is the unchanged reference binary.)*
 | 175 W | 52.70 | 175.1 | 0.3010 | **52.90** | 174.6 | **0.3030** |
 | 180 W | **54.00** | 180.1 | **0.2999** | 53.25 | 179.7 | 0.2963 |
 | 190 W | **57.80** | 190.0 | **0.3043** | 54.25 | 189.6 | 0.2861 |
-| 200 W | **61.95** | 199.9 | **0.3100** | 54.40 | 199.6 | 0.2725 |
+| 200 W | 61.20 | 199.9 | 0.3062 | 54.40 | 199.6 | 0.2725 |
 | 210 W | **64.90** | 209.8 | **0.3094** | 54.20 | 209.5 | 0.2587 |
 | 220 W | **66.30** | 219.6 | **0.3018** | 53.35 | 219.6 | 0.2430 |
 | 240 W | **67.90** | 239.6 | **0.2834** | 53.80 | 234.7 | 0.2292 |

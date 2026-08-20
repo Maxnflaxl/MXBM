@@ -483,20 +483,20 @@ The single most valuable setting on an NVIDIA card, and the reason it exists her
 bound the miner, it picks its operating point. On the reference RTX 4070 Ti SUPER,
 measured:
 
-**`--pl 210` is the setting to use** on the reference RTX 4070 Ti SUPER — the top of a
-flat efficiency shelf, and comfortably inside the window where MXBM beats the
-alternative, whose crossing is at ~177 W:
+**`--pl 210` is the setting to use** on the reference RTX 4070 Ti SUPER — its efficiency
+peak, and comfortably inside the window where MXBM beats the alternative, whose crossing
+is at ~177 W:
 
 | `--pl` | sol/s | sol/s/W | |
 |---|---|---|---|
 | 160 W | 46.2 | 0.2887 | |
 | 180 W | 54.0 | 0.2999 | |
-| **210 W** | **64.9** | **0.3094** | the efficiency shelf, and recommended |
+| **210 W** | **64.9** | **0.3094** | the efficiency peak, and recommended |
 | 240 W | 67.9 | 0.2834 | |
 | 285 W *(stock)* | **69.95** | 0.2461 | fastest |
 
 Dropping from 285 W to 210 W costs 7 % of throughput and saves 26 % of the power. Going
-below the shelf makes things *worse* on both counts: the core clock has fallen far
+below the peak makes things *worse* on both counts: the core clock has fallen far
 enough that the parts of the board which do not scale with it are being paid for out of
 less work.
 
