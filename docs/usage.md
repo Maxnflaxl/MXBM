@@ -36,7 +36,7 @@ immediately; only a *missing* one defers to the config.
 
 | Flag | Meaning | Default |
 |------|---------|---------|
-| `--pass x` | Pool password, if the pool requires one. | none |
+| `--pass x` | Accepted and ignored. Pools' instructions commonly say to pass one, so it is not an error — but BeamHash III's stratum login carries the address alone, so no password is ever sent. | none |
 | `--tls [0\|1]` | Enable/disable TLS to the pool. | on; off for a loopback pool |
 | `--solver cuda\|opencl\|gpu\|ref\|auto` | Solver backend. `gpu` = any GPU (CUDA preferred), `cuda`/`opencl` pin one, `ref` = CPU reference. | auto |
 | `--dev-fee PCT` | Raise the developer fee above its built-in rate, as a percentage. Raise-only. | built-in rate |
@@ -323,7 +323,7 @@ never set a value the command line would reject.
 |---|---|---|
 | `ALGO` | `--algo` | `BEAM-III` |
 | `POOL` / `POOLS` | `--pool` | `host:port` (flat: one pool; JSON: an array) |
-| `USER`, `PASS`, `TLS` | `--user`, `--pass`, `--tls` | bound to the pool |
+| `USER`, `PASS`, `TLS` | `--user`, `--pass`, `--tls` | bound to the pool (`PASS` is accepted and ignored) |
 | `APIPORT` | `--apiport` | 0–65535 |
 | `APIHOST` | `--apihost` | IPv4 address, e.g. `0.0.0.0` or `127.0.0.1` |
 | `SILENCE` | `--silence` | 0–3 |

@@ -3,7 +3,7 @@
     "ALGO": "BEAM-III",
     "APIPORT": 8080,
     "POOLS": [
-      {"POOL": "beam.herominers.com:1130", "USER": "YOUR_BEAM_SBBS_ADDRESS_HERE.rig1", "PASS": "x"},
+      {"POOL": "beam.herominers.com:1130", "USER": "YOUR_BEAM_SBBS_ADDRESS_HERE.rig1"},
       {"POOL": "de.beam.herominers.com:1130", "USER": "YOUR_BEAM_SBBS_ADDRESS_HERE.rig1"}
     ]
   },
@@ -13,7 +13,7 @@
     "APIPORT": 8080,
     "PL": "220",
     "POOLS": [
-      {"POOL": "beam.herominers.com:1130", "USER": "YOUR_BEAM_SBBS_ADDRESS_HERE.rig1", "PASS": "x"}
+      {"POOL": "beam.herominers.com:1130", "USER": "YOUR_BEAM_SBBS_ADDRESS_HERE.rig1"}
     ]
   }
 }
