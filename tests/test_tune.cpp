@@ -170,7 +170,7 @@ int main() {
     section("report paths: where half an hour of sweeping ends up");
     {
         // A fixed config dir so the expectations are about the naming, not the rig.
-        const std::string root = std::string(std::filesystem::temp_directory_path()) + "/mxbm-pathtest";
+        const std::string root = std::filesystem::temp_directory_path().string() + "/mxbm-pathtest";
         std::filesystem::remove_all(root);
         std::filesystem::create_directories(root);
 #ifndef _WIN32
