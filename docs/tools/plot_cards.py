@@ -40,7 +40,7 @@ SRC = os.path.join(REPO, "docs", "performance.md")
 OUT = os.path.join(HERE, "cards-curve.svg")
 
 REF_SECTION = "### Both miners under the same cap"
-TP_SECTION = "## Third-party hardware — a two-card rig, 2026-08-02"
+TP_SECTION = "## Third-party hardware — a two-card rig"
 
 W, H = 1000, 640
 L, R = 74, 34

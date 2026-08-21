@@ -480,7 +480,7 @@ card appears twice because both of its backends are measured.
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 69.1 | 28.9 | 284 | 0.243 | ours, `--benchmark` ‡ |
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 63.2 | 31.8 | 284 | 0.222 | ours, `--benchmark`, same session ‡ |
 | RTX 4070 SUPER | 12 GiB GDDR6X | 610.62 · Windows | CUDA | 43.9 | 44.8 | 214 | 0.205 | ZumZum, `--tune` † |
-| RTX 3060 Ti | 8 GiB GDDR6 | 610.62 · Windows | CUDA | 22.4 | 88.1 | 195 | 0.115 | ZumZum, `--tune` † |
+| RTX 3060 Ti | 8 GiB GDDR6 | 610.88 · Windows | CUDA | 26.5 | 75.4 | 192 | 0.138 | ZumZum, `--report` 120 s ※ |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
 ‡ Both re-taken 2026-08-17, interleaved in one session at released clocks, 30 s a run,
@@ -490,10 +490,25 @@ reproducibility, and the published headline is the pin. What the pair is for is 
 **1.10×**, where the same pair read 1.012× on 2026-08-02. OpenCL has since gained the
 implicit-bits record and the w0-checkpoint pair record against CUDA's several.
 
+※ A 120 s `--report` benchmark on MXBM 0.8.408, 2026-08-21, nothing else on the
+card: 1596 solves, 1.99 verified solutions/solve, 191.8 W from the card's energy
+counter. It replaces this card's earlier `--tune` row, which read 22.4 sol/s on
+MXBM 0.7.253 — most of the gap is eleven weeks of kernel work, and about 7
+points of it is the harness disagreement the † note describes. This row is the
+**same instrument as the reference rows** — a fixed-length benchmark, not a sweep
+point — which is why it is quoted rather than the sweep's own 200 W figure of
+24.7. The card is
+thermally limited at stock (81 °C, `sw_power_cap, sw_thermal`), so its top end is
+partly a cooling figure. The 4070 SUPER row beside it is still 0.7.253: its
+0.8.408 re-run measured 26 other compute processes on the card and is not
+quotable — see
+[third-party hardware](performance.md#third-party-hardware--a-two-card-rig).
+
 † `--tune` sweep points, not `--benchmark`: 60 s, CPU-verified, warmed up and
 drift-gauged. On the 4070 SUPER the miner loop reported ~48 sol/s at the same watts in
 the same session, ~10 % above the sweep, and which instrument is right is
-[open](performance.md#open-the-tune-harness-and-the-miner-loop-disagree). The
+[open](performance.md#open-the-tune-harness-and-the-miner-loop-disagree) —
+reproduced since on the 3060 Ti inside one run. For any row still marked †, the
 lower number is quoted.
 
 The M3 Max's pipeline alone runs **101.5 ms/solve (18.8 sol/s)**; the sustained figure is
@@ -503,7 +518,7 @@ GPU power API — blank rather than estimated.
 ![Speed and efficiency against the cap, every card measured](tools/cards-curve.svg)
 
 Curves for the three NVIDIA cards, generated from the tables in
-[performance.md](performance.md#third-party-hardware--a-two-card-rig-2026-08-02). **Not a
+[performance.md](performance.md#third-party-hardware--a-two-card-rig). **Not a
 controlled comparison** — different machines, operating systems and instruments — so
 cross-card distances are unreliable. What holds is each curve's shape and where its own
 efficiency peak sits: 210 W, 148 W and 130 W, all well under stock.
