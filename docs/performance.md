@@ -1293,27 +1293,35 @@ sol/s ≈ 2006 / ms, since BeamHash III yields 2.006 solutions per solve.
 Contributed, Windows, both cards on CUDA. Different silicon and cooling from the
 reference card, so only the shape of each curve transfers.
 
-**The two cards are not on the same build.** The 3060 Ti below is a 2026-08-21
-`--report` run on MXBM 0.8.408, driver 610.88. The 4070 SUPER's is still the
-2026-08-02 sweep on 0.7.253 / 610.62: its 0.8.408 re-run measured **26 other
-compute processes on the card**, and the sweep drifted −5.07 % against a 1.5 %
-gauge, so it is not quotable and a clean re-run is pending. Cross-card distances
-in this section now carry a build gap as well as a machine gap.
+Both curves are 2026-08-21 `--report` runs on MXBM 0.8.408, driver 610.88. They
+are not of equal quality: the 3060 Ti's is clean, and **the 4070 SUPER's was
+measured with 26 other compute processes on the card** and drifted −5.07 % over
+the sweep against a 1.5 % gauge. Its per-cap figures are indicative, not
+quotable, and a clean re-run is wanted. What supports reading it at all is that
+its gains against 0.7.253 track the clean card's — the same shape, growing as the
+cap tightens — rather than the direction a co-tenant would push them.
 
-**RTX 4070 SUPER** (Ada, 12 GB, 192-bit), stock memory:
+**RTX 4070 SUPER** (Ada, 12 GB, 192-bit), stock memory — 0.8.408, driver 610.88,
+2026-08-21, **26 other compute processes on the card**, sweep drift −5.07 %:
 
 | cap W | draw W | sol/s | ms/solve | sol/s/W |
 |---|---|---|---|---|
-| 220 | 213.8 | 43.88 | 44.8 | 0.2053 |
-| 212 | 205.3 | 44.83 | 43.5 | 0.2183 |
-| 202 | 195.8 | 44.28 | 44.4 | 0.2262 |
-| 196 | 191.1 | 44.13 | 44.9 | 0.2309 |
-| 192 | 187.5 | 42.87 | 45.7 | 0.2287 |
-| 182 | 176.9 | 41.77 | 46.9 | 0.2361 |
-| 172 | 167.6 | 42.30 | 46.2 | 0.2524 |
-| 148 | 144.3 | 36.93 | 53.7 | 0.2559 |
-| 124 | 121.1 | 30.25 | 66.4 | 0.2498 |
-| 100 | 97.2 | 22.41 | 87.6 | 0.2305 |
+| 220 | 211.2 | 52.38 | 38.21 | 0.2480 |
+| 212 | 202.7 | 54.10 | 36.49 | 0.2669 |
+| 202 | 193.4 | 53.64 | 36.86 | 0.2774 |
+| 196 | 187.4 | 51.56 | 38.92 | 0.2752 |
+| 192 | 183.3 | 52.61 | 37.64 | 0.2870 |
+| 182 | 176.2 | 52.59 | 37.72 | 0.2985 |
+| 172 | 162.3 | 48.99 | 39.29 | 0.3018 |
+| 148 | 142.0 | 44.99 | 44.04 | 0.3168 |
+| 124 | 119.4 | 37.68 | 52.67 | 0.3157 |
+| 100 | 96.7 | 29.70 | 68.10 | 0.3071 |
+
+At stock the same run's 120 s benchmark reads **55.76 sol/s / 36.18 ms** at
+210.8 W (2.02 verified solutions/solve, 3318 solves), 6.5 % above the sweep's own
+220 W point. The −5.07 % drift is what a co-tenant arriving and leaving across
+25 minutes looks like, so read the ordering of adjacent points loosely: 212 W
+measuring above 202 W and 192 W above 196 W are inside it.
 
 **RTX 3060 Ti** (Ampere, 8 GB), stock memory — 0.8.408, driver 610.88,
 2026-08-21, nothing else on the card, sweep drift −0.46 %:
@@ -1352,23 +1360,33 @@ curve's shape and its own efficiency peak are what transfer.
 
 The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER
 ([the record](#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w)).
-On the 4070 SUPER it pays only below **~121 W**, and above that it is expensive:
+On the 4070 SUPER it pays only below **~116 W**, and above that it is expensive:
 
-| cap W | draw W | sol/s | ms/solve | sol/s/W |
-|---|---|---|---|---|
-| 172 | 156.9 | 30.20 | 66.5 | 0.1925 |
-| 148 | 139.0 | 30.15 | 66.5 | 0.2169 |
-| 124 | 116.8 | 29.84 | 67.3 | 0.2555 |
-| 120 | 113.4 | 29.60 | 66.6 | 0.2609 |
-| 110 | 107.0 | 28.50 | 70.3 | **0.2663** |
-| 100 | 97.9 | 25.62 | 78.0 | 0.2616 |
+| cap W | draw W | sol/s | ms/solve | sol/s/W | vs stock |
+|---|---|---|---|---|---|
+| 172 | 158.2 | 38.38 | 51.73 | 0.2426 | −21.7 % |
+| 148 | 136.1 | 37.50 | 52.81 | 0.2755 | −16.7 % |
+| 124 | 112.9 | 36.30 | 54.91 | 0.3214 | −3.7 % |
+| 120 | 109.7 | 36.13 | 55.10 | 0.3294 | — |
+| 110 | 105.0 | 35.19 | 56.46 | 0.3353 | — |
+| 100 | 95.9 | 32.54 | 61.57 | **0.3392** | +9.6 % |
 
-At 148–172 W the rung costs ~29 %. The mechanism is in the column: from 172 W down
-to 120 W the time is **pinned at ~66.5 ms regardless of cap**, so the memory system
-binds and the power cap does not. A 192-bit bus against the reference card's
-256-bit is three quarters of the bandwidth at the same clock, which moves the
-crossover 50 W. `--tune` found it unaided and recommended the rung only below
-121 W.
+At 148–172 W the rung costs 17–22 %. The mechanism is in the ms column: from
+172 W down to 120 W a 52 W cut buys back only 6.5 % of the time (51.73 → 55.10),
+so the memory system is what binds and the power cap is not. A 192-bit bus
+against the reference card's 256-bit is three quarters of the bandwidth at the
+same clock, which is what moves the crossover — from ~173 W on the reference card
+to ~116 W here. `--tune` found it unaided.
+
+<details><summary>How this changed against 0.7.253</summary>
+
+The crossover barely moved (~121 W then, ~116 W now) but the penalty above it
+halved: the rung cost ~29 % at 148–172 W on the old build against 17–22 % here.
+The rung's own times also stopped being flat — 66.5 ms regardless of cap then,
+51.73 → 55.10 now. Both follow from the same thing: faster stock kernels shrink
+the stall budget a compute-for-memory trade hides in, so the trade buys less
+because there is less stall left to fill.
+</details>
 
 The 3060 Ti got no rung pass: its GDDR6 runs at 6801 MHz stock and offers no 5001
 rung. Correct, but the sweep skipped it silently and should name the skip.
@@ -1378,6 +1396,40 @@ rung. Correct, but the sweep skipped it silently and should name the skip.
 Kept for the progression, and excluded from the chart above — these tables sit
 under a subheading so `plot_cards.py` does not merge them into the current
 series.
+
+<details><summary>RTX 4070 SUPER, 0.7.253 / driver 610.62, 2026-08-02</summary>
+
+Stock memory:
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 220 | 213.8 | 43.88 | 44.8 | 0.2053 |
+| 212 | 205.3 | 44.83 | 43.5 | 0.2183 |
+| 202 | 195.8 | 44.28 | 44.4 | 0.2262 |
+| 196 | 191.1 | 44.13 | 44.9 | 0.2309 |
+| 192 | 187.5 | 42.87 | 45.7 | 0.2287 |
+| 182 | 176.9 | 41.77 | 46.9 | 0.2361 |
+| 172 | 167.6 | 42.30 | 46.2 | 0.2524 |
+| 148 | 144.3 | 36.93 | 53.7 | 0.2559 |
+| 124 | 121.1 | 30.25 | 66.4 | 0.2498 |
+| 100 | 97.2 | 22.41 | 87.6 | 0.2305 |
+
+5001 MHz memory rung:
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 172 | 156.9 | 30.20 | 66.5 | 0.1925 |
+| 148 | 139.0 | 30.15 | 66.5 | 0.2169 |
+| 124 | 116.8 | 29.84 | 67.3 | 0.2555 |
+| 120 | 113.4 | 29.60 | 66.6 | 0.2609 |
+| 110 | 107.0 | 28.50 | 70.3 | 0.2663 |
+| 100 | 97.9 | 25.62 | 78.0 | 0.2616 |
+
+Against the 0.8.408 stock curve above, every cap gained: +19.4 % at 220 W,
++25.9 % at 182 W, +32.5 % at 100 W — the same widening-under-a-cap shape the
+3060 Ti shows, measured on a card that also had a co-tenant, which is why it
+corroborates rather than confirms.
+</details>
 
 <details><summary>RTX 3060 Ti, 0.7.253 / driver 610.62, 2026-08-02</summary>
 
@@ -1414,14 +1466,18 @@ fan during mining, and the reported rate climbed 41.7 → 48.1 over twenty minut
 while the core clock *fell* 2700 → 2550 MHz. The 3060 Ti reproduction has none of
 them.
 
-Two clean sightings now, plus a third the same day on the contended 4070 SUPER
-run (55.76 against its 220 W sweep point of 52.38, +6.5 %) — all the same sign
-and the same rough size, which makes this a property of the harness rather than
-of a session. **Until it
-is resolved, a sweep point and a benchmark figure are not interchangeable**, and
-this page quotes the lower one for contributed cards. What it does not yet say is
-which is right: the benchmark loop and the sweep differ in warm-up, in how long
-each point runs, and in whether the solver is rebuilt between points.
+One clean sighting, then, and two with confounds — the 2026-08-02 pair above and
+the same day's contended 4070 SUPER run (55.76 against its 220 W sweep point of
+52.38, +6.5 %). All three run the same direction at +6.5 to +9.7 %, which makes
+this a property of the harness rather than of a session or a card.
+
+**Until it is resolved, a sweep point and a benchmark figure are not
+interchangeable.** [benchmarks.md](benchmarks.md#benchmarked-devices) therefore
+quotes the benchmark for every contributed row, because that is the instrument
+the reference rows use and a table has to compare like with like — not because
+the benchmark is known to be the right one. Which it is remains open: the two
+differ in warm-up, in how long each point runs, and in whether the solver is
+rebuilt between points.
 
 ### The multi-GPU path itself
 

@@ -54,27 +54,27 @@
 <circle cx="792.0" cy="134" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 255 W: 68.85 sol/s (drew 254.5 W)</title></circle>
 <circle cx="922.5" cy="130.5" r="6" fill="#fcfcfb"/>
 <circle cx="922.5" cy="130.5" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 285 W: 69.95 sol/s (drew 284.2 W)</title></circle>
-<polyline points="117.5,279.7 221.9,255.1 326.4,234.1 430.8,217.3 474.3,219.0 517.8,215.5 535.2,211.6 561.3,211.1 604.8,209.4 639.7,212.3" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="117.5" cy="279.7" r="6" fill="#fcfcfb"/>
-<circle cx="117.5" cy="279.7" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 100 W: 22.41 sol/s (drew 97.2 W)</title></circle>
-<circle cx="221.9" cy="255.1" r="6" fill="#fcfcfb"/>
-<circle cx="221.9" cy="255.1" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 124 W: 30.25 sol/s (drew 121.1 W)</title></circle>
-<circle cx="326.4" cy="234.1" r="6" fill="#fcfcfb"/>
-<circle cx="326.4" cy="234.1" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 148 W: 36.93 sol/s (drew 144.3 W)</title></circle>
-<circle cx="430.8" cy="217.3" r="6" fill="#fcfcfb"/>
-<circle cx="430.8" cy="217.3" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 172 W: 42.3 sol/s (drew 167.6 W)</title></circle>
-<circle cx="474.3" cy="219.0" r="6" fill="#fcfcfb"/>
-<circle cx="474.3" cy="219.0" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 182 W: 41.77 sol/s (drew 176.9 W)</title></circle>
-<circle cx="517.8" cy="215.5" r="6" fill="#fcfcfb"/>
-<circle cx="517.8" cy="215.5" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 192 W: 42.87 sol/s (drew 187.5 W)</title></circle>
-<circle cx="535.2" cy="211.6" r="6" fill="#fcfcfb"/>
-<circle cx="535.2" cy="211.6" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 196 W: 44.13 sol/s (drew 191.1 W)</title></circle>
-<circle cx="561.3" cy="211.1" r="6" fill="#fcfcfb"/>
-<circle cx="561.3" cy="211.1" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 202 W: 44.28 sol/s (drew 195.8 W)</title></circle>
-<circle cx="604.8" cy="209.4" r="6" fill="#fcfcfb"/>
-<circle cx="604.8" cy="209.4" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 212 W: 44.83 sol/s (drew 205.3 W)</title></circle>
-<circle cx="639.7" cy="212.3" r="6" fill="#fcfcfb"/>
-<circle cx="639.7" cy="212.3" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 220 W: 43.88 sol/s (drew 213.8 W)</title></circle>
+<polyline points="117.5,256.8 221.9,231.8 326.4,208.9 430.8,196.3 474.3,185.0 517.8,184.9 535.2,188.2 561.3,181.7 604.8,180.3 639.7,185.7" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="117.5" cy="256.8" r="6" fill="#fcfcfb"/>
+<circle cx="117.5" cy="256.8" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 100 W: 29.7 sol/s (drew 96.7 W)</title></circle>
+<circle cx="221.9" cy="231.8" r="6" fill="#fcfcfb"/>
+<circle cx="221.9" cy="231.8" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 124 W: 37.68 sol/s (drew 119.4 W)</title></circle>
+<circle cx="326.4" cy="208.9" r="6" fill="#fcfcfb"/>
+<circle cx="326.4" cy="208.9" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 148 W: 44.99 sol/s (drew 142 W)</title></circle>
+<circle cx="430.8" cy="196.3" r="6" fill="#fcfcfb"/>
+<circle cx="430.8" cy="196.3" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 172 W: 48.99 sol/s (drew 162.3 W)</title></circle>
+<circle cx="474.3" cy="185.0" r="6" fill="#fcfcfb"/>
+<circle cx="474.3" cy="185.0" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 182 W: 52.59 sol/s (drew 176.2 W)</title></circle>
+<circle cx="517.8" cy="184.9" r="6" fill="#fcfcfb"/>
+<circle cx="517.8" cy="184.9" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 192 W: 52.61 sol/s (drew 183.3 W)</title></circle>
+<circle cx="535.2" cy="188.2" r="6" fill="#fcfcfb"/>
+<circle cx="535.2" cy="188.2" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 196 W: 51.56 sol/s (drew 187.4 W)</title></circle>
+<circle cx="561.3" cy="181.7" r="6" fill="#fcfcfb"/>
+<circle cx="561.3" cy="181.7" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 202 W: 53.64 sol/s (drew 193.4 W)</title></circle>
+<circle cx="604.8" cy="180.3" r="6" fill="#fcfcfb"/>
+<circle cx="604.8" cy="180.3" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 212 W: 54.1 sol/s (drew 202.7 W)</title></circle>
+<circle cx="639.7" cy="185.7" r="6" fill="#fcfcfb"/>
+<circle cx="639.7" cy="185.7" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 220 W: 52.38 sol/s (drew 211.2 W)</title></circle>
 <polyline points="117.5,303.0 204.5,284.6 248.0,279.1 291.6,275.8 335.1,277.2 378.6,276.3 465.6,274.0 552.6,272.5" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="117.5" cy="303.0" r="6" fill="#fcfcfb"/>
 <circle cx="117.5" cy="303.0" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 100 W: 14.97 sol/s (drew 95.7 W)</title></circle>
@@ -92,27 +92,29 @@
 <circle cx="465.6" cy="274.0" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 180 W: 24.24 sol/s (drew 172.2 W)</title></circle>
 <circle cx="552.6" cy="272.5" r="6" fill="#fcfcfb"/>
 <circle cx="552.6" cy="272.5" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 200 W: 24.7 sol/s (drew 189.9 W)</title></circle>
-<polyline points="117.5,269.6 161.0,260.6 204.5,257.1 221.9,256.4 326.4,255.4 430.8,255.3" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
-<circle cx="117.5" cy="269.6" r="5.5" fill="#fcfcfb"/>
-<circle cx="117.5" cy="269.6" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 100 W: 25.62 sol/s (drew 97.9 W)</title></circle>
-<circle cx="161.0" cy="260.6" r="5.5" fill="#fcfcfb"/>
-<circle cx="161.0" cy="260.6" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 110 W: 28.5 sol/s (drew 107 W)</title></circle>
-<circle cx="204.5" cy="257.1" r="5.5" fill="#fcfcfb"/>
-<circle cx="204.5" cy="257.1" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 120 W: 29.6 sol/s (drew 113.4 W)</title></circle>
-<circle cx="221.9" cy="256.4" r="5.5" fill="#fcfcfb"/>
-<circle cx="221.9" cy="256.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 124 W: 29.84 sol/s (drew 116.8 W)</title></circle>
-<circle cx="326.4" cy="255.4" r="5.5" fill="#fcfcfb"/>
-<circle cx="326.4" cy="255.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 148 W: 30.15 sol/s (drew 139 W)</title></circle>
-<circle cx="430.8" cy="255.3" r="5.5" fill="#fcfcfb"/>
-<circle cx="430.8" cy="255.3" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 172 W: 30.2 sol/s (drew 156.9 W)</title></circle>
-<line x1="74" y1="528.1" x2="966" y2="528.1" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="531.1" font-size="10" fill="#898781" text-anchor="end">0.15</text>
-<line x1="74" y1="490.8" x2="966" y2="490.8" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="493.8" font-size="10" fill="#898781" text-anchor="end">0.20</text>
-<line x1="74" y1="453.4" x2="966" y2="453.4" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="456.4" font-size="10" fill="#898781" text-anchor="end">0.25</text>
-<line x1="74" y1="416" x2="966" y2="416" stroke="#e1e0d9" stroke-width="1"/>
-<text x="66" y="419" font-size="10" fill="#898781" text-anchor="end">0.30</text>
+<polyline points="117.5,247.9 161.0,239.6 204.5,236.7 221.9,236.1 326.4,232.4 430.8,229.6" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="117.5" cy="247.9" r="5.5" fill="#fcfcfb"/>
+<circle cx="117.5" cy="247.9" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 100 W: 32.54 sol/s (drew 95.9 W)</title></circle>
+<circle cx="161.0" cy="239.6" r="5.5" fill="#fcfcfb"/>
+<circle cx="161.0" cy="239.6" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 110 W: 35.19 sol/s (drew 105 W)</title></circle>
+<circle cx="204.5" cy="236.7" r="5.5" fill="#fcfcfb"/>
+<circle cx="204.5" cy="236.7" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 120 W: 36.13 sol/s (drew 109.7 W)</title></circle>
+<circle cx="221.9" cy="236.1" r="5.5" fill="#fcfcfb"/>
+<circle cx="221.9" cy="236.1" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 124 W: 36.3 sol/s (drew 112.9 W)</title></circle>
+<circle cx="326.4" cy="232.4" r="5.5" fill="#fcfcfb"/>
+<circle cx="326.4" cy="232.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 148 W: 37.5 sol/s (drew 136.1 W)</title></circle>
+<circle cx="430.8" cy="229.6" r="5.5" fill="#fcfcfb"/>
+<circle cx="430.8" cy="229.6" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 172 W: 38.38 sol/s (drew 158.2 W)</title></circle>
+<line x1="74" y1="531.2" x2="966" y2="531.2" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="534.2" font-size="10" fill="#898781" text-anchor="end">0.15</text>
+<line x1="74" y1="498.6" x2="966" y2="498.6" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="501.6" font-size="10" fill="#898781" text-anchor="end">0.20</text>
+<line x1="74" y1="466.0" x2="966" y2="466.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="469.0" font-size="10" fill="#898781" text-anchor="end">0.25</text>
+<line x1="74" y1="433.4" x2="966" y2="433.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="436.4" font-size="10" fill="#898781" text-anchor="end">0.30</text>
+<line x1="74" y1="400.8" x2="966" y2="400.8" stroke="#e1e0d9" stroke-width="1"/>
+<text x="66" y="403.8" font-size="10" fill="#898781" text-anchor="end">0.35</text>
 <line x1="74" y1="400" x2="74" y2="552" stroke="#c3c2b7" stroke-width="1"/>
 <line x1="74" y1="552" x2="966" y2="552" stroke="#c3c2b7" stroke-width="1"/>
 <line x1="117.5" y1="552" x2="117.5" y2="556" stroke="#c3c2b7" stroke-width="1"/>
@@ -136,90 +138,90 @@
 <line x1="922.5" y1="552" x2="922.5" y2="556" stroke="#c3c2b7" stroke-width="1"/>
 <text x="922.5" y="568" font-size="10" fill="#898781" text-anchor="middle">285 W</text>
 <text x="74" y="390" font-size="11" fill="#52514e">sol/s per watt</text>
-<polyline points="117.5,456.2 161.0,443.7 204.5,435.9 291.6,432.8 378.6,424.4 443.9,415.3 465.6,416.1 509.1,412.8 552.6,411.4 596.1,409.0 639.7,414.7 726.7,428.4 792.0,438.1 922.5,456.3" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="117.5" cy="456.2" r="6" fill="#fcfcfb"/>
-<circle cx="117.5" cy="456.2" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 100 W: 0.2462 sol/s per watt (drew 99.5 W)</title></circle>
-<circle cx="161.0" cy="443.7" r="6" fill="#fcfcfb"/>
-<circle cx="161.0" cy="443.7" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 110 W: 0.263 sol/s per watt (drew 109.7 W)</title></circle>
-<circle cx="204.5" cy="435.9" r="6" fill="#fcfcfb"/>
-<circle cx="204.5" cy="435.9" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 120 W: 0.2734 sol/s per watt (drew 119.8 W)</title></circle>
-<circle cx="291.6" cy="432.8" r="6" fill="#fcfcfb"/>
-<circle cx="291.6" cy="432.8" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 140 W: 0.2775 sol/s per watt (drew 139.8 W)</title></circle>
-<circle cx="378.6" cy="424.4" r="6" fill="#fcfcfb"/>
-<circle cx="378.6" cy="424.4" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 160 W: 0.2887 sol/s per watt (drew 160 W)</title></circle>
-<circle cx="443.9" cy="415.3" r="6" fill="#fcfcfb"/>
-<circle cx="443.9" cy="415.3" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 175 W: 0.301 sol/s per watt (drew 175.1 W)</title></circle>
-<circle cx="465.6" cy="416.1" r="6" fill="#fcfcfb"/>
-<circle cx="465.6" cy="416.1" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 180 W: 0.2999 sol/s per watt (drew 180.1 W)</title></circle>
-<circle cx="509.1" cy="412.8" r="6" fill="#fcfcfb"/>
-<circle cx="509.1" cy="412.8" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 190 W: 0.3043 sol/s per watt (drew 190 W)</title></circle>
-<circle cx="552.6" cy="411.4" r="6" fill="#fcfcfb"/>
-<circle cx="552.6" cy="411.4" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 200 W: 0.3062 sol/s per watt (drew 199.9 W)</title></circle>
-<circle cx="596.1" cy="409.0" r="6" fill="#fcfcfb"/>
-<circle cx="596.1" cy="409.0" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 210 W: 0.3094 sol/s per watt (drew 209.8 W)</title></circle>
-<circle cx="639.7" cy="414.7" r="6" fill="#fcfcfb"/>
-<circle cx="639.7" cy="414.7" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 220 W: 0.3018 sol/s per watt (drew 219.6 W)</title></circle>
-<circle cx="726.7" cy="428.4" r="6" fill="#fcfcfb"/>
-<circle cx="726.7" cy="428.4" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 240 W: 0.2834 sol/s per watt (drew 239.6 W)</title></circle>
-<circle cx="792.0" cy="438.1" r="6" fill="#fcfcfb"/>
-<circle cx="792.0" cy="438.1" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 255 W: 0.2705 sol/s per watt (drew 254.5 W)</title></circle>
-<circle cx="922.5" cy="456.3" r="6" fill="#fcfcfb"/>
-<circle cx="922.5" cy="456.3" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 285 W: 0.2461 sol/s per watt (drew 284.2 W)</title></circle>
-<polyline points="117.5,468.0 221.9,453.5 326.4,449.0 430.8,451.6 474.3,463.8 517.8,469.3 535.2,467.7 561.3,471.2 604.8,477.1 639.7,486.8" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="117.5" cy="468.0" r="6" fill="#fcfcfb"/>
-<circle cx="117.5" cy="468.0" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 100 W: 0.2305 sol/s per watt (drew 97.2 W)</title></circle>
-<circle cx="221.9" cy="453.5" r="6" fill="#fcfcfb"/>
-<circle cx="221.9" cy="453.5" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 124 W: 0.2498 sol/s per watt (drew 121.1 W)</title></circle>
-<circle cx="326.4" cy="449.0" r="6" fill="#fcfcfb"/>
-<circle cx="326.4" cy="449.0" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 148 W: 0.2559 sol/s per watt (drew 144.3 W)</title></circle>
-<circle cx="430.8" cy="451.6" r="6" fill="#fcfcfb"/>
-<circle cx="430.8" cy="451.6" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 172 W: 0.2524 sol/s per watt (drew 167.6 W)</title></circle>
-<circle cx="474.3" cy="463.8" r="6" fill="#fcfcfb"/>
-<circle cx="474.3" cy="463.8" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 182 W: 0.2361 sol/s per watt (drew 176.9 W)</title></circle>
-<circle cx="517.8" cy="469.3" r="6" fill="#fcfcfb"/>
-<circle cx="517.8" cy="469.3" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 192 W: 0.2287 sol/s per watt (drew 187.5 W)</title></circle>
-<circle cx="535.2" cy="467.7" r="6" fill="#fcfcfb"/>
-<circle cx="535.2" cy="467.7" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 196 W: 0.2309 sol/s per watt (drew 191.1 W)</title></circle>
-<circle cx="561.3" cy="471.2" r="6" fill="#fcfcfb"/>
-<circle cx="561.3" cy="471.2" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 202 W: 0.2262 sol/s per watt (drew 195.8 W)</title></circle>
-<circle cx="604.8" cy="477.1" r="6" fill="#fcfcfb"/>
-<circle cx="604.8" cy="477.1" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 212 W: 0.2183 sol/s per watt (drew 205.3 W)</title></circle>
-<circle cx="639.7" cy="486.8" r="6" fill="#fcfcfb"/>
-<circle cx="639.7" cy="486.8" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 220 W: 0.2053 sol/s per watt (drew 213.8 W)</title></circle>
-<polyline points="117.5,523.3 204.5,505.6 248.0,505.1 291.6,508.6 335.1,520.2 378.6,526.1 465.6,535.1 552.6,543.0" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-<circle cx="117.5" cy="523.3" r="6" fill="#fcfcfb"/>
-<circle cx="117.5" cy="523.3" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 100 W: 0.1565 sol/s per watt (drew 95.7 W)</title></circle>
-<circle cx="204.5" cy="505.6" r="6" fill="#fcfcfb"/>
-<circle cx="204.5" cy="505.6" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 120 W: 0.1802 sol/s per watt (drew 115.6 W)</title></circle>
-<circle cx="248.0" cy="505.1" r="6" fill="#fcfcfb"/>
-<circle cx="248.0" cy="505.1" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 130 W: 0.1808 sol/s per watt (drew 125 W)</title></circle>
-<circle cx="291.6" cy="508.6" r="6" fill="#fcfcfb"/>
-<circle cx="291.6" cy="508.6" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 140 W: 0.1762 sol/s per watt (drew 134.2 W)</title></circle>
-<circle cx="335.1" cy="520.2" r="6" fill="#fcfcfb"/>
-<circle cx="335.1" cy="520.2" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 150 W: 0.1606 sol/s per watt (drew 144.5 W)</title></circle>
-<circle cx="378.6" cy="526.1" r="6" fill="#fcfcfb"/>
-<circle cx="378.6" cy="526.1" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 160 W: 0.1528 sol/s per watt (drew 153.8 W)</title></circle>
-<circle cx="465.6" cy="535.1" r="6" fill="#fcfcfb"/>
-<circle cx="465.6" cy="535.1" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 180 W: 0.1407 sol/s per watt (drew 172.2 W)</title></circle>
-<circle cx="552.6" cy="543.0" r="6" fill="#fcfcfb"/>
-<circle cx="552.6" cy="543.0" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 200 W: 0.1301 sol/s per watt (drew 189.9 W)</title></circle>
-<polyline points="117.5,444.7 161.0,441.2 204.5,445.2 221.9,449.3 326.4,478.1 430.8,496.4" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
-<circle cx="117.5" cy="444.7" r="5.5" fill="#fcfcfb"/>
-<circle cx="117.5" cy="444.7" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 100 W: 0.2616 sol/s per watt (drew 97.9 W)</title></circle>
-<circle cx="161.0" cy="441.2" r="5.5" fill="#fcfcfb"/>
-<circle cx="161.0" cy="441.2" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 110 W: 0.2663 sol/s per watt (drew 107 W)</title></circle>
-<circle cx="204.5" cy="445.2" r="5.5" fill="#fcfcfb"/>
-<circle cx="204.5" cy="445.2" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 120 W: 0.2609 sol/s per watt (drew 113.4 W)</title></circle>
-<circle cx="221.9" cy="449.3" r="5.5" fill="#fcfcfb"/>
-<circle cx="221.9" cy="449.3" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 124 W: 0.2555 sol/s per watt (drew 116.8 W)</title></circle>
-<circle cx="326.4" cy="478.1" r="5.5" fill="#fcfcfb"/>
-<circle cx="326.4" cy="478.1" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 148 W: 0.2169 sol/s per watt (drew 139 W)</title></circle>
-<circle cx="430.8" cy="496.4" r="5.5" fill="#fcfcfb"/>
-<circle cx="430.8" cy="496.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 172 W: 0.1925 sol/s per watt (drew 156.9 W)</title></circle>
-<text x="596.1" y="398.0" font-size="10" font-weight="bold" fill="#2a78d6" text-anchor="middle">0.3094</text>
-<text x="326.4" y="438.0" font-size="10" font-weight="bold" fill="#eb6834" text-anchor="middle">0.2559</text>
-<text x="248.0" y="494.1" font-size="10" font-weight="bold" fill="#1baf7a" text-anchor="middle">0.1808</text>
-<text x="161.0" y="430.2" font-size="10" font-weight="bold" fill="#eb6834" text-anchor="middle">0.2663</text>
+<polyline points="117.5,468.5 161.0,457.5 204.5,450.7 291.6,448.1 378.6,440.8 443.9,432.7 465.6,433.5 509.1,430.6 552.6,429.3 596.1,427.3 639.7,432.2 726.7,444.2 792.0,452.6 922.5,468.5" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="117.5" cy="468.5" r="6" fill="#fcfcfb"/>
+<circle cx="117.5" cy="468.5" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 100 W: 0.2462 sol/s per watt (drew 99.5 W)</title></circle>
+<circle cx="161.0" cy="457.5" r="6" fill="#fcfcfb"/>
+<circle cx="161.0" cy="457.5" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 110 W: 0.263 sol/s per watt (drew 109.7 W)</title></circle>
+<circle cx="204.5" cy="450.7" r="6" fill="#fcfcfb"/>
+<circle cx="204.5" cy="450.7" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 120 W: 0.2734 sol/s per watt (drew 119.8 W)</title></circle>
+<circle cx="291.6" cy="448.1" r="6" fill="#fcfcfb"/>
+<circle cx="291.6" cy="448.1" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 140 W: 0.2775 sol/s per watt (drew 139.8 W)</title></circle>
+<circle cx="378.6" cy="440.8" r="6" fill="#fcfcfb"/>
+<circle cx="378.6" cy="440.8" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 160 W: 0.2887 sol/s per watt (drew 160 W)</title></circle>
+<circle cx="443.9" cy="432.7" r="6" fill="#fcfcfb"/>
+<circle cx="443.9" cy="432.7" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 175 W: 0.301 sol/s per watt (drew 175.1 W)</title></circle>
+<circle cx="465.6" cy="433.5" r="6" fill="#fcfcfb"/>
+<circle cx="465.6" cy="433.5" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 180 W: 0.2999 sol/s per watt (drew 180.1 W)</title></circle>
+<circle cx="509.1" cy="430.6" r="6" fill="#fcfcfb"/>
+<circle cx="509.1" cy="430.6" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 190 W: 0.3043 sol/s per watt (drew 190 W)</title></circle>
+<circle cx="552.6" cy="429.3" r="6" fill="#fcfcfb"/>
+<circle cx="552.6" cy="429.3" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 200 W: 0.3062 sol/s per watt (drew 199.9 W)</title></circle>
+<circle cx="596.1" cy="427.3" r="6" fill="#fcfcfb"/>
+<circle cx="596.1" cy="427.3" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 210 W: 0.3094 sol/s per watt (drew 209.8 W)</title></circle>
+<circle cx="639.7" cy="432.2" r="6" fill="#fcfcfb"/>
+<circle cx="639.7" cy="432.2" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 220 W: 0.3018 sol/s per watt (drew 219.6 W)</title></circle>
+<circle cx="726.7" cy="444.2" r="6" fill="#fcfcfb"/>
+<circle cx="726.7" cy="444.2" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 240 W: 0.2834 sol/s per watt (drew 239.6 W)</title></circle>
+<circle cx="792.0" cy="452.6" r="6" fill="#fcfcfb"/>
+<circle cx="792.0" cy="452.6" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 255 W: 0.2705 sol/s per watt (drew 254.5 W)</title></circle>
+<circle cx="922.5" cy="468.5" r="6" fill="#fcfcfb"/>
+<circle cx="922.5" cy="468.5" r="4" fill="#2a78d6"><title>RTX 4070 Ti SUPER, cap 285 W: 0.2461 sol/s per watt (drew 284.2 W)</title></circle>
+<polyline points="117.5,428.8 221.9,423.1 326.4,422.4 430.8,432.2 474.3,434.4 517.8,441.9 535.2,449.6 561.3,448.1 604.8,455.0 639.7,467.3" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="117.5" cy="428.8" r="6" fill="#fcfcfb"/>
+<circle cx="117.5" cy="428.8" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 100 W: 0.3071 sol/s per watt (drew 96.7 W)</title></circle>
+<circle cx="221.9" cy="423.1" r="6" fill="#fcfcfb"/>
+<circle cx="221.9" cy="423.1" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 124 W: 0.3157 sol/s per watt (drew 119.4 W)</title></circle>
+<circle cx="326.4" cy="422.4" r="6" fill="#fcfcfb"/>
+<circle cx="326.4" cy="422.4" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 148 W: 0.3168 sol/s per watt (drew 142 W)</title></circle>
+<circle cx="430.8" cy="432.2" r="6" fill="#fcfcfb"/>
+<circle cx="430.8" cy="432.2" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 172 W: 0.3018 sol/s per watt (drew 162.3 W)</title></circle>
+<circle cx="474.3" cy="434.4" r="6" fill="#fcfcfb"/>
+<circle cx="474.3" cy="434.4" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 182 W: 0.2985 sol/s per watt (drew 176.2 W)</title></circle>
+<circle cx="517.8" cy="441.9" r="6" fill="#fcfcfb"/>
+<circle cx="517.8" cy="441.9" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 192 W: 0.287 sol/s per watt (drew 183.3 W)</title></circle>
+<circle cx="535.2" cy="449.6" r="6" fill="#fcfcfb"/>
+<circle cx="535.2" cy="449.6" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 196 W: 0.2752 sol/s per watt (drew 187.4 W)</title></circle>
+<circle cx="561.3" cy="448.1" r="6" fill="#fcfcfb"/>
+<circle cx="561.3" cy="448.1" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 202 W: 0.2774 sol/s per watt (drew 193.4 W)</title></circle>
+<circle cx="604.8" cy="455.0" r="6" fill="#fcfcfb"/>
+<circle cx="604.8" cy="455.0" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 212 W: 0.2669 sol/s per watt (drew 202.7 W)</title></circle>
+<circle cx="639.7" cy="467.3" r="6" fill="#fcfcfb"/>
+<circle cx="639.7" cy="467.3" r="4" fill="#eb6834"><title>RTX 4070 SUPER, cap 220 W: 0.248 sol/s per watt (drew 211.2 W)</title></circle>
+<polyline points="117.5,527.0 204.5,511.5 248.0,511.1 291.6,514.1 335.1,524.3 378.6,529.4 465.6,537.3 552.6,544.2" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="117.5" cy="527.0" r="6" fill="#fcfcfb"/>
+<circle cx="117.5" cy="527.0" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 100 W: 0.1565 sol/s per watt (drew 95.7 W)</title></circle>
+<circle cx="204.5" cy="511.5" r="6" fill="#fcfcfb"/>
+<circle cx="204.5" cy="511.5" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 120 W: 0.1802 sol/s per watt (drew 115.6 W)</title></circle>
+<circle cx="248.0" cy="511.1" r="6" fill="#fcfcfb"/>
+<circle cx="248.0" cy="511.1" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 130 W: 0.1808 sol/s per watt (drew 125 W)</title></circle>
+<circle cx="291.6" cy="514.1" r="6" fill="#fcfcfb"/>
+<circle cx="291.6" cy="514.1" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 140 W: 0.1762 sol/s per watt (drew 134.2 W)</title></circle>
+<circle cx="335.1" cy="524.3" r="6" fill="#fcfcfb"/>
+<circle cx="335.1" cy="524.3" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 150 W: 0.1606 sol/s per watt (drew 144.5 W)</title></circle>
+<circle cx="378.6" cy="529.4" r="6" fill="#fcfcfb"/>
+<circle cx="378.6" cy="529.4" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 160 W: 0.1528 sol/s per watt (drew 153.8 W)</title></circle>
+<circle cx="465.6" cy="537.3" r="6" fill="#fcfcfb"/>
+<circle cx="465.6" cy="537.3" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 180 W: 0.1407 sol/s per watt (drew 172.2 W)</title></circle>
+<circle cx="552.6" cy="544.2" r="6" fill="#fcfcfb"/>
+<circle cx="552.6" cy="544.2" r="4" fill="#1baf7a"><title>RTX 3060 Ti, cap 200 W: 0.1301 sol/s per watt (drew 189.9 W)</title></circle>
+<polyline points="117.5,407.8 161.0,410.4 204.5,414.2 221.9,419.4 326.4,449.4 430.8,470.8" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="117.5" cy="407.8" r="5.5" fill="#fcfcfb"/>
+<circle cx="117.5" cy="407.8" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 100 W: 0.3392 sol/s per watt (drew 95.9 W)</title></circle>
+<circle cx="161.0" cy="410.4" r="5.5" fill="#fcfcfb"/>
+<circle cx="161.0" cy="410.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 110 W: 0.3353 sol/s per watt (drew 105 W)</title></circle>
+<circle cx="204.5" cy="414.2" r="5.5" fill="#fcfcfb"/>
+<circle cx="204.5" cy="414.2" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 120 W: 0.3294 sol/s per watt (drew 109.7 W)</title></circle>
+<circle cx="221.9" cy="419.4" r="5.5" fill="#fcfcfb"/>
+<circle cx="221.9" cy="419.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 124 W: 0.3214 sol/s per watt (drew 112.9 W)</title></circle>
+<circle cx="326.4" cy="449.4" r="5.5" fill="#fcfcfb"/>
+<circle cx="326.4" cy="449.4" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 148 W: 0.2755 sol/s per watt (drew 136.1 W)</title></circle>
+<circle cx="430.8" cy="470.8" r="5.5" fill="#fcfcfb"/>
+<circle cx="430.8" cy="470.8" r="3.5" fill="#eb6834"><title>RTX 4070 SUPER @ 5001 MHz, cap 172 W: 0.2426 sol/s per watt (drew 158.2 W)</title></circle>
+<text x="596.1" y="416.3" font-size="10" font-weight="bold" fill="#2a78d6" text-anchor="middle">0.3094</text>
+<text x="326.4" y="411.4" font-size="10" font-weight="bold" fill="#eb6834" text-anchor="middle">0.3168</text>
+<text x="248.0" y="500.1" font-size="10" font-weight="bold" fill="#1baf7a" text-anchor="middle">0.1808</text>
+<text x="117.5" y="396.8" font-size="10" font-weight="bold" fill="#eb6834" text-anchor="middle">0.3392</text>
 <line x1="88" y1="132" x2="110" y2="132" stroke="#2a78d6" stroke-width="2"/>
 <circle cx="99" cy="132" r="6" fill="#fcfcfb"/>
 <circle cx="99" cy="132" r="4" fill="#2a78d6"></circle>

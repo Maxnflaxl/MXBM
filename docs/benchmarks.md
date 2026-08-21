@@ -479,7 +479,7 @@ card appears twice because both of its backends are measured.
 |---|---|---|---|---|---|---|---|---|
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 69.1 | 28.9 | 284 | 0.243 | ours, `--benchmark` ‡ |
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 63.2 | 31.8 | 284 | 0.222 | ours, `--benchmark`, same session ‡ |
-| RTX 4070 SUPER | 12 GiB GDDR6X | 610.62 · Windows | CUDA | 43.9 | 44.8 | 214 | 0.205 | ZumZum, `--tune` † |
+| RTX 4070 SUPER | 12 GiB GDDR6X | 610.88 · Windows | CUDA | 55.8 | 36.2 | 211 | 0.265 | ZumZum, `--report` 120 s ※ ◇ |
 | RTX 3060 Ti | 8 GiB GDDR6 | 610.88 · Windows | CUDA | 26.5 | 75.4 | 192 | 0.138 | ZumZum, `--report` 120 s ※ |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
@@ -494,22 +494,24 @@ implicit-bits record and the w0-checkpoint pair record against CUDA's several.
 card: 1596 solves, 1.99 verified solutions/solve, 191.8 W from the card's energy
 counter. It replaces this card's earlier `--tune` row, which read 22.4 sol/s on
 MXBM 0.7.253 — most of the gap is eleven weeks of kernel work, and about 7
-points of it is the harness disagreement the † note describes. This row is the
+points of it is the harness disagreement described below. Both rows are the
 **same instrument as the reference rows** — a fixed-length benchmark, not a sweep
-point — which is why it is quoted rather than the sweep's own 200 W figure of
-24.7. The card is
-thermally limited at stock (81 °C, `sw_power_cap, sw_thermal`), so its top end is
-partly a cooling figure. The 4070 SUPER row beside it is still 0.7.253: its
-0.8.408 re-run measured 26 other compute processes on the card and is not
-quotable — see
+point — which is why they are quoted rather than the sweeps' own stock figures of
+24.7 and 52.4. The 3060 Ti is thermally limited at stock (81 °C,
+`sw_power_cap, sw_thermal`), so its top end is partly a cooling figure.
+
+◇ **Measured with 26 other compute processes on the card**, and its power sweep
+drifted −5.07 % against a 1.5 % gauge. A co-tenant moves a number rather than
+adding noise to it, so read this row as indicative and not as a benchmark. It is
+published because its gains against the same card's 0.7.253 sweep track the clean
+3060 Ti's in shape and size; a clean re-run is wanted. See
 [third-party hardware](performance.md#third-party-hardware--a-two-card-rig).
 
-† `--tune` sweep points, not `--benchmark`: 60 s, CPU-verified, warmed up and
-drift-gauged. On the 4070 SUPER the miner loop reported ~48 sol/s at the same watts in
-the same session, ~10 % above the sweep, and which instrument is right is
-[open](performance.md#open-the-tune-harness-and-the-miner-loop-disagree) —
-reproduced since on the 3060 Ti inside one run. For any row still marked †, the
-lower number is quoted.
+No row is a `--tune` sweep point any more. That matters because a sweep point and
+a benchmark do not agree: the benchmark loop reads 6–10 % higher at the same
+watts, on both contributed cards and in both directions of testing, and which
+instrument is right is
+[open](performance.md#open-the-tune-harness-and-the-miner-loop-disagree).
 
 The M3 Max's pipeline alone runs **101.5 ms/solve (18.8 sol/s)**; the sustained figure is
 lower because a laptop throttles. It has no power column because macOS exposes no public
