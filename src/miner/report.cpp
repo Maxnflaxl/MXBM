@@ -103,15 +103,15 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
     TuneStore store;
     tune_load(cfg.device_key, store);
     const std::string ver = version();
-    const bool curve_fresh = store.found && report_curve_fresh(store.mxbm_version, ver);
+    bool curve_fresh = store.found && report_curve_fresh(store.mxbm_version, ver);
     const bool can_tune = cfg.have_nvml && tune_can_write(cfg.device);
     const bool will_tune = !curve_fresh && can_tune;
 
     // Why the curve is or is not being measured, named rather than described: the
     // stored build against the running one, and the sweep's own cost estimate rather
     // than the default sweep's.
-    const std::string stored_by = store.mxbm_version.empty() ? "an unstamped build"
-                                                             : store.mxbm_version;
+    std::string stored_by = store.mxbm_version.empty() ? "an unstamped build"
+                                                       : store.mxbm_version;
     ui::console::info(fmt("Reporting on %s (%d s benchmark).", cfg.device_key.c_str(),
                           cfg.seconds));
     if (cfg.device_count > 1)
@@ -170,6 +170,11 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
         tc.device = cfg.device;
         run_tune(solver, stats, cfg.device_key, tc, stop);
         tune_load(cfg.device_key, store);   // whatever the sweep managed to store
+        // Both were decided against the curve this run replaced; the sweep has
+        // since stamped its own.
+        curve_fresh = store.found && report_curve_fresh(store.mxbm_version, ver);
+        stored_by = store.mxbm_version.empty() ? "an unstamped build"
+                                              : store.mxbm_version;
     }
 
     // --- the block itself ------------------------------------------------
