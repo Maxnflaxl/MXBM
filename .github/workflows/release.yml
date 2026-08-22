@@ -1,7 +1,7 @@
-# Build the release archives (Linux tar.gz, Windows zip) in the shape lolMiner
-# ships -- unpack, edit the mine script, run. Only one mine script per platform
-# ships: HeroMiners, the endpoint we have actually run against. Uploads
-# artifacts; does not create a release.
+# Build the release archives (Linux tar.gz, Windows zip) in the shape the
+# reference miner ships -- unpack, edit the mine script, run. Only one mine
+# script per platform ships: HeroMiners, the endpoint we have actually run
+# against. Uploads artifacts; does not create a release.
 name: release
 
 on:
@@ -42,7 +42,7 @@ jobs:
       - name: configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-                -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90;120" 2>&1 | tee configure.log
+                -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120" 2>&1 | tee configure.log
           grep -q 'CUDA found' configure.log
 
       - name: build
@@ -147,7 +147,7 @@ jobs:
                 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
                 -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
                 -DCMAKE_CUDA_COMPILER=nvcc \
-                -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90;120" 2>&1 | tee configure.log
+                -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120" 2>&1 | tee configure.log
           grep -q 'CUDA found' configure.log
 
       - name: build
