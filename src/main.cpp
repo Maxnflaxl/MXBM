@@ -958,7 +958,7 @@ int main(int argc, char** argv) {
                                "(no CUDA or OpenCL device, or built without either) - monitoring jobs only (no solving)");
         } else if (opts.solver == "cuda") {
             ui::console::error("--solver cuda requested but no usable CUDA device is available "
-                               "(needs Ampere or newer with room for the full 2^25 seed layer, "
+                               "(needs compute capability 7.5 or newer with room for the full 2^25 seed layer, "
                                "or this build has no CUDA support) - monitoring jobs only (no solving)");
         } else if (opts.solver == "metal") {
             ui::console::error("--solver metal requested but no usable Metal device is available "

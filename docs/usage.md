@@ -693,8 +693,8 @@ still means one slot. An address or vendor that matches nothing is an error, the
 same way a missing index is.
 
 **A mixed rig is one process.** The last column of `--list-devices` is the backend that
-card will actually run on: CUDA where the card supports it (Ampere or newer, with room
-for the full search), else OpenCL, and `not used` with the reason where neither can
+card will actually run on: CUDA where the card supports it (compute capability 7.5 or
+newer, with room for the full search), else OpenCL, and `not used` with the reason where neither can
 drive it. The three device lists — CUDA's, OpenCL's and NVML's — are joined on PCI bus
 id, so an old card beside a new one mines on the portable path in the same process, the
 same log and the same statistics block. Where that join is ambiguous — an OpenCL driver

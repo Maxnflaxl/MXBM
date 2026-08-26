@@ -288,13 +288,23 @@ struct CudaSolver::Impl {
     }
 };
 
+// Tracks the release fatbin's floor: compute_75 is its oldest image, and a card below
+// it finds none at launch. Nothing in the kernels needs Ampere (no cp.async, no async
+// barriers, no clusters), but Turing's 64 KB shared/SM hosts two 320-thread blocks per
+// SM where Ada hosts three, so the ISA is not what sets the pace there.
+constexpr int kMinComputeCapability = 75;
+
+bool cc_supported(const cudaDeviceProp& p) {
+    return p.major * 10 + p.minor >= kMinComputeCapability;
+}
+
 bool CudaSolver::available(int index) {
     int n = 0;
     if (cudaGetDeviceCount(&n) != cudaSuccess || n == 0) return false;
     if (index < 0 || index >= n) return false;
     cudaDeviceProp p{};
     if (cudaGetDeviceProperties(&p, index) != cudaSuccess) return false;
-    if (p.major < 8) return false;                      // needs Ampere+ shared-mem budget
+    if (!cc_supported(p)) return false;
     // Refuse only what no geometry on the ladder can host. The seed layer itself is
     // never reduced -- a reduced layer mines nothing (budget.h, budget_can_find_solutions)
     // -- so the ladder trades speed for footprint and nothing else.
@@ -306,7 +316,7 @@ CudaSolver::DeviceInfo CudaSolver::device_info(int index) {
     d.index = index;
     if (cudaGetDeviceProperties(&p, index) == cudaSuccess) {
         d.name = p.name; d.global_mem = p.totalGlobalMem; d.compute_units = p.multiProcessorCount;
-        d.viable = p.major >= 8 && pick_geometry(p.totalGlobalMem).viable;
+        d.viable = cc_supported(p) && pick_geometry(p.totalGlobalMem).viable;
         char buf[32];
         std::snprintf(buf, sizeof buf, "%x:%x", p.pciBusID, p.pciDeviceID);
         d.pci = buf;

@@ -15,7 +15,7 @@ report; BeamHash III yields 2.006 solutions per solve.
 
 | | Requirement |
 |---|---|
-| **GPU** | OpenCL 1.2+ device. A CUDA device (Ampere or newer) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89). |
+| **GPU** | OpenCL 1.2+ device. A CUDA device (compute capability **7.5 or newer** — Turing, RTX 20 / GTX 16) additionally unlocks the faster CUDA backend, which is the default when present. Developed and measured on NVIDIA (Ada, sm_89); Turing and Volta-era cards below 7.5 run the OpenCL path. |
 | **VRAM** | **3 GB on either backend** — BeamHash III's own stated minimum (needs > 2.6 GiB *reported*). 8 GB and up get the fastest geometry; below that [the ladder](#the-vram-ladder) steps down, 3–110 % slower |
 | **VRAM — what a full search occupies** | CUDA **6.17 GiB** at the fastest geometry, down to **1.90 GiB** at the coarsest; OpenCL **6.84** down to the same **1.90**. Both carry the [quad record](performance-research.md#the-quad-record-29--footprint-and-the-byte-prize-does-not-survive-re-derivation), the [dense-cap rungs](performance-research.md#the-overflow-arena-ported-36--for-a-404-gib-floor), the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena) and the octo record; the 0.67 GiB between them is the three reference rows CUDA [replays instead of storing](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib) |
 | **VRAM — what BeamHash III is designed to need** | **3 GB** ([Beam docs](https://beam.mw/docs/mining)) — met: MXBM's floor is **1.90 GiB**, so a 3 GB card lands on the octo rungs with room |

@@ -1494,6 +1494,36 @@ backend can drive.
 
 ---
 
+## Backend reach — the CUDA floor is compute capability 7.5
+
+CUDA drives every card from **Turing (sm_75)** up; below that a card runs the OpenCL
+path. The release fatbin carries `75;80;86;89;90;120`, each as a cubin plus its PTX, so
+the oldest image is `compute_75` and nothing older can JIT forward onto it. Pascal is
+out permanently: nvcc 13.3 refuses sm_61.
+
+The floor sat at 8.0 for the shared-memory budget of Ampere and newer. It does not bind:
+the kernels use no sm_80+ feature — no `cp.async`, no async barriers, no clusters — and
+`ptxas --gpu-name sm_75` reports **no spills anywhere, 26,944 B of static shared at the
+widest kernel and 112 registers at the heaviest**, against Turing's 48 KB per block. What
+Turing does change is occupancy, not capability: 64 KB of shared per SM and 1024 threads
+per SM host two 320-thread blocks where Ada hosts three, so a Turing card should be
+expected to land below the per-SM scaling of an Ampere one.
+
+Memory is not a second gate. Driving the ladder with the release's own availability
+allowance, every 6 GB Turing card reaches the top packed rung:
+
+| card | reported total | usable after the 640 MiB allowance | rung |
+|---|---|---|---|
+| GTX 1660 Ti 6 GB | 5.81 GiB | 5.18 GiB | (16,1) packed |
+| RTX 2060 6 GB | 5.81 GiB | 5.18 GiB | (16,1) packed |
+| RTX 3050 6 GB | 5.70 GiB | 5.07 GiB | (16,1) packed |
+
+**No Turing figure is measured yet** — this rig is sm_89 only, and the resource contract
+(`test_cuda_resources`) is the reference card's and skips itself off Ada. What the change
+is worth is bounded from below by the one OpenCL report on that silicon: a GTX 1660 Ti
+returned **4.28 sol/s** against a published third-party figure of ~14 sol/s for the card,
+and that run also carried 13 co-tenant processes, so its own baseline is depressed.
+
 ## Benchmarks and gates
 
 | Command | What it measures |

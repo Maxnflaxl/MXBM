@@ -28,7 +28,7 @@ const char* kNoPciFromCl =
     "(cl_nv_device_attribute_query is missing), so no OpenCL device can be matched "
     "to this card";
 const char* kNotCudaCapable =
-    "the CUDA path needs compute capability 8.0 or newer and a geometry that fits";
+    "the CUDA path needs compute capability 7.5 or newer and a geometry that fits";
 
 } // namespace
 

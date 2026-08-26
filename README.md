@@ -52,7 +52,7 @@ auditable alternative to the closed-source miners in the ecosystem.
   card, so no two ever try the same nonce; `--devices` and `--list-devices` select by an
   index that means the same card in every flag. Cards that need different backends run
   in the **same process**: the CUDA, OpenCL and NVML device lists are joined on PCI bus
-  id, so each card runs on its fastest viable backend (CUDA on Ampere and newer, else
+  id, so each card runs on its fastest viable backend (CUDA on Turing and newer, else
   OpenCL) and one neither can drive is skipped with the reason. Each card gets its own
   row in the statistics table and in `/summary`, with the rig's totals underneath.
 - **Runs unattended** — a watchdog that spots a card which has stopped completing
