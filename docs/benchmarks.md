@@ -6,7 +6,8 @@ commands are given under each table.
 
 **MXBM has been measured on four GPUs**: an RTX 4070 Ti SUPER (the card everything is
 developed against), an M3 Max via Metal, and a contributed RTX 4070 SUPER and RTX 3060 Ti.
-See [benchmarked devices](#benchmarked-devices), and [send us yours](#send-us-your-numbers).
+They are tabulated under [benchmarked devices](#benchmarked-devices) below; to add yours,
+see [send us your numbers](#send-us-your-numbers).
 
 For *why* comparing miners is harder than reading two numbers off two screens, see
 [benchmarking.md](benchmarking.md). This page is the results; that page is the method.
@@ -23,8 +24,46 @@ For *why* comparing miners is harder than reading two numbers off two screens, s
 | Driver | 610.43.03 · CUDA 13.3 |
 | OS | Linux 7.1.4 (Arch) |
 
-All figures below are on this card at **stock clocks**, no overclock or undervolt, unless
-the row says otherwise.
+Unless a row or section says otherwise, every figure on this page is this card at
+**stock clocks**, no overclock or undervolt.
+
+---
+
+## Benchmarked devices
+
+One row per backend per card, each at the card's **stock** power cap — the reference
+card appears twice because both of its backends are measured.
+
+| GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Source |
+|---|---|---|---|---|---|---|---|---|
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 69.1 | 28.9 | 284 | 0.243 | ours, `--benchmark` ‡ |
+| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 63.2 | 31.8 | 284 | 0.222 | ours, `--benchmark`, same session ‡ |
+| RTX 4070 SUPER | 12 GiB GDDR6X | 610.88 · Windows | CUDA | 55.8 | 36.2 | 211 | 0.265 | ZumZum, `--report` 120 s ※ ◇ |
+| RTX 3060 Ti | 8 GiB GDDR6 | 610.88 · Windows | CUDA | 26.5 | 75.4 | 192 | 0.138 | ZumZum, `--report` 120 s ※ |
+| Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
+
+‡ Both re-taken 2026-08-17, interleaved in one session at released clocks. The CUDA
+row reads ~0.7 % faster than the 29.10 ms
+[locked-clock pin](performance-research.md#the-named-reference-lgc-2600), which trades
+boost for reproducibility and is the published headline.
+
+※ 120 s `--report` on MXBM 0.8.408, 2026-08-21. The 3060 Ti is thermally limited at
+stock (81 °C), so its top end is partly a cooling figure.
+
+◇ Measured with **26 other compute processes on the card**, and the sweep drifted
+−5.07 %. Read it as indicative, not as a benchmark; a clean re-run is wanted. See
+[third-party hardware](performance.md#third-party-hardware--a-two-card-rig).
+
+The M3 Max's pipeline alone runs **101.5 ms/solve (18.8 sol/s)**; sustained is lower
+because the laptop throttles. No power column — macOS exposes no GPU power API.
+
+![Speed and efficiency against the cap, every card measured](tools/cards-curve.svg)
+
+Curves for the three NVIDIA cards, generated from the tables in
+[performance.md](performance.md#third-party-hardware--a-two-card-rig). **Not a
+controlled comparison** — different machines, operating systems and instruments — so
+cross-card distances are unreliable. What holds is each curve's shape and where its own
+efficiency peak sits: 210 W, 148 W and 130 W, all well under stock.
 
 ---
 
@@ -155,8 +194,8 @@ factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column 
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
 (both on the build of 2026-07-25; the current one is 69.20).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
-against lolMiner are unaffected. Left as measured rather than rescaled to numbers nobody
-observed.
+against lolMiner are unaffected. The figures are left as measured; rescaling them would
+publish numbers no run produced.
 
 Two things worth knowing before you cap your own card:
 
@@ -388,9 +427,8 @@ those kernels are marked disabled on macOS rather than silently skipped.
 
 - **No power figure.** macOS exposes no public API for GPU power, clocks, temperature or
   fan. `powermetrics` reads them through a private framework whose layout moves between
-  OS releases, so MXBM reports utilization and nothing else rather than a number nobody
-  can trust. Every efficiency claim elsewhere in this document is therefore
-  Ada-only — there is no sol/s/W row here because there is no honest W.
+  OS releases, so MXBM reports utilization and nothing else. Every efficiency claim
+  elsewhere in this document is therefore Ada-only, and there is no sol/s/W row here.
 - **No overclocking or power limiting.** `--pl`, `--cclk` and friends report
   "not supported on this platform".
 
@@ -435,6 +473,7 @@ memory rung pays below ~167 W on the 4070 Ti SUPER but only below 121 W on the 4
 Particularly wanted:
 
 - **Anything that is not Ada** — Turing, Blackwell, A-series. (Ampere: one report so far.)
+  Turing is the newest addition to the CUDA path and has no measurement yet at all.
 - **Smaller cards**: 8–12 GB. MXBM refuses to start below its threshold rather than mine
   nothing, so a refusal is itself a useful report — tell us what it said.
 - **AMD**, via the OpenCL backend. It is completely untested there.
@@ -465,62 +504,6 @@ refuses to start on your card, the refusal message is the report — send that.
 
 ### What happens to it
 
-Results get added to the benchmarked-devices table below with attribution, and hardware
-that behaves
-differently from the reference card becomes a work item. If MXBM turns out to be slow or
-broken on your GPU, that is a bug report we want, not a disappointment to manage.
-
-### Benchmarked devices
-
-One row per backend per card, each at the card's **stock** power cap — the reference
-card appears twice because both of its backends are measured.
-
-| GPU | Memory | Driver / OS | Backend | sol/s | ms/solve | W | sol/s/W | Source |
-|---|---|---|---|---|---|---|---|---|
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 69.1 | 28.9 | 284 | 0.243 | ours, `--benchmark` ‡ |
-| RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 63.2 | 31.8 | 284 | 0.222 | ours, `--benchmark`, same session ‡ |
-| RTX 4070 SUPER | 12 GiB GDDR6X | 610.88 · Windows | CUDA | 55.8 | 36.2 | 211 | 0.265 | ZumZum, `--report` 120 s ※ ◇ |
-| RTX 3060 Ti | 8 GiB GDDR6 | 610.88 · Windows | CUDA | 26.5 | 75.4 | 192 | 0.138 | ZumZum, `--report` 120 s ※ |
-| Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
-
-‡ Both re-taken 2026-08-17, interleaved in one session at released clocks, 30 s a run,
-two arms each. The CUDA row therefore reads ~0.7 % faster than the 29.10 ms
-[locked-clock pin](performance-research.md#the-named-reference-lgc-2600) — the pin trades boost for
-reproducibility, and the published headline is the pin. What the pair is for is the ratio:
-**1.10×**, where the same pair read 1.012× on 2026-08-02. OpenCL has since gained the
-implicit-bits record and the w0-checkpoint pair record against CUDA's several.
-
-※ A 120 s `--report` benchmark on MXBM 0.8.408, 2026-08-21, nothing else on the
-card: 1596 solves, 1.99 verified solutions/solve, 191.8 W from the card's energy
-counter. It replaces this card's earlier `--tune` row, which read 22.4 sol/s on
-MXBM 0.7.253 — most of the gap is eleven weeks of kernel work, and about 7
-points of it is the harness disagreement described below. Both rows are the
-**same instrument as the reference rows** — a fixed-length benchmark, not a sweep
-point — which is why they are quoted rather than the sweeps' own stock figures of
-24.7 and 52.4. The 3060 Ti is thermally limited at stock (81 °C,
-`sw_power_cap, sw_thermal`), so its top end is partly a cooling figure.
-
-◇ **Measured with 26 other compute processes on the card**, and its power sweep
-drifted −5.07 % against a 1.5 % gauge. A co-tenant moves a number rather than
-adding noise to it, so read this row as indicative and not as a benchmark. It is
-published because its gains against the same card's 0.7.253 sweep track the clean
-3060 Ti's in shape and size; a clean re-run is wanted. See
-[third-party hardware](performance.md#third-party-hardware--a-two-card-rig).
-
-No row is a `--tune` sweep point any more. That matters because a sweep point and
-a benchmark do not agree: the benchmark loop reads 6–10 % higher at the same
-watts, on both contributed cards and in both directions of testing, and which
-instrument is right is
-[open](performance.md#open-the-tune-harness-and-the-miner-loop-disagree).
-
-The M3 Max's pipeline alone runs **101.5 ms/solve (18.8 sol/s)**; the sustained figure is
-lower because a laptop throttles. It has no power column because macOS exposes no public
-GPU power API — blank rather than estimated.
-
-![Speed and efficiency against the cap, every card measured](tools/cards-curve.svg)
-
-Curves for the three NVIDIA cards, generated from the tables in
-[performance.md](performance.md#third-party-hardware--a-two-card-rig). **Not a
-controlled comparison** — different machines, operating systems and instruments — so
-cross-card distances are unreliable. What holds is each curve's shape and where its own
-efficiency peak sits: 210 W, 148 W and 130 W, all well under stock.
+Results get added to the [benchmarked-devices table](#benchmarked-devices) with
+attribution, and hardware that behaves differently from the reference card becomes a
+work item. If MXBM turns out to be slow or broken on your GPU, please open a bug report.

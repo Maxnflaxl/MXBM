@@ -46,9 +46,9 @@ Relabelling one axis in the other's units is *not* available — `sol/s × ms` i
 the OpenCL rows and ~1980 over the CUDA ones, so one converted ruler would misstate half
 the chart by 4 %.
 
-The x axis is optimization step, not calendar time: only three dates exist and 16 rows
-fall on one of them, so dates are drawn as bands. The dashed divider is the change of
-measurement described above, not just of backend.
+The x axis counts optimization steps. Only three dates exist and 16 rows fall on one of
+them, so dates are drawn as bands. The dashed divider marks the change of measurement
+described above, which is a larger break than the change of backend.
 
 **Error bars are Poisson on the observed solution count, `1/√N`, and cannot be got by
 repeating the run.** Five repeats of the 2026-07-26 build read 58.3/58.4/58.4/58.4/58.4,
@@ -59,7 +59,8 @@ the 300 s run saw 1.99 where the 120 s runs saw 2.01, nine times that σ. So `58
 is 8,729 solves × 1.99 = 17,371 solutions → `1/√17371` = 0.76 %; the same model gives the
 2026-07-25 row its ±2.3 (600 solutions → 4.1 %) and the 2026-08-13 row its ±0.3 (6 × 120 s
 at 32.00 ms = 22,500 solves × 2.006 = 45,135 solutions → 0.47 %). Rows whose run left no
-recorded solve count stay bare points rather than being given a fabricated bar.
+recorded solve count stay bare points; inventing a bar for them would be worse than
+having none.
 
 **It is an uncertainty on the figure, never a window σ.** A per-window standard deviation
 measures how far a one-minute reading bounces and does not shrink as the run lengthens, so
@@ -68,7 +69,8 @@ it would make a well-sampled build look as uncertain as a short one. The two dif
 0.90 against a `1/√N` of 0.11, and the 31-minute 2026-08-16 one 1.09 against 0.19. Window
 spreads are reported with the live-mining sessions below, as spreads.
 
-**The bar sits on the sol/s column, and it measures BeamHash III rather than the solver.**
+**The bar sits on the sol/s column, where it measures BeamHash III itself and not the
+solver.**
 Across a live session's 60 s windows the sol/s spread runs 1.4–1.6 %, nearly all of it the
 solutions-per-solve sampling above; the solves/s factor moves by less than the miner's own
 display step, so a log cannot resolve the solver's timing spread at all. Same asymmetry
@@ -158,10 +160,9 @@ column, since the sol/s above carry the run's own 2.002 solutions/solve. Stock 2
 clocks unlocked: 284–285 W / 2640–2670 MHz / 64–66 °C, memory pinned at 10251 by the
 P-state.
 
-The 1.15 is a spread of the reading, not uncertainty on the mean — that is the Poisson
-±0.19 over ~129,600 solutions. The progress rows keep their own `1/√N`, because a bar
-belongs to the run behind its row and this is a different measurement rather than more of
-the same one.
+The 1.15 is a spread of the reading. Uncertainty on the mean is the Poisson ±0.19 over
+~129,600 solutions. The progress rows keep their own `1/√N`: a bar belongs to the run
+behind its row, and this run is a separate measurement, not more of the same one.
 
 The pool's own sol/s column is **not** a second measurement of the same thing: it
 converges on share count, reading 51.0 after one minute and 72.6 by the last, at a ~12 %
@@ -201,8 +202,8 @@ The median was 56.1 on both windows, matching that build's benchmark median exac
 the 60 s σ of 2.30 matched its ±2.3.
 
 Individual 15 s windows in it reached **61.5 sol/s**, which is tempting and wrong: for
-σ = 3.27 the expected maximum of 304 draws is ≈ 67, so 61.5 is unremarkable rather than
-evidence of a higher true rate. Narrowing the window inflates the peak (61.5 at 15 s vs
+σ = 3.27 the expected maximum of 304 draws is ≈ 67, so 61.5 is exactly what the sampling
+predicts and says nothing about the true rate. Narrowing the window inflates the peak (61.5 at 15 s vs
 58.9 at 60 s) while leaving the median untouched — the signature of noise, not
 throughput. The three samples below 45 sol/s are consecutive and coincide with two other
 benchmarks being run against the same GPU.
@@ -299,7 +300,7 @@ twelve caps all within 2.5 % (mean −1 %).
 ### The locked-clock reference is stable to the digit — run it 2026-07-30
 
 Lock the SM and memory clocks (`LGC=2600 LMC=10251 benchmarks/headline.sh`) and the V/f
-point is pinned rather than left to the card's discretion. Two runs bracketing 70 minutes
+point is pinned instead of left to the card's discretion. Two runs bracketing 70 minutes
 of continuous varied load — the full 100–285 W head-to-head sweep, both miners, ran
 between them:
 
@@ -319,7 +320,7 @@ The cross-day repeat this owed was paid on 2026-08-01: 33.50 ms, six runs, 0.0 %
 — see [the sweep reproduction section](#the-sweep-reproduces-across-sessions).
 
 **Re-pinned at 33.30 on 2026-08-04, with the compute GPU headless — and the move is
-attributed: it is the rig, not the build.** Six runs, 0.0 % spread, 2610/10251, no
+attributed to the rig, and not to the build.** Six runs, 0.0 % spread, 2610/10251, no
 throttle flags, 271.1 W. The monitor moved to the motherboard iGPU that day, so the
 compositor no longer holds a graphics context on the card; rebuilding the 08-01 pin's
 own build and running it headless the same day reads **33.30 to the
@@ -367,9 +368,10 @@ fields this card certainly does answer:
 | 193–196 | the whole `T.Limit` family | **Not Supported** |
 
 The controls resolve to three digits — 285.8 W under load against a 285 W board limit —
-so the field is genuinely absent rather than mis-called. `nvidia-smi -q -d TEMPERATURE`
+so the field is genuinely absent, and nothing here is mis-calling it. `nvidia-smi -q -d TEMPERATURE`
 agrees: `Memory Current Temp: N/A`, `Memory Max Operating Temp: N/A`, `GPU Current
-T.Limit Temp: N/A`. A GeForce restriction, not a driver or API-surface problem.
+T.Limit Temp: N/A`. This is a GeForce restriction; the driver and the API surface are
+both fine.
 
 </details>
 
@@ -437,7 +439,7 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage:
 
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown, not the 29.10 one's; the per-stage split has not
+It is the 29.30 ms build's breakdown and not the 29.10 one's — the per-stage split has not
 been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
 
 Solve is 29.23 ms in the harness, so the stages account for 100.2 % of it, and
@@ -492,7 +494,8 @@ sample size the solutions-per-solve factor reads 2.01 against the 1.99 an 8 500-
 run measures. Every row is therefore about **1 % high in absolute terms** — the 285 W
 row says 57.5 where a long run of the same build says 56.4. The ms/solve column and the
 *shape* of the curve are unaffected, since every point was measured identically, and the
-shape is what the section is about. They are left as measured rather than rescaled:
+shape is what the section is about. They are left as measured; rescaling them would
+publish numbers no run produced:
 
 *Measured on the build of 2026-07-25, i.e. before the group-cap change took stock from
 35.1 to 34.1 ms. Every row would shift down by roughly that much; the bend, which is what
@@ -517,7 +520,7 @@ this table is for, is a property of the power curve and does not move.*
 > [Both miners under the same cap](#both-miners-under-the-same-cap).
 
 **Efficiency has an interior optimum, and it *falls again* below it** — that is the
-informative part, and it is a property of the board rather than of a build. Below the
+informative part, and it belongs to the board, not to any build. Below the
 peak the core clock has dropped far enough that the parts of the board which do not scale
 with it — memory, uncore, leakage — are paid for out of less work. On the current kernels
 the peak is **210 W at 0.3094 sol/s/W**, with 200 W a full 1.0 % below it and 220 W
@@ -636,7 +639,7 @@ The whole sweep was re-run on 2026-07-30, two days after the first, on the same 
 | 285 W | 59.15 → 59.05 | −0.2 % | 53.60 → 53.65 | +0.1 % |
 
 **MXBM's deltas are all the same sign** — twelve of twelve slightly slower on the second
-day, mean −1.0 % — which is a session offset, not noise; noise would change sign.
+day, mean −1.0 % — a session offset. Noise would change sign.
 **lolMiner's are mixed** (+0.8 % to −2.1 %, mean ≈ −0.2 %), i.e. noise-like. The second
 session was marginally unfavourable to MXBM, and every conclusion above is drawn from it,
 which makes them conservative.
@@ -656,7 +659,7 @@ different day for the first time: six 120 s runs, ms/solve spread **0.0 %** (33.
 digit, all six), SM/mem pinned at 2610/10251, 68 °C, power spread 0.6 %. It moved from
 34.30 to **33.50 (−2.3 %)**, and the lineage accounts for it exactly: two kernel changes
 shipped 2026-07-31 totalling 0.80 ms, and the draw rose 262 → 277 W at identical clocks —
-the signature of a busier binary, not a different rig-day. **Under the pin the rig
+the signature of a busier binary, and nothing a change of rig-day would produce. **Under the pin the rig
 reproduces to the digit across days; the number moves only when something about the
 machine does** — the build, or the card's other tenants. The 2026-08-04 re-take is
 the second kind: −0.6 % on the day the monitor left the compute GPU, attributed by
@@ -704,8 +707,8 @@ whole gap in range of a traffic story: it needs about 2.7× our lever, and lolMi
 variant against our 6.17 GiB is plausibly that. See
 [bytes are not free in watts](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz).
 
-**Traffic is not the whole of it.** Two levers that deleted *instructions* rather than
-bytes — the w0-checkpoint record and the replayed reference rows — each paid more under a
+**Traffic is not the whole of it.** Two levers that deleted *instructions* where the
+earlier ones deleted bytes — the w0-checkpoint record and the replayed reference rows — each paid more under a
 cap than at stock, and between them took the 180 W deficit from −10.4 % to −1.8 % without
 narrowing a single record. The clock gap they were measured against widened rather than
 closed. So traffic bounds the gap but does not exhaust it, and the issue economy is the
@@ -741,7 +744,8 @@ done per clock. The "bytes → watts → clock" chain cannot explain it: that pr
 miner moving fewer bytes clocks *higher* under a cap, and below ~150 W lolMiner clocks
 lower. **The per-cycle deficit is what the shipped levers have been closing**: at 100 W
 the same clock advantage read −21 % two kernels ago, −2 % one kernel ago, and is **+3.2 %
-now** — every lever that got it there deleted instructions rather than bytes, the
+now** — every lever that got it there deleted instructions where the byte-narrowing
+ones had not, the
 speculative-entry gate most recently
 ([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
 
@@ -877,7 +881,7 @@ and carries the cross-session term the method note prices: its 285 W point reads
 against that table's 69.95, **+0.9 %**, on the same binary. Read the rungs against each
 other, not against the caps below 285 W in the tables above.
 
-**The 10501 MHz memory rung is not reachable, and this is a mechanism rather than a
+**The 10501 MHz memory rung is not reachable, and the reason is a mechanism, not a
 null.** The card advertises it (`nvidia-smi -q -d SUPPORTED_CLOCKS` lists
 10501/10251/5001/810/405) and every figure ever published here was taken at 10251, so it
 looked like free bandwidth for a pipeline at 76–80 % of DRAM peak in rounds 3 and 4.
@@ -1010,7 +1014,7 @@ scope:
 | 160 W | 43.8 / 43.7 → **43.75** | 40.5 / 40.5 → **40.50** | **−7.4 %** |
 
 **The gate is in the right place.** The two geometries tie at 140 W and (16,1) wins
-clearly by 160 W, so the crossover sits just above the gate rather than well above it.
+clearly by 160 W, putting the crossover just above the gate instead of well above it.
 The 160 W arm is also that experiment's positive control: the same `MXBM_BB=17` that
 changes nothing at 140 W moves 160 W by 7.4 % with both arms identical to 0.1 sol/s.
 *(The 2026-08-15 kernel; the geometries were not re-raced on the current one.)*
@@ -1058,7 +1062,7 @@ each round reading its input layer once and writing its output layer once:
 
 Every line is within **1.4 %** of compulsory: no write amplification, no
 redundant re-reads, nothing left for the cache to save. Nsight re-taken 2026-08-16
-on the shipping record, so these are measured rather than derived — the previous
+on the shipping record, so these are measurements; the previous
 edition carried the reference rows' and the round-4 record's deletions as arithmetic
 on an older run, and the re-take lands within 1 MB of it on every line. Entry's
 −4.1 % is not a saving — it is ~11 MB of its output still sitting dirty in a 48 MB
@@ -1087,9 +1091,9 @@ streaming / in-place layer reuse.
 
 ### What the footprint still costs
 
-The sweep settles the *ranking*, not the *margin*. At its own operating point the
+The sweep settles the *ranking*. It does not settle the *margin*. At its own operating point the
 lolMiner spends **4.48 J per solution**; MXBM spends **4.11** at stock and **3.37 at
-220 W**, its optimum. Undercutting it at stock rather than only by capping is new, and
+220 W**, its optimum. Undercutting it at stock, and not only by capping, is new, and
 where the remaining gap to the ideal went is not mysterious: 10.69 GB of
 compulsory traffic per solve, the total measured in the table above. **Traffic,
 specifically — not the footprint it sits in.** Those were treated here as one problem and they are two:
@@ -1140,10 +1144,10 @@ on an idle machine:
 The **p5 is 116.8 ms in both — the pipeline's own 117 ms**, which agrees with the 1.6 ms
 the GPU timing measures outside the kernels. Nonce iteration, stats and the difficulty
 filter cost essentially nothing. What rises with run length is the median and the p95,
-which is a MacBook throttling under sustained load, not overhead.
+which is a MacBook throttling under sustained load, and not overhead.
 
 So quote 117 ms as the pipeline figure and ~15 sol/s as the sustained one, and expect
-the gap between them to widen with ambient temperature and run length rather than being
+the gap between them to widen with ambient temperature and run length, so it is not
 fixable in software.
 
 > **Benchmark figures here are only valid from an otherwise-idle machine.** A 155.2 ms
@@ -1221,7 +1225,7 @@ rebuild 116.8–119.3). r1 pays 2.8 ms for the wider write; r2 saves 19.7 ms, wh
 ablation's 21 ms less the cost of reading the wider record. Every other phase is
 unchanged to within noise, which is the internal check that the change did what it says.
 
-The win is larger under thermal load, not smaller (r2 55.8 → 25.4 ms when hot), because
+The win grows under thermal load rather than shrinking (r2 55.8 → 25.4 ms when hot), because
 the rebuild's compute is itself part of what generates the heat.
 
 SEEDF is the **default on Apple**. `MXBM_METAL_REBUILD=1` selects the CUDA-shipping
@@ -1299,7 +1303,7 @@ measured with 26 other compute processes on the card** and drifted −5.07 % ove
 the sweep against a 1.5 % gauge. Its per-cap figures are indicative, not
 quotable, and a clean re-run is wanted. What supports reading it at all is that
 its gains against 0.7.253 track the clean card's — the same shape, growing as the
-cap tightens — rather than the direction a co-tenant would push them.
+cap tightens — which is not the direction a co-tenant would push them.
 
 **RTX 4070 SUPER** (Ada, 12 GB, 192-bit), stock memory — 0.8.408, driver 610.88,
 2026-08-21, **26 other compute processes on the card**, sweep drift −5.07 %:
@@ -1356,7 +1360,7 @@ Generated from the tables above and the head-to-head table by
 operating systems and instruments — so cross-card distances are unreliable. Each
 curve's shape and its own efficiency peak are what transfer.
 
-### The memory rung's crossover is a property of the card, not of the algorithm
+### The memory rung's crossover belongs to the card, not to the algorithm
 
 The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER
 ([the record](#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w)).
@@ -1428,7 +1432,7 @@ Stock memory:
 Against the 0.8.408 stock curve above, every cap gained: +19.4 % at 220 W,
 +25.9 % at 182 W, +32.5 % at 100 W — the same widening-under-a-cap shape the
 3060 Ti shows, measured on a card that also had a co-tenant, which is why it
-corroborates rather than confirms.
+corroborates; it does not confirm.
 </details>
 
 <details><summary>RTX 3060 Ti, 0.7.253 / driver 610.62, 2026-08-02</summary>
@@ -1469,7 +1473,7 @@ them.
 One clean sighting, then, and two with confounds — the 2026-08-02 pair above and
 the same day's contended 4070 SUPER run (55.76 against its 220 W sweep point of
 52.38, +6.5 %). All three run the same direction at +6.5 to +9.7 %, which makes
-this a property of the harness rather than of a session or a card.
+this a property of the harness, and neither of a session nor of a card.
 
 **Until it is resolved, a sweep point and a benchmark figure are not
 interchangeable.** [benchmarks.md](benchmarks.md#benchmarked-devices) therefore
@@ -1505,7 +1509,7 @@ The floor sat at 8.0 for the shared-memory budget of Ampere and newer. It does n
 the kernels use no sm_80+ feature — no `cp.async`, no async barriers, no clusters — and
 `ptxas --gpu-name sm_75` reports **no spills anywhere, 26,944 B of static shared at the
 widest kernel and 112 registers at the heaviest**, against Turing's 48 KB per block. What
-Turing does change is occupancy, not capability: 64 KB of shared per SM and 1024 threads
+Turing changes is occupancy. Capability is intact: 64 KB of shared per SM and 1024 threads
 per SM host two 320-thread blocks where Ada hosts three, so a Turing card should be
 expected to land below the per-SM scaling of an Ampere one.
 
