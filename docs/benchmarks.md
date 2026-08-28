@@ -4,8 +4,9 @@ Measured numbers for MXBM, and for lolMiner on the same card, so the comparison 
 like-for-like. Everything here is reproducible with the scripts in `benchmarks/` — the
 commands are given under each table.
 
-**MXBM has been measured on four GPUs**: an RTX 4070 Ti SUPER (the card everything is
-developed against), an M3 Max via Metal, and a contributed RTX 4070 SUPER and RTX 3060 Ti.
+**MXBM has been measured on five GPUs**: an RTX 4070 Ti SUPER (the card everything is
+developed against), an M3 Max via Metal, and a contributed RTX 4070 SUPER, RTX 3060 Ti
+and GTX 1660 Ti.
 They are tabulated under [benchmarked devices](#benchmarked-devices) below; to add yours,
 see [send us your numbers](#send-us-your-numbers).
 
@@ -40,6 +41,7 @@ card appears twice because both of its backends are measured.
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 63.2 | 31.8 | 284 | 0.222 | ours, `--benchmark`, same session ‡ |
 | RTX 4070 SUPER | 12 GiB GDDR6X | 610.88 · Windows | CUDA | 55.8 | 36.2 | 211 | 0.265 | ZumZum, `--report` 120 s ※ ◇ |
 | RTX 3060 Ti | 8 GiB GDDR6 | 610.88 · Windows | CUDA | 26.5 | 75.4 | 192 | 0.138 | ZumZum, `--report` 120 s ※ |
+| GTX 1660 Ti | 6 GiB GDDR6 | 595.97 · Windows | CUDA | 9.48 | 210.6 | 106 | 0.089 | ZumZum, `--report` 120 s ◇ ◆ |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
 ‡ Both re-taken 2026-08-17, interleaved in one session at released clocks. The CUDA
@@ -50,20 +52,29 @@ boost for reproducibility and is the published headline.
 ※ 120 s `--report` on MXBM 0.8.408, 2026-08-21. The 3060 Ti is thermally limited at
 stock (81 °C), so its top end is partly a cooling figure.
 
-◇ Measured with **26 other compute processes on the card**, and the sweep drifted
-−5.07 %. Read it as indicative, not as a benchmark; a clean re-run is wanted. See
-[third-party hardware](performance.md#third-party-hardware--a-two-card-rig).
+◇ Measured with other compute processes on the card — 26 on the 4070 SUPER, 13 and a
+display attached on the 1660 Ti. Read both as indicative, not as benchmarks; clean
+re-runs are wanted. See
+[third-party hardware](performance.md#third-party-hardware--contributed-cards).
+
+◆ **The first Turing measurement**, and the one that prices the sm_75 cubin: the same
+machine on 0.8.412 fell to the OpenCL path at 4.28 sol/s / 462.9 ms, so CUDA is worth
+**2.2×** here. The 1660 Ti also never reached its board limit and shows no interior
+efficiency optimum, which no other card does — possibly the contention, so it is not yet
+read as a property of Turing.
 
 The M3 Max's pipeline alone runs **101.5 ms/solve (18.8 sol/s)**; sustained is lower
 because the laptop throttles. No power column — macOS exposes no GPU power API.
 
 ![Speed and efficiency against the cap, every card measured](tools/cards-curve.svg)
 
-Curves for the three NVIDIA cards, generated from the tables in
-[performance.md](performance.md#third-party-hardware--a-two-card-rig). **Not a
+Curves for the four NVIDIA cards, generated from the tables in
+[performance.md](performance.md#third-party-hardware--contributed-cards). **Not a
 controlled comparison** — different machines, operating systems and instruments — so
 cross-card distances are unreliable. What holds is each curve's shape and where its own
-efficiency peak sits: 210 W, 148 W and 130 W, all well under stock.
+efficiency peak sits: 210 W, 148 W and 130 W, all well under stock. The 1660 Ti is the
+exception and the reason its figure carries a `≥`: its efficiency was still climbing at
+the driver's 70 W floor, so that curve never turned over and its optimum is a bound.
 
 ---
 

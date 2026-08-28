@@ -1292,9 +1292,9 @@ sol/s ≈ 2006 / ms, since BeamHash III yields 2.006 solutions per solve.
 
 ---
 
-## Third-party hardware — a two-card rig
+## Third-party hardware — contributed cards
 
-Contributed, Windows, both cards on CUDA. Different silicon and cooling from the
+Contributed, Windows, every card on CUDA. Different silicon and cooling from the
 reference card, so only the shape of each curve transfers.
 
 Both curves are 2026-08-21 `--report` runs on MXBM 0.8.408, driver 610.88. They
@@ -1359,6 +1359,37 @@ Generated from the tables above and the head-to-head table by
 `docs/tools/plot_cards.py`. **Not a controlled comparison** — different machines,
 operating systems and instruments — so cross-card distances are unreliable. Each
 curve's shape and its own efficiency peak are what transfer.
+
+**GTX 1660 Ti** (Turing, 6 GB, 192-bit), stock memory — 0.8.413, driver 595.97,
+2026-08-28, **a display attached and 13 other compute processes on the card**, sweep
+drift −0.07 %:
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 130 | 108.6 | 9.28 | 211.15 | 0.0854 |
+| 118 | 104.0 | 9.63 | 204.64 | 0.0926 |
+| 106 | 96.5 | 9.52 | 206.42 | 0.0986 |
+| 94 | 87.8 | 9.39 | 209.68 | 0.1070 |
+| 82 | 77.2 | 9.21 | 214.68 | 0.1193 |
+| 80 | 75.4 | 9.18 | 215.04 | 0.1217 |
+| 70 | 66.1 | 8.95 | 222.98 | 0.1354 |
+
+At stock the same run's 120 s benchmark reads **9.48 sol/s / 210.63 ms**, 2.00
+verified solutions per solve, 106.2 W from the energy counter, 61 °C.
+
+**This card is the first Turing measurement, and the CUDA cubin is worth 2.2× on it.**
+The same machine on 0.8.412 fell to OpenCL at **4.28 sol/s / 462.91 ms**; 0.8.413 ships
+an sm_75 cubin, takes the CUDA path, and reads 9.48 / 210.63. Both runs carry the same
+contention, so the ratio is better founded than either absolute.
+
+**Two things here do not match any other card measured, and both may be the contention.**
+The card never reaches its limit — `clocks limited by: nothing`, drawing 108.6 W against
+a 130 W cap — where every other card sits pinned at the board limit in every kernel. And
+its efficiency has **no interior optimum**: sol/s/W climbs monotonically to the driver's
+70 W floor, so `--tune`'s verdict is the bottom of its own sweep range and the real
+optimum is below the band the driver permits. Speed is non-monotonic too, peaking at
+118 W rather than at the cap. A clean re-run is wanted before any of that is read as a
+property of Turing.
 
 ### The memory rung's crossover belongs to the card, not to the algorithm
 
@@ -1522,11 +1553,31 @@ allowance, every 6 GB Turing card reaches the top packed rung:
 | RTX 2060 6 GB | 5.81 GiB | 5.18 GiB | (16,1) packed |
 | RTX 3050 6 GB | 5.70 GiB | 5.07 GiB | (16,1) packed |
 
-**No Turing figure is measured yet** — this rig is sm_89 only, and the resource contract
-(`test_cuda_resources`) is the reference card's and skips itself off Ada. What the change
-is worth is bounded from below by the one OpenCL report on that silicon: a GTX 1660 Ti
-returned **4.28 sol/s** against a published third-party figure of ~14 sol/s for the card,
-and that run also carried 13 co-tenant processes, so its own baseline is depressed.
+**The first Turing figure landed 2026-08-28, and it does not reach the bar.** A GTX
+1660 Ti on 0.8.413 reads **9.48 sol/s / 210.63 ms**, against **4.28** on the OpenCL path
+one build earlier — so the cubin is worth **2.2×** — but a published third-party figure
+for this card is **~14 sol/s**, which leaves MXBM **32 % short** on this silicon while it
+leads at stock on Ada. That run carried a display and 13 co-tenant processes, so the
+absolute is a floor rather than a verdict, and the ratio between the two builds is the
+better-founded half of it.
+
+Three things are candidates for the deficit and only the first is cheap to settle:
+
+- **Which rung it ran.** The table above assumes an idle card: at 5.18 GiB usable the
+  ladder's first fit is (16,1) implicit-bits + dense caps, 5.03 GiB. A display raises the
+  reserve to 256 MB and the desktop's own allocation comes off `free` before the ladder
+  ever sees it, so the card may have started well down the list. The span is large enough
+  to hold the whole deficit — on the reference card that rung runs 29.81 ms against the
+  1.90 GiB floor's 56.98, a factor of 1.91
+  ([the rungs](HW_REQUIREMENTS.md#the-vram-ladder)) — so this is the first thing to settle
+  and the cheapest. **`--report` prints the allocated rung as of 0.8.418**, which it did
+  not when this run was taken.
+- **Occupancy**, which is structural and already stated above: two 320-thread blocks per
+  SM where Ada hosts three.
+- **Speculative entry**, expected off on an arena rung for want of a pool region.
+
+`test_cuda_resources` is still the reference card's and skips itself off Ada, so none of
+this is gated by a contract on Turing.
 
 ## Benchmarks and gates
 

@@ -40,14 +40,14 @@ SRC = os.path.join(REPO, "docs", "performance.md")
 OUT = os.path.join(HERE, "cards-curve.svg")
 
 REF_SECTION = "### Both miners under the same cap"
-TP_SECTION = "## Third-party hardware — a two-card rig"
+TP_SECTION = "## Third-party hardware — contributed cards"
 
 W, H = 1000, 640
 L, R = 74, 34
 A_TOP, A_BOT = 118, 350            # panel A: sol/s
 B_TOP, B_BOT = 400, 552            # panel B: sol/s per watt
 
-XTICKS = [100, 120, 140, 160, 180, 200, 220, 240, 260, 285]
+XTICKS = [70, 100, 120, 140, 160, 180, 200, 220, 240, 260, 285]
 
 # By entity. The rung is the 4070 SUPER at another memory clock, so it shares
 # that card's hue and is separated by the dash instead of by a fourth colour.
@@ -55,6 +55,7 @@ COLOUR = {
     "RTX 4070 Ti SUPER": cl.SERIES[0],
     "RTX 4070 SUPER": cl.SERIES[1],
     "RTX 3060 Ti": cl.SERIES[2],
+    "GTX 1660 Ti": cl.SERIES[3],
 }
 RUNG = "RTX 4070 SUPER @ 5001 MHz"
 
@@ -110,6 +111,15 @@ def peak(rows):
     return max(rows, key=lambda r: r["eff"])
 
 
+def censored(rows):
+    """True when the best efficiency sits at the lowest cap swept.
+
+    Such a curve never turned over inside the driver's band, so its optimum is
+    a bound rather than a located peak and the title must not call it one.
+    """
+    return peak(rows)["cap"] == min(r["cap"] for r in rows)
+
+
 def render(series):
     c = cl.Canvas(W, H)
     every = [r for rows in series.values() for r in rows]
@@ -124,9 +134,15 @@ def render(series):
     # -- title: the finding, computed, so an edit to the tables moves it ---
     peaks = [(n, peak(series[n])) for n in COLOUR if n in series]
     peaks.sort(key=lambda p: -p[1]["cap"])
-    c.text(L, 28, "On stock memory every card peaks for efficiency well below its stock "
-                  "cap -- at %s" % ", ".join("%g W" % p["cap"] for _, p in peaks),
-           15, cl.INK, weight="bold")
+    turned = [(n, p) for n, p in peaks if not censored(series[n])]
+    flat = [(n, p) for n, p in peaks if censored(series[n])]
+    head = ("On stock memory every card is most efficient well below its stock cap -- at %s"
+            % ", ".join("%g W" % p["cap"] for _, p in turned))
+    if flat:
+        head += "; %s never turned over above %s" % (
+            ", ".join(n for n, _ in flat),
+            ", ".join("%g W" % p["cap"] for _, p in flat))
+    c.text(L, 28, head, 15, cl.INK, weight="bold")
     c.text(L, 50, "NOT a controlled comparison. The 4070 Ti SUPER was swept on Linux with "
                   "caps set by nvidia-smi and power read from NVML; the other two by MXBM's "
                   "own --tune on", 11, cl.INK_2)
@@ -160,7 +176,11 @@ def render(series):
     # The rung is annotated too: it is the 4070 SUPER's real optimum, and a
     # title about stock memory would otherwise bury the better number.
     for name_, pk in peaks + ([(RUNG, peak(series[RUNG]))] if RUNG in series else []):
-        c.text(xs(pk["cap"]), ys_b(pk["eff"]) - 11, "%.4f" % pk["eff"], 10,
+        # A censored optimum is labelled with a >= so the number is not read as
+        # a located peak.
+        mark = ("\u2265%.4f" if name_ in series and censored(series[name_])
+                else "%.4f") % pk["eff"]
+        c.text(xs(pk["cap"]), ys_b(pk["eff"]) - 11, mark, 10,
                COLOUR.get(name_, COLOUR["RTX 4070 SUPER"]), "middle", weight="bold")
 
     lx, ly = L + 14, A_TOP + 18
