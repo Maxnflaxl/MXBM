@@ -72,3 +72,6 @@ __pycache__/
 .mclk.out
 /build-ow0/
 /build-ow0off/
+
+# aarch64 archives from docs-internal/build_jetson_arm64.sh
+dist/
