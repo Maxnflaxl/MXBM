@@ -31,12 +31,21 @@ benchmark-report issue. Needs root (Windows: an Administrator terminal) and
 ~25 min the first time, then reuses the stored curve. Uploads nothing.
 
 
-POWER LIMIT: --pl
------------------
+THE OPTIONS THAT NEED ROOT
+--------------------------
 
---pl caps the board power in watts. Needs root (Windows: an Administrator
-prompt); MXBM restores the previous limit on exit. There is no default cap:
-the right one depends on the card and on what you pay for electricity.
+    --pl W        board power limit, watts
+    --cclk MHz    lock the core clock          --coff MHz  shift its V/F curve
+    --mclk MHz    lock the memory clock        --moff MHz  shift its V/F curve
+    --fan PCT     fan target, percent
+
+All need root (Windows: an Administrator prompt), all take a per-GPU list
+(`240`, `240,*,260`; `*` skips a card), and all are restored when MXBM exits.
+--coff and --moff are offsets and may be negative; the rest are absolute.
+
+--pl is the one to set. It caps the board in watts, and because MXBM runs
+pinned at the limit in every kernel, the limit picks the operating point. There
+is no default: the right cap depends on the card and on what you pay for power.
 
 --tune measures your card's power/speed curve and recommends a value, storing
 it per card (~25 min, needs root, no pool):
@@ -48,12 +57,25 @@ Efficiency has an interior optimum. Past it, capping lower costs efficiency as
 well as speed, all the way down to the card's floor -- lower is not better,
 which is why it is worth measuring rather than guessing.
 
---cclk, --mclk, --coff, --moff and --fan work and are restored on exit, but
-only --pl has had a hands-on validation pass. Read docs/overclocking.md before
-the rest. Core instability shows as CPU-verify rejections, and the healthy
-count is zero, so any rejection means the card is computing wrong answers.
-Memory instability does not show there at all -- it shows as sol/s falling as
-you raise the offset.
+Only --pl has had a hands-on validation pass. The clock knobs work and are
+restored, but they are yours to validate on your own card:
+
+  - Set too high, they can overheat or hang the card, take down the desktop, or
+    leave it in a state only a reboot or a full power cycle clears. Move one
+    knob at a time, and compare against what the card reports from a fresh boot.
+  - Core instability shows as CPU-verify rejections. The healthy count is zero,
+    so any rejection means the card is computing wrong answers.
+  - Memory instability does not show there at all -- it shows as sol/s falling
+    as you raise the offset.
+  - Heat is a maintenance problem too. Clean the fans, and expect thermal pads
+    and paste to need attention every few years; see the card's own guidance.
+
+Full guide: https://github.com/maxnflaxl/MXBM/blob/master/docs/overclocking.md
+
+WSL2: the Linux build under WSL2 cannot set power or clocks. The Windows driver
+owns them and sudo does not change that, so benchmark figures from there are at
+whatever the card was already set to. Use the Windows build in an Administrator
+terminal for --pl, --tune and --report.
 
 
 CONFIG FILES
@@ -81,7 +103,8 @@ DEV FEE
 MXBM mines for the developer a small fraction of the time, under a separate
 worker name. Those solutions are counted separately and never touch your share
 counters or your reported speed. --dev-fee raises the fee; it cannot be
-lowered. docs/devfee.md documents it and points at the implementation.
+lowered. Full terms:
+https://github.com/maxnflaxl/MXBM/blob/master/docs/devfee.md
 
 
 VERIFYING THIS DOWNLOAD
