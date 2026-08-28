@@ -153,6 +153,9 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
     // and running it before the sweep means it is taken at the card's own setting
     // rather than at whatever the sweep left behind.
     gpu::TelemetryWindow tw(cfg.device);
+    // Read before the sweep: run_tune reconstructs the solver at every point, and the
+    // rung that belongs in the block is the one the reported throughput ran on.
+    const std::string geom = solver->geometry();
     BenchmarkResult r;
     try {
         r = run_benchmark(*solver, stats, cfg.seconds, stop);
@@ -201,6 +204,8 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
     o << "| OS | " << os_string() << " |\n";
     // "Cuda" is how the device join spells it; CUDA is how everyone else does.
     o << "| Backend | " << (cfg.backend == "Cuda" ? "CUDA" : cfg.backend) << " |\n";
+    // Nothing else in this block distinguishes a card that stepped down the ladder.
+    if (!geom.empty()) o << "| Geometry | " << geom << " |\n";
     if (pl.valid)
         o << "| Board power limit | " << pl.current_w << " W (card default "
           << pl.default_w << " W, driver band " << pl.min_w << "–" << pl.max_w << " W) |\n";

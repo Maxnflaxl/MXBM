@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // Row-bucket geometry and footprint arithmetic, shared by both backends so they cannot
 // answer the same question differently. Here rather than in round_pipeline.h because
@@ -229,5 +230,12 @@ size_t rowbucket_single_split(uint32_t capacity, uint32_t bb, bool quad, bool im
 // half. `n` receives the count.
 struct RbRung { uint32_t bb, sm; bool quad; bool arena; bool octo; };
 const RbRung* rb_rungs(int& n);
+
+// One rung as a line for a human: "(16,1) implicit-bits, 5.03 GiB". Shared so the two
+// backends cannot describe the same rung differently. Callers pass the rung that
+// ALLOCATED, not the one rb_geometry_for offered: a card whose desktop holds a gigabyte
+// steps down after that answer, and the landing point is what a report needs.
+std::string rb_describe(uint32_t bb, uint32_t sm, bool quad, bool impb, bool arena,
+                        bool octo, bool replay, uint32_t capacity = kRbCapacity);
 
 }} // namespace mxbm::gpu

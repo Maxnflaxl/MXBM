@@ -1,5 +1,6 @@
 #include "gpu/rowbucket_geom.h"
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace mxbm { namespace gpu {
@@ -75,6 +76,18 @@ void rowbucket_bytes(uint32_t capacity, uint32_t bb, size_t& total, size_t& sing
 // run, and the caller steps past it. Footprints are CUDA's, with the implicit-bits pack
 // and the replayed reference rows where the rung admits them; a backend that stores all
 // five rows adds 0.26 GiB, and 0.41 more on the implicit-bits rungs.
+std::string rb_describe(uint32_t bb, uint32_t sm, bool quad, bool impb, bool arena,
+                        bool octo, bool replay, uint32_t capacity) {
+    size_t total = 0, single = 0;
+    rowbucket_bytes(capacity, bb, total, single, quad, impb, arena, octo, replay);
+    char buf[128];
+    std::snprintf(buf, sizeof buf, "(%u,%u)%s%s%s%s, %.2f GiB", bb, sm,
+                  quad ? " quad" : "", impb ? " implicit-bits" : "",
+                  arena ? " dense-caps" : "", octo ? " octo" : "",
+                  (double)total / 1073741824.0);
+    return buf;
+}
+
 const RbRung* rb_rungs(int& n) {
     //     bb   sm   quad   arena  octo        footprint / time
     // Times re-measured in one sitting 2026-08-16, 40 s a rung, clocks released.

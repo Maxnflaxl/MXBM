@@ -88,6 +88,16 @@ GpuSolver::GpuSolver(unsigned index) : rt_(index) {
 
 bool GpuSolver::available(unsigned index) { return Runtime::any_device_available(index); }
 
+std::string GpuSolver::geometry() const {
+    if (!pb_.fb_num_buckets) return {};          // sort fallback: no rung to name
+    uint32_t bb = 0;
+    while ((1u << bb) < pb_.fb_num_buckets) ++bb;
+    // OpenCL carries neither the implicit-bits record nor the replayed reference rows,
+    // so both are false here whatever the rung.
+    return rb_describe(bb, pb_.fb_submask_bits, pb_.fb_quad, /*impb=*/false,
+                       pb_.fb_arena, pb_.fb_octo, /*replay=*/false);
+}
+
 std::vector<std::array<uint8_t, 104>> GpuSolver::solve(const uint8_t input[32], const uint8_t nonce[8]) {
     {   // MXBM_VERIFY_STATS: candidates/solve needs the solve count as denominator.
         static const bool kVerifyStatsSolve = std::getenv("MXBM_VERIFY_STATS") != nullptr;

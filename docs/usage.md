@@ -110,7 +110,9 @@ power/speed curve, and prints the lot as a markdown block ready to paste into a
 [benchmark report issue](https://github.com/maxnflaxl/MXBM/issues/new?template=benchmark-report.yml).
 Nothing is uploaded. It also records three things that decide whether a figure means
 anything and a person filling in a form usually cannot: whether a display was attached to
-the card, whether another process was using it, and what the clocks were limited by.
+the card, whether another process was using it, what the clocks were limited by, and which
+VRAM geometry the solver actually allocated — a card that stepped down the
+[ladder](HW_REQUIREMENTS.md#the-vram-ladder) is slower for a reason no other line reveals.
 
 **The curve takes about half an hour, and is measured once.** A later `--report` on the
 same binary reads it back and finishes in two minutes; a different build re-measures.

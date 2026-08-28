@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace mxbm { namespace miner {
@@ -19,6 +20,9 @@ struct Solver {
     // this as-is. GpuSolver (src/gpu/gpu_solver.h) overrides it to flip an
     // std::atomic<bool> that run_pipeline polls between rounds.
     virtual void request_abort() {}
+    // The rung this solver allocated, for --report; empty where the question does not
+    // apply (the CPU reference) or the backend cannot answer, and the row is omitted.
+    virtual std::string geometry() const { return {}; }
     virtual ~Solver() = default;
 };
 

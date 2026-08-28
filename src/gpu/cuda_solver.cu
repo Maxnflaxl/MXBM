@@ -353,6 +353,12 @@ std::vector<CudaSolver::DeviceInfo> CudaSolver::enumerate() {
 const CudaSolver::DeviceInfo& CudaSolver::device() const { return p_->info; }
 unsigned CudaSolver::bucket_bits() const { return p_->bb; }
 void CudaSolver::request_abort() { p_->abort_.store(true, std::memory_order_relaxed); }
+// The rung that ALLOCATED, read off the pipeline rather than recomputed: the ladder
+// steps down when the allocator refuses, and it is that landing point a report needs.
+std::string CudaSolver::geometry() const {
+    return rb_describe(p_->bb, p_->sm, p_->quad, p_->impb, p_->arena, p_->octo,
+                       /*replay=*/true);
+}
 
 CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz)
     : p_(new Impl) {

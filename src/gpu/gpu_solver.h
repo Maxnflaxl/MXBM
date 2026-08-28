@@ -21,6 +21,7 @@ public:
     static bool available(unsigned index = 0); // Runtime::any_device_available()
     std::vector<std::array<uint8_t,104>> solve(const uint8_t input[32], const uint8_t nonce[8]) override;
     void request_abort() override { abort_.store(true, std::memory_order_relaxed); }
+    std::string geometry() const override;
     const DeviceInfo& device() const { return rt_.device(); }
     // What the pipeline was sized against: driver-reported free VRAM less the
     // reserve, or the total-times-headroom fallback when free was unreadable.

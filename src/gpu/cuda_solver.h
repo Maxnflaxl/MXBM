@@ -48,6 +48,7 @@ public:
 
     std::vector<std::array<uint8_t, 104>> solve(const uint8_t input[32], const uint8_t nonce[8]) override;
     void request_abort() override;
+    std::string geometry() const override;
 
     const DeviceInfo& device() const;
 
