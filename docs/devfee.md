@@ -17,9 +17,8 @@ takes 1.0% on BeamHash III, and 0.7–2.5% across its other algorithms.
 | Per day | ~14.4 min |
 | Destination | `beam.herominers.com:1130` (TLS) |
 
-The fee is charged in **time**, not in shares. There is no per-share cut and
-no skimming of your submissions: your shares go to your pool, the fee's
-shares go to the fee pool, and the two are never mixed.
+The fee is charged in **time**. There is no per-share cut: your shares go to
+your pool, the fee's shares go to the fee pool, and the two are never mixed.
 
 Only time you are **actually mining** counts. Two things must both hold for
 the clock to run: your pool has given the miner a job, and a device is
@@ -31,15 +30,13 @@ solving it. So none of the following is charged:
 - a solver backing off after an error;
 - a machine suspended and resumed.
 
-A round that gets cut short settles only the time it really spent, so the
-remainder stays owed rather than being silently forgiven or double-charged.
-A round that overruns settles the overrun too, down to the fraction of a
-second, rather than rounding in the developer's favour.
+A round settles the time it really spent, to the fraction of a second. A round
+cut short leaves the remainder owed. A round that overruns settles the overrun
+too.
 
 If the fee pool has no current job when a round comes due, the round is
-**deferred**, not run — burning your hashrate on a job the miner does not
-have, or on one left over from a connection that has since dropped, would
-cost you time and pay the developer nothing.
+**deferred**. Mining a job the fee pool has not given would cost you time and
+pay the developer nothing.
 
 ## Raising it: `--dev-fee`
 
@@ -49,9 +46,9 @@ If you want to support the project with more than the built-in rate:
 mxbm --algo BEAM-III --pool ... --user ... --dev-fee 2.5
 ```
 
-The value is a percentage. It is **raise-only** — a value below the built-in
-rate is refused with an error rather than clamped, because clamping would
-leave you believing you had lowered it when you had not:
+The value is a percentage, and it is **raise-only**. A value below the
+built-in rate is refused with an error, so you cannot end up believing you
+lowered it when you had not:
 
 ```
 --dev-fee 0.5% is below this build's 1% rate; the fee can be raised, not
@@ -74,23 +71,21 @@ A fee round logs in to the fee pool as:
 
 So a rig mining as `<your address>.rig1` at the built-in rate appears as
 `rig1_1`, and the same rig with `--dev-fee 2.5` appears as `rig1_2.5`. The
-round shows up on the fee pool's dashboard as identifiably yours rather than
-as anonymous hashrate, and a raised rate is visible there too.
+round is identifiably yours on the fee pool's dashboard, and a raised rate is
+visible there too.
 
 Your worker name is sanitised to `[A-Za-z0-9_-]` and capped at 32 characters
-before it goes on the wire — pools reject exotic worker names, and the
-credential travels inside a JSON login line where a stray quote or newline
-would corrupt it. If you mine without a worker suffix, the fee round uses
-`mxbm`.
+before it goes on the wire. If you mine without a worker suffix, the fee round
+uses `mxbm`.
 
 ## How you can see it
 
-Nothing about the fee is hidden. It is reported in four places:
+The fee is reported in four places.
 
 **At startup**, before it is ever charged:
 
 ```
-Dev fee: 1% - one 36s round per 60min of mining, to beam.herominers.com:1130
+Dev fee: 1% - one 36s round per 60min of mining
 ```
 
 A build with no fee compiled in says so instead:
@@ -106,8 +101,8 @@ Dev fee round started (36s) - mining to the developer's address
 Dev fee round finished (36s) - back on your pool
 ```
 
-**In the statistics table**, with what has actually been spent this session —
-enough to check the rate against your own uptime rather than take it on trust:
+**In the statistics table**, with what has actually been spent this session,
+which you can check against your own uptime:
 
 ```
 Dev fee 1%: 2 rounds, 72s total, 1/0/0 A/S/R
@@ -132,25 +127,15 @@ separate ledger and never touch:
 - your pool-credited rate (`Pool sol/s`),
 - your submit latency.
 
-The one figure deliberately **shared** is the hashrate. `Speed sol/s` measures
-what the GPU is doing, and the GPU does the same work either way — splitting
-it would make your headline speed dip once an hour for no reason you could
-act on. What the fee actually costs you is time, which is what
-`Dev fee ... Ns total` reports.
+The hashrate is the one figure deliberately shared. `Speed sol/s` measures
+what the GPU is doing, and the GPU does the same work either way. What the fee
+costs you is time, and `Dev fee ... Ns total` reports it.
 
 ## Why there is a fee
 
-MXBM is built and maintained as open-source software, and the fee is what
-funds that work: the solver optimisation, the hardware it is measured on, and
-the ongoing maintenance as pools, drivers and the algorithm's ecosystem move.
-The rate is the same 1.0% the closed-source BeamHash III miners charge, so it
-costs no more to mine with a miner you can read.
-
-It is disclosed rather than buried — announced at startup, announced at both
-ends of every round, and reported in the statistics table and `/summary` — so
-what you are paying is checkable against your own uptime at any time. If the
-project is useful to you and you want to support it further, `--dev-fee`
-raises the rate.
+The fee funds the work: solver optimisation, the hardware it is measured on,
+and maintenance as pools, drivers and the ecosystem move. At 1.0% it is the
+same rate the closed-source BeamHash III miners charge.
 
 ## Implementation
 

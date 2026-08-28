@@ -92,13 +92,11 @@ immediately; only a *missing* one defers to the config.
 mxbm --benchmark BEAM-III --benchmark-seconds 120
 ```
 
-It drives the same solve path as live mining and reports through the same
-stats, so the figure is directly comparable to the mining one — median ms per
-solve with p5/p95, so a run can be judged stable without a second run. On cards
-with an energy counter (NVIDIA Volta and newer) it also prints joules total, mean
-watts and J/solution read from the counter itself — exact, not integrated from
-power samples — which is the number to compare when the question is efficiency
-rather than speed.
+It drives the same solve path as live mining, so the figure is comparable to the
+mining one. It reports median ms/solve with p5/p95, so a run can be judged stable
+without a second run; on cards with an energy counter (NVIDIA Volta and newer) it
+also prints joules, mean watts and J/solution read from the counter itself, which
+is the number to compare when the question is efficiency rather than speed.
 
 ### Reporting: send us how your card does
 
@@ -106,20 +104,18 @@ rather than speed.
 sudo mxbm --report
 ```
 
-The only command worth remembering if you are reporting a result. It benchmarks the card
-for two minutes through the same solve path mining uses, samples telemetry over the run,
-measures the card's power/speed curve, and prints the whole thing as a markdown block
-ready to paste into a
+This is the command to run if you are reporting a result. It benchmarks the card
+for two minutes through the same solve path mining uses, samples telemetry, measures the
+power/speed curve, and prints the lot as a markdown block ready to paste into a
 [benchmark report issue](https://github.com/maxnflaxl/MXBM/issues/new?template=benchmark-report.yml).
-Nothing is uploaded. It also records three things a person filling in a form usually
-cannot, and each decides whether a figure means anything: whether a display was attached
-to the card, whether another process was using it, and what the clocks were limited by.
+Nothing is uploaded. It also records three things that decide whether a figure means
+anything and a person filling in a form usually cannot: whether a display was attached to
+the card, whether another process was using it, and what the clocks were limited by.
 
 **The curve takes about half an hour, and is measured once.** A later `--report` on the
-same binary reads it back and finishes in two minutes; a different build re-measures,
-because a curve taken on different kernels describes a different program. Measuring it
-needs root (or an Administrator terminal on Windows) — without that you still get
-everything except the curve, and that is still a useful report.
+same binary reads it back and finishes in two minutes; a different build re-measures.
+Measuring it needs root (Windows: an Administrator terminal) — without that you still get
+everything except the curve, which is still a useful report.
 
 **The report is always saved**, and the path is printed:
 
@@ -133,8 +129,7 @@ path, `~/` expands, missing directories are created, and naming a *directory* sa
 default filename inside it. Under `sudo` the file is owned by you, not root.
 
 **On a multi-GPU rig a report covers one card at a time.** With more than one card
-`--report` lists them and stops rather than guessing, because a block that silently
-covered device 0 would read as a rig figure:
+`--report` lists them and stops rather than guessing:
 
 ```sh
 sudo mxbm --report --devices 1                       # one card
@@ -143,14 +138,11 @@ sudo mxbm --report --devices ALL --report-out rig.md # every card, in turn
 
 `--devices ALL` walks the cards one after another — never together, since two cards
 measured at once each report the other's contention — and collects every block into one
-file, so a rig is still one paste. Budget half an hour per card on the first run. Curves
-are stored per card (keyed by name and PCI address), so identical cards in different
-slots keep their own; cooling differs between slots.
+file. Budget half an hour per card on the first run. Curves are stored per card (keyed by
+name and PCI address), so identical cards in different slots keep their own.
 
-`--report` always sweeps at the defaults: `--tune-caps` and `--tune-seconds` configure
-`--tune` and are refused here, since a hand-picked grid produces a verdict that reads
-like a full sweep's without the refining passes behind it. Use `--tune` directly when you
-want to choose the grid.
+`--report` always sweeps at the defaults; `--tune-caps` and `--tune-seconds` are refused
+here. Use `--tune` directly when you want to choose the grid.
 
 ### Tuning: measure your own card
 
@@ -169,7 +161,7 @@ About 25 minutes, in four passes plus a drift gauge:
 | fine | ~10 W steps bracketing it | the coarse grid places the peak only to within its own spacing; this is what distinguishes 220 from 248 |
 | rung | the capped points again at your card's low memory rung — picked from the driver's own supported-clock list, held-clock verified every arm | under a low cap the memory interface burns watts for bandwidth the slowed core cannot use |
 | efficiency | refines around the best sol/s-per-watt point found, on whichever memory clock it sits | the coarse spacing blurs the efficiency optimum exactly as it blurs the recommendation |
-| drift gauge | the first point, measured a second time | past ±1.5 % the table says the card heat-soaked rather than pretending it did not |
+| drift gauge | the first point, measured a second time | past ±1.5 % the table is flagged: the card heat-soaked during the sweep |
 
 It prints the curve and three recommendations: the **recommended `--pl`** (the highest
 limit where each extra watt still returns at least 0.07 sol/s — above it you are buying
@@ -213,8 +205,7 @@ mxbm --algo BEAM-III \
 MXBM stays on the first pool while it answers. After **three consecutive failed
 redials** it moves to the next in the list, wrapping at the end, and says so on the
 console. Rotation is deliberately slow: a pool that drops a connection is usually back
-within seconds, and moving on the first failure would hand the rig to the backup over a
-blip — then leave it there, because nothing pulls it home.
+within seconds, and nothing pulls the rig home from a backup.
 
 ### Local pools (loopback)
 
@@ -234,11 +225,8 @@ mxbm --algo BEAM-III --pool 127.0.0.1:3416
 ```
 
 An explicit `--tls` or `--user` still wins, and neither relaxation applies to a remote
-pool: a remote `--pool` without `--user` remains an error, since mining to a pool with
-no address of yours mines for nobody.
-
-Each pool keeps its own credentials. They are different accounts, and re-logging into
-pool B with pool A's wallet would mine for the wrong address.
+pool: a remote `--pool` without `--user` remains an error. Each pool keeps its own
+credentials.
 
 ## Configuration files
 
@@ -371,12 +359,9 @@ NVIDIA GeForce RTX 4070 Ti SUPER: Found a share of difficulty 8.0k (3.9x target 
 Share accepted (18 ms)
 ```
 
-The multiple and the target are on the line because difficulty alone means
-nothing without the bar it had to clear — and pool vardiff moves that bar
-throughout a session, so the same "8.0k" is a different achievement at
-different times. The multiplier is plain ASCII `x` so the line stays greppable
-through `tee` and log shippers. Where no target is known yet, the suffix is
-omitted.
+The multiple and the target are on the line because pool vardiff moves the bar
+throughout a session, so the same "8.0k" is a different achievement at different
+times. Where no target is known yet, the suffix is omitted.
 
 Press Ctrl+C to stop.
 
@@ -396,15 +381,12 @@ Enter needed:
 
 Keys are case-insensitive, and every command's output goes through the normal
 console — timestamped into the `--log` transcript, and printed even under
-`--silence`, since a key press is an explicit request. A paused device shows
-as paused in the statistics table, and the watchdog knows the difference
-between paused and hung.
+`--silence`. A paused device shows as paused in the statistics table, and the
+watchdog knows the difference between paused and hung.
 
-The keys exist only when stdin is an interactive terminal. Under a pipe, a
-redirect, or a service manager the reader never starts and stdin is left
-untouched, so scripted and unattended runs behave exactly as before. For
-remote control of an unattended rig, use the [HTTP API](#dashboard-and-monitoring-api)
-instead.
+The keys exist only when stdin is an interactive terminal; under a pipe, a redirect
+or a service manager the reader never starts. For remote control of an unattended
+rig, use the [HTTP API](#dashboard-and-monitoring-api).
 
 ### Quieting the console
 
@@ -429,15 +411,12 @@ marks between two statistics blocks add up to the block's accepted count.
 **Rejected shares are printed at every level** — they are the one share line
 worth interrupting for, and they are rare enough not to flood anything.
 
-`--silence` applies to the `--log` transcript exactly as it applies to the
-screen: the file records what was displayed, so what you watch live and what you
-read afterwards are the same thing. To keep more in the file, lower the level.
-
-The startup banner is part of that transcript — the log opens before it is
-printed, so a pasted log carries the same header a screenshot does: version,
-licence, and which backends this binary was *built* with. That last line answers a
-question no runtime probe can: a machine with no CUDA card and a binary with no
-CUDA support look identical from the device table alone.
+`--silence` applies to the `--log` transcript exactly as it applies to the screen,
+so what you watch live and what you read afterwards are the same thing. To keep
+more in the file, lower the level. The startup banner is part of that transcript —
+version, licence, and which backends this binary was *built* with, which no runtime
+probe can tell you: a machine with no CUDA card and a binary with no CUDA support
+look identical from the device table alone.
 
 ### Logging to a file
 
@@ -458,11 +437,8 @@ implies `--log`; the file is opened for **append**, so a rig that
 watchdog-restarts continues its record instead of erasing it. If the file
 cannot be opened, MXBM says so and mines anyway.
 
-Every line in the file is timestamped whatever `--timeprint` says — that flag is
-about the console, which you are watching live and where the time is usually
-redundant. A file is read hours later, where a line with no time on it is nearly
-useless. (Turning both on is therefore slightly redundant: the transcript will
-carry its own stamp *and* the one `--timeprint` put on the speed line.)
+Every line in the file is timestamped whatever `--timeprint` says; that flag is
+about the console only, so turning both on double-stamps the speed line.
 
 This is also how to get numbers out for offline analysis. The speed lines are
 fixed-format, so a session's distribution is one command away:
@@ -478,14 +454,12 @@ mean and standard deviation without any parsing, the API reports them directly �
 
 ### Power limit
 
-The single most valuable setting on an NVIDIA card, and the reason it exists here:
-**MXBM runs pinned at the board power limit in every kernel**, so the limit does not just
-bound the miner, it picks its operating point. On the reference RTX 4070 Ti SUPER,
-measured:
+**MXBM runs pinned at the board power limit in every kernel**, so the limit does not
+just bound the miner, it picks its operating point — which makes it the single most
+valuable setting on an NVIDIA card.
 
-**`--pl 210` is the setting to use** on the reference RTX 4070 Ti SUPER — its efficiency
-peak, and comfortably inside the window where MXBM beats the alternative, whose crossing
-is at ~177 W:
+**`--pl 210` is the setting to use** on the reference RTX 4070 Ti SUPER: its measured
+efficiency peak.
 
 | `--pl` | sol/s | sol/s/W | |
 |---|---|---|---|
@@ -496,20 +470,14 @@ is at ~177 W:
 | 285 W *(stock)* | **69.95** | 0.2461 | fastest |
 
 Dropping from 285 W to 210 W costs 7 % of throughput and saves 26 % of the power. Going
-below the peak makes things *worse* on both counts: the core clock has fallen far
-enough that the parts of the board which do not scale with it are being paid for out of
-less work.
-
-The full curve — every cap from the driver's 100 W floor up, and both miners swept
-against each other at the same caps — is in
-[performance.md](performance.md#both-miners-under-the-same-cap). These numbers are one
-card's; `sudo mxbm --tune` measures yours ([Tuning](#tuning-measure-your-own-card)).
+below the peak is *worse* on both counts. The full curve is in
+[performance.md](performance.md#both-miners-under-the-same-cap); these numbers are one
+card's, and `sudo mxbm --tune` measures yours ([Tuning](#tuning-measure-your-own-card)).
 
 **Running capped below ~165 W? Drop the memory clock too.** Under a low cap the GDDR
 interface burns watts for bandwidth the slowed core cannot use; the 5001 MHz rung returns
 them as core clock — **+7 % sol/s at 160 W rising to +18 % at the 100 W floor**, at the
-same wall power. Pair the two through the miner itself — one command, and both settings
-are restored when it exits:
+same wall power. Both settings are restored when the miner exits:
 
 ```sh
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
@@ -518,9 +486,8 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 On a rig that doesn't run the miner as root, set the card once instead
 (`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. The
 crossover is ~167 W and above ~180 W the rung is a wall, so this is strictly a low-cap
-pairing. On energy per solution it only ties the shelf — 3.219 J/solution at 160 W on
-the rung against 3.232 at 210 W on stock memory, where the card does 31 % more work.
-Details in
+pairing — and on energy per solution it only ties: 3.219 J/solution at 160 W on the rung
+against 3.232 at 210 W on stock memory, where the card does 31 % more work. Details in
 [performance.md](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w).
 
 ```
@@ -536,9 +503,8 @@ Mining continues at the card's current 285 W.
 ```
 
 The value is clamped to the band the driver reports for your card (100–366 W on the
-reference one) and the clamp is announced, so a limit your card will not take is never
-silently ignored. The previous limit is restored when MXBM exits, including on Ctrl+C;
-`--no-oc-reset` leaves it applied instead.
+reference one) and the clamp is announced. The previous limit is restored when MXBM
+exits, including on Ctrl+C; `--no-oc-reset` leaves it applied instead.
 
 ### Choosing the columns
 
@@ -607,23 +573,19 @@ GPU 0: paused at 85 C (--tstop). It is not hung; mining resumes when it cools.
 GPU 0: resuming at 75 C (--tstart).
 ```
 
-The pause is cooperative: a solve already running finishes, nothing is torn down,
-and resuming costs only the wait. The card is checked every 2 seconds — a card
-under load can climb 20 C between slower polls, and every degree of that
-overshoot is above the limit you set.
+The pause is cooperative: a solve already running finishes, nothing is torn down, and
+resuming costs only the wait. The card is checked every 2 seconds, because a card under
+load can climb 20 C between slower polls.
 
-**The watchdog knows about it.** A paused card stops completing solves, which is
-exactly what `--watchdog` looks for; MXBM excludes paused devices, so `--tstop`
-with the default `--watchdog exit` cannot turn into a restart loop back into the
-same heat. A paused card is also marked `"Paused": true` in `/summary`, so a
-monitoring dashboard shows *why* it reads 0 sol/s.
+**The watchdog knows about it.** A paused card stops completing solves, which is exactly
+what `--watchdog` looks for; MXBM excludes paused devices, so `--tstop` with the default
+`--watchdog exit` cannot turn into a restart loop back into the same heat. A paused card
+is also marked `"Paused": true` in `/summary`.
 
-`--tmode` selects the sensor. **On consumer NVIDIA cards only `edge` is
-readable** — the driver answers "not supported" for memory temperature and the
-whole T.Limit family, and reports no junction sensor at all. Asking for one of
-those is an error at startup rather than a silent fall back to edge, because
-protecting a card by a temperature you did not choose is worse than not
-protecting it.
+`--tmode` selects the sensor. **On consumer NVIDIA cards only `edge` is readable** — the
+driver reports no junction sensor at all and answers "not supported" for memory
+temperature. Asking for one of those is an error at startup rather than a silent fall
+back to edge.
 
 ### VRAM sizing
 
@@ -634,11 +596,11 @@ reserve, and prints all four numbers at startup:
 VRAM: 16376 MB total, 15620 MB free, reserving 256 MB (display attached) -> 15364 MB usable
 ```
 
-`free` is already net of the driver's own reserved region and of every other
-process, so the reserve covers only what can appear *after* MXBM allocates:
-another GPU client starting, allocator overhead, context growth. That is a
-constant, not a share of the card — 256 MB when a display is attached (queried,
-not assumed), 64 MB headless.
+`free` is already net of the driver's own reserved region and of every other process, so
+the reserve covers only what can appear *after* MXBM allocates: another GPU client
+starting, allocator overhead, context growth. It is a constant, not a share of the card —
+256 MB with a display attached, 64 MB headless. Whether one is attached is queried at
+startup.
 
 `--keepfree MB` replaces that reserve outright. `--keepfree 0` takes everything
 the driver reports free; a large value hands memory back to the desktop. It is
@@ -679,34 +641,30 @@ wrong card is worse than one that refuses to start.
 
 **Indices are in PCI order**, which is what makes `--devices 1` and `--pl 240,*,260`
 refer to the same physical card. CUDA's own enumeration defaults to fastest-first and
-NVML's is by bus id, so the two disagree on any rig whose cards are not identical;
-sorting by PCI address is the only key all three agree on.
+NVML's is by bus id, so PCI address is the only key all three agree on.
 
 **Two ways to name a card that are not its index.** `--devices NVIDIA` (or `AMD`,
 `INTEL`, `APPLE`) selects every card from that vendor. `--devicesbypcie` reads
 `--devices` as PCI addresses instead — `--devices 1:0,41:0 --devicesbypcie` — in
 whichever form your tooling prints: `1:0`, `01:00` and `0000:01:00.0` all name the
-same card. Addresses are worth the extra typing on a rig you do not physically
-watch: indices renumber when a card drops off the bus, so yesterday's
-`--pl 240,*,200` lands on different cards than it did today, while an address
-still means one slot. An address or vendor that matches nothing is an error, the
-same way a missing index is.
+same card. Addresses are worth the extra typing on a rig you do not physically watch: indices
+renumber when a card drops off the bus, while an address still means one slot. An
+address or vendor that matches nothing is an error, the same way a missing index is.
 
 **A mixed rig is one process.** The last column of `--list-devices` is the backend that
 card will actually run on: CUDA where the card supports it (compute capability 7.5 or
-newer, with room for the full search), else OpenCL, and `not used` with the reason where neither can
-drive it. The three device lists — CUDA's, OpenCL's and NVML's — are joined on PCI bus
-id, so an old card beside a new one mines on the portable path in the same process, the
-same log and the same statistics block. Where that join is ambiguous — an OpenCL driver
-that reports no PCI address, two devices claiming one bus, a name that does not match —
-MXBM says so and declines the match rather than guessing, because a wrong guess would
-aim `--pl` at the wrong card.
+newer, with room for the full search), else OpenCL, and `not used` with the reason where
+neither can drive it. The three device lists — CUDA's, OpenCL's and NVML's — are joined
+on PCI bus id, so an old card beside a new one mines on the portable path in the same
+process, log and statistics block. Where that join is ambiguous — an OpenCL driver
+reporting no PCI address, two devices claiming one bus, a name that does not match —
+MXBM declines the match rather than guessing, since a wrong guess would aim `--pl` at
+the wrong card.
 
-**Several GPUs mine at once.** Each selected card gets its own solver, its own worker
-thread and its own **nonce lane**: card *n* of *N* walks nonces *n, n+N, n+2N, …* off the
-pool's prefix, so no two cards ever try the same nonce. That matters because the failure
-is silent — two cards duplicating each other's work would each look perfectly healthy
-while the rig did half of what it was paid for.
+**Several GPUs mine at once.** Each selected card gets its own solver, worker thread and
+**nonce lane**: card *n* of *N* walks nonces *n, n+N, n+2N, …* off the pool's prefix, so
+no two cards ever try the same nonce. The failure it prevents is silent — two cards
+duplicating each other's work each look perfectly healthy.
 
 A card that fails to initialise is reported and skipped rather than taking the rig down;
 the others keep mining. **Each card gets its own row** in the statistics block and its own
@@ -723,31 +681,31 @@ Total             112.40 110.20   56.8   34/1/0  12.8k    0.205    548
 
 What the Total row does and does not add up is deliberate:
 
-- **Speed, iterations, share counts and power are summed.** Watts add, and the rig's
-  draw is what sizes a power supply and sets the electricity bill. If any card's power
-  cannot be read the wattage is blank rather than partial — understating a rig's draw is
-  the direction that trips a breaker.
-- **Efficiency on the Total is total speed over total watts**, the rig's real sol/s/W,
-  not the average of the per-card ratios.
+- **Speed, iterations, share counts and power are summed.** If any card's power cannot
+  be read the wattage is blank rather than partial — understating a rig's draw is the
+  direction that trips a breaker.
+- **Efficiency on the Total is total speed over total watts**, not the average of the
+  per-card ratios.
 - **Clocks, temperature and fan are left blank.** A rig has no single core clock, and an
   averaged temperature is a figure no card measured.
 - **The pool column appears only on the Total.** The pool credits shares without saying
-  which GPU found them, so a per-card share of that rate would be invented. Per-card
-  A/S/R comes from matching each result to the card that submitted it, which is
-  best-effort: Beam's results carry no submit id, so heavy overlap between cards can
-  mispair them. The rig totals never depend on that matching.
+  which GPU found them. Per-card A/S/R comes from matching each result to the card that
+  submitted it, which is best-effort — Beam's results carry no submit id, so heavy
+  overlap between cards can mispair them. The rig totals never depend on that matching.
 
-> **Multi-GPU has never run on a multi-GPU machine.** It is built and tested — four
-> concurrent engines, disjoint nonces, verified against a deliberately broken lane
-> assignment — but the development box has one card. If you run it on several, a report
-> either way is the single most useful thing you can send us.
+> **Verified on a two-card rig**: 21 minutes with both cards in one process, 42 shares
+> found and 42 accepted, no stales or rejects, and the pool-side rate converging onto the
+> miner's own total ([the run](performance.md#the-multi-gpu-path-itself)). Both cards
+> chose CUDA, so two *different* backends in one process is still unexercised, as is the
+> skip path on a card no backend can drive. Reports from rigs with more cards, or mixed
+> ones, are welcome.
 
 ### Watchdog
 
-A crashed or hung card is the one failure a rig cannot notice by itself: the process is
-alive, the pool connection is up, the console keeps printing, and one card's share of the
-hashrate has quietly gone missing. On a single GPU the speed drops to zero and someone
-looks; on eight it is a 12 % dip that reads like variance for a week.
+A crashed or hung card is hard to spot from outside: the process is alive, the pool
+connection is up, the console keeps printing, and one card's share of the hashrate has
+quietly gone missing. On eight cards that is a 12 % dip, which reads like variance for a
+week.
 
 ```sh
 mxbm ... --watchdog              # exit(42) when a card hangs; the default action
@@ -755,22 +713,19 @@ mxbm ... --watchdog off          # report it, keep mining on the others
 mxbm ... --watchdog script --watchdogscript /usr/local/bin/reset-gpu.sh
 ```
 
-What it watches is each device's **count of completed solves**, not its hashrate. A rate
-cannot tell "hung" from "the 60-second window has not filled yet", and a card that finds
-no candidates for a minute is unlucky rather than crashed; a counter that stops advancing
-is unambiguous. A device is called hung after **90 seconds** without completing one.
+What it watches is each device's **count of completed solves**, not its hashrate: a rate
+cannot tell "hung" from "the 60-second window has not filled yet". A device is called
+hung after **90 seconds** without completing a solve.
 
 **Idle is not hung.** The clock only runs while a job is present, so a rig waiting on its
-first job — or one whose pool has dropped — is never mistaken for a crashed one. That
-matters most under the default action: a watchdog that cannot tell those apart restarts
-healthy rigs exactly when a restart helps least. A card that recovers on its own is
-reported again if it stalls later.
+first job — or one whose pool has dropped — is never mistaken for a crashed one. A card
+that recovers on its own is reported again if it stalls later.
 
 `exit` is the default because it is the only action that actually recovers an NVIDIA
 card: a wedged CUDA context generally cannot be torn down by the process that wedged it,
-so the fix is to exit with a code a supervisor (systemd, a rig manager, a shell loop)
-can act on. **42** is the conventional one, and what lolMiner uses. The script action
-passes the device index as its first argument, so one script can serve a whole rig.
+so the fix is to exit with a code a supervisor (systemd, a rig manager, a shell loop) can
+act on. **42** is the conventional code. The script action passes the device index as its
+first argument, so one script can serve a whole rig.
 
 ### Clocks and fans
 
@@ -803,18 +758,15 @@ band the driver reports for your card and says so when it clamps. On the referen
 > timing with link-level retries rather than with wrong data.
 
 **The memory offset is in MHz of transfer rate, which is twice the memory clock** — so
-`--moff 400` asks for +200 MHz of clock. NVML's `nvmlDeviceSetMemClkVfOffset` follows
-`nvidia-settings`' `GPUMemoryTransferRateOffset` convention here; measured under load,
-where the clock landed on `base + offset/2` for every offset tried. MXBM reports the
-offset in the units you typed and the resulting clock in the statistics block, so the two
-together are unambiguous whatever your driver does with them. See
+`--moff 400` asks for +200 MHz of clock, following `nvidia-settings`'
+`GPUMemoryTransferRateOffset` convention. MXBM reports the offset in the units you typed
+and the resulting clock in the statistics block, so the two together are unambiguous. See
 [overclocking.md](overclocking.md), which also has the reason to reach for this knob
 before `--mclk`.
 
 Restore order is the reverse of apply order: the fan goes back to the driver's curve
-first, so the card is cooling itself normally while the clocks come down, and the power
-limit is put back last, so nothing is ever unlocked into a clock the old limit would not
-have allowed.
+first, so the card cools normally while the clocks come down, and the power limit is put
+back last, so nothing is unlocked into a clock the old limit would not have allowed.
 
 ### Speed vs pool rate
 
@@ -828,12 +780,9 @@ rate** (`Pool_Speed_Session`, the `Pool` column) is inferred from what the pool
 credited you: the summed target difficulty of your accepted shares, divided by
 session seconds.
 
-They are in the same units and **agree in expectation**. A solution clears
-difficulty `d` with probability `1/d`, so at `S` sol/s you land `S/d` shares per
-second, each crediting `d` units of difficulty — `S` units per second, either
-way. The pool figure is your own speed seen through the pool's ledger.
-
-Four things make them differ, and only the first is noise:
+They are in the same units and **agree in expectation** — the pool figure is your own
+speed seen through the pool's ledger. Four things make them differ, and only the first
+is noise:
 
 1. **Statistics.** The pool figure is an estimate from share arrivals, and its
    relative error is roughly `1/√N` over `N` accepted shares: ±32 % at 10
@@ -848,22 +797,19 @@ Four things make them differ, and only the first is noise:
    toward the true rate, and never forgets a bad patch. There is no 15 s or
    60 s pool rate, and there cannot usefully be one.
 
-**Which to use.** For anything about the hardware — tuning, overclocking,
-comparing against another miner — use **speed**, and specifically the 60 s
-window: it is the only one with a short window and low variance. For "am I
-being paid for what I produce", use **pool rate**, over hours. The pool's own
-website computes its hashrate estimate the same way, so that is the
-apples-to-apples comparison; your local speed against the pool's display is not.
+**Which to use.** For anything about the hardware — tuning, overclocking, comparing
+against another miner — use **speed**, and the 60 s window specifically. For "am I being
+paid for what I produce", use **pool rate**, over hours; the pool's own website computes
+its estimate the same way, so that is the apples-to-apples comparison, and your local
+speed against the pool's display is not.
 
-The **ratio** is the real diagnostic. After a few hundred accepted shares it
-should sit near 99 %. Persistently below that means shares are being lost —
-check `Stale`, `Rejected` and `Reconnects`.
+The **ratio** is the real diagnostic. After a few hundred accepted shares it should sit
+near 99 %; persistently below that means shares are being lost — check `Stale`,
+`Rejected` and `Reconnects`.
 
-Quote the **mean and spread**, never a peak. `Session_Stats.Speed_60s` reports
-`Mean`, `Stddev`, `Min` and `Max` over the whole session for exactly this
-reason: the maximum of a few hundred noisy samples is a property of the sample
-count, not of the miner. [docs/performance.md](performance.md) works through a
-live session where the 15 s peak was 61.5 sol/s and the honest figure 56.1.
+Quote the **mean and spread, never a peak** — the maximum of a few hundred noisy samples
+is a property of the sample count, not of the miner. `Session_Stats.Speed_60s` reports
+`Mean`, `Stddev`, `Min` and `Max` over the whole session for exactly that reason.
 
 ## Developer fee
 
@@ -873,7 +819,7 @@ about 14.4 minutes a day. Only time you are actually mining counts toward it.
 It announces itself at startup and at each round:
 
 ```
-Dev fee: 1% - one 36s round per 60min of mining, to beam.herominers.com:1130
+Dev fee: 1% - one 36s round per 60min of mining
 Dev fee round started (36s) - mining to the developer's address
 Dev fee round finished (36s) - back on your pool
 ```

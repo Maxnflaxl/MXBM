@@ -119,12 +119,11 @@ void share_result(int code, const std::string& description, long long ms = -1);
 void disconnected();
 
 // -- developer fee ----------------------------------------------------------
-// The fee is announced, not concealed: one disclosure line at startup stating
-// rate, cadence and destination, and a line at each end of every round. See
-// miner/devfee.h for why an open-source miner gains nothing from hiding it.
+// One disclosure line at startup stating the rate and cadence, and a line at
+// each end of every round.
 
 void devfee_notice(double rate, std::chrono::seconds slice,
-                   std::chrono::seconds cycle, const std::string& pool);
+                   std::chrono::seconds cycle);
 
 void devfee_start(std::chrono::seconds slice);
 void devfee_end(std::chrono::seconds slice);

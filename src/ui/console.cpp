@@ -373,7 +373,7 @@ void disconnected() {
 }
 
 void devfee_notice(double rate, std::chrono::seconds slice,
-                   std::chrono::seconds cycle, const std::string& pool) {
+                   std::chrono::seconds cycle) {
     // The cadence reads in minutes for the hour-scale cycle that ships, but
     // falls back to seconds rather than rounding a compressed test cycle down
     // to "per 0min".
@@ -382,10 +382,10 @@ void devfee_notice(double rate, std::chrono::seconds slice,
     if (secs >= 60 && secs % 60 == 0) std::snprintf(cadence, sizeof cadence, "%lldmin", secs / 60);
     else                              std::snprintf(cadence, sizeof cadence, "%llds", secs);
 
-    char buf[192];
+    char buf[128];
     std::snprintf(buf, sizeof buf,
-        "Dev fee: %.4g%% - one %llds round per %s of mining, to %s",
-        rate * 100.0, (long long)slice.count(), cadence, pool.c_str());
+        "Dev fee: %.4g%% - one %llds round per %s of mining",
+        rate * 100.0, (long long)slice.count(), cadence);
     print_line(buf);
 }
 

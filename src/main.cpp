@@ -1395,8 +1395,7 @@ int main(int argc, char** argv) {
         pool.user = miner::devfee_login(pool.user, opts.pools[0].user, sched.rate);
 
         stats.set_devfee_rate(sched.rate);
-        ui::console::devfee_notice(sched.rate, sched.slice(), sched.cycle,
-                                   pool.host + ":" + std::to_string(pool.port));
+        ui::console::devfee_notice(sched.rate, sched.slice(), sched.cycle);
         devfee = std::make_unique<miner::DevFee>(router, stats, pool, sched);
         devfee->on_slice_begin = [](std::chrono::seconds d) { ui::console::devfee_start(d); };
         devfee->on_slice_end   = [](std::chrono::seconds d) { ui::console::devfee_end(d); };
