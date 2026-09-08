@@ -30,7 +30,8 @@ busy=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader | wc -l)
 [ "$busy" -eq 0 ] || { echo "ABORT: $busy co-tenant process(es) on the card"; exit 1; }
 
 cleanup() { echo "resetting clocks"; nvidia-smi -rgc >/dev/null 2>&1; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 echo "clock_mhz,pass,ms_per_solve,sol_per_s,solves,sm_mhz_observed,mem_mhz_observed" > "$OUT"
 

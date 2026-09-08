@@ -24,7 +24,8 @@ LIMITS=${LIMITS:-"240 255 270 285"}
 DEFAULT=$(nvidia-smi --query-gpu=power.default_limit --format=csv,noheader,nounits | cut -d. -f1)
 echo "default power limit: ${DEFAULT} W"
 restore() { echo "restoring ${DEFAULT} W"; sudo nvidia-smi -pl "$DEFAULT" >/dev/null 2>&1; }
-trap restore EXIT INT TERM
+trap restore EXIT
+trap 'exit 130' INT TERM
 
 for pl in $LIMITS; do
     echo "=================== power limit ${pl} W ==================="

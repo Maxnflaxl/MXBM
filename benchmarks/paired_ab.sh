@@ -56,8 +56,8 @@ cmp -s "$BIN_A" "$BIN_B" && echo "NOTE: the arms are byte-identical -- this is a
 if [ -n "$CAP" ]; then
     [ "$(id -u)" -eq 0 ] || { echo "CAP needs root (nvidia-smi -pl)"; exit 1; }
     nvidia-smi -pl "$CAP" >/dev/null || { echo "ABORT: -pl $CAP rejected"; exit 1; }
-    trap 'echo "restoring ${PL_DEFAULT} W"; nvidia-smi -pl "$PL_DEFAULT" >/dev/null 2>&1' \
-         EXIT INT TERM
+    trap 'echo "restoring ${PL_DEFAULT} W"; nvidia-smi -pl "$PL_DEFAULT" >/dev/null 2>&1' EXIT
+    trap 'exit 130' INT TERM
     sleep 3
     echo "cap pinned at ${CAP} W (restored to ${PL_DEFAULT} W on exit)"
 fi

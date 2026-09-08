@@ -105,7 +105,8 @@ restore() {
         sudo -n nvidia-smi -pl "$DEFAULT" >/dev/null 2>&1
     fi
 }
-trap restore EXIT INT TERM
+trap restore EXIT
+trap 'exit 130' INT TERM
 
 # One run: sample NVML underneath, return "sol/s watts sm_clock mem_clock temp".
 run_one() {   # $1 = miner (mxbm|lol), $2 = label

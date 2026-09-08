@@ -135,7 +135,8 @@ restore() {
         [ "$PL" != "stock" ] && sudo -n nvidia-smi -pl "$DEFAULT" >/dev/null 2>&1
     fi
 }
-trap restore EXIT INT TERM
+trap restore EXIT
+trap 'exit 130' INT TERM
 
 if [ "$PL" != "stock" ]; then
     sudo -n nvidia-smi -pl "$PL" >/dev/null 2>&1 || { echo "could not set -pl $PL"; exit 1; }
