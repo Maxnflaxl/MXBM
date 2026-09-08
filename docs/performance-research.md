@@ -4482,10 +4482,18 @@ fusion) are untouched by this closure. Corollary applied elsewhere the same day:
 `MXBM_PAIR_W0` loss above, and the floor pricing of every instruction-adding trade.
 
 The three encodings measured here were all count-*increasing* (145 instructions became
-193), which left a count-neutral move to the FMA pipe formally untested. That gap is
-closed by census, with no measurement needed: ptxas has already made the move, on 95.9 %
-of the population. See
-[the carry-consuming IMAD](#the-carry-consuming-imad-is-already-on-the-fma-pipe-96-percent-of-it).
+193), which left a count-neutral move to the FMA pipe formally untested. Census closed it
+for the adds — ptxas has already made that move on 95.9 % of the population, see
+[the carry-consuming IMAD](#the-carry-consuming-imad-is-already-on-the-fma-pipe-96-percent-of-it)
+— and on 2026-09-08 the rotates were measured too, in the shipping kernels rather than a
+microbench. `rotl64` as two `mul.wide.u32` by 2^b, whose OR folds into the XOR that
+follows every rotate in SipRound: round 2's SASS goes 24,566 → 1,922 `SHF`, +22,336
+`IMAD`, +2,924 `LOP3` where the OR met an add instead of an XOR — ALU-pipe instructions
+**−30 %** at **+3.8 %** total count. KAT 3/3 × 15, eight 30 s arms: **round 1 +5.5 %,
+round 2 +1.6 %**, ranges non-overlapping. Taking 19,000 instructions off a pipe reported
+70–75 % busy bought nothing; the loss tracks the count and the wide multiply's latency.
+The pipe-utilisation figure is not the binding constraint at 8 warps per scheduler; the
+issue slot and the dependency chain are.
 
 </details>
 
