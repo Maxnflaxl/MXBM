@@ -222,6 +222,8 @@ const Kernel kContract[] = {
     { "entry_scatter",         false, {0,0,0,0,0,0}, "13entry_scatterE",  256,  40,     0,  0, 6,
       "ON A CLIFF: 40 registers is EXACTLY the limit for 6 blocks/SM. Measured at 6 "
       "blocks/SM standalone (docs/performance-research.md:951); the pass costs 2.77 ms" },
+    { "entry_beside",          false, {0,0,0,0,0,0}, "12entry_besideE",   128,  36,     0,  0, 12,
+      "The entry pass beside rounds 3 and 4 on its own stream, one 128-thread block per SM" },
     { "r1 (LM_SEED, FCAP 288)", true, {7,7,1,3,1,2,0,0,0,0,1}, nullptr,             256,  48, 19016,  0, 5,
       "ON TWO CLIFFS: 48 registers of 48 AND 19016 B of 19456. r1's fifth block is "
       "worth 0.15 ms (docs/performance-research.md:1719)" },

@@ -35,6 +35,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [Measured results, 2026-09-08](#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay) | **The r3 → r4 record is 56 B, +1.7 % at stock** — the dead sixth work word goes and the replay hint moves into word 4's free top byte and the meta word; the 8 B-off slots take one `ST.64` and three `ST.128` chosen by slot parity, so transactions stay at four per element (seven scalar stores measured +23 % on the round). r3 8.54 → 8.23, r4 6.43 → 6.20, KAT 3/3 × 15 both arms, drops 0. **Under a 140 W cap the rounds gain 1.5 ms and the solve 0.1**: entry/r1/r2 give the time back as clock — a capped solve is energy-bound, so round marginals under a cap overstate and the ×6.8 write-sector multiplier is a round figure, not a solve one |
 | [Measured results, 2026-09-08](#the-gi-allocator-goes-where-nothing-indexes-a-gi-09) | **The gi allocator is not issued on the replayed rungs, +0.9 %** — its only reader left was the walk's tiebreak, which now orders by the parent record's slot on both the round and its replay; round 1 4.88 → 4.73 ms (issue-bound: the aggregated atomic's ballot/popc/shuffle were issue slots), round 2 8.06 → 8.00; KAT 3/3 × 15, drops 0. **The entry → r1 word-0 checkpoint in a 16 B record is a null**: r1 −0.37 ms, the hosting round 4 +0.53 from 0.27 GB more scattered writes, net −0.6 % |
 | [Measured results, 2026-09-08](#turings-shared-memory-budget-and-the-per-card-staging-cap) | **Turing's 64 KB of shared memory caps every round at two resident blocks per SM, and a per-card staging cap of 280 lifts rounds 1, 2 and 4 to three** — the sm_75 cubin read with `cuobjdump`: at kFCap 320 every round kernel sits at 22.3–26.9 KB, over the 21,845 B a third block needs, and ptxas fills the registers to 111–128 because nothing better is reachable; at 280, rounds 2 and 4 fall to 20.7–21.4 KB and ptxas re-fits them at 80 registers, round 1 (already 288) fits, round 3 (leaf staging) does not at any cap the population allows — **it takes its 16-bit word 6 in a u16 plane (the NARROW6 flag, now per card) at a cap of 272**, 20.7–21.4 KB and three blocks on sm_75, worth **−8.3 % of round 3** where the round is capped at two (pad emulation on the reference card, ABBA non-overlapping); the trade priced on the reference card with `MXBM_SMEM_PAD`: two blocks per SM instead of three or four costs **+16 % on every round** (28.7 → 33.3 ms), so the lever is worth up to ~that on a Turing card; the caps are a per-card choice because on the reference card, at unchanged occupancy, they measure **+0.5 %** (round 4 +0.08 ms, round 3 +0.05); gated 3/3 × 15 goldens in both arms, 0 drops over 8,364 solves. **The per-stage table shipped with it** (`MXBM_ROUND_STATS`, and always in `--report`) — device timestamps at every stage boundary, free at this rig's resolution, r2 7.93 / r3 8.51 ms reproducing the census to the hundredth |
+| [Measured results, 2026-09-08](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers) | **The next solve's entry pass runs beside rounds 3 and 4 on a stream at the device's greatest priority, +2.0 % at stock** — the block scheduler dispatches its blocks into the warp and register room round 3's shared-memory cap leaves idle, displacing no round block (the two closures of the overlap family were dispatch order and displacement, not SM room). The co-runner's cost to round 3 goes as the square of its issue duty (compute-only: +2.0 ms packed into 3 ms, +0.65 spread over 8, 0 over 16), so the pass ships throttled: one dependent SipHash chain per lane, four warps per SM, 1 µs of sleep per element. Store hints move ≤ 0.1 ms; `evict_first` on every store costs 4.7. Loses under every cap (energy-bound; 140 W 51.7 vs 50.5 standalone), crossover at the existing 220 W gate. Paired ABBA 27.59 → 27.05 ms |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -184,15 +185,15 @@ records NVML telemetry per run. The telemetry is what makes a failure diagnosabl
 original measurement recorded a number and nothing else, so when it failed to reproduce
 there was nothing to diff.
 
-Reference values (RTX 4070 Ti SUPER, driver 610.43.03, re-measured 2026-09-08, six 120 s
+Reference values (RTX 4070 Ti SUPER, driver 610.43.03, re-measured 2026-09-09, six 120 s
 runs, **compute GPU headless**):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **27.80** (spread 0.0 %) | a build change is real past ±0.5 % |
-| sol/s | **72.30** | derived; quoted because the pin cites it |
+| ms/solve median | **27.00** (spread 0.0 %) | a build change is real past ±0.5 % |
+| sol/s | **74.40** | derived; quoted because the pin cites it |
 | SM / mem clock | 2610 / 10251 MHz | must match, or it is a different V/f point |
-| board draw | **276.8 W** | context, not a gate — 265–281 W across ten sessions; near the limit `sw_power_cap` is intermittently active (1–10 % of samples) at identical clocks and work |
+| board draw | **276.4 W** | context, not a gate — 265–281 W across ten sessions; near the limit `sw_power_cap` is intermittently active (1–10 % of samples) at identical clocks and work |
 | `clocks_event_reasons` | none, or `sw_power_cap` at any fraction | any **other** flag voids the run. The fraction is not predictive and is not a gate |
 | display on the compute GPU | **no** | a compositor costs **0.20 ms and ~6 W** |
 
@@ -216,6 +217,7 @@ re-hashes the commit and the citation dangles, which has already happened here.
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
+| 2026-09-09 | **27.00** | 276.4 W | the next solve's entry pass beside rounds 3 and 4 on a priority stream ([ledger](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers)) — **−0.80 ms, 72.30 → 74.40 sol/s**, against −0.55 on the 60 s ABBA and +3.0 % on the pin's solves (4314 → 4445 per 120 s). Six runs at 0.0 % spread, p95 27.0 |
 | 2026-09-08 | **27.80** | 276.8 W | the gi allocator not issued on the replayed rungs ([ledger](#the-gi-allocator-goes-where-nothing-indexes-a-gi-09)) — **−0.20 ms, 71.90 → 72.30 sol/s**, against −0.25 on the rounds' timers and +0.9 % on solves ABBA. Six runs at 0.0 % spread |
 | 2026-09-08 | **28.00** | 280.9 W | the round-3 record at 56 B ([ledger](#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay)) — **−0.60 ms, 70.30 → 71.90 sol/s**, against −0.55 on the rounds' timers and +1.7 % on solves ABBA. Six runs at 0.0 % spread; the draw is up 13 W and the board limit is touched in 2–10 % of samples |
 | 2026-09-08 | **28.60** | 268.1 W | recovery's replays by chain table, candidates in lockstep ([ledger](#the-replays-were-warp-serialised-on-their-hits-not-latency-bound)) — **−0.20 ms, 69.90 → 70.30 sol/s**, against −0.16 measured on the stage's own timer and +0.4 % on solves ABBA. Six runs at 0.0 % spread |
@@ -360,7 +362,10 @@ the overflow path never ran and the arm measured nothing.
 after a `--benchmark`, from device timestamps at every stage boundary; the same table is
 always in a `--report`, so a contributed card names the stage it stretches. Off, the
 timestamps are not recorded; on, they cost nothing this rig can resolve (28.7 ms both
-arms). `MXBM_SMEM_PAD=<bytes>` adds that much unused dynamic shared memory to every
+arms), but a timing event is also a dispatch fence at its boundary, so the instrument can
+hide a stream-ordering tail the plain run has ([the entry pass beside rounds 3 and
+4](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers)) —
+check a change's solves/s with it off as well. `MXBM_SMEM_PAD=<bytes>` adds that much unused dynamic shared memory to every
 round launch: resident blocks per SM fall and nothing else moves, so it prices occupancy
 on this card at another card's shared-memory budget (12288 reproduces Turing's two
 blocks per SM here; above 48 KB per block the launch fails). `MXBM_FCAP_SMALL=0|1`
@@ -401,7 +406,9 @@ real entry launched separately). `--pipe2` runs the two-solve software pipeline 
 residency. On the shipped miner, `MXBM_NO_SPEC=1` disables speculative entry
 co-scheduling for A/Bs — on **either** backend since the OpenCL port
 (2026-08-02), where `MXBM_CO_STRIDE=N` also sweeps the displacement ratio
-(default 3; measured null across 2–6 on Ada, kept as a per-card lever). `-DMXBM_MB_SEED=N` / `-DMXBM_MB_RD2=N` force a register budget
+(default 3; measured null across 2–6 on Ada, kept as a per-card lever); on CUDA
+`MXBM_SPEC_COBLOCKS=1` selects the co-blocks form inside round 4's launch instead of
+the default [priority-stream pass beside rounds 3 and 4](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers). `-DMXBM_MB_SEED=N` / `-DMXBM_MB_RD2=N` force a register budget
 (`__launch_bounds__` minBlocks) on r1 / r2 — measured null, shared memory caps first.
 `-DMXBM_PAIR128=0` restores r2's two scalar pair-record loads
 ([shipped on 2026-07-31](#two-below-the-floor-levers-clear-noise-on-cuda-r2s-pair-record-in-one-ld128-and-the-terminal-round-joins-the-perfect-table-022-ms)).
@@ -8128,7 +8135,9 @@ carries the per-stage table that says how much of it arrived.
 **The per-stage table** (`MXBM_ROUND_STATS=1` on `--benchmark`; always in `--report`)
 records a device timestamp at every stage boundary and reports medians. It costs nothing
 this rig can resolve (28.7 ms in both arms, 30 s each), and its first reading reproduced
-the census: r2 7.93 / r3 8.51 ms against the profiler's 7.94 / 8.51.
+the census: r2 7.93 / r3 8.51 ms against the profiler's 7.94 / 8.51. Its timing events
+are also dispatch fences at each boundary, which a plain solve does not have
+([the entry pass beside rounds 3 and 4](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers)).
 
 ### The terminal round's time was its block count, not its bytes
 
@@ -8321,6 +8330,108 @@ says; the entry record has no slack for it.
 
 </details>
 
+### The entry pass beside rounds 3 and 4, on a stream the block scheduler prefers: +2.0 %
+
+<details>
+<summary>Details</summary>
+
+The overlap family was closed on two mechanisms. A second stream never overlaps, because
+a round enqueues 131k blocks against ~200 resident and the second kernel's blocks are
+dispatched only in the last wave's tail; and co-blocks inside the round's own launch
+displace a round block one for one, which round 4 could spare and round 3 could not
+(hosting there measured worse than sequential). Neither mechanism was about the SM's
+resources: during round 3 every SM has 24 warp slots, ~20k registers and the whole L1
+idle, because shared memory caps the round at three blocks. **A stream created with the
+highest priority puts the entry's blocks into that room straight away** — the CUDA block
+scheduler dispatches a higher-priority kernel's pending blocks ahead of the lower one's,
+into any SM with space — and, launched after round 2, they run beside rounds 3 and 4 and
+the terminal round without taking a block slot from any of them.
+
+What was measured, all at stock, per-round medians from 10 s runs (the round-3 baseline is
+8.18 ms; entry standalone 2.57; the shipping co-blocks form 27.4–27.6 ms/solve, sequential
+27.7):
+
+| form of the entry kernel beside round 3 | entry kernel | round 3 | ms/solve |
+|---|---|---|---|
+| the standalone kernel's grid (131k blocks of 256) | 2.61 | 10.79 (+2.6) | 27.8 |
+| one 256-thread block per SM, grid-strided | 2.86 | 10.70 (+2.5) | 27.7 |
+| one 128-thread block per SM, hashes made one dependent chain | 4.17 | 9.66 (+1.5) | 26.8 |
+| the same, 1 µs sleep after each element | 8.1 | 9.44 (+1.3) | **26.5–26.6** |
+| the same at 64 threads | 8.4 | 10.35 (+2.2) | 27.4 |
+| launched after round 1 instead (beside round 2) | 8–19 | r2 +1.3–2.6 | 27.7–28.4 |
+
+**A full grid at high priority is not overlap, it is a turn**: every slot a round block
+vacates goes to a pending entry block, and the round stops until the entry is through —
+its 2.6 ms land on round 3 to the digit. So did one 256-thread block per SM: eight warps
+of seven independent SipHash chains saturate the SM's ALU pipe on their own, and the
+issue scheduler is greedy — a warp that is always ready keeps issuing. What decides the
+round's loss is **how densely the co-resident warps issue**, measured with the compute
+alone (stores and atomics removed, the real pass launched separately so the pipeline
+stays right):
+
+| compute-only co-runner, 4 warps/SM | co-run | round 3 |
+|---|---|---|
+| dependent chain, no sleep | 2.98 ms | +2.00 |
+| + 0.4 µs sleep per element | 4.11 | +1.27 |
+| + 1.2 µs | 8.15 | +0.65 |
+| + 4 µs | 16.3 | +0.00 (r4 +0.28, terminal +0.11) |
+
+The same work costs round 3 three times less spread over 8 ms than packed into 3, and
+nothing at all spread over 16 — the loss goes as the square of the co-runner's duty, the
+shape of queueing at a shared pipe rather than of a conserved budget. Round 3's own
+issue is 19 % busy and its ALU pipe 18 %; a co-runner at low duty fits in the gaps, one at
+high duty makes round 3's latency-bound chains wait. So the shipped form throttles
+itself: the seven hashes of an element are threaded into one dependent chain through a
+runtime-zero mask (so a warp issues one instruction per pipe latency instead of seven
+deep), four warps per SM, one microsecond of `__nanosleep` per element. Longer sleeps
+lower round 3's loss further but spill the pass past round 4 into the next solve's
+round 1, which then waits.
+
+**What the memory side costs, and what it does not.** With the compute-only co-runner at
+the shipped duty costing 0.65, the real pass costs 1.3: the other half is its 33.5 M
+atomics and 8 B stores. Two things were tried against it. Store cache hints —
+`evict_last` on every store, `evict_last` while a sector or a 128 B line fills and
+`evict_first` on the record that completes it — move it by ≤ 0.1 ms and one form ships
+(line-granular release), while `evict_first` on every store costs 4.7 ms: the write
+frontier flushed sector by sector under round 3's stream is the disaster case, and the
+default policy already avoids most of it. Giving the entry kernel the rounds' shared
+carveout preference changes nothing. The remaining ~0.6 ms is the entry's scatter
+arriving at an L2 crossbar that round 3 has at 62 %.
+
+**Under a cap it loses, like every hosting form**: at 140 W round 3 takes the whole pass
+(10.6 → 15.45 ms) and the solve reads 51.7 against 50.5 with the entry standalone; the
+solve is energy-bound there and the hosted joules come back as clock. The crossover is
+where the co-blocks' was: 200 W −1.3 %, 220 W +2.4 %, 240 W +3.5 %, 255 W +3.9 % against
+standalone, so the existing 220 W gate stands and the form is stock-band only.
+
+**The event between round 2 and the launch must keep its timestamp.** Recorded with
+`cudaEventDisableTiming`, the same plumbing runs a two-mode solve: half the solves at 26.5
+ms and half at 30.0, mean 28.6, verified count untouched. Round 3's grid is already queued
+behind round 2 when round 2 ends, and in about half the solves it wins the SMs before the
+priority stream's 66 blocks are eligible; the pass then runs where a plain second stream
+would have put it, after the round, and the next solve waits ~3.5 ms for it. A
+timing-enabled event at that boundary is a fence — the front end takes the timestamp
+before it submits round 3 — and the priority blocks dispatch first every time (224 solves
+in 6 s with 2 over 29 ms, against 210 with ~95). A timing event at any other boundary, a
+timing-less event at this one, or a host-side pause change nothing. Stage timing
+(`MXBM_ROUND_STATS=1`) records timing events at every boundary, which is why the tail is
+invisible under the instrument that would have shown it.
+
+**Shipped**: `entry_beside`, one 128-thread block per SM on a `cudaStreamNonBlocking`
+stream at the device's greatest priority, launched after round 2 behind a timing-enabled
+event, waited on at the start of the next solve; `MXBM_SPEC_COBLOCKS=1` keeps the co-blocks form for
+A/Bs. Verified solutions per solve hold at 2.02 with drops 0 throughout; the KAT gate
+does not exercise speculation (its inputs are distinct jobs) and the verify count is the
+positive control, as for the co-blocks. Paired ABBA at stock, both orderings, 16 × 60 s:
+**27.59 → 27.05 ms, −2.02 % on solves (2174.5 → 2218.4 per 60 s, sd 0.02 / 0.13 %, t = −42), against a 0.04 % null floor**; the priority-stream arm ran the card 18 MHz lower for the same limit, so the paired figure is a floor on the kernel-time gain.
+
+*Scope: sm_89, driver 610.43.03, the (16,1) rung. The block-priority mechanism needs an
+SM with room beside the round's resident blocks — on a card whose rounds are
+register-bound rather than shared-bound there is no room and the entry blocks would wait
+for a slot, which is the co-blocks case again.*
+
+</details>
+
 ## Established limits
 <details>
 <summary>Details</summary>
@@ -8503,7 +8614,7 @@ computed at geometry (16,1), and two at (15,2) need 13.8 GiB — they fit.
 | coalescing the emit | max 1.9–2.2× against a 3× traffic cost ([two-level](#two-level-bucketing)) |
 | the two atomics | both load-bearing; removing either is slower |
 | `apply_mix`, back-refs, rebuild | 2.2 ms combined on OpenCL and less on CUDA — nothing left to win |
-| phase overlap | **closed by three mechanisms and HARVESTED 2026-07-31.** Grid depth (streams) and warp slots (same-warp hosting) were null; the third — [co-blocks](#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), separate interleaved blocks in one launch — works, and its whole yield is **~0.5 ms**: r4's exploitable idle, whatever co-work is offered (entry, or [a whole round of the next solve](#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms)). Shipped as [speculative entry](#speculative-entry-co-scheduling-ships-in-the-miner-045-ms); the 1.71× roofline stays out of reach |
+| phase overlap | **REOPENED 2026-09-08 by a fourth mechanism**: a stream at the device's greatest priority puts the entry's blocks into the warp and register room round 3's shared-memory cap leaves idle, without displacing a round block — [the entry pass beside rounds 3 and 4](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers), +2.0 % at stock, gated off under caps like the co-blocks. Before it: closed by three mechanisms and harvested 2026-07-31. Grid depth (plain streams) and warp slots (same-warp hosting) were null; the third — [co-blocks](#co-blocks-the-third-overlap-mechanism-works--and-it-is-worth-04-ms-not-14), separate interleaved blocks in one launch — works, and its whole yield is **~0.5 ms**: r4's exploitable idle, whatever co-work is offered (entry, or [a whole round of the next solve](#fused_pair-two-solves-rounds-in-one-launch--the-familys-ceiling-is-05-ms)). Shipped as [speculative entry](#speculative-entry-co-scheduling-ships-in-the-miner-045-ms); the 1.71× roofline stays out of reach |
 | match organization | **closed 2026-07-31, by two probes, prototype unbuilt.** The plan was fine-grained buckets matched in registers (chains, rescans, staging and barriers deleted). P2: [thin records lose 4.5× scattering into 2^21 buckets](#the-solver-reorganization-probes-the-cycle-deficit-is-not-bookkeeping) (the L2 bucket-tail cliff starts at bb = 18), so fine buckets cannot live in the global layout. P3: a counting-sort/register-pair r1 built in shared instead emits the exact pair multiset and is **1.75× slower** — its carve prices r1's cycles as derive ~2.5 + emit arithmetic ~1.8 + **all bookkeeping ~0.6** of 4.9 ms. There is no 2× in the match, for any organization of it; any rewrite's ceiling is ~0.6 ms/round |
 
 **Leads.** The CUDA backend is ~6 % past the target and the OpenCL path 1.07× short

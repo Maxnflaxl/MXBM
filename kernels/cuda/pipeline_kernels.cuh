@@ -21,6 +21,58 @@ void entry_scatter(const uint64_t* __restrict__ pp4, uint32_t begin, uint32_t co
     entry_body(begin + g, pp4, bucket_bits, bucket_cap, counts, belem, drops, actr, atag);
 }
 
+// The same pass beside a round, on a higher-priority stream (cuda_solver.cu). A grid of
+// one 128-thread block per SM holds exactly those slots for the whole pass, in the warp
+// and register room the rounds' shared-memory limit leaves idle; a full grid would take
+// every slot a round block vacates and run the two passes in turn. What the co-resident
+// warps cost the round is set by how densely they issue: chain_mask is zero at runtime,
+// and threading (dep & chain_mask) through every nonce makes an element's seven hashes,
+// and consecutive elements, one dependent chain, so a warp issues at the pipe's latency
+// rather than seven hashes deep; the sleep after each element spreads the pass over the
+// round that follows, and the round's loss falls faster than the pass stretches.
+// Stores keep their L2 line resident until the record that completes it, then release
+// it, so the write frontier is not flushed sector by sector under the round's stream.
+constexpr uint32_t kBesideWG      = 128u;
+constexpr uint32_t kBesideSleepNs = 1000u;
+
+__global__ __launch_bounds__(kBesideWG)
+void entry_beside(const uint64_t* __restrict__ pp4, uint32_t count,
+                  uint32_t bucket_bits, uint32_t bucket_cap,
+                  uint32_t* __restrict__ counts, uint64_t* __restrict__ belem,
+                  uint32_t* __restrict__ drops, uint64_t chain_mask) {
+    const uint32_t stride = gridDim.x * blockDim.x;
+    const uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+    uint64_t keep, done;
+    asm volatile("createpolicy.fractional.L2::evict_last.b64 %0, 1.0;"  : "=l"(keep));
+    asm volatile("createpolicy.fractional.L2::evict_first.b64 %0, 1.0;" : "=l"(done));
+    uint64_t dep = 0;
+    for (uint32_t g = blockIdx.x*blockDim.x + threadIdx.x; g < count; g += stride) {
+        bh3::Elem e;
+        for (int k = 0; k < bh3::kWorkWords; ++k) {
+            e.w[k] = bh3::siphash24(pp[0], pp[1], pp[2], pp[3],
+                                    (((uint64_t)g << 3) + (uint64_t)k) ^ (dep & chain_mask));
+            dep = e.w[k];
+        }
+        uint32_t t1[1] = { g };
+        bh3::apply_mix(e, t1, 1u, 448u);
+        const uint32_t key = (uint32_t)(e.w[0] & 0xFFFFFFu);
+        const uint32_t b = key >> (24u - bucket_bits);
+#if MXBM_GCEN
+        kcen_note(key);
+#endif
+        const uint32_t pos = atomicAdd(&counts[b], 1u);
+        if (pos < bucket_cap) {
+            uint64_t* dst = belem + (size_t)b*bucket_cap + pos;
+            const uint64_t rec = ((uint64_t)g << 32) | key;
+            const uint64_t pol = ((pos & 15u) == 15u) ? done : keep;   // 16 records per 128 B line
+            asm volatile("st.global.L2::cache_hint.u64 [%0], %1, %2;"
+                         :: "l"(dst), "l"(rec), "l"(pol) : "memory");
+        } else atomicAdd(&drops[0], 1u);
+        dep ^= e.w[0];
+        __nanosleep(kBesideSleepNs);
+    }
+}
+
 // Between a producer round and its consumer: thread the pool entries onto per-bucket
 // chains. ahead must be 0xFF-memset first; spill_total is the run-long positive
 // control (a pool that never fills means the dense cap was never exceeded, and the

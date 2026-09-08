@@ -205,6 +205,13 @@ struct CudaSolver::Impl {
     cudaEvent_t ev[kStages + 1] = {};
     std::vector<float> stageMs[kStages];
     void mark(int i) { if (timing) cudaEventRecord(ev[i], 0); }
+    // The speculative entry pass runs beside rounds 3 and 4 on a higher-priority stream
+    // (entry_beside in pipeline_kernels.cuh); MXBM_SPEC_COBLOCKS=1 selects the older
+    // form, interleaved co-blocks inside round 4's launch.
+    cudaStream_t specStream = nullptr;
+    cudaEvent_t evSpecReady = nullptr, evSpecDone = nullptr;
+    bool specPending = false;           // entry(next) in flight on specStream
+    int specBlocks = 0;                 // one per SM
     uint64_t *elem[2] = {nullptr,nullptr}, *dpp = nullptr;
     uint32_t *counts[2] = {nullptr,nullptr}, *gictr=nullptr, *drops=nullptr;
 #if MXBM_GCEN
@@ -224,15 +231,14 @@ struct CudaSolver::Impl {
     DeviceInfo info;
     int device_index = 0;
 
-    // Speculative entry co-scheduling. The NEXT nonce's entry pass rides inside round
-    // 4's launch as separate interleaved blocks (COBLOCKS in fused_round.cuh), where it
-    // measures ~0.4 ms cheaper than standing alone -- round 4 is 82 % of DRAM peak and
-    // 29 % SM, and displacing a third of its blocks is measured free. The engine
-    // iterates nonces at a fixed stride within a job, so the solver LEARNS the delta
-    // between consecutive calls and seeds (nonce + delta); a job change mis-speculates
-    // one solve, which then simply runs its own entry pass. Entry output moves to a
-    // dedicated dense buffer (+0.39 GiB) so it survives round 2 overwriting elem[0];
-    // if that buffer does not fit, spec* stay null and everything runs as before.
+    // Speculative entry co-scheduling. The NEXT nonce's entry pass runs beside rounds 3
+    // and 4 on a higher-priority stream (entry_beside), or, with MXBM_SPEC_COBLOCKS=1,
+    // as interleaved blocks inside round 4's launch (COBLOCKS in fused_round.cuh). The
+    // engine iterates nonces at a fixed stride within a job, so the solver LEARNS the
+    // delta between consecutive calls and seeds (nonce + delta); a job change
+    // mis-speculates one solve, which then simply runs its own entry pass. Entry output
+    // moves to a dedicated dense buffer (+0.39 GiB) so it survives round 2 overwriting
+    // elem[0]; if that buffer does not fit, spec* stay null and everything runs as before.
     uint64_t *specElem = nullptr, *specPp = nullptr;
     uint32_t *specCounts = nullptr;
     bool specOn = false;                // buffers allocated and MXBM_NO_SPEC unset
@@ -308,6 +314,7 @@ struct CudaSolver::Impl {
     // runs either way, p_ being a fully-constructed member.
     ~Impl() {
         if (evReady) for (auto e : ev) cudaEventDestroy(e);
+        if (specStream) { cudaStreamDestroy(specStream); cudaEventDestroy(evSpecReady); cudaEventDestroy(evSpecDone); }
         for (auto* q : {elem[0], elem[1], dpp, specElem, specPp, elem4}) cudaFree(q);
 #if MXBM_GCEN
         cudaFree(kcen);
@@ -623,8 +630,8 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
 
     // Speculative-entry buffers are best-effort: a card without the extra 0.39 GiB (or
     // a user setting MXBM_NO_SPEC=1) simply runs the entry pass standalone, as before.
-    // Under a cap the co-blocks displace r4 work the card can no longer spare -- the
-    // rounds turn issue-bound -- so the observed power limit gates it too, with the
+    // Under a cap the solve is energy-bound and the hosted pass hands its joules back as
+    // clock (both forms measured), so the observed power limit gates it too, with the
     // observed memory clock choosing which crossover applies: a down-locked rung
     // un-starves the core (spec pays again above kSpecMinPowerRungW), while stock
     // memory keeps every round issue-bound up to kSpecMinPowerW. mem_clock_mhz > 600
@@ -662,6 +669,19 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
         p_->specCounts = dalloc<uint32_t>(p_->nb);
         p_->specPp     = dalloc<uint64_t>(4);
         p_->specOn = p_->specElem && p_->specCounts && p_->specPp;
+        if (p_->specOn && !std::getenv("MXBM_SPEC_COBLOCKS")) {
+            int lo = 0, hi = 0;
+            cudaDeviceGetStreamPriorityRange(&lo, &hi);
+            cudaStreamCreateWithPriority(&p_->specStream, cudaStreamNonBlocking, hi);
+            // evSpecReady keeps its timestamp on purpose: a timing event is the fence
+            // that lets the priority stream's blocks dispatch before round 3's grid,
+            // which is otherwise already queued when round 2 ends and wins the SMs in
+            // about half of the solves (the pass then runs after the round, +3.5 ms).
+            cudaEventCreate(&p_->evSpecReady);
+            cudaEventCreateWithFlags(&p_->evSpecDone, cudaEventDisableTiming);
+            cudaDeviceProp pr{}; cudaGetDeviceProperties(&pr, p_->device_index);
+            p_->specBlocks = pr.multiProcessorCount;
+        }
         if (!p_->specOn) {
             cudaFree(p_->specElem);   p_->specElem = nullptr;
             cudaFree(p_->specCounts); p_->specCounts = nullptr;
@@ -684,6 +704,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // Per-thread, and cheap when it is already current. See the constructor.
     cudaSetDevice(I.device_index);
     I.abort_.store(false, std::memory_order_relaxed);
+    if (I.specPending) { cudaStreamWaitEvent(0, I.evSpecDone, 0); I.specPending = false; }
 
     uint64_t pp[4]; const uint8_t extra0[4] = {0,0,0,0};
     bh3::compute_prepow(input, 32, nonce, extra0, pp);
@@ -692,7 +713,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
 
     // Speculative entry co-scheduling. The engine walks nonces at a fixed stride
     // within a job, so consecutive calls teach the solver the delta; each solve then
-    // seeds (nonce + delta) inside round 4's launch, and the next call skips its
+    // seeds (nonce + delta) beside its later rounds, and the next call skips its
     // entry pass if the prediction was right. A job change simply misses once.
     uint64_t nLE = 0; std::memcpy(&nLE, nonce, 8);
     const bool sameJob = I.haveLast && std::memcmp(I.lastInput, input, 32) == 0;
@@ -702,7 +723,20 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     const bool hit = I.specOn && I.specValid && I.specNonceLE == nLE
                   && std::memcmp(I.specInput, input, 32) == 0;
     I.specValid = false;
-    const bool spec = I.specOn && I.haveDelta;  // seed nonce + delta during round 4
+    const bool spec = I.specOn && I.haveDelta;  // seed nonce + delta this solve
+    const bool specStrm = spec && I.specStream != nullptr;
+    // The next nonce's entry pass beside rounds 3 and 4, once round 1 has read the
+    // buffers it writes. The next call waits on evSpecDone before touching them.
+    auto specLaunch = [&] {
+        if (!specStrm) return;
+        cudaEventRecord(I.evSpecReady, 0);
+        cudaStreamWaitEvent(I.specStream, I.evSpecReady, 0);
+        cudaMemsetAsync(I.specCounts, 0, (size_t)I.nb*4, I.specStream);
+        entry_beside<<<I.specBlocks, kBesideWG, 0, I.specStream>>>(I.specPp, kElems, I.bb, I.cap,
+                                                I.specCounts, I.specElem, I.drops, 0ull);
+        cudaEventRecord(I.evSpecDone, I.specStream);
+        I.specPending = true;
+    };
     // Entry output lives in the dedicated dense buffer when speculation is available,
     // because elem[0] is overwritten by round 2 and could not carry data across solves.
     uint32_t* r1Counts = I.specOn ? I.specCounts : I.counts[0];
@@ -831,12 +865,12 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     #define ROUND2NR(IMPB, A, AS) { if (I.smallShared) ROUND_XNR(2, IMPB, AS) else ROUND_XNR(2, IMPB, A) }
     #define ROUND3(IMPB, A, AS) { if (I.smallShared) ROUND_X6(3, IMPB, AS) else ROUND_X(3, IMPB, A) }
     #define ROUND3NR(IMPB, A, AS) { if (I.smallShared) ROUND_XNR6(3, IMPB, AS) else ROUND_XNR(3, IMPB, A) }
-    if (I.octo)          { ROUND2NR(0u, MXBM_R2QO_ARGS, MXBM_R2QO_ARGS_S) I.mark(3); ROUND3NR(0u, MXBM_R3QO_ARGS, MXBM_R3QO_ARGS_S) }
-    else if (I.quad)     { ROUND2(0u,  MXBM_R2Q_ARGS, MXBM_R2Q_ARGS_S) I.mark(3); ROUND3(0u,  MXBM_R3Q_ARGS, MXBM_R3Q_ARGS_S) }
+    if (I.octo)          { ROUND2NR(0u, MXBM_R2QO_ARGS, MXBM_R2QO_ARGS_S) I.mark(3); specLaunch(); ROUND3NR(0u, MXBM_R3QO_ARGS, MXBM_R3QO_ARGS_S) }
+    else if (I.quad)     { ROUND2(0u,  MXBM_R2Q_ARGS, MXBM_R2Q_ARGS_S) I.mark(3); specLaunch(); ROUND3(0u,  MXBM_R3Q_ARGS, MXBM_R3Q_ARGS_S) }
     else if (I.impb && I.bb == 17u)
-                         { ROUND2(17u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND3(17u, MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
-    else if (I.impb)     { ROUND2(16u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND3(16u, MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
-    else                 { ROUND2(0u,  MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND3(0u,  MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
+                         { ROUND2(17u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); specLaunch(); ROUND3(17u, MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
+    else if (I.impb)     { ROUND2(16u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); specLaunch(); ROUND3(16u, MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
+    else                 { ROUND2(0u,  MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); specLaunch(); ROUND3(0u,  MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
     #undef ROUND3NR
     #undef ROUND3
     #undef ROUND2NR
@@ -847,8 +881,8 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     #undef ROUND_NR
     #undef ROUND
     // Round 4, outside the macro so the co-blocks variant is instantiated for this
-    // round only. When speculating it hosts the next nonce's entry pass as interleaved
-    // co-blocks: grid *3/2, every third block seeds into the spec buffers.
+    // round only. Under MXBM_SPEC_COBLOCKS it hosts the next nonce's entry pass as
+    // interleaved co-blocks: grid *3/2, every third block seeds into the spec buffers.
     { const int o = inSet ^ 1;
       // Where round 4 puts its output. On its own plane wherever recovery needs round
       // 2's, which is still sitting in set 0; on set 0 otherwise, as before.
@@ -869,7 +903,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
                             I.arena ? I.anext[inSet] : nullptr,                      \
                             I.arena ? r4Ac : nullptr, I.arena ? r4At : nullptr
       #define R4_ARMS(R4A, R4OA) \
-      if (spec) { \
+      if (spec && !specStrm) { \
           cudaMemset(I.specCounts, 0, (size_t)I.nb*4); \
           fused_round<R4A, false, false, true> \
             <<<(I.nb << I.sm) + (I.nb << I.sm)/2u, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, I.cap, \
@@ -952,7 +986,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         std::fprintf(stderr, "CUDA launch error: %s\n", cudaGetErrorString(le));
         return out;
     }
-    if (spec) {   // round 4's co-blocks seeded (nonce + delta) for the next call
+    if (spec) {   // seeded (nonce + delta) for the next call
         I.specValid = true;
         I.specNonceLE = nLE + I.learnedDelta;
         std::memcpy(I.specInput, input, 32);

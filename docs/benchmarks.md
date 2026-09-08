@@ -48,8 +48,8 @@ card appears twice because both of its backends are measured.
 predate the four 2026-09-08 changes (−4.1 % ms at stock together; under a cap the
 terminal's +0.5 % at 140 W, 0.0 % at 100 W and the 56 B record's +0.2 % at 140 W by
 paired arms). The published headline
-is the **27.80 ms / 72.30 sol/s**
-[locked-clock pin](performance-research.md#the-named-reference-lgc-2600) of 2026-09-08,
+is the **27.00 ms / 74.40 sol/s**
+[locked-clock pin](performance-research.md#the-named-reference-lgc-2600) of 2026-09-09,
 which trades boost for reproducibility.
 
 ※ 120 s `--report` on MXBM 0.8.408, 2026-08-21. The 3060 Ti is thermally limited at
@@ -134,7 +134,7 @@ MXBM's column: 80 minutes against the pool reads **62.32 sol/s**, its 15 s windo
 spread σ = 1.99 (the uncertainty on that mean is ±0.11), and the controlled benchmark the
 same day reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). It predates
 the w0-checkpoint record and the replayed recovery, which together took the controlled
-figure to **72.30 sol/s at 27.80 ms** (+15.3 %), so every margin in it is a floor on the
+figure to **74.40 sol/s at 27.00 ms** (+18.7 %), so every margin in it is a floor on the
 current one. lolMiner's column is the 2026-07 session; its binary is unchanged.
 
 </details>
@@ -206,7 +206,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 72.30).
+(both on the build of 2026-07-25; the current one is 74.40).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. The figures are left as measured; rescaling them would
 publish numbers no run produced.
@@ -339,15 +339,16 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage, baseline
 
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown, not the 27.80 one's; the per-stage split has not
+It is the 29.30 ms build's breakdown, not the 27.00 one's; the per-stage split has not
 been re-taken with power and `benchmarks/stage_power.sh` is what re-takes it. The *time*
 split has been, by a second instrument that cannot give the power column —
 [the idle-GPU census](performance-research.md#the-gpu-computes-993--of-a-solve) reads
 per-kernel durations straight out of Nsight Compute. Round 3 and the terminal round agree
 to ~1 %; rounds 1 and 2 read 4.79 and 7.94, which is where the −0.20 ms landed. It also
-shows why `entry_scatter` has no dispatch of its own at stock: speculative entry carries
-it inside round 4's launch, and the pair costs 6.39 ms against the 6.86 these two rows sum
-to when replayed apart.
+shows why `entry_scatter` has no dispatch of its own at stock: speculative entry runs
+the next solve's pass beside rounds 3 and 4 on its own stream (inside round 4's launch
+when this table was taken, where the pair cost 6.39 ms against the 6.86 these two rows
+sum to when replayed apart).
 
 Deleting the reference rows is visible here as its own mechanism: **round 4 −1.21 ms**
 (its row and half its output record), **round 3 −0.54**, **round 2 −0.29**, **round 1
