@@ -204,10 +204,11 @@ constexpr uint32_t kImpDB = (uint32_t)MXBM_IMPDB;
 // lwork from 7 to 6 u64 therefore doubles the conflicts on the walk's dominant shared
 // access. Whether the extra block pays for that is the measurement.
 //
-// Measured null at stock (16,1), and measured LOSS composed with (17,0) under power
-// caps -- +0.9 % at 180 W growing to +3 % at 100 W (2026-07-31): the split lw6 plane
-// costs instructions on the staging store and every walk ldw, and instructions are
-// the one thing a capped card cannot afford. Keep it off; do not re-propose.
+// Measured null at stock (16,1) and a loss under power caps composed with (17,0), so
+// the build-wide switch stays off. It is also a template flag (N6), which is how a
+// card with 64 KB of shared per SM gets round 3's third resident block: there the
+// narrow plane is what takes the block under the line, and the block is worth more
+// than the plane's instructions.
 #ifndef MXBM_NARROW6
 #define MXBM_NARROW6 0
 #endif
@@ -606,11 +607,11 @@ struct RoundArgs {
 // order and sizes are exactly the arrays fused_round declared individually before this
 // existed; test_cuda_resources pins the totals against cuobjdump.
 template<int INW, int LEAFW, int LMODE, uint32_t FCAP, bool SUBPASS,
-         bool MFIRST = (MXBM_MATCH_FIRST != 0), bool ARENA = (MXBM_ARENA != 0)>
+         bool MFIRST = (MXBM_MATCH_FIRST != 0), bool ARENA = (MXBM_ARENA != 0),
+         bool N6 = (MXBM_NARROW6 != 0)>
 struct RoundShared {
     static constexpr bool kNeedLead = (LMODE == LM_USE || LMODE == LM_RD4);
-    static constexpr bool kNarrow6 =
-        (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
+    static constexpr bool kNarrow6 = N6 && (LMODE == LM_EMIT || LMODE == LM_RD3);
     static constexpr int  kLws = kNarrow6 ? INW - 1 : INW;
     static constexpr bool kGiIsLead = (LMODE == LM_SEED || LMODE == LM_SEEDF);
     uint64_t lwork[kLws * FCAP];
@@ -651,9 +652,11 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          bool ARENA = (MXBM_ARENA != 0),
          // Write the two back-reference rows. False on rounds 1-3 of an octo rung,
          // whose rows recovery never reads and the host never allocates.
-         bool REFS = true>
+         bool REFS = true,
+         // Stage round 3's 16-bit word 6 in its own u16 plane (see MXBM_NARROW6).
+         bool N6 = (MXBM_NARROW6 != 0)>
 __device__ __forceinline__
-void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA>& shm,
+void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA, N6>& shm,
                  uint32_t bid,
                  uint32_t bucket_bits, uint32_t submask_bits,
                  uint32_t in_bucket_cap, uint32_t out_bucket_cap, uint32_t out_off,
@@ -691,7 +694,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
     constexpr bool kNeedLead = (LMODE == LM_USE || LMODE == LM_RD4);
     // Derived, not passed: LM_EMIT is round 3's mode and nothing else uses it, so the
     // launch sites need no new argument.
-    constexpr bool NARROW6 = (MXBM_NARROW6 != 0) && (LMODE == LM_EMIT || LMODE == LM_RD3);
+    constexpr bool NARROW6 = N6 && (LMODE == LM_EMIT || LMODE == LM_RD3);
     constexpr int  LWS     = NARROW6 ? INW - 1 : INW;      // lwork stride, u64
     // Round 1's gi IS its leaf: both are the seed index, written from the same
     // rec0 >> 32. So LM_SEED keeps only one copy and reads gi through lleaf[0].
@@ -1227,7 +1230,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             } else {
                 bh3::Elem e;
                 rebuild_r3(pp, l, e);
-                for (int w = 0; w < INW; ++w) lwork[lwx(pos, w)] = e.w[w];
+                for (int w = 0; w < INW; ++w) stw(pos, w, e.w[w]);
             }
         } else if constexpr (LMODE == LM_RD4) {
             // Deferred here for the same reason as the two rebuilds above: every lane is
@@ -1582,6 +1585,8 @@ template<int INW, int OUTW, int LEAFW, int LMODE,
          bool ARENA = (MXBM_ARENA != 0),
          // See fused_round_body: rounds 1-3 of an octo rung write no references.
          bool REFS = true,
+         // Round 3's narrow word-6 plane, chosen per card (see MXBM_NARROW6).
+         bool N6 = (MXBM_NARROW6 != 0),
          int MINBLOCKS = (LMODE == LM_SEED ? MXBM_MB_SEED
                         : LMODE == LM_RD2  ? MXBM_MB_RD2
                         : LMODE == LM_EMIT ? MXBM_MB_EMIT : 0)>
@@ -1641,9 +1646,9 @@ void fused_round(uint32_t bucket_bits, uint32_t submask_bits,
         bid -= bid / co_stride;                             // rank among round blocks
     }
 
-    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA> shm;
+    __shared__ RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, ARENA, N6> shm;
     fused_round_body<INW, OUTW, LEAFW, LMODE, LOUT, PADN, SIN, SOUT, SBUILD,
-                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB, ARENA, REFS>(
+                     INSTR, OUTSTR, FCAP, SUBPASS, MFIRST, IMPB, ARENA, REFS, N6>(
         shm, bid, bucket_bits, submask_bits, in_bucket_cap, out_bucket_cap, out_off,
         in_counts, in_belem, out_counts, out_belem, all_left, all_right, gi_counter,
         drops, pp4, in_ahead, in_anext, out_actr, out_atag);

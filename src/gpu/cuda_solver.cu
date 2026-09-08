@@ -72,16 +72,21 @@ constexpr uint32_t kQuad16Stride = 2u;   // the quad record with its gi retired
 #define MXBM_R4O_ARGS  6,1,2,LM_RD4, 288u,9u,2u,0u,0u, kOctoStride,2u,kFCap
 // The same rounds staged at 280 for cards with 64 KB of shared memory per SM (Turing):
 // under 21,845 B a block, rounds 1, 2 and 4 hold three resident blocks there instead of
-// two, and ptxas fits their registers to match. Round 3 stays at kFCap (its leaf staging
-// keeps it above the line at any cap the population allows), and so does every card with
-// a larger budget, where the smaller cap buys no block and costs time. Chosen at runtime
-// from the device's budget (Impl::smallShared).
-constexpr uint32_t kFCap64K = 280u;
+// two, and ptxas fits their registers to match. Round 3 carries 80 B per staged element
+// and reaches the line only with its word 6 in a u16 plane (N6) and a cap of 272; the
+// dense-cap variant is 21,344 B there. Every card with a larger budget keeps kFCap,
+// where the smaller caps buy no block and cost time. Chosen at runtime from the
+// device's budget (Impl::smallShared).
+constexpr uint32_t kFCap64K  = 280u;
+constexpr uint32_t kFCap64K3 = 272u;
 #define MXBM_R2_ARGS_S  7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kR2RecStride,kFCap64K
 #define MXBM_R4_ARGS_S  6,1,2,LM_USE, 288u,9u,2u,0u,0u, 8u,(MXBM_R4_ROWS?2u:1u),kFCap64K
 #define MXBM_R2Q_ARGS_S 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuadStride,kFCap64K
 #define MXBM_R2QO_ARGS_S 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuad16Stride,kFCap64K
 #define MXBM_R4O_ARGS_S  6,1,2,LM_RD4, 288u,9u,2u,0u,0u, kOctoStride,2u,kFCap64K
+#define MXBM_R3_ARGS_S   7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap64K3
+#define MXBM_R3Q_ARGS_S  7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap64K3
+#define MXBM_R3QO_ARGS_S 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuad16Stride,kOctoStride,kFCap64K3
 // Left alone the rebuild takes 128 registers, exactly 2 blocks/SM. Asking for a third
 // costs 88-96 B of spill and pays -2 %; 0 leaves the choice to ptxas.
 #ifndef MXBM_MB_OCTO
@@ -409,7 +414,7 @@ std::vector<miner::Solver::StageTime> CudaSolver::stage_times() const {
 
 std::string CudaSolver::geometry() const {
     return rb_describe(p_->bb, p_->sm, p_->quad, p_->impb, p_->arena, p_->octo,
-                       /*replay=*/true) + (p_->smallShared ? ", staging 280" : "");
+                       /*replay=*/true) + (p_->smallShared ? ", staging 280/272" : "");
 }
 
 CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz)
@@ -547,6 +552,12 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
         CARVE((fused_round<MXBM_R2_ARGS_S, false, false, false, false,  0u>));
         CARVE((fused_round<MXBM_R2_ARGS_S, false, false, false, true,   0u>));
         CARVE((fused_round<MXBM_R4_ARGS_S, false, false, false, false>));
+        CARVE((fused_round<MXBM_R3_ARGS_S, false, false, false, false, 16u, false, true, true>));
+        CARVE((fused_round<MXBM_R3_ARGS_S, false, false, false, true,  16u, false, true, true>));
+        CARVE((fused_round<MXBM_R3_ARGS_S, false, false, false, false, 17u, false, true, true>));
+        CARVE((fused_round<MXBM_R3_ARGS_S, false, false, false, true,  17u, false, true, true>));
+        CARVE((fused_round<MXBM_R3Q_ARGS_S, false, false, false, false, 0u, false, true, true>));
+        CARVE((fused_round<MXBM_R3Q_ARGS_S, false, false, false, true,  0u, false, true, true>));
     }
     // The arena rungs run every round again with dense caps and the overflow pool. Set
     // only when one was picked, since these kernels are otherwise never launched.
@@ -572,6 +583,12 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
             CARVE((fused_round<MXBM_R2_ARGS_S,  false, false, false, true,  16u, true>));
             CARVE((fused_round<MXBM_R2_ARGS_S,  false, false, false, false,  0u, true>));
             CARVE((fused_round<MXBM_R2_ARGS_S,  false, false, false, true,   0u, true>));
+            CARVE((fused_round<MXBM_R3Q_ARGS_S, false, false, false, false, 0u, true, true, true>));
+            CARVE((fused_round<MXBM_R3Q_ARGS_S, false, false, false, true,  0u, true, true, true>));
+            CARVE((fused_round<MXBM_R3_ARGS_S,  false, false, false, false, 16u, true, true, true>));
+            CARVE((fused_round<MXBM_R3_ARGS_S,  false, false, false, true,  16u, true, true, true>));
+            CARVE((fused_round<MXBM_R3_ARGS_S,  false, false, false, false,  0u, true, true, true>));
+            CARVE((fused_round<MXBM_R3_ARGS_S,  false, false, false, true,   0u, true, true, true>));
         }
     }
     if (p_->octo) {
@@ -581,13 +598,15 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
         CARVE((fused_round<MXBM_R1_ARGS,  false, false, false, true,  0u, true, false>));
         CARVE((fused_round<MXBM_R2QO_ARGS, false, false, false, false, 0u, true, false>));
         CARVE((fused_round<MXBM_R2QO_ARGS, false, false, false, true,  0u, true, false>));
-        CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, false, 0u, true, true, MXBM_MB_OCTO>));
-        CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, true,  0u, true, true, MXBM_MB_OCTO>));
+        CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, false, 0u, true, true, false, MXBM_MB_OCTO>));
+        CARVE((fused_round<MXBM_R4O_ARGS,  false, false, false, true,  0u, true, true, false, MXBM_MB_OCTO>));
         if (p_->smallShared) {
             CARVE((fused_round<MXBM_R2QO_ARGS_S, false, false, false, false, 0u, true, false>));
             CARVE((fused_round<MXBM_R2QO_ARGS_S, false, false, false, true,  0u, true, false>));
-            CARVE((fused_round<MXBM_R4O_ARGS_S,  false, false, false, false, 0u, true, true, MXBM_MB_OCTO>));
-            CARVE((fused_round<MXBM_R4O_ARGS_S,  false, false, false, true,  0u, true, true, MXBM_MB_OCTO>));
+            CARVE((fused_round<MXBM_R4O_ARGS_S,  false, false, false, false, 0u, true, true, false, MXBM_MB_OCTO>));
+            CARVE((fused_round<MXBM_R4O_ARGS_S,  false, false, false, true,  0u, true, true, false, MXBM_MB_OCTO>));
+            CARVE((fused_round<MXBM_R3QO_ARGS_S, false, false, false, false, 0u, true, false, true>));
+            CARVE((fused_round<MXBM_R3QO_ARGS_S, false, false, false, true,  0u, true, false, true>));
         }
         CARVE((fused_round<MXBM_R2_ARGS,  false, false, false, false, 16u, true>));
         CARVE((fused_round<MXBM_R3_ARGS,  false, false, false, false, 16u, true>));
@@ -745,14 +764,14 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // Round 1 reads the entry buffer, wherever this solve put it.
     // MFIRST and ARENA are template parameters, so every combination that can run needs
     // its own launch line; ROUND_L is that line, with only those two spelled out.
-    #define ROUND_L(MF, AR, RF, R, IMPB, ...)                                        \
-            fused_round<__VA_ARGS__, false, false, false, MF, IMPB, AR, RF>          \
+    #define ROUND_L(MF, AR, RF, N6, R, IMPB, ...)                                    \
+            fused_round<__VA_ARGS__, false, false, false, MF, IMPB, AR, RF, N6>      \
               <<<I.nb << I.sm, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, I.cap, (uint32_t)((R)-1)*kCapacity,\
                   inC, inE, I.counts[o], I.elem[o],                                  \
                   I.left, I.right, I.gictr, I.drops, I.dpp,                          \
                   arIn ? I.ahead[inSet] : nullptr, arIn ? I.anext[inSet] : nullptr,  \
                   arIn ? I.actr[o] : nullptr, arIn ? I.atag[o] : nullptr)
-    #define ROUND(R, IMPB, ...)                                                      \
+    #define ROUND_I(N6, R, IMPB, ...)                                                \
         { const int o = inSet ^ 1;                                                   \
           const uint32_t* inC = ((R)==1) ? r1Counts : I.counts[inSet];               \
           const uint64_t* inE = ((R)==1) ? r1Elem   : I.elem[inSet];                 \
@@ -760,16 +779,16 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
           KCEN_CLEAR                                                             \
           arenaClear(o);                                                             \
-          if (arIn) { if (I.matchFirst) ROUND_L(true,  true,  true, R, IMPB, __VA_ARGS__); \
-                      else              ROUND_L(false, true,  true, R, IMPB, __VA_ARGS__); }\
-          else      { if (I.matchFirst) ROUND_L(true,  false, true, R, IMPB, __VA_ARGS__); \
-                      else              ROUND_L(false, false, true, R, IMPB, __VA_ARGS__); }\
+          if (arIn) { if (I.matchFirst) ROUND_L(true,  true,  true, N6, R, IMPB, __VA_ARGS__); \
+                      else              ROUND_L(false, true,  true, N6, R, IMPB, __VA_ARGS__); }\
+          else      { if (I.matchFirst) ROUND_L(true,  false, true, N6, R, IMPB, __VA_ARGS__); \
+                      else              ROUND_L(false, false, true, N6, R, IMPB, __VA_ARGS__); }\
           arenaLink(o);                                                              \
           inSet = o; }
     // Rounds 1-3 of an octo rung, which write no references. Two arms rather than four:
     // an octo rung is always a dense-cap rung, so the plain-cap kernels cannot run here
     // and instantiating them would put kernels in the binary that never launch.
-    #define ROUND_NR(R, IMPB, ...)                                                   \
+    #define ROUND_NRI(N6, R, IMPB, ...)                                              \
         { const int o = inSet ^ 1;                                                   \
           const uint32_t* inC = ((R)==1) ? r1Counts : I.counts[inSet];               \
           const uint64_t* inE = ((R)==1) ? r1Elem   : I.elem[inSet];                 \
@@ -777,13 +796,18 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
           cudaMemset(I.counts[o], 0, (size_t)I.nb*4); cudaMemset(I.gictr, 0, 4);     \
           KCEN_CLEAR                                                             \
           arenaClear(o);                                                             \
-          if (I.matchFirst) ROUND_L(true,  true, false, R, IMPB, __VA_ARGS__);       \
-          else              ROUND_L(false, true, false, R, IMPB, __VA_ARGS__);       \
+          if (I.matchFirst) ROUND_L(true,  true, false, N6, R, IMPB, __VA_ARGS__);   \
+          else              ROUND_L(false, true, false, N6, R, IMPB, __VA_ARGS__);   \
           arenaLink(o);                                                              \
           inSet = o; }
-    // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments.
-    #define ROUND_X(...) ROUND(__VA_ARGS__)
-    #define ROUND_XNR(...) ROUND_NR(__VA_ARGS__)
+    #define ROUND(R, IMPB, ...)    ROUND_I((MXBM_NARROW6 != 0), R, IMPB, __VA_ARGS__)
+    #define ROUND_NR(R, IMPB, ...) ROUND_NRI((MXBM_NARROW6 != 0), R, IMPB, __VA_ARGS__)
+    // ROUND_X expands MXBM_Rn_ARGS before ROUND counts its arguments. The _6 forms
+    // stage word 6 narrow (round 3 on a 64 KB-shared card).
+    #define ROUND_X(...)    ROUND(__VA_ARGS__)
+    #define ROUND_XNR(...)  ROUND_NR(__VA_ARGS__)
+    #define ROUND_X6(...)   ROUND_I(true, __VA_ARGS__)
+    #define ROUND_XNR6(...) ROUND_NRI(true, __VA_ARGS__)
     // Round 1 rides the rung's implied-bit count, derived from the condition round 2's
     // own arm below tests, so writer and reader agree on the r1 -> r2 layout: the
     // w0-checkpoint record with MXBM_PAIR_W0, the plain pair record without. IMPB != 0
@@ -800,16 +824,20 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // implicit-bits pairs are the same strides with the pack folded into the
     // stores; the IMPB value is the bucket-bit count the pack drops, so each
     // geometry needs its own instantiation.
-    // Round 2 at the device's staging cap (kFCap64K on a 64 KB-shared card); round 3
-    // at kFCap everywhere.
+    // Both rounds at the device's staging caps: kFCap64K / kFCap64K3 with round 3's
+    // narrow word-6 plane on a 64 KB-shared card, kFCap elsewhere.
     #define ROUND2(IMPB, A, AS) { if (I.smallShared) ROUND_X(2, IMPB, AS) else ROUND_X(2, IMPB, A) }
     #define ROUND2NR(IMPB, A, AS) { if (I.smallShared) ROUND_XNR(2, IMPB, AS) else ROUND_XNR(2, IMPB, A) }
-    if (I.octo)          { ROUND2NR(0u, MXBM_R2QO_ARGS, MXBM_R2QO_ARGS_S) I.mark(3); ROUND_XNR(3, 0u, MXBM_R3QO_ARGS) }
-    else if (I.quad)     { ROUND2(0u,  MXBM_R2Q_ARGS, MXBM_R2Q_ARGS_S) I.mark(3); ROUND_X(3, 0u,  MXBM_R3Q_ARGS) }
+    #define ROUND3(IMPB, A, AS) { if (I.smallShared) ROUND_X6(3, IMPB, AS) else ROUND_X(3, IMPB, A) }
+    #define ROUND3NR(IMPB, A, AS) { if (I.smallShared) ROUND_XNR6(3, IMPB, AS) else ROUND_XNR(3, IMPB, A) }
+    if (I.octo)          { ROUND2NR(0u, MXBM_R2QO_ARGS, MXBM_R2QO_ARGS_S) I.mark(3); ROUND3NR(0u, MXBM_R3QO_ARGS, MXBM_R3QO_ARGS_S) }
+    else if (I.quad)     { ROUND2(0u,  MXBM_R2Q_ARGS, MXBM_R2Q_ARGS_S) I.mark(3); ROUND3(0u,  MXBM_R3Q_ARGS, MXBM_R3Q_ARGS_S) }
     else if (I.impb && I.bb == 17u)
-                         { ROUND2(17u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND_X(3, 17u, MXBM_R3_ARGS)  }
-    else if (I.impb)     { ROUND2(16u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND_X(3, 16u, MXBM_R3_ARGS)  }
-    else                 { ROUND2(0u,  MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND_X(3, 0u,  MXBM_R3_ARGS)  }
+                         { ROUND2(17u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND3(17u, MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
+    else if (I.impb)     { ROUND2(16u, MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND3(16u, MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
+    else                 { ROUND2(0u,  MXBM_R2_ARGS, MXBM_R2_ARGS_S)  I.mark(3); ROUND3(0u,  MXBM_R3_ARGS, MXBM_R3_ARGS_S)  }
+    #undef ROUND3NR
+    #undef ROUND3
     #undef ROUND2NR
     #undef ROUND2
     I.mark(4);
@@ -849,12 +877,12 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
                 nullptr, nullptr, nullptr, nullptr, \
                 I.specPp, kElems, I.cap, I.specCounts, I.specElem, 3u); \
       } else if (I.octo && I.matchFirst) { \
-          fused_round<R4OA, false, false, false, true, 0u, true, true, MXBM_MB_OCTO> \
+          fused_round<R4OA, false, false, false, true, 0u, true, true, false, MXBM_MB_OCTO> \
             <<<I.nb << I.sm, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, I.cap, r4Off, \
                 I.counts[inSet], I.elem[inSet], r4C, r4E, \
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS); \
       } else if (I.octo) { \
-          fused_round<R4OA, false, false, false, false, 0u, true, true, MXBM_MB_OCTO> \
+          fused_round<R4OA, false, false, false, false, 0u, true, true, false, MXBM_MB_OCTO> \
             <<<I.nb << I.sm, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, I.cap, r4Off, \
                 I.counts[inSet], I.elem[inSet], r4C, r4E, \
                 I.left, I.right, I.gictr, I.drops, I.dpp, R4_ARENA_ARGS); \

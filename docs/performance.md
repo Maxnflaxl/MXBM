@@ -1544,9 +1544,10 @@ holds two 256-thread round blocks where Ada holds three or four — and the 112 
 the heaviest kernel took there were ptxas spending a register file that two blocks
 cannot fill. On the reference card, two blocks per SM instead of three or four costs
 **+16 % on every round** (measured with `MXBM_SMEM_PAD`). **Since 2026-09-08 a card
-with a 64 KB budget stages rounds 2 and 4 at 280 instead of 320**, which puts rounds 1,
-2 and 4 at three blocks per SM on sm_75; round 3 stays at two. The reference card keeps
-320 (280 costs it +0.5 % at unchanged occupancy). Mechanism and figures:
+with a 64 KB budget stages rounds 2 and 4 at 280 instead of 320, and round 3 at 272 with
+its 16-bit work word 6 in a narrow plane**, which puts every round at three blocks per
+SM on sm_75. The reference card keeps 320 (the smaller caps cost it +0.5 % at unchanged
+occupancy). Mechanism and figures:
 [performance-research.md](performance-research.md#turings-shared-memory-budget-and-the-per-card-staging-cap).
 
 Memory is not a second gate. Driving the ladder with the release's own availability
@@ -1579,9 +1580,9 @@ shipped and awaits the card:
   [the rungs](HW_REQUIREMENTS.md#the-vram-ladder)). Closing the other processes, or
   `MXBM_QUAD=0 MXBM_ARENA=1 MXBM_BB=16`, moves it up; it accounts for about a third of
   the gap, not the whole of it.
-- **Occupancy: two blocks per SM, now three on rounds 1, 2 and 4** — the per-card
-  staging cap above, shipped 2026-09-08 and unmeasured on the card. On the reference
-  card the whole 2 → 3 step is worth 14 %.
+- **Occupancy: two blocks per SM, now three on every round** — the per-card staging
+  caps above, shipped 2026-09-08 and unmeasured on the card. On the reference card the
+  whole 2 → 3 step is worth 14 %; emulated for round 3 alone it is 8 % of that round.
 - **Speculative entry**, off on an arena rung for want of a pool region; on the 5.03 GiB
   rung it is available.
 
