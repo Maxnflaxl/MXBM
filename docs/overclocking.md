@@ -21,10 +21,10 @@ same operating point mining will use.
 
 Four measured facts decide what to set:
 
-- **A rig that pays for electricity should cap.** `--pl 210` is the reference card's
+- **A rig that pays for electricity should cap.** `--pl 220` is the reference card's
   efficiency peak; `--tune` finds your card's own
-  ([the curves](performance.md#both-miners-under-the-same-cap)).
-- **Below ~165 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
+  ([the curve](benchmarks.md#mxbm-power-curve)).
+- **Below ~167 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
   GDDR6X): worth +7 % sol/s at 160 W rising to +18 % at the 100 W floor. The crossover
   is ~167 W and above ~180 W the rung is a wall — strictly a low-cap pairing.
 - **Undervolting (`--cclk` + `--coff`) does nothing under a power cap** — the governor
@@ -122,8 +122,8 @@ so the doubling is visible while mining.
 hashrate.no lists `--coff 300 --cclk 2205 --moff 2000 --pl 300` for this card — tuned
 for lolMiner's kernels. Do not adopt it wholesale: the undervolt half is a measured null
 under any cap, `--moff 2000` is +1000 MHz of *actual clock* (past the driver's ceiling),
-and a locked 2600 MHz already costs MXBM 2.6 % of throughput, so 2205 needs measuring,
-not trusting. One knob at a time.
+and a locked 2600 MHz measures 0.5 % under the unlocked stock figure (27.00 against
+26.9 ms), so 2205 needs measuring, not trusting. One knob at a time.
 
 ## Stability canaries
 

@@ -27,27 +27,32 @@ Dependencies and platform notes are in **[docs/building.md](docs/building.md)**;
 command line, config files and API are in **[docs/usage.md](docs/usage.md)**.
 
 **Cap the board.** MXBM runs pinned at the power limit in every kernel, so the limit
-picks the operating point. `--pl 210` is the reference card's efficiency peak;
+picks the operating point. `--pl 220` is the reference card's efficiency peak;
 `sudo mxbm --tune` measures yours. Needs root, restored on exit.
 
 ## How it compares
 
 Both miners swept against each other at identical board caps, interleaved in one session
-([the full table](docs/performance.md#both-miners-under-the-same-cap)):
+on 2026-08-18 ([the full table](docs/performance.md#both-miners-under-the-same-cap)); the
+MXBM column is that day's build, and the current one is bounded within +0.5 % to −2.5 %
+of it by paired arms, so every margin is a floor:
 
 | board cap | MXBM | lolMiner 1.98a |
 |---|---|---|
 | 180 W | **54.0 sol/s** · 0.300 sol/s/W | 53.3 sol/s · 0.296 sol/s/W |
-| 210 W | **64.9 sol/s** · 0.309 sol/s/W | 54.2 sol/s · 0.259 sol/s/W |
+| 220 W | **66.3 sol/s** · 0.302 sol/s/W | 53.4 sol/s · 0.243 sol/s/W |
 | 285 W | **70.0 sol/s** · 0.246 sol/s/W | 53.8 sol/s · 0.229 sol/s/W |
 
-MXBM has the higher ceiling — **70.0 sol/s against ~54.4**, which lolMiner cannot reach
-at any setting — and it leads on both speed and efficiency from ~177 W to the 285 W
-stock limit. Below that lolMiner is ahead on stock memory, at worst by 7.5 % at 160 W.
-With each miner at its best memory clock the band splits into two narrow strips: 2–3 %
-below 115 W and under 1 % from 155–177 W, with MXBM ahead by 8.5 % at 120 W and 3.5 % at
-140 W between them ([the low band](docs/performance.md#the-low-band-on-the-current-kernel)).
-Best efficiency is a tie at ~3.22 J/solution, and at its point MXBM does 30 % more work.
+MXBM has the higher ceiling — **74.8 sol/s** on the current build against ~54.4, which
+lolMiner cannot reach at any setting — and it leads on both speed and efficiency from
+~177 W to the 285 W stock limit. Below that lolMiner is ahead on stock memory, at worst
+by 7.5 % at 160 W. With each miner at its best memory clock the band splits into two
+narrow strips: 2–3 % below 115 W and under 1 % from 155–177 W, with MXBM ahead by 8.5 %
+at 120 W and 3.5 % at 140 W between them
+([the low band](docs/performance.md#the-low-band-on-the-current-kernel)). The current
+build's best efficiency is 3.14 J/solution at 220 W ([the
+curve](docs/benchmarks.md#mxbm-power-curve)), 69.9 sol/s at that point against
+lolMiner's best of 3.21 J/solution at 49.95 sol/s.
 
 ## Features
 

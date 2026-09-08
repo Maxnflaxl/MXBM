@@ -43,11 +43,11 @@ Two y axes are safe here because sol/s and ms/solve are one quantity inverted, s
 correlation between two things is implied. On the log chart the lines are near-mirror
 images; on the linear chart the reciprocal's convexity makes them different shapes.
 Relabelling one axis in the other's units is *not* available — `sol/s × ms` is ~1900 over
-the OpenCL rows and ~1980 over the CUDA ones, so one converted ruler would misstate half
-the chart by 4 %.
+the OpenCL rows and ~2010 over the CUDA ones, so one converted ruler would misstate half
+the chart by ~6 %.
 
-The x axis counts optimization steps. Only three dates exist and 16 rows fall on one of
-them, so dates are drawn as bands. The dashed divider marks the change of measurement
+The x axis counts optimization steps. Most rows fall on a handful of dates, so dates are
+drawn as bands. The dashed divider marks the change of measurement
 described above, which is a larger break than the change of backend.
 
 **Error bars are Poisson on the observed solution count, `1/√N`, and cannot be got by
@@ -131,10 +131,11 @@ that makes ms/solve the quoted quantity.
 |---|---|---|---|
 | **OpenCL** | 63.0 | 31.9 | fallback / `--solver opencl` |
 | **CUDA** | **74.40**[^drift] | **27.00**[^drift] | **shipping** — default when a CUDA device is present |
-| **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
+| **Target** | 53.0 | 37.9 | lolMiner, stock — user-measured |
 
-The CUDA row is six 120 s runs at stock 285 W, headless, at **0.0 % spread on both
-columns** — [the pin and its lineage](performance-research.md#the-named-reference-lgc-2600).
+The CUDA row is six 120 s runs at the locked-clock pin (LGC=2600 LMC=10251, 276.4 W under
+the stock 285 W cap), headless, at **0.0 % spread on both columns**; unlocked at stock the
+same build reads 74.8 sol/s / 26.9 ms — [the pin and its lineage](performance-research.md#the-named-reference-lgc-2600).
 
 [^drift]: Absolute figures carry a ~2.5 % cross-session band ([how far they
     reproduce](#-the-absolute-figures-reproduce-to-03--within-a-session-and-5--between-sessions));
@@ -147,8 +148,8 @@ columns** — [the pin and its lineage](performance-research.md#the-named-refere
 > III (**2.006**, pinned over 28,305 solves) and a short run estimates it noisily enough
 > to move the headline by a full sol/s. Every speed *change* here is an ms/solve figure.
 
-**Live mining reproduced the pin**, on the shipping kernel. A 31-minute HeroMiners
-session medianed **28.74 ms/solve** — 1.2 % under the pin, at stock boost (2655 MHz
+**Live mining reproduced the pin** (the 29.10 ms build of 2026-08-18). A 31-minute HeroMiners
+session medianed **28.74 ms/solve** — 1.2 % under that pin, at stock boost (2655 MHz
 median) against the pin's locked 2600, which is the direction and roughly the size the
 clock difference predicts. **69 shares, 0 stale, 0 rejected** over 38 jobs, on a path
 sharing no code with the harness.
@@ -176,9 +177,9 @@ standard error over 69 shares. It agrees; it cannot corroborate.
 
 </details>
 
-**Standing:** CUDA is **~31 % past the target**, OpenCL 1.07× short — read
+**Standing:** CUDA is **~40 % past the target**, OpenCL ~19 % past it — read
 [the caveats](performance-research.md#the-cuda-backend) before treating it as beaten.
-From **1.8 sol/s** at the start, **31× faster**.
+From **1.8 sol/s** at the start, **41× faster**.
 
 **VRAM for a full search:** 8.36 → **6.17 GiB** at the fastest geometry (268 → 197
 B/element), and **1.90 GiB** at the floor on *both* backends — a 3 GB card, clearing
@@ -226,7 +227,7 @@ solve, so sol/s ≈ 2006 / (ms per solve).*
 
 ---
 
-## ⚠ The absolute figures reproduce to 0.3 % within a session and 5 % between sessions
+## ⚠ The absolute figures reproduce to 0.3 % within a session and ~2.5 % between sessions
 
 *(Read before trusting any single-number claim here.)*
 
@@ -395,9 +396,9 @@ from a short run: see the note on solutions/solve under the progress table.
 *(User-facing summary of these results, plus how to reproduce them on your own
 card: [benchmarks.md](benchmarks.md).)*
 
-Every figure above measures **speed**. A run against lolMiner on the
-same card measured **power** for the first time, and it does not point the same
-way:
+Every figure above measures **speed**. A stock-versus-stock run against lolMiner on the
+same card (2026-07-28, the 34.8 ms build) measures **power** as well, and it does not
+point the same way:
 
 | | MXBM | lolMiner 1.98a | ratio |
 |---|---|---|---|
@@ -443,17 +444,18 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage:
 | terminal | 0.78 | 2.7 | 285.3 W | 0.22 | 2.7 |
 | **sum** | **29.30** | **100.2 %** | 282.8 W | **8.29** | |
 
-**Scope: this table predates the day's two kernel changes** (the block-exit barrier and
-singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown and not the 27.00 one's — the per-stage split has not
-been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
+**Scope: this is the 29.30 ms build's breakdown (2026-08-16) and not the 27.00 ms one's** —
+the per-stage split has not been re-taken with power and `benchmarks/stage_power.sh` is
+what re-takes it; the current time split is the per-stage table `MXBM_ROUND_STATS=1`
+prints.
 
-Solve is 29.23 ms in the harness, so the stages account for 100.2 % of it, and
+Solve was 29.23 ms in the harness, so the stages account for 100.2 % of it, and
 their summed energy lands within 0.2 % of the counter's own whole-solve figure
 (8.30 J) — both closures bound anything unattributed (memsets, launch gaps,
 readback, CPU verify) at essentially zero. 8.30 J per solve ÷ 2.01 verified
-solutions = **4.13 J per solution** at stock, from 4.44 on the previous profile:
-energy per solve fell 8.92 → 8.30 J at an unchanged multiplier.
+solutions = **4.13 J per solution** at stock on that build, from 4.44 on the previous
+profile; the current build reads 3.81 J per solution at the 285 W point of the
+2026-09-09 sweep.
 
 Each of the last three record changes is visible here as its own mechanism and
 nothing else's. **Deleting the reference rows** is round 4 **−1.21 ms** — the only
@@ -481,9 +483,9 @@ Two consequences:
    optimization of the same size, and no amount of watt-shaving *inside* the
    workload is available independently of it — there is no slack kernel to
    quieten. Matching lolMiner's 0.223 sol/s/W while still drawing
-   285 W would need **63.5 sol/s**, against 62.4 measured — 1.8 % away, and only
-   reachable through ms/solve. Moving the cap itself is the other lever, and
-   it turns out to be the cheap one.
+   285 W needs 63.5 sol/s; the current build's 74.8 at stock is 0.263 sol/s/W,
+   so at stock MXBM is now the more efficient of the two as well. Moving the
+   cap itself is the other lever, and it turns out to be the cheap one.
 2. **The published comparison is between two different operating points.** The
    lolMiner draws 238.7 W with σ 4.05: it is *not* at the cap, and leaves
    46 W unused. Comparing sol/s/W at stock rewards whichever miner fails to fill
@@ -528,27 +530,26 @@ this table is for, is a property of the power curve and does not move.*
 **Efficiency has an interior optimum, and it *falls again* below it** — that is the
 informative part, and it belongs to the board, not to any build. Below the
 peak the core clock has dropped far enough that the parts of the board which do not scale
-with it — memory, uncore, leakage — are paid for out of less work. On the current kernels
-the peak is **210 W at 0.3094 sol/s/W**, with 200 W a full 1.0 % below it and 220 W
-2.5 % below; at the driver's 100 W minimum the collapse is unmistakable, 24.5 sol/s and
-0.2462 sol/s/W. The peak has moved right to left across builds — 240 W, then 220, now
-210 with the speculative-entry gate — because a lever that pays more under a cap than at stock
-lifts the left half of the curve more than the right; it is read from
-[the live table](#both-miners-under-the-same-cap), never from the historical one above.
+with it — memory, uncore, leakage — are paid for out of less work. On the current build
+(the MXBM-only sweep of 2026-09-09 in [benchmarks.md](benchmarks.md#mxbm-power-curve))
+the peak is **220 W at 0.318 sol/s/W and 3.14 J/solution**, with 210 W 0.6 % below it
+and 200 W 2 % below; at the driver's 100 W minimum the collapse is unmistakable,
+24.0 sol/s and 0.242 sol/s/W. The peak's position is a property of the build as well as
+the board: a lever that pays more under a cap than at stock lifts the left half of the
+curve, and one that is gated on above 220 W (the speculative entry pass) lifts the right,
+so it is read from the newest MXBM-only sweep, never from a historical one.
 
 **Marginal return collapses well before stock.** Extra sol/s per extra watt, from the
-live column:
+2026-09-09 sweep:
 
 | step | 180→190 | 190→200 | 200→210 | 210→220 | 220→240 | 240→255 | 255→285 |
 |---|---|---|---|---|---|---|---|
-| sol/s per W | 0.380 | 0.340 | 0.370 | 0.140 | 0.080 | 0.063 | 0.037 |
+| sol/s per W | 0.37 | 0.39 | 0.42 | 0.34 | 0.12 | 0.08 | 0.043 |
 
-(The 190→200 and 200→210 split is inside this rig's resolution; the 20 W span they
-cover, **0.355 per W**, is the figure to quote.) The last 45 W
-(240 → 285) buys 2.05 sol/s; the 20 W from 180 to 200 buys 7.20. The bend is sharp and
-it is at **210–220 W** — immediately past the peak, with 220 W already 2.5 % below it.
-The right cap is an economic choice: **210 W for a rig that pays for electricity,
-285 W only where power is free.**
+The last 45 W (240 → 285) buys 2.5 sol/s; the 20 W from 200 to 220 buys 7.6. The bend is
+sharp and it is at **220–240 W** — immediately past the peak. The right cap is an
+economic choice: **220 W for a rig that pays for electricity, 285 W only where power is
+free.**
 
 ### Both miners under the same cap
 
@@ -625,13 +626,15 @@ Its ceiling is **54.40 sol/s at a 200 W cap**; from there down to 180 W it gives
 draw 234.7–235.1 W. MXBM at the 285 W board limit does **69.95, a 28.6 % higher
 ceiling** that lolMiner cannot reach at any setting.
 
-**Both miners have an interior efficiency optimum, and today they are level.** MXBM's
-stock-memory peak is a flat **0.309–0.310 sol/s/W across 200–210 W**; its rung point
-(160 W + 5001 MHz) reads 3.219 J/sol, and lolMiner's best is **0.3120 at 160 W**
-(3.205 J/sol on its own sol/s definition) — the three sit within a percent, which is a
-tie under the own-definition caveat and the repeat spread. The difference is what the
-energy buys: at MXBM's peak the same joules-per-solution do **64.9 sol/s against
-49.95 — 30 % more work**.
+**Both miners have an interior efficiency optimum.** In this session MXBM's
+stock-memory peak was a flat **0.309–0.310 sol/s/W across 200–210 W**, its rung point
+(160 W + 5001 MHz) read 3.219 J/sol, and lolMiner's best is **0.3120 at 160 W**
+(3.205 J/sol on its own sol/s definition) — a tie within a percent under the
+own-definition caveat and the repeat spread. The current build's stock-memory peak reads
+**3.14 J/sol at 220 W** in its own session
+([benchmarks.md](benchmarks.md#mxbm-power-curve)). The difference is what the energy
+buys: at MXBM's peak the same joules-per-solution do **69.9 sol/s against 49.95 — 40 %
+more work**.
 
 **Nothing is hiding below the sweep's left edge.** Both curves fall away monotonically
 below their efficiency peaks, and lolMiner's advantage vanishes at both ends of its own
@@ -685,7 +688,7 @@ reproduces to the digit across days; the number moves only when something about 
 machine does** — the build, or the card's other tenants. The 2026-08-04 re-take is
 the second kind: −0.6 % on the day the monitor left the compute GPU, attributed by
 rebuilding the 08-01 commit and re-running it headless (33.30 to the digit — the
-compositor was the whole 0.20 ms and ~6 W). The pin stands at **32.00** (2026-08-13) and carries
+compositor was the whole 0.20 ms and ~6 W). The pin stands at **27.00** (2026-09-09) and carries
 "headless" as a stated condition; repeat it after any kernel-shipping day or any
 change to what else the card is doing.
 
@@ -817,14 +820,13 @@ Two other candidates died in the same week:
 **The practical conclusion, and what has since moved.** MXBM's advantage is a band:
 lolMiner below the crossing, MXBM between the crossings, and MXBM alone above the upper
 one at a ceiling lolMiner cannot reach at any setting. That shape still holds; the figures
-in it do not. On the current kernels the band is **~177 W to the 285 W stock limit** and
-the ceiling **69.95 sol/s against ~54.4** — see
-[both miners under the same cap](#both-miners-under-the-same-cap), which is the live
-table. The low-end verdict has moved furthest: "not supportable below 210 W" was true of
-the 07-29 build, and on stock memory the low band is now **a 3.2 % lead at the 100 W
-floor** with a worst case of **−7.5 % at 160 W**, against the −19 to −32 % of that
-build — and at best configuration the residual is the ≤115 W floor at 2–3 % and the
-155–177 W strip at under 1 % ([the low band](#the-low-band-on-the-current-kernel)).
+in it do not. In the 2026-08-18 head-to-head the band is **~177 W to the 285 W stock
+limit** and the ceiling **74.8 sol/s on the current build against ~54.4** — see
+[both miners under the same cap](#both-miners-under-the-same-cap). On stock memory the
+low band is **a 3.2 % lead at the 100 W floor** with a worst case of **−7.5 % at 160 W**,
+against −19 to −32 % on the build of 2026-07-29 — and at best configuration the residual
+is the ≤115 W floor at 2–3 % and the 155–177 W strip at under 1 %
+([the low band](#the-low-band-on-the-current-kernel)).
 
 *Reopening: a no-replay 180 W A/B putting the whole-solve rate materially above
 92 MHz/GB; a narrowing worth more than 1.07 GB; or a machine where the compute GPU does
@@ -892,10 +894,10 @@ rung: 68 °C at 366 W against 65 °C at stock.
 
 **`--pl 315` is the operating point above stock**, worth **+1.1 % speed for +10.5 %
 power**. The marginal return over 285 → 315 W is **0.027 sol/s per W**, which is *below*
-the 0.037 this document records for the 255 → 285 step — the curve rolls off above stock
-rather than continuing straight, so extrapolating the sub-stock sweep overstates what is
-there. It is a goal-2 lever bought at a goal-3 cost, and 210 W remains the recommendation
-for a rig that pays for electricity.
+the 0.043 the current sweep records for the 255 → 285 step — the curve rolls off above
+stock rather than continuing straight, so extrapolating the sub-stock sweep overstates
+what is there. It is a goal-2 lever bought at a goal-3 cost, and 220 W remains the
+recommendation for a rig that pays for electricity.
 
 **This sweep is a later session than [the head-to-head table](#both-miners-under-the-same-cap)**
 and carries the cross-session term the method note prices: its 285 W point reads 70.55
@@ -940,9 +942,9 @@ back as core clock. Measured: **−14.3 % at 100 W, −14.4 % at 120, −10.8 % 
 200 W up — the solver's own DRAM roofline at 280 GB/s sustained, 87 % of the rung's
 peak, with draw saturating at ~230 W under a 285 W cap).
 
-**The efficiency-optimal operating point moved onto the rung: 160 W + 5001 MHz gives
-3.70 J/solution** (2026-08-14, 120 s pairs in mirrored order — the 2026-07-31 sweep read
-3.79 there). The gain at this cap is the implicit-bits record shipped 2026-08-13, not the
+**On the 2026-08-14 build the efficiency-optimal operating point was on the rung: 160 W +
+5001 MHz gave 3.70 J/solution** (120 s pairs in mirrored order — the 2026-07-31 sweep read
+3.79 there; the 2026-08-18 session below reads 3.219 for the same point on a later build). The gain at this cap is the implicit-bits record shipped 2026-08-13, not the
 low-power pair: that gate fires only below 130 W. Guidance for capped rigs: below ~170 W, always
 pair the cap with the rung — `sudo mxbm ... --pl <cap> --mclk 5001` (both restored on
 exit), or `sudo nvidia-smi -pl <cap> -lmc 5001,5001` once at boot on rigs that mine
@@ -1015,16 +1017,18 @@ residual deficits are the ≤115 W floor at 2–3 % and the 155–177 W strip at
 
 **The rung plateaus near 50.7 sol/s from 175 W up** — above ~172 W it stops drawing
 its cap (178 W observed at a 180 W limit): the memory watts the rung frees exceed what
-the core can absorb. The plateau was ~47 sol/s one kernel ago; levers that delete
+the core can absorb. The plateau was ~47 sol/s on the 2026-08-14 build; levers that delete
 instructions pay more on the rung, where the core is the constraint, than at stock. The
 rung-versus-stock crossover sits at ~167 W.
 
-**The efficiency optimum is a tie between the rung and stock memory.** This sweep puts
-the rung at 160 W at **3.219 J/sol** against stock memory's 3.232 at 210 W — inside
-the arm spread — with stock delivering 31 % more throughput at its point (64.9 against
-49.55 sol/s). The recommendation is unchanged: 210 W on stock memory where the rig can
-supply it, the 160 W rung where it cannot. lolMiner's best point in the same session
-is 3.205 J/sol on its own sol/s definition, a tie with both.
+**In this session the efficiency optimum was a tie between the rung and stock memory:**
+the rung at 160 W at **3.219 J/sol** against stock memory's 3.232 at 210 W — inside the
+arm spread — with stock delivering 31 % more throughput at its point (64.9 against
+49.55 sol/s). The current build's stock-memory optimum reads **3.14 J/sol at 220 W**
+doing 69.9 sol/s ([benchmarks.md](benchmarks.md#mxbm-power-curve)); the rung has not
+been re-swept on it. The recommendation: 220 W on stock memory where the rig can supply
+it, the 160 W rung where it cannot. lolMiner's best point in the same session is
+3.205 J/sol on its own sol/s definition.
 
 The geometry below the ~130 W gate is unchanged and its A/B stands, at its recorded
 scope:
@@ -1059,10 +1063,12 @@ figures, so they carry the cross-session band, not the paired harness's.
 | 240 W | 61.1 | 32.9 | 3.92 |
 | 285 W | 63.6 | 31.6 | 4.46 |
 
-**The fallback's deficit against CUDA widens as the cap drops**: ~1.09× at stock,
-~1.15× at 140 W, ~1.29× at 100 W — the cap multiplier pricing the backend's larger
-dynamic instruction count. Its efficiency floor (3.65 J/solution at 210 W, against
-CUDA's 3.23) never crosses under CUDA's, so a capped rig should run the CUDA path
+**The fallback's deficit against CUDA, in this session, widened as the cap dropped**:
+~1.09× at stock, ~1.15× at 140 W, ~1.29× at 100 W — the cap multiplier pricing the
+backend's larger dynamic instruction count. Against the current CUDA build it is
+~1.18× at stock ([benchmarks.md](benchmarks.md#mxbm-power-curve)); the OpenCL kernels
+are unchanged. Its efficiency floor (3.65 J/solution at 210 W, against CUDA's 3.14 at
+220 W on the current build) never crosses under CUDA's, so a capped rig should run the CUDA path
 wherever the card allows it. Speculative entry and its gate are CUDA-only; nothing on
 this curve depends on them.
 

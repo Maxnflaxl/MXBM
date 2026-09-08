@@ -55,7 +55,7 @@ curl http://localhost:8080/summary
 
 ```json
 {
-  "Software": "MXBM 0.5.126 [2ecb9d4]",
+  "Software": "MXBM v0.8.431 [3d2563a]",
   "Mining":  { "Algorithm": "BeamHash III" },
   "Session": {
     "Uptime_Human": "0h 0m 56s", "Uptime_s": 56,

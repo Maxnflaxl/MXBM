@@ -323,30 +323,26 @@ Reported by OpenCL: `gmem = 15.59 GiB`, `max_alloc = 3.90 GiB`.
 | Throughput | **74.40 sol/s** | 63.2 sol/s |
 | End-to-end solve | **27.00 ms** | 31.8 ms |
 | Board power | 276.4 W at the pin, near the card's 285 W limit; `sw_power_cap` intermittently active | — |
-| Efficiency | **0.269 sol/s/W** at the pin (74.40 / 276.4 W), **0.275 at 220 W** (its optimum on the stock memory clock), matched but not beaten by **0.276** at 160 W with `--mclk 5001` | — |
+| Efficiency | **0.269 sol/s/W** at the pin (74.40 / 276.4 W), **0.318 at 220 W** (its optimum on the stock memory clock, 3.14 J/solution) | — |
 
-*(CUDA column: the locked-clock pin, re-taken 2026-08-16 after the block-exit barrier and
-singleton-free staging shipped, and the 2026-08-14 rung measurements. Stock efficiency is that pin's own
-throughput over its own board draw. **The capped figures were not re-measured against
-the new kernel** — under a cap the binding currency is different, so their sign there is
-unknown rather than assumed.
-The OpenCL column is its own 2026-08-17 measurement, after the implicit-bits record and
-the w0-checkpoint pair record shipped there.)*
+*(CUDA column: the locked-clock pin of 2026-09-09; the capped figure is the same day's
+power sweep of the same build. Stock efficiency is the pin's own throughput over its own
+board draw. The OpenCL column is its own 2026-08-17 measurement; the OpenCL kernels are
+unchanged since.)*
 
-The two backends are within **1.10×** of each other, measured in the same session at
-released clocks (CUDA 28.9 ms, OpenCL 31.8 ms, 2026-08-17, two 30 s arms each); the same
-pair read 1.012× on 2026-08-02, before CUDA took several records OpenCL still lacks.
-Cross-session figures carry a ~2.5 % band, so the same-session pair is the only comparison
-that means anything; the column figures above are each backend's own controlled headline,
-and the CUDA one is a locked-clock pin while the OpenCL one is not.
+The two backends are about **1.18×** apart at stock (CUDA 26.9 ms against OpenCL 31.8
+at released clocks; the last same-session pair, 2026-08-17, read 1.10× before the CUDA
+kernel changes of 2026-09-08/09). Cross-session figures carry a ~2.5 % band; the column
+figures above are each backend's own controlled headline, and the CUDA one is a
+locked-clock pin while the OpenCL one is not.
 
 The card is power-limited, not thermally limited, in every kernel, so the board power
-limit is the most valuable knob on it: **at 210 W the solver does 64.9 sol/s for 209.8 W,
-against 69.95 at 284 W** — 93 % of the speed for 74 % of the power, and 210 W is
-also the efficiency peak (**3.23 J/solution**). Below ~167 W the memory clock is the
-second knob: `--mclk 5001` is worth +7 % at 160 W rising to +18 % at 100 W, and its
-160 W point matches stock memory's 210 W on energy per solution (3.22 against 3.23 J)
-at a third less throughput. Against an *equally capped* lolMiner, MXBM wins on
+limit is the most valuable knob on it: **at 220 W the solver does 69.9 sol/s for 219.7 W,
+against 74.8 at 285 W** — 93 % of the speed for 77 % of the power, and 220 W is
+also the efficiency peak (**3.14 J/solution**). Below ~167 W the memory clock is the
+second knob: `--mclk 5001` is worth +7 % at 160 W rising to +18 % at 100 W, at a
+third less throughput than the 220 W point. Against an *equally capped* lolMiner
+(measured 2026-08-18; the MXBM column there is a floor on the current build), MXBM wins on
 both speed and efficiency from ~177 W to the 285 W stock limit and again below ~104 W
 on stock memory; in between it trails — worst at 160 W (−7.5 %) — and at each miner's
 best configuration the residual is 2–3 % at 100–110 W and under 1 % at 155–177 W, with

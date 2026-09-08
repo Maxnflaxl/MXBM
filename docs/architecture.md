@@ -61,7 +61,7 @@ verifier over tens of thousands of fuzzed inputs.
 
 - **`Solver`** is a one-method interface: given a header and a nonce, return
   candidate solutions. This is the seam the GPU backends plug into. The current
-  reference solver wraps Beam's `OptimisedSolve`; the OpenCL, CUDA and Metal solvers (and a future HIP one)
+  reference solver wraps Beam's `OptimisedSolve`; the CUDA, OpenCL and Metal solvers
   implement the same interface.
 - **`Engine`** owns the pipeline: it takes the latest job from a mailbox on a
   worker thread, runs the solver, filters each candidate through the difficulty
@@ -71,8 +71,8 @@ verifier over tens of thousands of fuzzed inputs.
 - **`DevFee`** implements the 1.0% developer fee (see
   [devfee.md](devfee.md)). It holds a second stratum connection to the fee
   pool and, once a round is owed, has `JobRouter` switch the solver to that
-  pool's job for 36 seconds and then back. There is still only one `Engine`
-  and one solver; only the job being fed to it changes.
+  pool's job for 36 seconds and then back. There is still one `Engine` per mining
+  device and no extra one for the fee; only the job being fed to them changes.
 - **`Origin`** tags every job — and every solution derived from it — with the
   connection it came from, so a round ending mid-solve still submits to the
   pool that issued the job rather than to whichever is active at the time.
@@ -80,8 +80,8 @@ verifier over tens of thousands of fuzzed inputs.
 ## Threading model
 
 The running miner uses a small number of cooperating threads: the client's
-read loop, the engine's solver worker, the stats ticker, and (if enabled) the
-HTTP API's accept loop. With the developer fee configured there are two more —
+read loop, one solver worker per mining device, the thermal poller, the stats ticker,
+and (if enabled) the HTTP API's accept loop. With the developer fee configured there are two more —
 the fee connection's own read loop and its scheduler. Shared state is confined
 to the `Stats` object and the `JobRouter`, each behind a single mutex; each
 thread has a clear owner and a clean shutdown path, except the two stratum
@@ -96,15 +96,17 @@ for the console and API, matching what pools and other miners display.
 
 ## Testing
 
-Every unit has a focused test. The suite runs with `ctest` and needs no network
-or GPU. Golden vectors (wire messages, proof-of-work KATs, SHA-256 and difficulty
+Every unit has a focused test. The suite runs with `ctest` and needs no pool and no
+GPU — the GPU tests print `SKIP` without a device, and the transport test uses a
+loopback socket. Golden vectors (wire messages, proof-of-work KATs, SHA-256 and difficulty
 vectors) are checked in under `tests/vectors/` and `tests/`. See
 [building.md](building.md) for how to run them, including the optional Beam
 differential oracle.
 
 ## GPU solver performance
 
-The GPU collision-finding pipeline — its two paths, the per-round schedule, the
+The GPU collision-finding pipeline — its two geometries (row-bucket and the sort
+fallback) across three backends, the per-round schedule, the
 measured hardware limits that shape it, and the running log of every optimization and
 every failed experiment — is documented in
 [performance-research.md](performance-research.md); the headline figures, progress log

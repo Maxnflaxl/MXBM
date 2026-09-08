@@ -7,10 +7,11 @@ mxbm --algo BEAM-III --pool host:port --user addr[.worker] [options]
 MXBM's command line and configuration files are modeled on lolMiner's, so
 existing Beam mining setups translate with minimal changes.
 
-MXBM mines on a GPU by default (CUDA where available, otherwise OpenCL) and
-submits accepted shares to a real pool. A CPU reference solver remains
-available via `--solver ref` for validating the pipeline; it is far too slow to
-clear pool difficulty and is not a mining option.
+MXBM mines on a GPU by default (CUDA where available, then Metal on Apple Silicon,
+otherwise OpenCL) and submits accepted shares to a real pool. A CPU reference solver is
+available via `--solver ref` in a build configured with `-DBEAM_SOURCE_DIR=` (see
+[building.md](building.md)) for validating the pipeline; it is far too slow to clear
+pool difficulty and is not a mining option.
 
 ## Command-line options
 
@@ -38,7 +39,7 @@ immediately; only a *missing* one defers to the config.
 |------|---------|---------|
 | `--pass x` | Accepted and ignored — BeamHash III's stratum login carries the address alone, so no password is ever sent. | none |
 | `--tls [0\|1]` | Enable/disable TLS to the pool. | on; off for a loopback pool |
-| `--solver cuda\|opencl\|gpu\|ref\|auto` | Solver backend. `gpu` = any GPU (CUDA preferred), `cuda`/`opencl` pin one, `ref` = CPU reference. | auto |
+| `--solver cuda\|metal\|opencl\|gpu\|ref\|auto` | Solver backend. `gpu` = any GPU (CUDA, then Metal, then OpenCL), `cuda`/`metal`/`opencl` pin one, `ref` = CPU reference. | auto |
 | `--dev-fee PCT` | Raise the developer fee above its built-in rate, as a percentage. Raise-only. | built-in rate |
 | `--nocolor` | Disable ANSI colors in console output. | colors on |
 | `--apiport N` | Serve the dashboard and monitoring API on port N (0 = off). | off |
@@ -59,7 +60,7 @@ immediately; only a *missing* one defers to the config.
 | `--tstart C` | Resume a paused GPU at this temperature. | 0 (stays paused) |
 | `--tmode MODE` | Which sensor those read: `edge`, `junction`, `memory`. | edge |
 | `--pl W` | Board power limit in watts, per GPU (`240`, `240,*,260`; `*` skips one), or `auto` for the value a `--tune` run stored for this card. Needs root. | card default |
-| `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~25 min, no pool. | |
+| `--tune` | Measure this card's own power/speed curve and recommend `--pl` (and, when it pays, `--mclk`) values (see [Tuning](#tuning-measure-your-own-card)). Needs root, ~30 min, no pool. | |
 | `--cclk MHz` | Lock the core clock. Needs root. | driver-managed |
 | `--mclk MHz` | Lock the memory clock. Needs root. | driver-managed |
 | `--coff MHz` | Shift the core voltage/frequency curve. May be negative. Needs root. | 0 |
@@ -155,7 +156,7 @@ produces the same table for **your** card, then recommends a wattage:
 sudo mxbm --tune
 ```
 
-About 25 minutes, in four passes plus a drift gauge:
+About 30 minutes, in four passes plus a drift gauge:
 
 | pass | what it measures | why |
 |---|---|---|
@@ -310,7 +311,7 @@ never set a value the command line would reject.
 | `LOG`, `TIMEPRINT`, `WATCHDOG`, `NOCOLOR` | same | `1`/`0`, `true`/`false`, `on`/`off` |
 | `WATCHDOGSCRIPT` | `--watchdogscript` | path |
 | `LOGFILE` | `--logfile` | path; implies `LOG` unless `LOG` says otherwise |
-| `SOLVER` | `--solver` | `cuda`, `opencl`, `gpu`, `ref`, `auto` |
+| `SOLVER` | `--solver` | `cuda`, `metal`, `opencl`, `gpu`, `ref`, `auto` |
 | `DEVICES` | `--devices` | `ALL` or a list of indices (JSON also accepts an array) |
 | `PL` | `--pl` | watts per GPU (JSON also accepts an array: `[220, "*", 260]`) |
 | `CCLK`, `MCLK` | `--cclk`, `--mclk` | MHz per GPU (JSON also accepts an array) |
@@ -426,7 +427,7 @@ look identical from the device table alone.
 in the same order, minus the colour and plus a timestamp on every one:
 
 ```
-[2026-07-25 19:16:21] MXBM 0.5.126 [2ecb9d4] — open BeamHash III miner
+[2026-09-09 00:12:04] MXBM v0.8.431 [3d2563a] — open BeamHash III miner
 [2026-07-25 19:16:23] New job received for blockheight 3974400 (job 58481) Difficulty: 512
 [2026-07-25 19:16:44] RTX 4070 Ti SUPER: Found a share of difficulty 8.0k (3.9x target of 2048)
 [2026-07-25 19:16:44] Share accepted (18 ms)
@@ -460,23 +461,23 @@ mean and standard deviation without any parsing, the API reports them directly �
 just bound the miner, it picks its operating point — which makes it the single most
 valuable setting on an NVIDIA card.
 
-**`--pl 210` is the setting to use** on the reference RTX 4070 Ti SUPER: its measured
+**`--pl 220` is the setting to use** on the reference RTX 4070 Ti SUPER: its measured
 efficiency peak.
 
 | `--pl` | sol/s | sol/s/W | |
 |---|---|---|---|
-| 160 W | 46.2 | 0.2887 | |
-| 180 W | 54.0 | 0.2999 | |
-| **210 W** | **64.9** | **0.3094** | the efficiency peak, and recommended |
-| 240 W | 67.9 | 0.2834 | |
-| 285 W *(stock)* | **69.95** | 0.2461 | fastest |
+| 160 W | 47.0 | 0.294 | |
+| 180 W | 54.7 | 0.304 | |
+| **220 W** | **69.9** | **0.318** | the efficiency peak, and recommended |
+| 240 W | 72.3 | 0.301 | |
+| 285 W *(stock)* | **74.8** | 0.263 | fastest |
 
-Dropping from 285 W to 210 W costs 7 % of throughput and saves 26 % of the power. Going
+Dropping from 285 W to 220 W costs 7 % of throughput and saves 23 % of the power. Going
 below the peak is *worse* on both counts. The full curve is in
-[performance.md](performance.md#both-miners-under-the-same-cap); these numbers are one
+[benchmarks.md](benchmarks.md#mxbm-power-curve); these numbers are one
 card's, and `sudo mxbm --tune` measures yours ([Tuning](#tuning-measure-your-own-card)).
 
-**Running capped below ~165 W? Drop the memory clock too.** Under a low cap the GDDR
+**Running capped below ~167 W? Drop the memory clock too.** Under a low cap the GDDR
 interface burns watts for bandwidth the slowed core cannot use; the 5001 MHz rung returns
 them as core clock — **+7 % sol/s at 160 W rising to +18 % at the 100 W floor**, at the
 same wall power. Both settings are restored when the miner exits:
@@ -488,12 +489,12 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 On a rig that doesn't run the miner as root, set the card once instead
 (`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. The
 crossover is ~167 W and above ~180 W the rung is a wall, so this is strictly a low-cap
-pairing — and on energy per solution it only ties: 3.219 J/solution at 160 W on the rung
-against 3.232 at 210 W on stock memory, where the card does 31 % more work. Details in
+pairing — and it is not an efficiency setting: 3.22 J/solution at 160 W on the rung
+against 3.14 at 220 W on stock memory, where the card does 41 % more work. Details in
 [performance.md](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w).
 
 ```
-sudo mxbm --algo BEAM-III --pool ... --user ... --pl 210
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
 ```
 
 **It needs root** — every NVML write does. Without it MXBM says so by name and mines on
@@ -611,8 +612,8 @@ rather than mine a partial search that finds nothing —
 
 ```
 GPU has too little memory for BeamHash III: it can host only 11834786 of the
-required 33554432 seed elements. [...] Need ~8.9 GiB of usable VRAM; this device
-offers 3.1 GiB after the reserve (see --keepfree).
+required 33554432 seed elements. [...] The coarsest geometry needs ~1.90 GiB of
+usable VRAM; this device offers 1.1 GiB after the reserve (see --keepfree).
 ```
 
 Two caveats. On Windows the display driver can page GPU memory, so over-allocating
@@ -622,7 +623,7 @@ launched afterwards competes for what is left, whatever was reserved.
 
 On a small card the usable figure decides which **geometry** MXBM runs, not
 whether it runs at all: the solver walks a ladder of rungs from 6.17 GiB down to
-4.03 and takes the fastest that fits, so `--keepfree` is also the knob that
+1.90 and takes the fastest that fits, so `--keepfree` is also the knob that
 trades a rung for desktop headroom. The rungs and what each card class gets are
 in [HW_REQUIREMENTS.md](HW_REQUIREMENTS.md#the-vram-ladder).
 
@@ -737,7 +738,7 @@ lock the clock and raise the offset, so the locked frequency runs at a voltage t
 otherwise deliver less. `--fan` sets a fan target in percent, on every fan the card has.
 
 ```sh
-sudo mxbm --algo BEAM-III --pool ... --user ... --pl 210 --cclk 2100 --coff 200 --moff 1500
+sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220 --cclk 2100 --coff 200 --moff 1500
 ```
 
 All of them take the same per-GPU list syntax as `--pl`, all need root, and all are

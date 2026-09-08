@@ -59,7 +59,7 @@ A raised rate lengthens the round proportionally (2.5% → a 90 s round per
 hour) and is shown everywhere the rate is: the startup line, the statistics
 table, `/summary`, and the fee pool worker name below.
 
-`--dev-fee` is a command-line flag only; it is not read from the config files.
+`DEVFEE` is also accepted in both config formats, with the same raise-only rule.
 
 ## Worker name on fee rounds
 

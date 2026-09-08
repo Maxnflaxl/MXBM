@@ -39,7 +39,7 @@ xcodebuild -downloadComponent MetalToolchain
 
 This is optional. Without it CMake reports `Metal solver disabled` and every
 other target still builds and tests; with it you get `--solver metal`, which is
-roughly 4× faster than the OpenCL path on Apple Silicon (see
+roughly 5× faster than the OpenCL path on Apple Silicon (see
 [performance.md](performance.md)).
 
 If CMake does not find Homebrew's OpenSSL automatically, point it at the keg:
@@ -88,6 +88,6 @@ part of a shipped binary.
 
 ## Version string
 
-`mxbm --version` prints `MXBM <major>.<minor>.<commit-count> [<short-hash>]`,
+`mxbm --version` prints `MXBM v<major>.<minor>.<commit-count> [<short-hash>]`,
 stamped from git at build time. Source tarballs without git metadata report
 `[nogit]` for the hash.
