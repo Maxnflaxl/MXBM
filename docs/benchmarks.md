@@ -45,7 +45,8 @@ card appears twice because both of its backends are measured.
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
 ‡ Both re-taken 2026-08-17, interleaved in one session at released clocks, and both
-predate the 2026-09-08 terminal-round change (−0.7 % at stock). The published headline
+predate the 2026-09-08 terminal-round change (−0.7 % at stock, +0.5 % at 140 W and
+0.0 % at 100 W by paired arms). The published headline
 is the **28.80 ms / 69.90 sol/s**
 [locked-clock pin](performance-research.md#the-named-reference-lgc-2600) of 2026-09-08,
 which trades boost for reproducibility.

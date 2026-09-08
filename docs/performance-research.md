@@ -6499,6 +6499,19 @@ the session. Three consequences:
   the per-cap margins between the crossings are known only to within this band. Where a
   margin drives a decision, both miners get measured in one session, interleaved.
 
+**A fourth instance (2026-09-08) reproduced the shape with the sign reversed again.** The
+15-cap sweep after the terminal round shipped read *below* the 08-18 column at every cap
+under 220 W — −2.8 % at 140 W, −5.3 % at 100, −8.1 % at 110 — and above it from 240 W
+up (+0.7 to +1.1 %). The pre-stint binary, built from its commit and run in the same
+session, sits at the swept figure, not the published one: old against new is **+0.5 % at
+140 W** for the new build (eight 60 s arms, ranges non-overlapping) and **0.0 % at 100 W**
+(second ordering; the first ordering's two arms after the first hand-off read 3–6 % low
+in both a 60 s and a 90 s repeat, a settling transient specific to the floor cap). The
+sweep's own ~4 % at 140 W is the session, and the column was left as swept on 08-18 with
+the change bounded by the pairs. One method note came out of it: the sweep script's
+output filter matched the miner's periodic status header, which also says `sol/s`; the
+summary lines were intact and the filter is now anchored to them.
+
 The clock-lock row is worth keeping separately. It is the third independent confirmation
 that [the governor outranks the lock](#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs) — under a 120 W cap, `-lgc 2600 -lmc 10251` and released
 clocks both settle to the same 1035 MHz and the same time per solve.

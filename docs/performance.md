@@ -562,9 +562,14 @@ term, which reaches ~5 % at the low caps
 memory, the measured crossover
 ([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
 lolMiner 1.98a is the unchanged reference binary. **The MXBM column predates the
-2026-09-08 terminal-round change** (−0.7 % at stock, and the round stretches least under
-a cap, ×1.17 at 140 W), so every MXBM figure below is a floor of up to ~0.7 % until the
-column is re-swept; the crossings and margins quoted around it inherit that.)*
+2026-09-08 terminal-round change**, which paired arms bound at **+0.5 % at 140 W**
+(old against new, eight 60 s arms non-overlapping), **0.0 % at 100 W** and −1.0 % ms at
+stock, so every MXBM figure below is a floor of at most ~1 %, inside the row spacing of
+every crossing. A solo 15-cap re-sweep the same day was *not* merged: it read the
+pre-stint binary itself ~4 % below this column at 140 W — the
+[swept-column session term](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it),
+fourth instance — and a head-to-head column is taken from one session with both miners
+or not at all.)*
 
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|

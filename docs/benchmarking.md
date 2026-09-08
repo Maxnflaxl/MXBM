@@ -101,7 +101,7 @@ one instrument measured both.
 **A swept column is provisional until one of its points is bracketed.** `power_sweep.sh`
 gives one unrepeated run per cap: the right instrument for a curve's *shape*, the wrong
 one for any single number in it. Two sweeps of the same binary have disagreed by up to
-~5 %, in both directions, and the disagreement grows toward the low caps
+~5 %, in both directions, four times now, and the disagreement grows toward the low caps
 ([the write-ups](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it)).
 So: reproduce at least one cap with an interleaved A/B before publishing, **never treat a
 difference between two sweeps as evidence about a kernel change**, and take a head-to-head

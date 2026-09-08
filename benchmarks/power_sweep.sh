@@ -36,5 +36,5 @@ for pl in $LIMITS; do
     # measured window rather than from a sampler bolted on outside it.
     "$ROOT/build/mxbm" --benchmark BEAM-III --benchmark-seconds "$SECS" --nocolor \
         --solver cuda 2>&1 \
-        | grep -E "sol/s|ms/solve|MHz core|J total"
+        | grep -E "^  [0-9.]+ (sol/s|ms/solve)|MHz core|J total"
 done
