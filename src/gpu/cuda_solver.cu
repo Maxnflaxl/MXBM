@@ -49,17 +49,18 @@ constexpr uint32_t kPairStride = 2u;     // r1 -> r2 pair record, 16 B
 // kernels that DO run never received the preference.
 #define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,kPairStride,MXBM_R1_FCAP
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, kPairStride,kR2RecStride,kFCap
-#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap
+constexpr uint32_t kR3OutStride = kR3OutWords;   // round 3's record; set 1 stays sized at 8
+#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,kR3OutStride,kFCap
 // Round 4's output stride: 8 B (t5_rec) on a shipping build, 16 B where MXBM_R4_ROWS
 // keeps gi and lead for the reference recovery arm.
-#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,(MXBM_R4_ROWS?2u:1u),kFCap
+#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, kR3OutStride,(MXBM_R4_ROWS?2u:1u),kFCap
 // The quad-record pair. Only rounds 2 and 3 differ, and only in their strides and round
 // 3's mode: the record carries the same INFORMATION either way, so every L value, tree
 // width and cap is identical. Both pairs are instantiated and the choice is made at
 // RUNTIME from the geometry, because which one a card wants depends on its VRAM.
 constexpr uint32_t kQuadStride = 3u;
 #define MXBM_R2Q_ARGS 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuadStride,kFCap
-#define MXBM_R3Q_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap
+#define MXBM_R3Q_ARGS 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,kR3OutStride,kFCap
 // The OCTO pair. Round 3 emits its eight leaves in 4 u64 instead of the 64 B record, and
 // round 4 rebuilds the work words, the lead and the leftContrib from them (LM_RD4). Only
 // round 3's OUTSTR and round 4's INSTR and mode change; every L value, tree width and cap
@@ -80,12 +81,12 @@ constexpr uint32_t kQuad16Stride = 2u;   // the quad record with its gi retired
 constexpr uint32_t kFCap64K  = 280u;
 constexpr uint32_t kFCap64K3 = 272u;
 #define MXBM_R2_ARGS_S  7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kR2RecStride,kFCap64K
-#define MXBM_R4_ARGS_S  6,1,2,LM_USE, 288u,9u,2u,0u,0u, 8u,(MXBM_R4_ROWS?2u:1u),kFCap64K
+#define MXBM_R4_ARGS_S  6,1,2,LM_USE, 288u,9u,2u,0u,0u, kR3OutStride,(MXBM_R4_ROWS?2u:1u),kFCap64K
 #define MXBM_R2Q_ARGS_S 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuadStride,kFCap64K
 #define MXBM_R2QO_ARGS_S 7,7,2,LM_RD2, 400u,4u,2u,4u,4u, kPairStride,kQuad16Stride,kFCap64K
 #define MXBM_R4O_ARGS_S  6,1,2,LM_RD4, 288u,9u,2u,0u,0u, kOctoStride,2u,kFCap64K
-#define MXBM_R3_ARGS_S   7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,8u,kFCap64K3
-#define MXBM_R3Q_ARGS_S  7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,8u,kFCap64K3
+#define MXBM_R3_ARGS_S   7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, kR2RecStride,kR3OutStride,kFCap64K3
+#define MXBM_R3Q_ARGS_S  7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuadStride,kR3OutStride,kFCap64K3
 #define MXBM_R3QO_ARGS_S 7,6,4,LM_RD3, 376u,6u,4u,2u,8u, kQuad16Stride,kOctoStride,kFCap64K3
 // Left alone the rebuild takes 128 registers, exactly 2 blocks/SM. Asking for a third
 // costs 88-96 B of spill and pays -2 %; 0 leaves the choice to ptxas.
@@ -1019,14 +1020,14 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         // round-3 ancestors by slot. Two blocks per survivor, ~4 in the whole grid.
         cudaMemset(I.l3Slots, 0xFF, (size_t)hs*4*4);
         replay_r4<<<2*hs, 256>>>(hs, I.survL4, I.elem4 ? I.elem4 : I.elem[0], I.elem[1],
-                                 8u, I.counts[1], I.cap, I.l3Slots, I.l4Lead, I.drops,
+                                 kR3OutStride, I.counts[1], I.cap, I.l3Slots, I.l4Lead, I.drops,
                                  I.bb, I.arena ? I.ahead[1] : nullptr,
                                  I.arena ? I.anext[1] : nullptr);
         if (I.elem4) {
             // ...and none for rounds 1-3 either. replay_r3 does the same one level down,
             // reaching round 2's output, whose record carries four leaves in tree order.
             cudaMemset(I.l2Slots, 0xFF, (size_t)hs*8*4);
-            replay_r3<<<4*hs, 256>>>(hs, I.l3Slots, I.elem[1], 8u, I.elem[0], 8u, I.bb,
+            replay_r3<<<4*hs, 256>>>(hs, I.l3Slots, I.elem[1], kR3OutStride, I.elem[0], 8u, I.bb,
                                      I.counts[0], I.cap, I.l2Slots, I.drops, I.bb,
                                      I.arena ? I.ahead[0] : nullptr,
                                      I.arena ? I.anext[0] : nullptr);
@@ -1035,7 +1036,7 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
         } else {
             recover_from_l3<<<(hs+63)/64, 64>>>(hs, kCapacity, I.left, I.right, I.l3Slots,
                                                 MXBM_R4_ROWS ? nullptr : I.l4Lead,
-                                                I.elem[1], 8u, I.dleaves);
+                                                I.elem[1], kR3OutStride, I.dleaves);
         }
     }
     I.mark(7);

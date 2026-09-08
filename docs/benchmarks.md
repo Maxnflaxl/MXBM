@@ -45,9 +45,10 @@ card appears twice because both of its backends are measured.
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
 ‡ Both re-taken 2026-08-17, interleaved in one session at released clocks, and both
-predate the 2026-09-08 terminal-round and replay changes (−1.4 % at stock together;
-the terminal's +0.5 % at 140 W and 0.0 % at 100 W by paired arms). The published headline
-is the **28.60 ms / 70.30 sol/s**
+predate the three 2026-09-08 changes (−3.4 % ms at stock together; under a cap the
+terminal's +0.5 % at 140 W, 0.0 % at 100 W and the 56 B record's +0.2 % at 140 W by
+paired arms). The published headline
+is the **28.00 ms / 71.90 sol/s**
 [locked-clock pin](performance-research.md#the-named-reference-lgc-2600) of 2026-09-08,
 which trades boost for reproducibility.
 
@@ -133,7 +134,7 @@ MXBM's column: 80 minutes against the pool reads **62.32 sol/s**, its 15 s windo
 spread σ = 1.99 (the uncertainty on that mean is ±0.11), and the controlled benchmark the
 same day reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). It predates
 the w0-checkpoint record and the replayed recovery, which together took the controlled
-figure to **70.30 sol/s at 28.60 ms** (+12.1 %), so every margin in it is a floor on the
+figure to **71.90 sol/s at 28.00 ms** (+14.7 %), so every margin in it is a floor on the
 current one. lolMiner's column is the 2026-07 session; its binary is unchanged.
 
 </details>
@@ -205,7 +206,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 70.30).
+(both on the build of 2026-07-25; the current one is 71.90).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. The figures are left as measured; rescaling them would
 publish numbers no run produced.
@@ -338,7 +339,7 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage, baseline
 
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown, not the 28.60 one's; the per-stage split has not
+It is the 29.30 ms build's breakdown, not the 28.00 one's; the per-stage split has not
 been re-taken with power and `benchmarks/stage_power.sh` is what re-takes it. The *time*
 split has been, by a second instrument that cannot give the power column —
 [the idle-GPU census](performance-research.md#the-gpu-computes-993--of-a-solve) reads

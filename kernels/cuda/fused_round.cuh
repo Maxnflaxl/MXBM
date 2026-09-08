@@ -1031,6 +1031,30 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             llead[pos] = OW0 ? ow0_lead(q0.x, q0.y) : octo_lead(q0.x);
             lslot[pos] = (uint32_t)idx_;           // what this round's references name
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
+        } else if constexpr (INSTR == kR3OutWords) {   // LM_USE on the 7-word record
+            // Word 4's top byte carries a replay hint; combine's Lout mask drops it.
+            uint64_t r7[7];
+            const uint64_t* s7 = in_belem + d;
+            if (idx_ & 1u) {
+                r7[0] = s7[0];
+                ulonglong2 a = *reinterpret_cast<const ulonglong2*>(s7 + 1);
+                ulonglong2 b = *reinterpret_cast<const ulonglong2*>(s7 + 3);
+                ulonglong2 e = *reinterpret_cast<const ulonglong2*>(s7 + 5);
+                r7[1] = a.x; r7[2] = a.y; r7[3] = b.x; r7[4] = b.y; r7[5] = e.x; r7[6] = e.y;
+            } else {
+                ulonglong2 a = *reinterpret_cast<const ulonglong2*>(s7 + 0);
+                ulonglong2 b = *reinterpret_cast<const ulonglong2*>(s7 + 2);
+                ulonglong2 e = *reinterpret_cast<const ulonglong2*>(s7 + 4);
+                r7[0] = a.x; r7[1] = a.y; r7[2] = b.x; r7[3] = b.y; r7[4] = e.x; r7[5] = e.y;
+                r7[6] = s7[6];
+            }
+            #pragma unroll
+            for (int w = 0; w < 5; ++w) lwork[lwx(pos, w)] = r7[w];
+            lwork[lwx(pos, 5)] = 0ull;
+            lgi[pos] = r3o_gi(r7[5]); llead[pos] = r3o_lead(r7[5]);
+            if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
+            for (uint32_t i = 0; i < SIN; ++i)
+                lleaf[pos*LEAFW + i] = (uint32_t)(r7[6] >> ((i & 1u) * 32u));
         } else {   // LM_USE: work words, meta, then the leftContrib as the leaf payload
             // INW-generic: this branch serves LM_USE (INW=6) and LM_RAW (INW=7), and
             // hardcoding three ulonglong2 loads silently dropped word 6 for the latter.
@@ -1475,11 +1499,29 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         }
                     } else if constexpr (LMODE == LM_EMIT || LMODE == LM_RD3) {
                         // LM_RD3 differs from LM_EMIT only in how it READ its input; what
-                        // round 3 writes for round 4 is byte-identical either way.
-                        // Word 5 in the emitting block's INPUT bucket's place: at
-                        // Lout(4) = 288 the shift drops everything above bit 311, so this
-                        // word cannot reach round 4's output and round 4 reads it only to
-                        // XOR it into a result that masks it away. replay_r3 reads it.
+                        // round 3 writes for round 4 is byte-identical either way. Round 4
+                        // consumes 312 work bits, so the sixth work word is dead and only
+                        // replay_r3's parent hint (the emitting block's bucket) needs a home.
+                    if constexpr (OUTSTR == kR3OutWords) {
+                        // The 7-word record (bh3_records.cuh). 56 B slots alternate 16 B
+                        // alignment, so the four stores are one 8 B and three 16 B, placed
+                        // by the slot's parity: four transactions either way.
+                        const uint64_t w4 = r3o_w4(c.w[4], bucket);
+                        const uint64_t m7 = r3o_meta(ctree[0], cgi, bucket);
+                        uint64_t* o = out_belem + od;
+                        if (oslot & 1u) {
+                            st_em(o, c.w[0]);
+                            st_em(reinterpret_cast<ulonglong2*>(o + 1), make_ulonglong2(c.w[1], c.w[2]));
+                            st_em(reinterpret_cast<ulonglong2*>(o + 3), make_ulonglong2(c.w[3], w4));
+                            st_em(reinterpret_cast<ulonglong2*>(o + 5), make_ulonglong2(m7, contribOut));
+                        } else {
+                            st_em(reinterpret_cast<ulonglong2*>(o + 0), make_ulonglong2(c.w[0], c.w[1]));
+                            st_em(reinterpret_cast<ulonglong2*>(o + 2), make_ulonglong2(c.w[2], c.w[3]));
+                            st_em(reinterpret_cast<ulonglong2*>(o + 4), make_ulonglong2(w4, m7));
+                            st_em(o + 6, contribOut);
+                        }
+                    } else {
+                        // The 8-word form: the hint takes the dead word whole.
                         static_assert(OUTSTR % 2 == 0, "vectorised path needs an even stride");
 #if MXBM_PAIRED_EMIT && !MXBM_POISON_W
                         pair_emit64(out_belem, od,
@@ -1503,6 +1545,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         st_em(v + 3, make_ulonglong2(((uint64_t)cgi << 32) | (uint64_t)ctree[0],
                                                contribOut));
 #endif
+                    }
                     } else if constexpr (LMODE == LM_USE && OUTSTR == 1) {
                         st_em(out_belem + od, t5_rec(c.w[0], bucket));
                     } else {

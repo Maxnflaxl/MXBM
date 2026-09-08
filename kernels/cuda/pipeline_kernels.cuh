@@ -299,19 +299,19 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
     replay_pairs(sh, n, [&](uint32_t p, uint32_t q) {
         {
             const size_t dp = slot_of(p) * r3_stride, dq = slot_of(q) * r3_stride;
-            const uint64_t mp = r3_elem[dp + 6], mq = r3_elem[dq + 6];
-            const uint32_t la = (uint32_t)mp, lb = (uint32_t)mq;
-            const uint32_t ga = (uint32_t)(mp >> 32), gb = (uint32_t)(mq >> 32);
+            const uint64_t mp = r3_elem[dp + 5], mq = r3_elem[dq + 5];
+            const uint32_t la = r3o_lead(mp), lb = r3o_lead(mq);
+            const uint32_t ga = r3o_gi(mp), gb = r3o_gi(mq);
             const bool swap = (lb < la) || (lb == la && gb < ga);
             const size_t dL = swap ? dq : dp, dR = swap ? dp : dq;
             bh3::Elem a{}, b{}, c;
             #pragma unroll
-            for (int w = 0; w < 6; ++w) { a.w[w] = r3_elem[dL + w]; b.w[w] = r3_elem[dR + w]; }
+            for (int w = 0; w < 5; ++w) { a.w[w] = r3_elem[dL + w]; b.w[w] = r3_elem[dR + w]; }
             bh3::combine(a, b, 288u, c);
             uint32_t ctree[9] = {0,0,0,0,0,0,0,0,0};
-            ctree[8] = (uint32_t)(swap ? mp : mq);          // lead of the right parent
+            ctree[8] = r3o_lead(swap ? mp : mq);            // lead of the right parent
             bh3::apply_mix(c, ctree, 9u, 288u);
-            c.w[0] = bh3::rotl64(bh3::rotl64(c.w[0], 40) + r3_elem[dL + 7], 24);
+            c.w[0] = bh3::rotl64(bh3::rotl64(c.w[0], 40) + r3_elem[dL + 6], 24);
             const uint64_t got = kTermStride == 1 ? t5_ident_w0(c.w[0])
                                                   : (c.w[0] & 0xFFFFFFFFFFFFull);
             if (got == target) {
@@ -319,7 +319,7 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
                 out_slots[2u*blockIdx.x + 1u] = (uint32_t)(dR / r3_stride);
                 // This element's own lead, which is its left parent's: the terminal round
                 // no longer stores one, so the survivor's two halves are ordered here.
-                out_lead[blockIdx.x] = (uint32_t)(swap ? mq : mp);
+                out_lead[blockIdx.x] = r3o_lead(swap ? mq : mp);
             }
         }
     });
@@ -353,7 +353,7 @@ void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
     uint64_t tw[5];
     #pragma unroll
     for (int w = 0; w < 5; ++w) tw[w] = r3_elem[d3 + w];
-    const uint32_t b2 = (uint32_t)r3_elem[d3 + 5];
+    const uint32_t b2 = r3o_hint(tw[4], r3_elem[d3 + 5]);
     // The record keeps the 24 - impb key bits the bucket address does not carry, so
     // inside one bucket those bits alone decide whether two full keys are equal.
     const uint32_t impKB = 24u - impb;
@@ -413,9 +413,11 @@ void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
             #pragma unroll
             for (int i = 0; i < 4; ++i) { ctree[i] = lL[i]; ctree[i + 4] = lR[i]; }
             bh3::apply_mix(c, ctree, 6u, 376u);
+            // Word 4's top byte is the replay hint, not work: compare below it.
             bool hit = true;
             #pragma unroll
-            for (int w = 0; w < 5; ++w) if (c.w[w] != tw[w]) hit = false;
+            for (int w = 0; w < 5; ++w)
+                if ((c.w[w] ^ tw[w]) & (w == 4 ? 0x00FFFFFFFFFFFFFFull : ~0ull)) hit = false;
             if (hit) {
                 out_slots[2u*blockIdx.x]      = (uint32_t)((swap ? dq : dp) / r2_stride);
                 out_slots[2u*blockIdx.x + 1u] = (uint32_t)((swap ? dp : dq) / r2_stride);
@@ -504,7 +506,7 @@ __global__ void recover_from_l3(uint32_t nSurv, uint32_t capacity,
         }
         const size_t s = (size_t)sr;
         int sp = 1;
-        lvl[0] = 3u; slt[0] = (uint32_t)(r3_elem[s * r3_stride + 6] >> 32);
+        lvl[0] = 3u; slt[0] = r3o_gi(r3_elem[s * r3_stride + 5]);
         while (sp > 0 && got < 32u) {
             --sp;
             const uint32_t lv = lvl[sp], sl = slt[sp];

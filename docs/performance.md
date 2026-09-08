@@ -123,11 +123,12 @@ that makes ms/solve the quoted quantity.
 | 2026-09-08 | **Every round at three blocks per SM on 64 KB-shared cards** — rounds 2 and 4 staged at 280, round 3 at 272 with its 16-bit work word 6 in a narrow plane, chosen at runtime from the device's shared budget | — | — | — | — | — | [Turing's shared-memory budget](performance-research.md#turings-shared-memory-budget-and-the-per-card-staging-cap) *(a TURING row: no kernel the reference card runs changed, so the pin is untouched. The step 2 → 3 blocks costs +16 % on every round here when reproduced with `MXBM_SMEM_PAD`; round 3's block priced by emulation at −8.3 % of the round. Unmeasured on a Turing card)* | — |
 | 2026-09-08 | **The terminal round at one block per bucket, its record loads in flight together** — the round was 131k blocks each paying two or three DRAM latencies in series; hoisting a block's loads ahead of the sub-mask filter and staging a whole bucket per block halves the grid and the chain | 29.1 | 28.8 | **69.90** | −0.30 | −1.0 % | [the terminal round](performance-research.md#the-terminal-rounds-time-was-its-block-count-not-its-bytes) *(−0.28 ms measured ABBA on the round's own timer, 0.80 → 0.52 ms; the pin prints to 0.1 ms and moves 29.10 → 28.80 at 0.0 % spread both sides)* | — |
 | 2026-09-08 | **Recovery's replays search by chain table and rebuild candidates in lockstep** — each replay ran its pair search as a per-lane loop with the child rebuild inline, so every same-key hit executed hundreds of instructions on one lane; the candidates now go to a shared list and the block processes them a lane each | 28.8 | 28.6 | **70.30** | −0.20 | −0.7 % | [the replays](performance-research.md#the-replays-were-warp-serialised-on-their-hits-not-latency-bound) *(recovery 0.19 → 0.03 ms on its own timer, +0.4 % on solves ABBA both orderings; the pin prints to 0.1 ms and moves 28.80 → 28.60 at 0.0 % spread both sides)* | — |
+| 2026-09-08 | **The round-3 record is 56 B** — the sixth work word round 4 never reads is gone, the replay hint moves into word 4's free top byte and the meta word, and the 8 B-off slots take one 8 B and three 16 B stores chosen by slot parity, so transactions stay at four per element | 28.6 | 28.0 | **71.90** | −0.60 | −2.1 % | [the 56 B record](performance-research.md#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay) *(+1.7 % on solves ABBA both orderings; round 3 8.54 → 8.23 ms, round 4 6.43 → 6.20. Under a 140 W cap the two rounds gain 1.5 ms and the solve 0.1: a capped solve is energy-bound)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 63.0 | 31.9 | fallback / `--solver opencl` |
-| **CUDA** | **70.30**[^drift] | **28.60**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **71.90**[^drift] | **28.00**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
 The CUDA row is six 120 s runs at stock 285 W, headless, at **0.0 % spread on both
@@ -239,7 +240,7 @@ Under a locked clock the rig reproduces **to the digit across days** (0.0 % spre
 six runs on each of the five pins that measured an unchanged build, and 0.3 % on each of
 the two that measured a changed one), so use `LGC=2600 LMC=10251 benchmarks/headline.sh`
 to regression-test builds and the stock figure to describe what a user gets. The pin
-stands at **28.60 ms** as of 2026-09-08, taken with the compute GPU headless — a condition of
+stands at **28.00 ms** as of 2026-09-08, taken with the compute GPU headless — a condition of
 the number, since a compositor on the card costs a measured 0.20 ms and ~6 W, and one
 that follows the HDMI cable per login, so it is verified from the miner's own banner
 each session.
@@ -379,7 +380,7 @@ both fine.
 </details>
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — **28.60 ms / 70.30 sol/s** at stock 285 W, headless, locked LGC=2600
+attached — **28.00 ms / 71.90 sol/s** at stock 285 W, headless, locked LGC=2600
 LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-09-08; see
 the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
 cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline
@@ -442,7 +443,7 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage:
 
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown and not the 28.60 one's — the per-stage split has not
+It is the 29.30 ms build's breakdown and not the 28.00 one's — the per-stage split has not
 been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
 
 Solve is 29.23 ms in the harness, so the stages account for 100.2 % of it, and
@@ -562,12 +563,14 @@ term, which reaches ~5 % at the low caps
 *(The MXBM rows carry the shipped speculative-entry gate — off below 220 W on stock
 memory, the measured crossover
 ([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
-lolMiner 1.98a is the unchanged reference binary. **The MXBM column predates the two
+lolMiner 1.98a is the unchanged reference binary. **The MXBM column predates the three
 2026-09-08 changes.** The terminal round's is bounded by paired arms at **+0.5 % at
 140 W** (old against new, eight 60 s arms non-overlapping), **0.0 % at 100 W** and
-−1.0 % ms at stock; the replays' is +0.4 % at stock and, at 0.16 ms of a kernel that
-is not on the card's power-bound path, at most ~0.5 % anywhere. Every MXBM figure below
-is therefore a floor of at most ~1.5 %, inside the row spacing of every crossing. A solo 15-cap re-sweep the same day was *not* merged: it read the
+−1.0 % ms at stock; the replays' is +0.4 % at stock and at most ~0.5 % anywhere; the
+56 B record's is +1.7 % at stock and **+0.2 % at 140 W** measured (a capped solve is
+energy-bound; [ledger](performance-research.md#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay)).
+Every MXBM figure below is therefore a floor of at most ~2 % under 220 W, inside the row
+spacing of every crossing. A solo 15-cap re-sweep the same day was *not* merged: it read the
 pre-stint binary itself ~4 % below this column at 140 W — the
 [swept-column session term](performance-research.md#a-swept-cap-column-that-did-not-reproduce-and-the-five-explanations-that-were-not-it),
 fourth instance — and a head-to-head column is taken from one session with both miners

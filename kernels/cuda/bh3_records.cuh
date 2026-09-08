@@ -94,6 +94,25 @@ __device__ __forceinline__ uint32_t r3_l2(uint64_t p0, uint64_t p1) {
 __device__ __forceinline__ uint32_t r3_l3(uint64_t p1) { return (uint32_t)((p1 >> 11) & kIdxMask); }
 __device__ __forceinline__ uint32_t r3_gi(uint64_t p1) { return (uint32_t)((p1 >> 36) & 0x3FFFFFFull); }
 
+// r3 -> r4 RECORD: 7 u64. Work words 0..4 (round 4 consumes 312 bits, so word 4's top
+// byte is free), one meta word, the leftContrib. The dead sixth work word is gone, and the
+// emitting block's bucket -- replay_r3's parent hint, up to 17 bits -- rides in the free
+// byte of word 4 and the top of the meta word.
+//   w4 = work | hint[0..7] << 56      meta = lead | gi << 25 | hint[8..16] << 51
+constexpr uint32_t kR3OutWords = 7u;
+__device__ __forceinline__ uint64_t r3o_w4(uint64_t w4, uint32_t hint) {
+    return (w4 & 0x00FFFFFFFFFFFFFFull) | ((uint64_t)(hint & 0xFFu) << 56);
+}
+__device__ __forceinline__ uint64_t r3o_meta(uint32_t lead, uint32_t gi, uint32_t hint) {
+    return (uint64_t)(lead & kIdxMask) | ((uint64_t)(gi & 0x3FFFFFFu) << 25)
+         | ((uint64_t)(hint >> 8) << 51);
+}
+__device__ __forceinline__ uint32_t r3o_lead(uint64_t m) { return (uint32_t)(m & kIdxMask); }
+__device__ __forceinline__ uint32_t r3o_gi(uint64_t m)   { return (uint32_t)((m >> 25) & 0x3FFFFFFull); }
+__device__ __forceinline__ uint32_t r3o_hint(uint64_t w4, uint64_t m) {
+    return (uint32_t)(w4 >> 56) | ((uint32_t)(m >> 51) << 8);
+}
+
 // r2 -> r3, QUAD RECORD (MXBM_R3_QUAD): 24 B instead of the 72 B above. Same argument as
 // the pair record one round up -- a round-2 output element is a combine of two round-2
 // inputs, each of which is determined by two seed indices, so FOUR indices determine it

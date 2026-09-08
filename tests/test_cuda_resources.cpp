@@ -230,12 +230,12 @@ const Kernel kContract[] = {
       "crossing 3 -> 4 together was worth 1.13 ms (docs/performance-research.md:1609)" },
     { "r2 (quad record)",       true, {7,7,2,4,2,3,0,0,0,0,1}, nullptr,             256,  64, 23624,  0, 4,
       "ON A CLIFF: 64 registers is EXACTLY the limit for 4 blocks/SM" },
-    { "r3 (packed record)",     true, {7,6,4,1,8,8,0,0,0,0,1}, nullptr,             256,  56, 26184,  0, 3,
+    { "r3 (packed record)",     true, {7,6,4,1,8,7,0,0,0,0,1}, nullptr,             256,  54, 26184, 0, 3,
       "shared-bound at 3 blocks; r3 does not want a fourth "
       "(docs/performance-research.md:1731-1745)" },
-    { "r3 (quad record)",       true, {7,6,4,7,3,8,0,0,0,0,1}, nullptr,             256,  80, 26184,  0, 3,
+    { "r3 (quad record)",       true, {7,6,4,7,3,7,0,0,0,0,1}, nullptr,             256,  80, 26184,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
-    { "r4 (LM_USE)",            true, {6,1,2,2,8,1,0,0,0,0,1}, nullptr,             256,  47, 22336,  0, 4,
+    { "r4 (LM_USE)",            true, {6,1,2,2,7,1,0,0,0,0,1}, nullptr,             256,  48, 22336, 0, 4,
       "47 of 64: the reference row and the gi atomic both went, and the 4-block line\n"
       "      is where it was" },
     // The match-first variants: same rounds, chain built at staging so the rebuild can
@@ -250,15 +250,15 @@ const Kernel kContract[] = {
       "the packed stores fold the repack; resources identical to the base record, "
       "still exactly on the 64-register cliff" },
     { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,16,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
-    { "r3 implicit-bits",       true, {7,6,4,1,8,8,0,0,16,0,1}, nullptr,       256,  60, 26184,  0, 3, "" },
-    { "r3 implicit-bits mf",    true, {7,6,4,1,8,8,0,1,16,0,1}, nullptr,       256,  60, 26816,  0, 3, "" },
+    { "r3 implicit-bits",       true, {7,6,4,1,8,7,0,0,16,0,1}, nullptr,       256,  56, 26184, 0, 3, "" },
+    { "r3 implicit-bits mf",    true, {7,6,4,1,8,7,0,1,16,0,1}, nullptr,       256,  56, 26816, 0, 3, "" },
     // The (17,0) pack: same code with 17 address-implied bits, selected under the
     // low-power gate. Resources identical to the 16-bit pack on every variant --
     // r2 stays exactly on the 64-register cliff.
     { "r2 implicit-bits 17",    true, {7,7,2,4,2,8,0,0,17,0,1}, nullptr,       256,  64, 23624,  0, 4, "" },
     { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
-    { "r3 implicit-bits 17",    true, {7,6,4,1,8,8,0,0,17,0,1}, nullptr,       256,  60, 26184,  0, 3, "" },
-    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,8,0,1,17,0,1}, nullptr,       256,  60, 26816,  0, 3, "" },
+    { "r3 implicit-bits 17",    true, {7,6,4,1,8,7,0,0,17,0,1}, nullptr,       256,  56, 26184, 0, 3, "" },
+    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,7,0,1,17,0,1}, nullptr,       256,  56, 26816, 0, 3, "" },
     // Round 1 at the rung's IMPB. With MXBM_PAIR_W0 the emit packs the w0-checkpoint
     // record from registers it already holds, so every variant matches its IMPB=0 twin
     // exactly and the same rows hold with the checkpoint off -- r1 keeps both of its
@@ -275,10 +275,10 @@ const Kernel kContract[] = {
     { "r1 implicit-bits 17 arena", true, {7,7,1,3,1,2,0,0,17,1,1}, nullptr,    256,  48, 19144,  0, 5, "" },
     { "r1 implicit-bits 17 mf arena", true, {7,7,1,3,1,2,0,1,17,1,1}, nullptr, 256,  64, 19720,  0, 4, "" },
     { "r2 match-first (quad)",  true, {7,7,2,4,2,3,0,1,0,0,1}, nullptr,         256,  64, 24256,  0, 4, "" },
-    { "r3 match-first",         true, {7,6,4,1,8,8,0,1,0,0,1}, nullptr,         256,  54, 26816,  0, 3, "" },
-    { "r3 match-first (quad)",  true, {7,6,4,7,3,8,0,1,0,0,1}, nullptr,         256,  80, 26816,  0, 3, "" },
-    { "r4 match-first",         true, {6,1,2,2,8,1,0,1,0,0,1}, nullptr,         256,  47, 22976,  0, 4, "" },
-    { "r4 (entry co-blocks)",   true, {6,1,2,2,8,1,1,0,0,0,1}, nullptr,           256,  64, 22336,  0, 4,
+    { "r3 match-first",         true, {7,6,4,1,8,7,0,1,0,0,1}, nullptr,         256,  54, 26816,  0, 3, "" },
+    { "r3 match-first (quad)",  true, {7,6,4,7,3,7,0,1,0,0,1}, nullptr,         256,  80, 26816,  0, 3, "" },
+    { "r4 match-first",         true, {6,1,2,2,7,1,0,1,0,0,1}, nullptr,         256,  48, 22976, 0, 4, "" },
+    { "r4 (entry co-blocks)",   true, {6,1,2,2,7,1,1,0,0,0,1}, nullptr,           256,  64, 22336,  0, 4,
       "ON A CLIFF: hosting the speculative entry pass costs 18 registers (46 -> 64), "
       "landing EXACTLY on the 4-blocks/SM limit. One more and the whole launch -- the "
       "round AND the co-scheduled entry -- drops to 3 blocks" },
@@ -297,23 +297,23 @@ const Kernel kContract[] = {
     { "r1 mf arena",            true, {7,7,1,3,1,2,0,1,0,1,1}, nullptr,    256,  64, 19720,  0, 4, "" },
     { "r2 arena",               true, {7,7,2,4,2,8,0,0,0,1,1}, nullptr,    256,  64, 23752,  0, 4, "" },
     { "r2 mf arena",            true, {7,7,2,4,2,8,0,1,0,1,1}, nullptr,    256,  64, 24384,  0, 4, "" },
-    { "r3 arena",               true, {7,6,4,1,8,8,0,0,0,1,1}, nullptr,    256,  60, 26312,  0, 3, "" },
-    { "r3 mf arena",            true, {7,6,4,1,8,8,0,1,0,1,1}, nullptr,    256,  62, 26944,  0, 3, "" },
+    { "r3 arena",               true, {7,6,4,1,8,7,0,0,0,1,1}, nullptr,    256,  58, 26312, 0, 3, "" },
+    { "r3 mf arena",            true, {7,6,4,1,8,7,0,1,0,1,1}, nullptr,    256,  58, 26944, 0, 3, "" },
     { "r2 implicit-bits arena", true, {7,7,2,4,2,8,0,0,16,1,1}, nullptr,   256,  64, 23752,  0, 4, "" },
     { "r2 implicit-bits mf arena", true, {7,7,2,4,2,8,0,1,16,1,1}, nullptr,256,  64, 24384,  0, 4, "" },
-    { "r3 implicit-bits arena", true, {7,6,4,1,8,8,0,0,16,1,1}, nullptr,   256,  58, 26312,  0, 3, "" },
-    { "r3 implicit-bits mf arena", true, {7,6,4,1,8,8,0,1,16,1,1}, nullptr,256,  58, 26944,  0, 3, "" },
+    { "r3 implicit-bits arena", true, {7,6,4,1,8,7,0,0,16,1,1}, nullptr,   256,  60, 26312, 0, 3, "" },
+    { "r3 implicit-bits mf arena", true, {7,6,4,1,8,7,0,1,16,1,1}, nullptr,256,  60, 26944, 0, 3, "" },
     { "r2 implicit-bits 17 arena", true, {7,7,2,4,2,8,0,0,17,1,1}, nullptr,256,  64, 23752,  0, 4, "" },
     { "r2 implicit-bits 17 mf arena", true, {7,7,2,4,2,8,0,1,17,1,1}, nullptr, 256, 64, 24384, 0, 4, "" },
-    { "r3 implicit-bits 17 arena", true, {7,6,4,1,8,8,0,0,17,1,1}, nullptr,256,  58, 26312,  0, 3, "" },
-    { "r3 implicit-bits 17 mf arena", true, {7,6,4,1,8,8,0,1,17,1,1}, nullptr, 256, 58, 26944, 0, 3, "" },
+    { "r3 implicit-bits 17 arena", true, {7,6,4,1,8,7,0,0,17,1,1}, nullptr,256,  60, 26312, 0, 3, "" },
+    { "r3 implicit-bits 17 mf arena", true, {7,6,4,1,8,7,0,1,17,1,1}, nullptr, 256, 60, 26944, 0, 3, "" },
     { "r2 quad arena",          true, {7,7,2,4,2,3,0,0,0,1,1}, nullptr,    256,  64, 23752,  0, 4, "" },
     { "r2 quad mf arena",       true, {7,7,2,4,2,3,0,1,0,1,1}, nullptr,    256,  64, 24384,  0, 4, "" },
-    { "r3 quad arena",          true, {7,6,4,7,3,8,0,0,0,1,1}, nullptr,    256,  80, 26312,  0, 3,
+    { "r3 quad arena",          true, {7,6,4,7,3,7,0,0,0,1,1}, nullptr,    256,  80, 26312,  0, 3,
       "ON A CLIFF: 80 registers is EXACTLY the limit for 3 blocks/SM" },
-    { "r3 quad mf arena",       true, {7,6,4,7,3,8,0,1,0,1,1}, nullptr,    256,  80, 26944,  0, 3, "" },
-    { "r4 arena",               true, {6,1,2,2,8,1,0,0,0,1,1}, nullptr,    256,  47, 22464,  0, 4, "" },
-    { "r4 mf arena",            true, {6,1,2,2,8,1,0,1,0,1,1}, nullptr,    256,  47, 23104,  0, 4, "" },
+    { "r3 quad mf arena",       true, {7,6,4,7,3,7,0,1,0,1,1}, nullptr,    256,  80, 26944,  0, 3, "" },
+    { "r4 arena",               true, {6,1,2,2,7,1,0,0,0,1,1}, nullptr,    256,  48, 22464, 0, 4, "" },
+    { "r4 mf arena",            true, {6,1,2,2,7,1,0,1,0,1,1}, nullptr,    256,  48, 23104, 0, 4, "" },
     // The octo record. Round 3's side is free -- same kernel, a narrower store, and the
     // 80-register cliff it already sat on; its rows are all no-refs, below. Round 4's side is where it is paid: rebuilding
     // six work words from eight leaves costs 46 -> 128 registers, which is EXACTLY the
@@ -361,7 +361,7 @@ const Kernel kContract[] = {
       "the same walk entered at level 3; same 64 B DFS stack, same <= 17-block grid" },
     { "recover_from_l2",       false, {0,0,0,0,0,0}, "15recover_from_l2E",  64,  40,     0,  0, 24,
       "no walk and no stack: the eight round-2 records ARE the 32 leaves" },
-    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  78, 45320, 144, 2,
+    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  79, 45320, 144, 2,
       "four blocks per survivor, so ~8 in the whole grid; the 44 KB is the chain table\n"
       "      and candidate list of the lockstep pair search; the 144 B stack is the two\n"
       "      unpacked 7-word records, not a spill of the hot path" },
