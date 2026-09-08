@@ -52,6 +52,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -474,6 +475,12 @@ std::vector<Measured> parse_res_usage(const std::string& out, bool& sawArch) {
         }
         line.clear();
     }
+    // The kFCap64K instantiations (rounds 2 and 4 staged at 280) launch only on a card
+    // with 64 KB of shared memory per SM. The reference card never runs them, so they
+    // carry no row and are set aside before matching; their cliff is Turing's.
+    found.erase(std::remove_if(found.begin(), found.end(), [](const Measured& k) {
+                    return k.targs.size() >= 19 && k.targs[11] == 280; }),
+                found.end());
     for (Measured& k : found) {
         for (int i = 0; i < kNumKernels; ++i) {
             const Kernel& c = kContract[i];

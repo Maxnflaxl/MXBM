@@ -483,8 +483,9 @@ memory rung pays below ~167 W on the 4070 Ti SUPER but only below 121 W on the 4
 
 Particularly wanted:
 
-- **Anything that is not Ada** — Turing, Blackwell, A-series. (Ampere: one report so far.)
-  Turing is the newest addition to the CUDA path and has no measurement yet at all.
+- **Anything that is not Ada** — Turing, Blackwell, A-series. (Ampere and Turing: one
+  report each so far.) Turing is where MXBM is furthest behind, and every report from an
+  RTX 20 or GTX 16 card carries the per-stage table that says why.
 - **Smaller cards**: 8–12 GB. MXBM refuses to start below its threshold rather than mine
   nothing, so a refusal is itself a useful report — tell us what it said.
 - **AMD**, via the OpenCL backend. It is completely untested there.

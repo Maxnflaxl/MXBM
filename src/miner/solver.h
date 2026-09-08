@@ -23,6 +23,13 @@ struct Solver {
     // The rung this solver allocated, for --report; empty where the question does not
     // apply (the CPU reference) or the backend cannot answer, and the row is omitted.
     virtual std::string geometry() const { return {}; }
+    // Per-stage GPU time. stage_timing(true) starts recording device timestamps at
+    // every stage boundary of each solve; stage_times() returns the median of each
+    // stage over the solves recorded so far. Off by default and a no-op where the
+    // backend does not answer (empty vector).
+    struct StageTime { std::string name; double median_ms; };
+    virtual bool stage_timing(bool) { return false; }
+    virtual std::vector<StageTime> stage_times() const { return {}; }
     virtual ~Solver() = default;
 };
 

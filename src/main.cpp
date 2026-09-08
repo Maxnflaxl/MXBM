@@ -1193,6 +1193,10 @@ int main(int argc, char** argv) {
         // the efficiency line here is the same measurement they quote.
         gpu::TelemetryWindow tw(measure_dev);
         miner::BenchmarkResult r;
+        // MXBM_ROUND_STATS=1: per-stage GPU medians after the summary. Opt-in so the
+        // A/B loop runs the shipping path exactly.
+        const bool round_stats = std::getenv("MXBM_ROUND_STATS") != nullptr;
+        if (round_stats) solver->stage_timing(true);
         try {
             r = miner::run_benchmark(*solver, stats, opts.benchmark_seconds, stop);
         } catch (const std::exception& e) {
@@ -1237,6 +1241,21 @@ int main(int argc, char** argv) {
         if (r.solves < 100) {
             ui::console::info("  note: fewer than 100 solves - too few to quote a margin; "
                               "use --benchmark-seconds to run longer");
+        }
+        if (round_stats) {
+            double gpu_ms = 0.0;
+            const auto stages = solver->stage_times();
+            for (const auto& s : stages) gpu_ms += s.median_ms;
+            for (const auto& s : stages) {
+                std::snprintf(line, sizeof line, "  %-9s %7.2f ms  %5.1f %%", s.name.c_str(),
+                              s.median_ms, gpu_ms > 0.0 ? 100.0 * s.median_ms / gpu_ms : 0.0);
+                ui::console::info(line);
+            }
+            if (!stages.empty()) {
+                std::snprintf(line, sizeof line, "  GPU total %.2f ms of %.2f ms solve wall",
+                              gpu_ms, r.median_ms);
+                ui::console::info(line);
+            }
         }
         ui::console::info("  (`--report` produces this plus the power curve, as a "
                           "paste-ready block)");

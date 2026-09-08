@@ -82,7 +82,7 @@ immediately; only a *missing* one defers to the config.
 |------|---------|---------|
 | `--benchmark BEAM-III` | Solve synthetic jobs and report sol/s. No pool, no wallet. Uses one device. | |
 | `--benchmark-seconds N` | Stop the benchmark after N seconds. | until Ctrl+C |
-| `--report` | Benchmark this card, measure its power curve, and print a paste-ready report (see [Reporting](#reporting-send-us-how-your-card-does)). No pool. | |
+| `--report` | Benchmark this card, measure its power curve, and print a paste-ready report — throughput, telemetry, where the solve's GPU time goes, the curve (see [Reporting](#reporting-send-us-how-your-card-does)). No pool. | |
 | `--report-seconds N` | Length of the report's benchmark. | 120 |
 | `--report-out PATH` | Where to save the report. A directory saves the default filename inside it. | `~/.config/mxbm/report-<gpu>-<date>.md` |
 

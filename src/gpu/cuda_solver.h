@@ -49,6 +49,8 @@ public:
     std::vector<std::array<uint8_t, 104>> solve(const uint8_t input[32], const uint8_t nonce[8]) override;
     void request_abort() override;
     std::string geometry() const override;
+    bool stage_timing(bool on) override;
+    std::vector<miner::Solver::StageTime> stage_times() const override;
 
     const DeviceInfo& device() const;
 

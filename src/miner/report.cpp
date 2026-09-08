@@ -157,12 +157,17 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
     // rung that belongs in the block is the one the reported throughput ran on.
     const std::string geom = solver->geometry();
     BenchmarkResult r;
+    // Stage timing rides the throughput block: which stage a card stretches is what
+    // separates a slow rung from slow silicon, and only the card itself can say.
+    solver->stage_timing(true);
     try {
         r = run_benchmark(*solver, stats, cfg.seconds, stop);
     } catch (const std::exception& e) {
         ui::console::error(std::string("--report: the benchmark failed: ") + e.what());
         return 1;
     }
+    const std::vector<Solver::StageTime> stages = solver->stage_times();
+    solver->stage_timing(false);
     const gpu::TelemetrySummary t = tw.close(r.elapsed_s);
     ui::console::info(fmt("  %.2f sol/s, %.2f ms/solve median, %llu solves",
                           r.sol_per_s, r.median_ms, (unsigned long long)r.solves));
@@ -249,6 +254,19 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
     if (r.solves < 100)
         o << "\n> Fewer than 100 solves — too short to quote a margin. Re-run with "
              "`--report-seconds 300`.\n";
+
+    // --- where the solve goes ----------------------------------------------
+    if (!stages.empty()) {
+        double gpu_ms = 0.0;
+        for (const auto& s : stages) gpu_ms += s.median_ms;
+        o << "\n<details>\n<summary>Where the solve goes — GPU time per stage, medians</summary>\n\n"
+             "| stage | ms | share |\n|---|---|---|\n";
+        for (const auto& s : stages)
+            o << "| " << s.name << " | " << s2(s.median_ms) << " | "
+              << w(gpu_ms > 0.0 ? 100.0 * s.median_ms / gpu_ms : 0.0) << " % |\n";
+        o << "| **GPU total** | **" << s2(gpu_ms) << "** | (solve wall "
+          << s2(r.median_ms) << ") |\n</details>\n";
+    }
 
     // --- the curve -------------------------------------------------------
     if (store.found && !store.points.empty()) {

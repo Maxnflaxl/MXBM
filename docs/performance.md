@@ -1538,11 +1538,16 @@ out permanently: nvcc 13.3 refuses sm_61.
 
 The floor sat at 8.0 for the shared-memory budget of Ampere and newer. It does not bind:
 the kernels use no sm_80+ feature — no `cp.async`, no async barriers, no clusters — and
-`ptxas --gpu-name sm_75` reports **no spills anywhere, 26,944 B of static shared at the
-widest kernel and 112 registers at the heaviest**, against Turing's 48 KB per block. What
-Turing changes is occupancy. Capability is intact: 64 KB of shared per SM and 1024 threads
-per SM host two 320-thread blocks where Ada hosts three, so a Turing card should be
-expected to land below the per-SM scaling of an Ampere one.
+`ptxas --gpu-name sm_75` reports no spills anywhere. What Turing changes is occupancy:
+64 KB of shared memory per SM against Ada's 100 KB, which at the shipping staging cap
+holds two 256-thread round blocks where Ada holds three or four — and the 112 registers
+the heaviest kernel took there were ptxas spending a register file that two blocks
+cannot fill. On the reference card, two blocks per SM instead of three or four costs
+**+16 % on every round** (measured with `MXBM_SMEM_PAD`). **Since 2026-09-08 a card
+with a 64 KB budget stages rounds 2 and 4 at 280 instead of 320**, which puts rounds 1,
+2 and 4 at three blocks per SM on sm_75; round 3 stays at two. The reference card keeps
+320 (280 costs it +0.5 % at unchanged occupancy). Mechanism and figures:
+[performance-research.md](performance-research.md#turings-shared-memory-budget-and-the-per-card-staging-cap).
 
 Memory is not a second gate. Driving the ladder with the release's own availability
 allowance, every 6 GB Turing card reaches the top packed rung:
@@ -1561,20 +1566,30 @@ leads at stock on Ada. That run carried a display and 13 co-tenant processes, so
 absolute is a floor rather than a verdict, and the ratio between the two builds is the
 better-founded half of it.
 
-Three things are candidates for the deficit and only the first is cheap to settle:
+**A second report (2026-09-05, no display, the same 13 co-tenants) reads 9.51 sol/s /
+210.49 ms — the display was not the deficit — and names the rung: quad (16,1) + dense
+caps, 4.03 GiB**, five rows down the ladder from the one an idle 6 GB card takes.
 
-- **Which rung it ran.** The table above assumes an idle card: at 5.18 GiB usable the
-  ladder's first fit is (16,1) implicit-bits + dense caps, 5.03 GiB. A display raises the
-  reserve to 256 MB and the desktop's own allocation comes off `free` before the ladder
-  ever sees it, so the card may have started well down the list. The span is large enough
-  to hold the whole deficit — on the reference card that rung runs 29.81 ms against the
-  1.90 GiB floor's 56.98, a factor of 1.91
-  ([the rungs](HW_REQUIREMENTS.md#the-vram-ladder)) — so this is the first thing to settle
-  and the cheapest. **`--report` prints the allocated rung as of 0.8.418**, which it did
-  not when this run was taken.
-- **Occupancy**, which is structural and already stated above: two 320-thread blocks per
-  SM where Ada hosts three.
-- **Speculative entry**, expected off on an arena rung for want of a pool region.
+Three things are candidates for the deficit; the first is now settled, the second is
+shipped and awaits the card:
+
+- **Which rung it ran: quad (16,1) + dense caps, 4.03 GiB.** The 13 co-tenants took the
+  VRAM; an idle 6 GB card fits packed (16,1) + dense caps at 5.03 GiB, which on the
+  reference card is **17 % faster** (29.8 against 35.0 ms,
+  [the rungs](HW_REQUIREMENTS.md#the-vram-ladder)). Closing the other processes, or
+  `MXBM_QUAD=0 MXBM_ARENA=1 MXBM_BB=16`, moves it up; it accounts for about a third of
+  the gap, not the whole of it.
+- **Occupancy: two blocks per SM, now three on rounds 1, 2 and 4** — the per-card
+  staging cap above, shipped 2026-09-08 and unmeasured on the card. On the reference
+  card the whole 2 → 3 step is worth 14 %.
+- **Speculative entry**, off on an arena rung for want of a pool region; on the 5.03 GiB
+  rung it is available.
+
+What remains after those two is unexplained by scaling: core and DRAM ratios alone put
+the 5.03 GiB rung near 97 ms on this card, and the two levers together reach perhaps
+~150. **The per-stage table every `--report` now carries is what says which round holds
+the rest** — the reference card's split is 17 / 28 / 30 / 22 % over rounds 1–4, and a
+round that stretches past the ~3.2× the scaling model predicts names its own mechanism.
 
 `test_cuda_resources` is still the reference card's and skips itself off Ada, so none of
 this is gated by a contract on Turing.

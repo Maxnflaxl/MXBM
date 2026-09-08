@@ -41,7 +41,8 @@ sudo mxbm --tune                    # the power/speed curve and a --pl recommend
 Run `--report`. It benchmarks the card through the same solve path mining drives, samples telemetry, measures the power/speed curve (or reuses the one this binary
 already measured), and prints the lot as markdown. It also records the three conditions
 that decide whether a figure means anything: whether a display was on the card, whether
-another process was, and what the clocks were limited by.
+another process was, and what the clocks were limited by — and, under a fold, where the
+solve's GPU time goes stage by stage, which is what tells a slow rung from slow silicon.
 
 A single sample is not meaningful — quote a median of at least 5, and prefer a spread.
 
