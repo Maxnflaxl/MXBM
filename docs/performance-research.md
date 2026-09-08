@@ -33,6 +33,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [Measured results, 2026-09-08](#the-terminal-rounds-time-was-its-block-count-not-its-bytes) | **The terminal round was wave-bound, not byte-bound: 0.80 → 0.52 ms, −0.7 % of the solve** — 131k blocks each paying two or three DRAM latencies in series (one load per pass behind the sub-mask filter and the shared atomic); hoisting a block's loads ahead of the filter is 0.80 → 0.73, and one block per bucket on the (16,1) rungs (staging 832, a 256-entry perfect table, half the grid) is **0.52**, ABBA non-overlapping, 28.8 → 28.6 ms; the octo rung's terminal goes 1.10 → 1.03 at four blocks per SM instead of six; KAT 3/3 × 15, drops 0. The "GPU idle time" closure counted the gaps between kernels and not the latency chains inside a short one |
 | [Measured results, 2026-09-08](#the-replays-were-warp-serialised-on-their-hits-not-latency-bound) | **Recovery's replays were warp-serialised on their hits: 0.19 → 0.03 ms, +0.4 % on solves** — each replay ran its pair search as a per-lane loop with the child rebuild inline, so every same-key hit executed hundreds of instructions with the warp masked to one lane (`replay_r3` keeps 8 key bits in a bucket, ~500 candidates each; 9.4 of 32 lanes active); a chain table, a shared candidate list and lockstep processing take `replay_r4` 60 → 10 µs and `replay_r3` 115 → 10.5; ABBA both orderings non-overlapping, KAT 3/3 × 15, drops 0. **The lever stops at round 3**: its staging shows the same 60 % long-scoreboard profile, but hoisting the word-0 loads (with or without an L2 prefetch of the record) measures **0.00 / +0.17 ms** — at 508 GB/s the stalls are bus queueing, not exposed latency |
 | [Measured results, 2026-09-08](#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay) | **The r3 → r4 record is 56 B, +1.7 % at stock** — the dead sixth work word goes and the replay hint moves into word 4's free top byte and the meta word; the 8 B-off slots take one `ST.64` and three `ST.128` chosen by slot parity, so transactions stay at four per element (seven scalar stores measured +23 % on the round). r3 8.54 → 8.23, r4 6.43 → 6.20, KAT 3/3 × 15 both arms, drops 0. **Under a 140 W cap the rounds gain 1.5 ms and the solve 0.1**: entry/r1/r2 give the time back as clock — a capped solve is energy-bound, so round marginals under a cap overstate and the ×6.8 write-sector multiplier is a round figure, not a solve one |
+| [Measured results, 2026-09-08](#the-gi-allocator-goes-where-nothing-indexes-a-gi-09) | **The gi allocator is not issued on the replayed rungs, +0.9 %** — its only reader left was the walk's tiebreak, which now orders by the parent record's slot on both the round and its replay; round 1 4.88 → 4.73 ms (issue-bound: the aggregated atomic's ballot/popc/shuffle were issue slots), round 2 8.06 → 8.00; KAT 3/3 × 15, drops 0 |
 | [Measured results, 2026-09-08](#turings-shared-memory-budget-and-the-per-card-staging-cap) | **Turing's 64 KB of shared memory caps every round at two resident blocks per SM, and a per-card staging cap of 280 lifts rounds 1, 2 and 4 to three** — the sm_75 cubin read with `cuobjdump`: at kFCap 320 every round kernel sits at 22.3–26.9 KB, over the 21,845 B a third block needs, and ptxas fills the registers to 111–128 because nothing better is reachable; at 280, rounds 2 and 4 fall to 20.7–21.4 KB and ptxas re-fits them at 80 registers, round 1 (already 288) fits, round 3 (leaf staging) does not at any cap the population allows — **it takes its 16-bit word 6 in a u16 plane (the NARROW6 flag, now per card) at a cap of 272**, 20.7–21.4 KB and three blocks on sm_75, worth **−8.3 % of round 3** where the round is capped at two (pad emulation on the reference card, ABBA non-overlapping); the trade priced on the reference card with `MXBM_SMEM_PAD`: two blocks per SM instead of three or four costs **+16 % on every round** (28.7 → 33.3 ms), so the lever is worth up to ~that on a Turing card; the caps are a per-card choice because on the reference card, at unchanged occupancy, they measure **+0.5 %** (round 4 +0.08 ms, round 3 +0.05); gated 3/3 × 15 goldens in both arms, 0 drops over 8,364 solves. **The per-stage table shipped with it** (`MXBM_ROUND_STATS`, and always in `--report`) — device timestamps at every stage boundary, free at this rig's resolution, r2 7.93 / r3 8.51 ms reproducing the census to the hundredth |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
@@ -188,10 +189,10 @@ runs, **compute GPU headless**):
 
 | quantity | reference | gate |
 |---|---|---|
-| ms/solve median | **28.00** (spread 0.0 %) | a build change is real past ±0.5 % |
-| sol/s | **71.90** | derived; quoted because the pin cites it |
+| ms/solve median | **27.80** (spread 0.0 %) | a build change is real past ±0.5 % |
+| sol/s | **72.30** | derived; quoted because the pin cites it |
 | SM / mem clock | 2610 / 10251 MHz | must match, or it is a different V/f point |
-| board draw | **280.9 W** | context, not a gate — 265–281 W across nine sessions; at this draw `sw_power_cap` is intermittently active (2–10 % of samples) at identical clocks and work |
+| board draw | **276.8 W** | context, not a gate — 265–281 W across ten sessions; near the limit `sw_power_cap` is intermittently active (1–10 % of samples) at identical clocks and work |
 | `clocks_event_reasons` | none, or `sw_power_cap` at any fraction | any **other** flag voids the run. The fraction is not predictive and is not a gate |
 | display on the compute GPU | **no** | a compositor costs **0.20 ms and ~6 W** |
 
@@ -215,6 +216,7 @@ re-hashes the commit and the citation dangles, which has already happened here.
 
 | pin | ms/solve | draw | what moved |
 |---|---|---|---|
+| 2026-09-08 | **27.80** | 276.8 W | the gi allocator not issued on the replayed rungs ([ledger](#the-gi-allocator-goes-where-nothing-indexes-a-gi-09)) — **−0.20 ms, 71.90 → 72.30 sol/s**, against −0.25 on the rounds' timers and +0.9 % on solves ABBA. Six runs at 0.0 % spread |
 | 2026-09-08 | **28.00** | 280.9 W | the round-3 record at 56 B ([ledger](#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay)) — **−0.60 ms, 70.30 → 71.90 sol/s**, against −0.55 on the rounds' timers and +1.7 % on solves ABBA. Six runs at 0.0 % spread; the draw is up 13 W and the board limit is touched in 2–10 % of samples |
 | 2026-09-08 | **28.60** | 268.1 W | recovery's replays by chain table, candidates in lockstep ([ledger](#the-replays-were-warp-serialised-on-their-hits-not-latency-bound)) — **−0.20 ms, 69.90 → 70.30 sol/s**, against −0.16 measured on the stage's own timer and +0.4 % on solves ABBA. Six runs at 0.0 % spread |
 | 2026-09-08 | **28.80** | 273.1 W | the terminal round at one block per bucket with its loads in flight together ([ledger](#the-terminal-rounds-time-was-its-block-count-not-its-bytes)) — **−0.30 ms, 69.20 → 69.90 sol/s**, against −0.28 measured ABBA on the round's own timer. The same day's Turing staging caps change no kernel the reference card runs. Six runs at 0.0 % spread |
@@ -6706,6 +6708,14 @@ and unaligns odd slots, and encoding hint bits in sub-bucketed slot ranges buys
 atomic — no sector moves. *Comes back if a recovery scheme can name an
 r3-ancestor's parent bucket without a per-element stored field.*
 
+*Both dismissals above were measured on 2026-09-08 and both were wrong in the same way —
+priced by category rather than built. The 7-u64 record keeps four transactions by choosing
+the 8 B access by slot parity and shipped at
+[+1.7 %](#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay);
+retiring `cgi` on the replayed rungs shipped at
+[+0.9 %](#the-gi-allocator-goes-where-nothing-indexes-a-gi-09). The 48 B form stays dead by
+bits.*
+
 What the table prices up instead is the format-preserving route: a
 **warp-cooperative sector-paired emit** for rounds 2 and 3. Both scatters store a
 64 B record as four ST.128, and each 16 B store from a lane half-fills its own
@@ -8272,6 +8282,31 @@ a cap-band lever must be priced on the solve, or in joules. And the stock closur
 this path ("bytes buy nothing") was scoped to a narrowing that kept the 64 B stride —
 the sectors it saved were the ones L2 was already merging. Narrowing the *stride* at
 equal transaction count is a different lever, and it is the one that paid at stock.
+
+</details>
+
+### The gi allocator goes where nothing indexes a gi: +0.9 %
+
+<details>
+<summary>Details</summary>
+
+Every emitted child on rounds 1–3 took a global `gi` from one counter — warp-aggregated,
+so one `ATOMG` per warp-batch plus a shuffle to hand each lane its number — and stored it
+in the record. Its readers were the reference rows, gone since the replays, and the
+walk's left/right tiebreak on equal leads. The ledger had priced retiring it as "only the
+`gi_alloc` atomic" and left it. On the replayed rungs the tiebreak now orders by the
+parent record's slot, which the staging loop already has and which `replay_r3` and
+`replay_r4` compute from the same address, so the rule is identical on both sides and
+deterministic run to run. The allocator is not issued on those rungs; rungs that still
+write rows keep it, because there the gi is the row index.
+
+KAT 3/3 × 15 on both staging arms, drops 0, 2.04 verified solutions/solve over the
+check. Eight 30 s arms at stock, both orderings: **1073 → 1083 solves, +0.9 %** — round 1
+4.88 → 4.73 ms, round 2 8.06 → 8.00, rounds 3 and 4 within 0.02. Round 1 pays most: it is
+issue-bound and the aggregated atomic's ballot, popcount, shuffle and the wait for the
+counter's return were issue slots. Round 3's 5.5 % of stall samples on that shuffle did
+not turn into time, which is the bus-queueing story again. 40 fewer `ATOMG` in the
+module.
 
 </details>
 

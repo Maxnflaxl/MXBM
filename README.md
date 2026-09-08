@@ -8,7 +8,7 @@ closed-source miners in the ecosystem. It mines against a real pool over TLS: li
 in, verified solutions out, shares accepted.
 
 > **Status: working, optimization ongoing.** On an RTX 4070 Ti SUPER the CUDA backend
-> does **71.90 sol/s** (28.00 ms/solve) and the portable OpenCL one **63.0**.
+> does **72.30 sol/s** (27.80 ms/solve) and the portable OpenCL one **63.0**.
 
 ## Quick start
 

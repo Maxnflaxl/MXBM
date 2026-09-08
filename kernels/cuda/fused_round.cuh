@@ -921,12 +921,12 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                 // Word 0 is read, not derived: stage it here with the bucket's key bits
                 // put back, and the all-lanes loop below rebuilds the linear lane only.
                 stw(pos, 0, pw0_word0<IMPB>(rec0, bucket));
-                lgi[pos] = pw0_gi<IMPB>(rec0, rec1);
+                lgi[pos] = (IMPB && !MXBM_R4_ROWS) ? (uint32_t)idx_ : pw0_gi<IMPB>(rec0, rec1);
                 lleaf[pos*LEAFW + 0] = pw0_left(rec1);              // leaf 0 IS the lead
                 lleaf[pos*LEAFW + 1] = pw0_right(rec1);
             } else {
                 const uint32_t li = pair_left(rec0), ri = pair_right(rec1);
-                lgi[pos] = pair_gi(rec1);
+                lgi[pos] = (IMPB && !MXBM_R4_ROWS) ? (uint32_t)idx_ : pair_gi(rec1);
                 lleaf[pos*LEAFW + 0] = li; lleaf[pos*LEAFW + 1] = ri;  // leaf 0 IS the lead
             }
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
@@ -1011,7 +1011,7 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                 p0 = q3.y; p1 = r3_word8(in_belem, d, side_in + idx_);
             }
             const uint32_t l0 = r3_l0(p0);
-            lgi[pos] = r3_gi(p1);
+            lgi[pos] = (IMPB && !MXBM_R4_ROWS) ? (uint32_t)idx_ : r3_gi(p1);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
             lleaf[pos*LEAFW + 0] = l0;          lleaf[pos*LEAFW + 1] = r3_l1(p0);
             lleaf[pos*LEAFW + 2] = r3_l2(p0,p1); lleaf[pos*LEAFW + 3] = r3_l3(p1);
@@ -1051,7 +1051,8 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
             #pragma unroll
             for (int w = 0; w < 5; ++w) lwork[lwx(pos, w)] = r7[w];
             lwork[lwx(pos, 5)] = 0ull;
-            lgi[pos] = r3o_gi(r7[5]); llead[pos] = r3o_lead(r7[5]);
+            // Round 4 is always replayed, and the replay orders by slot too.
+            lgi[pos] = MXBM_R4_ROWS ? r3o_gi(r7[5]) : (uint32_t)idx_; llead[pos] = r3o_lead(r7[5]);
             if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
             for (uint32_t i = 0; i < SIN; ++i)
                 lleaf[pos*LEAFW + i] = (uint32_t)(r7[6] >> ((i & 1u) * 32u));
@@ -1361,17 +1362,19 @@ void fused_round_body(RoundShared<INW, LEAFW, LMODE, FCAP, SUBPASS, MFIRST, AREN
                         else oslot = ~(size_t)0;
                     }
                 if (ARENA ? oslot != ~(size_t)0 : cpos < out_bucket_cap) {
-                    // The gi this child is given. Dead on an octo rung's round 2: no
-                    // reference row is indexed by it and the 16 B record does not carry
-                    // it, so the atomic is not issued at all.
-                    // Round 4's 8 B record drops gi with everything else it stopped
-                    // needing, and no row is indexed by one there, so the atomic goes.
-                    // The w0-checkpoint octo record spends gi's 26 bits on word 0, so it
-                    // goes there too -- unless a reference row still indexes one.
+                    // The gi this child is given: a reference-row index, so it is
+                    // allocated only where a row is written. Records without a gi field
+                    // (quad/octo forms, round 4's 8 B) and the replayed rungs never
+                    // issue the atomic; there the walk's tiebreak reads the record's
+                    // slot, which the replay reproduces.
+                    constexpr bool kReplayedR = (LMODE == LM_USE)
+                        || (IMPB != 0 && (LMODE == LM_SEED || LMODE == LM_RD2
+                                          || LMODE == LM_EMIT));
                     constexpr bool kNeedGi =
                         (LMODE == LM_USE && OUTSTR == 1)
                             ? false
-                            : (REFS || !((LMODE == LM_RD2 && OUTSTR == 2) || OW0_EMIT));
+                            : ((REFS || !((LMODE == LM_RD2 && OUTSTR == 2) || OW0_EMIT))
+                               && (MXBM_R4_ROWS || !kReplayedR));
                     const uint32_t cgi = kNeedGi ? gi_alloc(gi_counter) : 0u;
                     const size_t od    = oslot * OUTSTR;
                     if constexpr (LMODE == kAblEmit) {

@@ -250,15 +250,15 @@ const Kernel kContract[] = {
       "the packed stores fold the repack; resources identical to the base record, "
       "still exactly on the 64-register cliff" },
     { "r2 implicit-bits mf",    true, {7,7,2,4,2,8,0,1,16,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
-    { "r3 implicit-bits",       true, {7,6,4,1,8,7,0,0,16,0,1}, nullptr,       256,  56, 26184, 0, 3, "" },
-    { "r3 implicit-bits mf",    true, {7,6,4,1,8,7,0,1,16,0,1}, nullptr,       256,  56, 26816, 0, 3, "" },
+    { "r3 implicit-bits",       true, {7,6,4,1,8,7,0,0,16,0,1}, nullptr,       256,  58, 26184, 0, 3, "" },
+    { "r3 implicit-bits mf",    true, {7,6,4,1,8,7,0,1,16,0,1}, nullptr,       256,  58, 26816, 0, 3, "" },
     // The (17,0) pack: same code with 17 address-implied bits, selected under the
     // low-power gate. Resources identical to the 16-bit pack on every variant --
     // r2 stays exactly on the 64-register cliff.
     { "r2 implicit-bits 17",    true, {7,7,2,4,2,8,0,0,17,0,1}, nullptr,       256,  64, 23624,  0, 4, "" },
     { "r2 implicit-bits 17 mf", true, {7,7,2,4,2,8,0,1,17,0,1}, nullptr,       256,  64, 24256,  0, 4, "" },
-    { "r3 implicit-bits 17",    true, {7,6,4,1,8,7,0,0,17,0,1}, nullptr,       256,  56, 26184, 0, 3, "" },
-    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,7,0,1,17,0,1}, nullptr,       256,  56, 26816, 0, 3, "" },
+    { "r3 implicit-bits 17",    true, {7,6,4,1,8,7,0,0,17,0,1}, nullptr,       256,  58, 26184, 0, 3, "" },
+    { "r3 implicit-bits 17 mf", true, {7,6,4,1,8,7,0,1,17,0,1}, nullptr,       256,  58, 26816, 0, 3, "" },
     // Round 1 at the rung's IMPB. With MXBM_PAIR_W0 the emit packs the w0-checkpoint
     // record from registers it already holds, so every variant matches its IMPB=0 twin
     // exactly and the same rows hold with the checkpoint off -- r1 keeps both of its
@@ -361,11 +361,11 @@ const Kernel kContract[] = {
       "the same walk entered at level 3; same 64 B DFS stack, same <= 17-block grid" },
     { "recover_from_l2",       false, {0,0,0,0,0,0}, "15recover_from_l2E",  64,  40,     0,  0, 24,
       "no walk and no stack: the eight round-2 records ARE the 32 leaves" },
-    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  79, 45320, 144, 2,
+    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  77, 45320, 144, 2,
       "four blocks per survivor, so ~8 in the whole grid; the 44 KB is the chain table\n"
       "      and candidate list of the lockstep pair search; the 144 B stack is the two\n"
       "      unpacked 7-word records, not a spill of the hot path" },
-    { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  55, 45320,  0, 2,
+    { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  59, 45320,  0, 2,
       "two blocks per survivor, so ~4 in the whole grid: occupancy is not a lever here,\n"
       "      and the 4096-key staging plus the pair search's tables are what cover bb = 14" },
 };

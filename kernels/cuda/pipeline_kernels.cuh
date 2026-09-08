@@ -301,7 +301,8 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
             const size_t dp = slot_of(p) * r3_stride, dq = slot_of(q) * r3_stride;
             const uint64_t mp = r3_elem[dp + 5], mq = r3_elem[dq + 5];
             const uint32_t la = r3o_lead(mp), lb = r3o_lead(mq);
-            const uint32_t ga = r3o_gi(mp), gb = r3o_gi(mq);
+            // Ordered as round 4 orders: lead, then the record's slot.
+            const uint32_t ga = (uint32_t)(dp / r3_stride), gb = (uint32_t)(dq / r3_stride);
             const bool swap = (lb < la) || (lb == la && gb < ga);
             const size_t dL = swap ? dq : dp, dR = swap ? dp : dq;
             bh3::Elem a{}, b{}, c;
@@ -401,6 +402,7 @@ void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
             uint64_t wp[7], wq[7]; uint32_t lp[4], lq[4], gp, gq;
             const size_t dp = slot_of(p) * r2_stride, dq = slot_of(q) * r2_stride;
             load(dp, wp, lp, gp); load(dq, wq, lq, gq);
+            gp = (uint32_t)(dp / r2_stride); gq = (uint32_t)(dq / r2_stride);   // slot order, as round 3
             // Leaf 0 IS the lead, and the tiebreak is the round's own.
             const bool swap = (lq[0] < lp[0]) || (lq[0] == lp[0] && gq < gp);
             const uint64_t* wL = swap ? wq : wp; const uint32_t* lL = swap ? lq : lp;
