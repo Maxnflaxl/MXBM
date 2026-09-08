@@ -361,12 +361,13 @@ const Kernel kContract[] = {
       "the same walk entered at level 3; same 64 B DFS stack, same <= 17-block grid" },
     { "recover_from_l2",       false, {0,0,0,0,0,0}, "15recover_from_l2E",  64,  40,     0,  0, 24,
       "no walk and no stack: the eight round-2 records ARE the 32 leaves" },
-    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  62, 16644, 144, 4,
-      "four blocks per survivor, so ~8 in the whole grid; the 144 B stack is the two\n"
+    { "replay_r3",             false, {0,0,0,0,0,0}, "9replay_r3E",        256,  78, 45320, 144, 2,
+      "four blocks per survivor, so ~8 in the whole grid; the 44 KB is the chain table\n"
+      "      and candidate list of the lockstep pair search; the 144 B stack is the two\n"
       "      unpacked 7-word records, not a spill of the hot path" },
-    { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  48, 16644,  0, 5,
+    { "replay_r4",             false, {0,0,0,0,0,0}, "9replay_r4E",        256,  55, 45320,  0, 2,
       "two blocks per survivor, so ~4 in the whole grid: occupancy is not a lever here,\n"
-      "      and the 4096-key staging that costs the fifth block is what covers bb = 14" },
+      "      and the 4096-key staging plus the pair search's tables are what cover bb = 14" },
 };
 constexpr int kNumKernels = (int)(sizeof(kContract) / sizeof(kContract[0]));
 

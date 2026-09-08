@@ -193,6 +193,58 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
     }
 }
 
+// ---- the replays' pair search --------------------------------------------------------
+// A bucket's same-key pairs by chain table, then the candidates processed in lockstep:
+// every lane walks its own chain and appends (p, q) to a shared list, and the block
+// then runs one candidate per lane. A hit's rebuild is hundreds of instructions, so
+// running it inside a per-lane loop serialises the warp on every hit.
+constexpr uint32_t kRepN    = 4096;     // widest bucket the replays stage (bb = 14 nears 2400)
+constexpr uint32_t kRepTab  = 1024;
+constexpr uint32_t kRepPair = 4096;
+constexpr uint32_t kRepEnd  = 0xFFFFu;
+struct ReplayShared {
+    uint32_t skey[kRepN];
+    uint16_t nxt[kRepN];
+    uint32_t head[kRepTab];
+    uint32_t pairs[kRepPair];
+    uint32_t apool[kAMax];
+    uint32_t ntot, npairs;
+};
+// Chains n staged keys, then hands every same-key pair (p, q), q < p, to `hit` with the
+// block in lockstep. Uniform control flow: every thread makes the same barrier calls.
+template <class Hit>
+__device__ __forceinline__ void replay_pairs(ReplayShared& sh, uint32_t n, Hit hit) {
+    for (uint32_t i = threadIdx.x; i < kRepTab; i += blockDim.x) sh.head[i] = kRepEnd;
+    __syncthreads();
+    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x)
+        sh.nxt[p] = (uint16_t)atomicExch(&sh.head[sh.skey[p] & (kRepTab - 1u)], p);
+    if (threadIdx.x == 0) sh.npairs = 0;
+    __syncthreads();
+    for (uint32_t p0 = 0; p0 < n; p0 += blockDim.x) {
+        const uint32_t p = p0 + threadIdx.x;
+        uint32_t cur = p < n ? sh.head[sh.skey[p] & (kRepTab - 1u)] : kRepEnd;
+        bool more;
+        do {
+            while (cur != kRepEnd) {
+                const uint32_t q = cur;
+                cur = sh.nxt[q];
+                if (q < p && sh.skey[q] == sh.skey[p]) {
+                    const uint32_t i = atomicAdd(&sh.npairs, 1u);
+                    if (i >= kRepPair) { cur = q; break; }    // list full: resume at q
+                    sh.pairs[i] = (p << 16) | q;
+                }
+            }
+            __syncthreads();
+            const uint32_t np = min(sh.npairs, kRepPair);
+            for (uint32_t i = threadIdx.x; i < np; i += blockDim.x)
+                hit(sh.pairs[i] >> 16, sh.pairs[i] & 0xFFFFu);
+            __syncthreads();
+            if (threadIdx.x == 0) sh.npairs = 0;
+            more = __syncthreads_or(cur != kRepEnd);
+        } while (more);
+    }
+}
+
 // ---- replay_r4: rebuild one survivor-ancestor's round-4 pairing from its bucket -----
 // Round 4's back-reference row names its parents for all 33.5 M children and is read for
 // four. Instead the child's record carries the emitting block's input bucket, and this
@@ -212,10 +264,9 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
     // The whole bucket, not one (bucket, sub-mask) group: elements in different sub-masks
     // have different keys and can never pair, so the hint stays 17 bits. kMaxN covers the
     // widest rung -- bb = 14 caps a bucket near 2400 -- and excess is counted, not dropped.
-    constexpr uint32_t kMaxN = 4096;
-    __shared__ uint32_t skey[kMaxN];
-    __shared__ uint32_t apool[kAMax];
-    __shared__ uint32_t ntot;
+    __shared__ ReplayShared sh;
+    uint32_t* skey = sh.skey; uint32_t* apool = sh.apool; uint32_t& ntot = sh.ntot;
+    constexpr uint32_t kMaxN = kRepN;
     if (blockIdx.x >= 2u*nSurv) return;
     const size_t d4 = (size_t)surv_l4[blockIdx.x] * kTermStride;
     const uint64_t rec = r4_elem[d4];
@@ -245,9 +296,8 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
     for (uint32_t p = threadIdx.x; p < n; p += blockDim.x)
         skey[p] = (uint32_t)(r3_elem[slot_of(p) * r3_stride] & 0xFFFFFFu);
     __syncthreads();
-    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x) {
-        for (uint32_t q = p + 1u; q < n; ++q) {
-            if (skey[q] != skey[p]) continue;
+    replay_pairs(sh, n, [&](uint32_t p, uint32_t q) {
+        {
             const size_t dp = slot_of(p) * r3_stride, dq = slot_of(q) * r3_stride;
             const uint64_t mp = r3_elem[dp + 6], mq = r3_elem[dq + 6];
             const uint32_t la = (uint32_t)mp, lb = (uint32_t)mq;
@@ -272,7 +322,7 @@ void replay_r4(uint32_t nSurv, const uint32_t* __restrict__ surv_l4,
                 out_lead[blockIdx.x] = (uint32_t)(swap ? mq : mp);
             }
         }
-    }
+    });
 }
 
 // ---- replay_r3: the same trick one level down, on the implicit-bits record -----------
@@ -293,10 +343,9 @@ void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
                uint32_t bucket_bits,
                const uint32_t* __restrict__ r2_ahead = nullptr,
                const uint32_t* __restrict__ r2_anext = nullptr) {
-    constexpr uint32_t kMaxN = 4096;
-    __shared__ uint32_t skey[kMaxN];
-    __shared__ uint32_t apool[kAMax];
-    __shared__ uint32_t ntot;
+    __shared__ ReplayShared sh;
+    uint32_t* skey = sh.skey; uint32_t* apool = sh.apool; uint32_t& ntot = sh.ntot;
+    constexpr uint32_t kMaxN = kRepN;
     if (blockIdx.x >= 4u*nSurv) return;
     const uint32_t s3 = l3_slots[blockIdx.x];
     if (s3 == 0xFFFFFFFFu) return;                  // the round-4 replay found no pair
@@ -347,9 +396,8 @@ void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
         l[2] = r3_l2(q3.x, q3.y); l[3] = r3_l3(q3.y);
         gi   = r3_gi(q3.y);
     };
-    for (uint32_t p = threadIdx.x; p < n; p += blockDim.x) {
-        for (uint32_t q = p + 1u; q < n; ++q) {
-            if (skey[q] != skey[p]) continue;
+    replay_pairs(sh, n, [&](uint32_t p, uint32_t q) {
+        {
             uint64_t wp[7], wq[7]; uint32_t lp[4], lq[4], gp, gq;
             const size_t dp = slot_of(p) * r2_stride, dq = slot_of(q) * r2_stride;
             load(dp, wp, lp, gp); load(dq, wq, lq, gq);
@@ -373,7 +421,7 @@ void replay_r3(uint32_t nSurv, const uint32_t* __restrict__ l3_slots,
                 out_slots[2u*blockIdx.x + 1u] = (uint32_t)((swap ? dp : dq) / r2_stride);
             }
         }
-    }
+    });
 }
 
 // ---- recover: walk a survivor's back-ref ancestry to its 32 leaf indices -----------
