@@ -120,11 +120,13 @@ that makes ms/solve the quoted quantity.
 | 2026-08-17 | **The w0 checkpoint reaches OpenCL** — round 1 stores the child's post-mix work word 0 in the same 16 B pair record, so round 2 derives the linear lane alone: 12 siphashes and no `apply_mix`, against 14 and three. A port rather than a new lever, and one the implicit-bits pack unlocked the week before by freeing the address bits that pay for word 0 | — | — | — | −0.745 | **−2.3 %** | [the OpenCL checkpoint](performance-research.md#the-w0-checkpoint-reaches-opencl-0745-ms-229--the-same-lever-at-the-same-size) *(an OPENCL row: no CUDA kernel changed, so the headline pin and the cap table are untouched. 32.600 → 31.855 over twelve interleaved arms with non-overlapping ranges; CUDA measured −0.76 ms for the identical change. Confirmed again by a one-sitting ladder re-measurement, where the eleven byte-identical rungs size the session offset at +1.26 % and correct the two changed rungs to −2.19 / −2.46 %)* | — |
 | 2026-08-17 | **And its quad and octo records, which are the bigger half** — round 2's 24 B quad record holds word 0 with no repacking, since word 0's own low 24 bits *are* the key it stored there; round 3's 32 B octo record buys word 0's 40 bits out of a `gi` nothing indexes and 14 key bits the bucket address carries. Rounds 3 and 4 then run the lane alone — 24 and 48 siphashes, and not one of the 22 `apply_mix` calls between them | — | — | — | −2.43 / −5.28 | **−6.3 / −8.6 %** | [the quad and octo ports](performance-research.md#the-w0-checkpoint-reaches-opencls-quad-and-octo-records) *(an OPENCL REACH-RUNG row: no CUDA kernel changed and no shipping OpenCL rung did either, so the headline pin and the cap table are untouched. Quad (16,1) goes 38.933 → 36.500 and octo (16,1) 61.733 → 56.450, six interleaved arms a side each with non-overlapping ranges. CUDA measured −1.84 and −4.39 ms for the identical changes. Confirmed again off the four ladder rungs that did not change, session offset −0.73 %, corrected −6.63 % and −8.72 %. The OpenCL floor goes 68.5 → 63.0 ms)* | — |
 | 2026-08-18 | **Speculative entry's gate moves to its measured crossovers** — the co-blocks ride round 4 having idle issue capacity, which a cap removes, so spec turns off below 220 W on stock memory and below 150 W on a held 5001 memory rung, where the freed watts un-starve the core and the sign flips back. Match-first decouples onto the 130 W band it was measured in | 29.1 | 29.1 | **69.20 ± 0.3** | 0 at stock | **−1.75 % at 140/160 W, −0.99 % at 180, −0.22 % at 210; −0.71 % at 140 W on the rung** | [the spec gate](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them) *(a CAP-BAND row: the stock path is unchanged — spec stays on at 285 W — and the re-taken pin reproduces 29.10 / 69.20 with 0.0 % spread on both columns over six runs. The band deltas are position-balanced paired A/Bs, |t| ≥ 3.7 everywhere, with the 285 W arm as the applied-knob control (+1.03 %, spec's stock win). The head-to-head and low-band tables were re-measured the same session on the shipped defaults)* | — |
+| 2026-09-08 | **Every round at three blocks per SM on 64 KB-shared cards** — rounds 2 and 4 staged at 280, round 3 at 272 with its 16-bit work word 6 in a narrow plane, chosen at runtime from the device's shared budget | — | — | — | — | — | [Turing's shared-memory budget](performance-research.md#turings-shared-memory-budget-and-the-per-card-staging-cap) *(a TURING row: no kernel the reference card runs changed, so the pin is untouched. The step 2 → 3 blocks costs +16 % on every round here when reproduced with `MXBM_SMEM_PAD`; round 3's block priced by emulation at −8.3 % of the round. Unmeasured on a Turing card)* | — |
+| 2026-09-08 | **The terminal round at one block per bucket, its record loads in flight together** — the round was 131k blocks each paying two or three DRAM latencies in series; hoisting a block's loads ahead of the sub-mask filter and staging a whole bucket per block halves the grid and the chain | 29.1 | 28.8 | **69.90** | −0.30 | −1.0 % | [the terminal round](performance-research.md#the-terminal-rounds-time-was-its-block-count-not-its-bytes) *(−0.28 ms measured ABBA on the round's own timer, 0.80 → 0.52 ms; the pin prints to 0.1 ms and moves 29.10 → 28.80 at 0.0 % spread both sides)* | — |
 
 | | sol/s | ms/solve | |
 |---|---|---|---|
 | **OpenCL** | 63.0 | 31.9 | fallback / `--solver opencl` |
-| **CUDA** | **69.20**[^drift] | **29.10**[^drift] | **shipping** — default when a CUDA device is present |
+| **CUDA** | **69.90**[^drift] | **28.80**[^drift] | **shipping** — default when a CUDA device is present |
 | **Target** | 53.0 | 35.8 | lolMiner, stock — user-measured |
 
 The CUDA row is six 120 s runs at stock 285 W, headless, at **0.0 % spread on both
@@ -236,7 +238,7 @@ Under a locked clock the rig reproduces **to the digit across days** (0.0 % spre
 six runs on each of the five pins that measured an unchanged build, and 0.3 % on each of
 the two that measured a changed one), so use `LGC=2600 LMC=10251 benchmarks/headline.sh`
 to regression-test builds and the stock figure to describe what a user gets. The pin
-stands at **29.10 ms** as of 2026-08-16, taken with the compute GPU headless — a condition of
+stands at **28.80 ms** as of 2026-09-08, taken with the compute GPU headless — a condition of
 the number, since a compositor on the card costs a measured 0.20 ms and ~6 W, and one
 that follows the HDMI cable per login, so it is verified from the miner's own banner
 each session.
@@ -376,8 +378,8 @@ both fine.
 </details>
 
 **How to quote a number from this page:** use the controlled figure with its conditions
-attached — **29.10 ms / 69.20 sol/s** at stock 285 W, headless, locked LGC=2600
-LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-08-16; see
+attached — **28.80 ms / 69.90 sol/s** at stock 285 W, headless, locked LGC=2600
+LMC=10251, six runs at 0.0 % spread (most recently re-pinned 2026-09-08; see
 the lineage table in [benchmarking.md](benchmarking.md)) — and carry the ~2.5 %
 cross-session band (narrowed 2026-07-31; see above). Do not re-derive a headline
 from a short run: see the note on solutions/solve under the progress table.
@@ -439,7 +441,7 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage:
 
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown and not the 29.10 one's — the per-stage split has not
+It is the 29.30 ms build's breakdown and not the 28.80 one's — the per-stage split has not
 been re-taken and `benchmarks/stage_power.sh` is what re-takes it.
 
 Solve is 29.23 ms in the harness, so the stages account for 100.2 % of it, and
@@ -559,7 +561,10 @@ term, which reaches ~5 % at the low caps
 *(The MXBM rows carry the shipped speculative-entry gate — off below 220 W on stock
 memory, the measured crossover
 ([ledger](performance-research.md#speculative-entry-under-a-cap-both-crossovers-measured-and-the-gate-moves-to-them)).
-lolMiner 1.98a is the unchanged reference binary.)*
+lolMiner 1.98a is the unchanged reference binary. **The MXBM column predates the
+2026-09-08 terminal-round change** (−0.7 % at stock, and the round stretches least under
+a cap, ×1.17 at 140 W), so every MXBM figure below is a floor of up to ~0.7 % until the
+column is re-swept; the crossings and margins quoted around it inherit that.)*
 
 | cap | MXBM sol/s | MXBM W | MXBM sol/s/W | lolMiner sol/s | lolMiner W | lolMiner sol/s/W |
 |---|---|---|---|---|---|---|

@@ -336,13 +336,16 @@ const Kernel kContract[] = {
     { "r2 quad16 mf arena no-refs", true, {7,7,2,4,2,2,0,1,0,1,0}, nullptr, 256, 64, 24384, 0, 4, "" },
     { "r3 quad16 octo no-refs", true, {7,6,4,7,2,4,0,0,0,1,0}, nullptr,  256,  80, 26312,  0, 3, "" },
     { "r3 quad16 octo mf no-refs", true, {7,6,4,7,2,4,0,1,0,1,0}, nullptr, 256, 80, 26944,  0, 3, "" },
-    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0ELj1EE", 256, 20, 6660, 0, 6,
-      "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound. Reading\n"
-      "      the 16 B record it staged gi and lead too, at 9732 B and 28 registers" },
-    { "terminal_round (arena)", false, {0,0,0,0,0,0}, "14terminal_roundILb1ELj1EE", 256, 24, 6792, 0, 6,
+    { "terminal_round",        false, {0,0,0,0,0,0}, "14terminal_roundILb0ELj1EE", 256, 32, 14340, 0, 6,
+      "warp-capped at 6 (48 warps/SM / 8 warps per block), not resource-bound. One block\n"
+      "      per bucket (kTermCap 832, a 256-entry table) with its record loads hoisted\n"
+      "      ahead of the filter: 20 -> 32 registers, 6660 -> 14340 B, blocks held" },
+    { "terminal_round (arena)", false, {0,0,0,0,0,0}, "14terminal_roundILb1ELj1EE", 256, 29, 14472, 0, 6,
       "the pool chain's shared list costs 132 B and no block: still warp-capped at 6" },
-    { "terminal_round (octo)",  false, {0,0,0,0,0,0}, "14terminal_roundILb1ELj2EE", 256, 28, 9864, 0, 6,
-      "the 16 B arm: an octo round 4 keeps its reference row, so it keeps gi and lead" },
+    { "terminal_round (octo)",  false, {0,0,0,0,0,0}, "14terminal_roundILb1ELj2EE", 256, 33, 21128, 0, 4,
+      "the 16 B arm: an octo round 4 keeps its reference row, so it keeps gi and lead;\n"
+      "      at one block per bucket that is 21 KB and four blocks, measured -6 % on the\n"
+      "      round against six" },
     { "arena_link",            false, {0,0,0,0,0,0}, "10arena_linkE",      256,  12,     0,  0, 6,
       "threads the overflow pool onto per-bucket chains between rounds; 256 blocks" },
     // recover's 64 B of stack is a genuine local array, not a spill: ptxas -v reports

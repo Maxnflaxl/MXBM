@@ -44,6 +44,13 @@ __global__ void arena_link(const uint32_t* __restrict__ actr,
 // An octo rung's round 4 is LM_RD4: it keeps its slot-indexed reference row, so it keeps
 // gi and lead and the 16 B record with them. STRIDE is what tells the two apart.
 constexpr uint32_t kTermStride = MXBM_R4_ROWS ? 2u : 1u;
+// One block per BUCKET where the bucket fits: the kernel's time is its blocks' lifetimes
+// rather than its bytes, so halving the block count on a (16,1) rung is worth more
+// than the sub-mask split's smaller groups. kTermCap holds a plain (16,1) bucket cap
+// plus a dense rung's pool entries; kTermTab keeps the table a perfect hash down to
+// bb + sm = 16 (8 varying key bits). The launcher picks sm = 0 whenever both hold.
+constexpr uint32_t kTermCap = 832u;
+constexpr uint32_t kTermTab = 256u;
 template<bool ARENA = (MXBM_ARENA != 0), uint32_t STRIDE = kTermStride>
 __global__ __launch_bounds__(kWG)
 void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_bucket_cap,
@@ -59,25 +66,24 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
                     // by SLOT rather than by gi: the replay reads their records to get
                     // the bucket hint, and a slot is what addresses one.
                     uint32_t* __restrict__ surv_l4 = nullptr) {
-    __shared__ uint64_t lwork[kTCap];
-    __shared__ uint32_t lchain[kTCap], tab[kTabSize], lslot[kTCap];
+    __shared__ uint64_t lwork[kTermCap];
+    __shared__ uint32_t lchain[kTermCap], tab[kTermTab], lslot[kTermCap];
     // Only the reference-row arm orders left from right here; the 8 B record carries
     // neither field and the order is settled in recovery, off the lead replay_r4 reads
     // out of the left parent's record.
-    __shared__ uint32_t lgi[STRIDE == 2 ? kTCap : 1];
-    __shared__ uint32_t llead[STRIDE == 2 ? kTCap : 1];
+    __shared__ uint32_t lgi[STRIDE == 2 ? kTermCap : 1];
+    __shared__ uint32_t llead[STRIDE == 2 ? kTermCap : 1];
     // Same perfect-hash argument as the fused rounds (MXBM_PERFECT_TAB in
-    // fused_round.cuh): on the bb + sm = 17 line only 7 key bits vary inside a
-    // group and the 128-entry table covers them, so same chain <=> same full key
-    // and lkey plus the walk's compare are dead. The launcher's geometry check in
-    // cuda_solver.cu guards this kernel too (same bb/sm).
-    __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : kTCap];
+    // fused_round.cuh): at bb + sm >= 16 at most 8 key bits vary inside a group and
+    // the 256-entry table covers them, so same chain <=> same full key and lkey plus
+    // the walk's compare are dead. The launcher keeps bb + sm inside that range.
+    __shared__ uint32_t lkey[MXBM_PERFECT_TAB ? 1 : kTermCap];
     __shared__ uint32_t gcount;
     const uint32_t lId = threadIdx.x;
     const uint32_t submaskCount = 1u << submask_bits;
     const uint32_t bucket = blockIdx.x / submaskCount, mask = blockIdx.x % submaskCount;
     if (lId == 0) gcount = 0;
-    for (uint32_t i = lId; i < kTabSize; i += kWG) tab[i] = kEmpty;
+    for (uint32_t i = lId; i < kTermTab; i += kWG) tab[i] = kEmpty;
     __syncthreads();
     uint32_t cnt = in_counts[bucket];
     if (cnt > in_bucket_cap) cnt = in_bucket_cap;
@@ -102,33 +108,52 @@ void terminal_round(uint32_t bucket_bits, uint32_t submask_bits, uint32_t in_buc
         __syncthreads();
         acnt = acnt_sh[0];
     }
-    for (uint32_t p = lId; p < cnt + acnt; p += kWG) {
-        size_t idx_ = base + p;
-        if constexpr (ARENA)
-            if (p >= cnt) idx_ = nbcap_in + aidx[p - cnt];
-        const size_t d = idx_ * (size_t)STRIDE;
-        const uint64_t rec = in_belem[d];
-        const uint64_t w0  = STRIDE == 1 ? t5_work(rec) : rec;
-        const uint32_t key = (uint32_t)(w0 & 0xFFFFFFu);
-        if ((key & (submaskCount - 1u)) != mask) continue;
-        const uint32_t pos = atomicAdd(&gcount, 1u);
-        if (pos >= kTCap) { atomicAdd(&drops[1], 1u); continue; }
-        lwork[pos] = w0; lslot[pos] = (uint32_t)idx_;
-        if constexpr (STRIDE == 2) {
-            const uint64_t meta = in_belem[d + 1];
-            // gi is 26 bits; bit 63 carries the replay's 17th bucket bit, so mask it off.
-            lgi[pos] = (uint32_t)(meta >> 32) & 0x3FFFFFFu;
-            llead[pos] = (uint32_t)meta;
+    // Every record load of a chunk is issued before the first is filtered, so a block
+    // pays one DRAM latency for its bucket rather than one per pass: the kernel is
+    // short enough that its blocks' lifetimes, not its bytes, set its time. kPre
+    // covers kTermCap.
+    constexpr int kPre = 4;
+    const uint32_t nIn = cnt + acnt;
+    for (uint32_t p0 = 0; p0 < nIn; p0 += kWG * kPre) {
+        uint64_t w0s[kPre]; size_t idxs[kPre];
+        #pragma unroll
+        for (int u = 0; u < kPre; ++u) {
+            const uint32_t p = p0 + lId + (uint32_t)u * kWG;
+            size_t idx_ = base + p;
+            if (p < nIn) {
+                if constexpr (ARENA)
+                    if (p >= cnt) idx_ = nbcap_in + aidx[p - cnt];
+                const uint64_t rec = in_belem[idx_ * (size_t)STRIDE];
+                w0s[u] = STRIDE == 1 ? t5_work(rec) : rec;
+            }
+            idxs[u] = idx_;
         }
-        if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
+        #pragma unroll
+        for (int u = 0; u < kPre; ++u) {
+            const uint32_t p = p0 + lId + (uint32_t)u * kWG;
+            if (p >= nIn) continue;
+            const uint64_t w0  = w0s[u];
+            const uint32_t key = (uint32_t)(w0 & 0xFFFFFFu);
+            if ((key & (submaskCount - 1u)) != mask) continue;
+            const uint32_t pos = atomicAdd(&gcount, 1u);
+            if (pos >= kTermCap) { atomicAdd(&drops[1], 1u); continue; }
+            lwork[pos] = w0; lslot[pos] = (uint32_t)idxs[u];
+            if constexpr (STRIDE == 2) {
+                const uint64_t meta = in_belem[idxs[u] * (size_t)STRIDE + 1];
+                // gi is 26 bits; bit 63 carries the replay's 17th bucket bit, so mask it off.
+                lgi[pos] = (uint32_t)(meta >> 32) & 0x3FFFFFFu;
+                llead[pos] = (uint32_t)meta;
+            }
+            if constexpr (!MXBM_PERFECT_TAB) lkey[pos] = key;
+        }
     }
     __syncthreads();
-    const uint32_t total = gcount < kTCap ? gcount : kTCap;
+    const uint32_t total = gcount < kTermCap ? gcount : kTermCap;
     for (uint32_t pos = lId; pos < total; pos += kWG) {
         // lwork[pos] is word 0, whose low 24 bits ARE the key.
         const uint32_t k_ = MXBM_PERFECT_TAB ? (uint32_t)(lwork[pos] & 0xFFFFFFu)
                                              : lkey[pos];
-        const uint32_t hk = (k_ >> submask_bits) & (kTabSize - 1u);
+        const uint32_t hk = (k_ >> submask_bits) & (kTermTab - 1u);
         lchain[pos] = atomicExch(&tab[hk], pos);
     }
     __syncthreads();

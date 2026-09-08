@@ -922,19 +922,22 @@ std::vector<std::array<uint8_t,104>> CudaSolver::solve(const uint8_t input[32], 
     // round 4's row as the replay's reference arm. Off those, the terminal names its two
     // parents by slot in survL4 and the rows stop at three.
     const bool r5 = I.octo || MXBM_R4_ROWS;
+    // One block per bucket where the whole bucket fits the terminal's staging and its
+    // table stays a perfect hash; the sub-mask split otherwise (see kTermCap).
+    const uint32_t tsm = (I.bb >= 16u && I.cap + kAMax <= kTermCap) ? 0u : I.sm;
     if (I.octo)
-        terminal_round<true, 2u><<<I.nb << I.sm, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, r5Off,
+        terminal_round<true, 2u><<<I.nb << tsm, kWG, I.smemPad>>>(I.bb, tsm, I.cap, r5Off,
                                         termC, termE, I.left, I.right,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
                                         termAh, termAn);
     else if (I.arena)
-        terminal_round<true><<<I.nb << I.sm, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, r5Off,
+        terminal_round<true><<<I.nb << tsm, kWG, I.smemPad>>>(I.bb, tsm, I.cap, r5Off,
                                         termC, termE,
                                         r5 ? I.left : nullptr, r5 ? I.right : nullptr,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,
                                         termAh, termAn, I.survL4);
     else
-        terminal_round<false><<<I.nb << I.sm, kWG, I.smemPad>>>(I.bb, I.sm, I.cap, r5Off,
+        terminal_round<false><<<I.nb << tsm, kWG, I.smemPad>>>(I.bb, tsm, I.cap, r5Off,
                                         termC, termE,
                                         r5 ? I.left : nullptr, r5 ? I.right : nullptr,
                                         I.survSlots, I.survCount, kSurvCap, I.drops,

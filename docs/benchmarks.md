@@ -44,10 +44,11 @@ card appears twice because both of its backends are measured.
 | GTX 1660 Ti | 6 GiB GDDR6 | 595.97 · Windows | CUDA | 9.48 | 210.6 | 106 | 0.089 | ZumZum, `--report` 120 s ◇ ◆ |
 | Apple M3 Max (40-core) | 128 GB unified | macOS 26.5 · Metal 3 | Metal | 16.3 | 128.0 | — | — | ours, `--benchmark` |
 
-‡ Both re-taken 2026-08-17, interleaved in one session at released clocks. The CUDA
-row reads ~0.7 % faster than the 29.10 ms
-[locked-clock pin](performance-research.md#the-named-reference-lgc-2600), which trades
-boost for reproducibility and is the published headline.
+‡ Both re-taken 2026-08-17, interleaved in one session at released clocks, and both
+predate the 2026-09-08 terminal-round change (−0.7 % at stock). The published headline
+is the **28.80 ms / 69.90 sol/s**
+[locked-clock pin](performance-research.md#the-named-reference-lgc-2600) of 2026-09-08,
+which trades boost for reproducibility.
 
 ※ 120 s `--report` on MXBM 0.8.408, 2026-08-21. The 3060 Ti is thermally limited at
 stock (81 °C), so its top end is partly a cooling figure.
@@ -131,7 +132,7 @@ MXBM's column: 80 minutes against the pool reads **62.32 sol/s**, its 15 s windo
 spread σ = 1.99 (the uncertainty on that mean is ±0.11), and the controlled benchmark the
 same day reads **62.7 sol/s at 32.0 ms/solve** (six 120 s runs, 0.0 % spread). It predates
 the w0-checkpoint record and the replayed recovery, which together took the controlled
-figure to **69.20 sol/s at 29.10 ms** (+10.4 %), so every margin in it is a floor on the
+figure to **69.90 sol/s at 28.80 ms** (+11.5 %), so every margin in it is a floor on the
 current one. lolMiner's column is the 2026-07 session; its binary is unchanged.
 
 </details>
@@ -203,7 +204,7 @@ implies for the roadmap are in
 Each point is 90 s (~2,000–2,500 solves). At that sample size the solutions-per-solve
 factor reads 2.01 where an 8,500-solve run measures 1.99, so **the sol/s column is
 about 1 % high in absolute terms** — stock read 57.5 here and 56.4 over a long run
-(both on the build of 2026-07-25; the current one is 69.20).
+(both on the build of 2026-07-25; the current one is 69.90).
 Every point was measured the same way, so the curve's shape, its peak and the crossings
 against lolMiner are unaffected. The figures are left as measured; rescaling them would
 publish numbers no run produced.
@@ -336,7 +337,7 @@ Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage, baseline
 
 **Scope: this table predates the day's two kernel changes** (the block-exit barrier and
 singleton-free staging, −0.20 ms together on the pin, both landing in rounds 1 and 2).
-It is the 29.30 ms build's breakdown, not the 29.10 one's; the per-stage split has not
+It is the 29.30 ms build's breakdown, not the 28.80 one's; the per-stage split has not
 been re-taken with power and `benchmarks/stage_power.sh` is what re-takes it. The *time*
 split has been, by a second instrument that cannot give the power column —
 [the idle-GPU census](performance-research.md#the-gpu-computes-993--of-a-solve) reads
