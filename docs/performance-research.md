@@ -36,7 +36,7 @@ copy bandwidth, ~672 GB/s theoretical). Absolute figures carry a
 | [Measured results, 2026-09-08](#the-gi-allocator-goes-where-nothing-indexes-a-gi-09) | **The gi allocator is not issued on the replayed rungs, +0.9 %** — its only reader left was the walk's tiebreak, which now orders by the parent record's slot on both the round and its replay; round 1 4.88 → 4.73 ms (issue-bound: the aggregated atomic's ballot/popc/shuffle were issue slots), round 2 8.06 → 8.00; KAT 3/3 × 15, drops 0. **The entry → r1 word-0 checkpoint in a 16 B record is a null**: r1 −0.37 ms, the hosting round 4 +0.53 from 0.27 GB more scattered writes, net −0.6 % |
 | [Measured results, 2026-09-08](#turings-shared-memory-budget-and-the-per-card-staging-cap) | **Turing's 64 KB of shared memory caps every round at two resident blocks per SM, and a per-card staging cap of 280 lifts rounds 1, 2 and 4 to three** — the sm_75 cubin read with `cuobjdump`: at kFCap 320 every round kernel sits at 22.3–26.9 KB, over the 21,845 B a third block needs, and ptxas fills the registers to 111–128 because nothing better is reachable; at 280, rounds 2 and 4 fall to 20.7–21.4 KB and ptxas re-fits them at 80 registers, round 1 (already 288) fits, round 3 (leaf staging) does not at any cap the population allows — **it takes its 16-bit word 6 in a u16 plane (the NARROW6 flag, now per card) at a cap of 272**, 20.7–21.4 KB and three blocks on sm_75, worth **−8.3 % of round 3** where the round is capped at two (pad emulation on the reference card, ABBA non-overlapping); the trade priced on the reference card with `MXBM_SMEM_PAD`: two blocks per SM instead of three or four costs **+16 % on every round** (28.7 → 33.3 ms), so the lever is worth up to ~that on a Turing card; the caps are a per-card choice because on the reference card, at unchanged occupancy, they measure **+0.5 %** (round 4 +0.08 ms, round 3 +0.05); gated 3/3 × 15 goldens in both arms, 0 drops over 8,364 solves. **The per-stage table shipped with it** (`MXBM_ROUND_STATS`, and always in `--report`) — device timestamps at every stage boundary, free at this rig's resolution, r2 7.93 / r3 8.51 ms reproducing the census to the hundredth |
 | [Measured results, 2026-09-08](#the-entry-pass-beside-rounds-3-and-4-on-a-stream-the-block-scheduler-prefers) | **The next solve's entry pass runs beside rounds 3 and 4 on a stream at the device's greatest priority, +2.0 % at stock** — the block scheduler dispatches its blocks into the warp and register room round 3's shared-memory cap leaves idle, displacing no round block (the two closures of the overlap family were dispatch order and displacement, not SM room). The co-runner's cost to round 3 goes as the square of its issue duty (compute-only: +2.0 ms packed into 3 ms, +0.65 spread over 8, 0 over 16), so the pass ships throttled: one dependent SipHash chain per lane, four warps per SM, 1 µs of sleep per element. Store hints move ≤ 0.1 ms; `evict_first` on every store costs 4.7. Loses under every cap (energy-bound; 140 W 51.7 vs 50.5 standalone), crossover at the existing 220 W gate. Paired ABBA 27.59 → 27.05 ms |
-| [Measured results, 2026-09-09](#the-pipe-census-at-the-140-w-clock-the-front-half-stays-alu-pipe-bound-the-back-half-leaves-dram) | **At the 140 W clock (1230 MHz pin) entry is still at the ALU roofline (98.8 %, ×2.24 stretch), r1/r2 still ALU-pipe-bound (75/69 %, barrier + long-scoreboard 32–36 %, DRAM ≤ 24 % of peak), and r3/r4 have left DRAM (55/54 % of peak, ×1.33/×1.47)** — under the cap the currency is instruction count in entry and r2, warp supply in r1/r2, latency in r3/r4, and bytes nowhere; also **both speculative-entry gates re-measured on the priority-stream form and stand** — rung 140 W +0.000 % (identical solve counts, spec arm 100 MHz lower), stock 210 W −0.42 % (t = 9); **and the 16 B entry checkpoint re-priced at 140 W is −1.9 % (t = 18), three times its stock loss** — the saved hash is ALU slots the cap already discounts, the added 0.27 GB of scattered writes is DRAM energy the cap charges as clock (variant arm 54 MHz lower); **and a resident round-2 block, 1.7 % of the solve at stock, is worth +0.15 % (t = 0.8) at 140 W** — warp supply is not a band currency, so the fifth-block, shared-narrowing and barrier families are closed under caps |
+| [Measured results, 2026-09-09](#the-pipe-census-at-the-140-w-clock-the-front-half-stays-alu-pipe-bound-the-back-half-leaves-dram) | **At the 140 W clock (1230 MHz pin) entry is still at the ALU roofline (98.8 %, ×2.24 stretch), r1/r2 still ALU-pipe-bound (75/69 %, barrier + long-scoreboard 32–36 %, DRAM ≤ 24 % of peak), and r3/r4 have left DRAM (55/54 % of peak, ×1.33/×1.47)** — under the cap the currency is instruction count in entry and r2, warp supply in r1/r2, latency in r3/r4, and bytes nowhere; also **both speculative-entry gates re-measured on the priority-stream form and stand** — rung 140 W +0.000 % (identical solve counts, spec arm 100 MHz lower), stock 210 W −0.42 % (t = 9); **and the 16 B entry checkpoint re-priced at 140 W is −1.9 % (t = 18), three times its stock loss** — the saved hash is ALU slots the cap already discounts, the added 0.27 GB of scattered writes is DRAM energy the cap charges as clock (variant arm 54 MHz lower); **and a resident round-2 block, 1.7 % of the solve at stock, is worth +0.15 % (t = 0.8) at 140 W** — warp supply is not a band currency, so the fifth-block, shared-narrowing and barrier families are closed under caps; **and round 3's word-0 hoist, null at stock, is −0.24 % (t = 3.7) at 140 W** — the round's chains are already overlapped across its 24 warps, the hoist adds issue, and under the cap issue is clock |
 | [Established limits](#established-limits) | measured properties that bound any further optimization |
 | [Current focus and open leads](#current-focus-and-open-leads) | where the time goes, the lever table, the numbered leads |
 | [The CUDA backend](#the-cuda-backend) | what it is, its headline, and why it is faster |
@@ -8540,6 +8540,30 @@ shared-memory narrowing in r1/r2 whose value was that block, and the barrier-sta
 family, whose currency was warp supply. Under a cap r1 and r2 are paid by instruction
 count and nothing else. What is left for the band is instruction deletion that adds no
 bytes, and the r3/r4 latency chains.
+
+### Round 3's word-0 hoist at 140 W: −0.24 %, the bus was not the reason
+
+The [replay entry](#the-replays-were-warp-serialised-on-their-hits-not-latency-bound)
+closed the hoist on round 3's staging at stock because the round runs the bus at 77 %,
+so its long-scoreboard cycles were queueing, not exposed round trips. At the
+[140 W clock](#the-pipe-census-at-the-140-w-clock-the-front-half-stays-alu-pipe-bound-the-back-half-leaves-dram)
+round 3 is at 55 % of DRAM peak with long-scoreboard still its top stall, which is
+outside that closure's scope, so the register-hoist form was rebuilt: the first three
+iterations' word-0 loads issue together ahead of the first filter, the remainder loop
+unchanged, registers within 2, occupancy unchanged, KAT 3/3 × 15, drops 0. At stock it
+reproduces the null (round 3 9.67 vs 9.68 ms).
+
+Paired at 140 W on stock memory, 4 + 4 × 60 s: 1137.75 → 1135.00 solves, **−0.24 %,
+t = 3.7**, the hoist arm 9 MHz lower.
+
+The bus was not the reason the hoist did nothing; warp overlap was. Round 3 holds 24
+warps per SM and each lane's chain is two or three loads deep, so at either clock the
+memory system already has every chain in flight across warps, and moving one lane's
+loads earlier changes the order it waits in, not the time. What the hoist adds — the
+guards and the three-way unrolled prologue — is issue, and under the cap issue is
+clock. The terminal round and the replays paid because their chains were per block
+with the bus idle; round 3's are per lane with the SM full, and the lever does not
+reach that shape at any operating point.
 
 ## Established limits
 <details>
