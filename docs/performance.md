@@ -432,30 +432,45 @@ inside the binary; the sampled-watts identity remains the fallback):
 
     t_s = (T_N - T_1) / (N-1)        E_s = (J_N - J_1) / (N-1)        P_s = E_s / t_s
 
-Re-measured 2026-08-16 on the current kernels, 8 reps, 45 s per stage:
+Re-measured 2026-09-09 on the shipping kernels, 8 reps, 45 s per stage:
+
+| stage | ms | % of solve | power | J/solve | % of energy |
+|---|---|---|---|---|---|
+| `entry_scatter` | 2.69 | 9.6 | 282.9 W | 0.76 | 9.4 |
+| round 1 | 4.72 | 16.8 | 284.4 W | 1.34 | 16.6 |
+| round 2 | 8.14 | 29.0 | 284.9 W | 2.32 | 28.7 |
+| round 3 | 8.09 | 28.9 | 287.0 W | 2.32 | 28.8 |
+| round 4 | 3.94 | 14.1 | 284.1 W | 1.12 | 13.9 |
+| terminal | 0.73 | 2.6 | 289.2 W | 0.21 | 2.6 |
+| **sum** | **28.31** | **101.0 %** | 285.2 W | **8.07** | |
+
+The harness solve was 28.04 ms, so the stages account for 101.0 % of it, and their
+summed energy lands within 1.4 % of the counter's own whole-solve figure (7.96 J).
+Both closures bound anything unattributed (memsets, launch gaps, readback, CPU verify)
+at essentially zero. The harness replays entry on its own; the miner runs the next
+solve's entry pass beside rounds 3 and 4 on a priority stream, which is the difference
+to the 27.00 ms pin. 7.96 J per solve ÷ 2.0 verified solutions is **3.98 J per
+solution** at stock in the harness; the miner reads 3.81 at the 285 W point of the
+2026-09-09 sweep.
+
+<details>
+<summary>The 2026-08-16 breakdown, on the 29.30 ms build</summary>
 
 | stage | ms | % of solve | power | J/solve | % of energy |
 |---|---|---|---|---|---|
 | `entry_scatter` | 2.66 | 9.1 | 282.9 W | 0.75 | 9.1 |
 | round 1 | 5.02 | 17.2 | 285.1 W | 1.43 | 17.3 |
 | round 2 | 8.21 | 28.1 | 282.8 W | 2.32 | 28.0 |
-| round 3 | 8.42 | 28.8 | **281.0 W** | 2.37 | 28.6 |
+| round 3 | 8.42 | 28.8 | 281.0 W | 2.37 | 28.6 |
 | round 4 | 4.20 | 14.4 | 283.5 W | 1.19 | 14.4 |
 | terminal | 0.78 | 2.7 | 285.3 W | 0.22 | 2.7 |
 | **sum** | **29.30** | **100.2 %** | 282.8 W | **8.29** | |
 
-**Scope: this is the 29.30 ms build's breakdown (2026-08-16) and not the 27.00 ms one's** —
-the per-stage split has not been re-taken with power and `benchmarks/stage_power.sh` is
-what re-takes it; the current time split is the per-stage table `MXBM_ROUND_STATS=1`
-prints.
+Against it, the 2026-09-08 work reads as round 3 −0.33 ms (the 56 B record and the
+priority-stream pass), round 1 −0.30, round 4 −0.26, the terminal round −0.05 (its
+one-block-per-bucket form) and round 2 −0.07.
 
-Solve was 29.23 ms in the harness, so the stages account for 100.2 % of it, and
-their summed energy lands within 0.2 % of the counter's own whole-solve figure
-(8.30 J) — both closures bound anything unattributed (memsets, launch gaps,
-readback, CPU verify) at essentially zero. 8.30 J per solve ÷ 2.01 verified
-solutions = **4.13 J per solution** at stock on that build, from 4.44 on the previous
-profile; the current build reads 3.81 J per solution at the 285 W point of the
-2026-09-09 sweep.
+</details>
 
 Each of the last three record changes is visible here as its own mechanism and
 nothing else's. **Deleting the reference rows** is round 4 **−1.21 ms** — the only
@@ -712,7 +727,7 @@ split below is core-clock only.)*
 **Above 160 W the mechanism is traffic.** MXBM's kernels cost more power per clock, so a
 tightening cap takes clock away from us faster than from them — 126 MHz behind at stock,
 703 MHz behind at 175 W. MXBM moves
-[10.73 GB/solve](benchmarks.md#where-the-time-and-energy-go) at geometry (16,1), while
+[10.21 GB/solve](benchmarks.md#where-the-time-and-energy-go) at geometry (16,1), while
 lolMiner selects a **4G** variant that fits the search in 4 GB and moves far less.
 Narrowing round 2's record so the solve moves 16 % fewer bytes buys **60 MHz at 285 W and
 210 MHz at 180 W** — the price of a byte rises 5× as the cap tightens, which is the
@@ -914,7 +929,7 @@ to +18 % at 100 W** with its crossover at ~178 W ([the low
 band](#the-low-band-on-the-current-kernel) has the full table); above the crossover it
 is a wall — the solver's own DRAM roofline, ~54 sol/s. lolMiner rides the same rung to
 its own roofline, which arrives at ~110 W because its design moves ~17.7 GB/solve
-against our 10.69. Guidance for capped rigs: below ~175 W, pair the cap with the rung —
+against our 10.21. Guidance for capped rigs: below ~175 W, pair the cap with the rung —
 `sudo mxbm ... --pl <cap> --mclk 5001` (both restored on exit), or
 `sudo nvidia-smi -pl <cap> -lmc 5001,5001` once at boot on rigs that mine unprivileged.
 At or above ~180 W, never.
@@ -1073,18 +1088,17 @@ each round reading its input layer once and writing its output layer once:
 | stage | compulsory rd | wr | measured rd | wr | excess |
 |---|---|---|---|---|---|
 | entry | — | 268 MB | 0 | 257 MB | −4.1 % |
-| r1 | 268 | 537 | 271 | 525 | −1.4 % |
-| r2 | 537 | 2147 | 539 | 2130 | −0.5 % |
-| r3 | 2147 | 2147 | 2148 | 2131 | −0.4 % |
-| r4 | 2147 | 268 | 2149 | 267 | −0.1 % |
-| terminal | 268 | — | 270 | 2 | +0.7 % |
-| **total** | | | **10.69 GB** | | **−0.6 %** |
+| r1 | 268 | 537 | 271 | 525 | −1.2 % |
+| r2 | 537 | 2147 | 539 | 2130 | −0.6 % |
+| r3 | 2147 | 1879 | 2149 | 1918 | +1.0 % |
+| r4 | 1879 | 268 | 1882 | 267 | +0.1 % |
+| terminal | 268 | — | 271 | 2 | +1.5 % |
+| **total** | | | **10.21 GB** | | **+0.1 %** |
 
-Every line is within **1.4 %** of compulsory: no write amplification, no
-redundant re-reads, nothing left for the cache to save. Nsight re-taken 2026-08-16
-on the shipping record, so these are measurements; the previous
-edition carried the reference rows' and the round-4 record's deletions as arithmetic
-on an older run, and the re-take lands within 1 MB of it on every line. Entry's
+Every line is within **1.5 %** of compulsory: no write amplification, no
+redundant re-reads, nothing left for the cache to save. Nsight taken 2026-09-09 on the
+shipping record set (the 56 B round-3 record is what moved rounds 3 and 4 from the
+previous edition's 2147 MB). Entry's
 −4.1 % is not a saving — it is ~11 MB of its output still sitting dirty in a 48 MB
 L2 when the kernel ends, billed to the next one. The kernel times sum to **101 %**
 of the solve, which also rules out the fourth lead: there is no idle spin between
@@ -1095,8 +1109,9 @@ rounds to reclaim.
 after; the [implicit-bits record](performance-research.md#populations-are-pinned-at-225-and-the-occupancy-tail-prices-a-spill-arena)
 took it to 12.30 by deleting round 2's side plane, and
 [the replay](performance-research.md#the-back-reference-rows-are-gone-recovery-replays-instead-203-ms-and-688-mib)
-to **10.69** — 1.11 GB of reference rows and 0.54 GB from round 4's record at 8 B instead
-of 16. That plane was the last line
+to 10.69 — 1.11 GB of reference rows and 0.54 GB from round 4's record at 8 B instead
+of 16 — and [the 56 B round-3 record](performance-research.md#the-round-3-record-is-56-b-the-dead-word-goes-and-the-four-16-b-transactions-stay)
+to **10.21**. That plane was the last line
 materially above compulsory — round 2 used to write 72 B of record as 64 + 8 to
 two places, and the +4.1 % it cost was the sector granularity of the split.
 
@@ -1114,7 +1129,7 @@ streaming / in-place layer reuse.
 The sweep settles the *ranking*. It does not settle the *margin*. At its own operating point the
 lolMiner spends **4.48 J per solution**; MXBM spends **4.11** at stock and **3.37 at
 220 W**, its optimum. Undercutting it at stock, and not only by capping, is new, and
-where the remaining gap to the ideal went is not mysterious: 10.69 GB of
+where the remaining gap to the ideal went is not mysterious: 10.21 GB of
 compulsory traffic per solve, the total measured in the table above. **Traffic,
 specifically — not the footprint it sits in.** Those were treated here as one problem and they are two:
 [the byte-power measurement](performance-research.md#but-bytes-are-not-free-in-watts-and-under-a-cap-watts-are-clock-60-mhz)

@@ -416,8 +416,8 @@ rebuild cost doubles per round while the record it replaces shrinks, so the quad
 costs +14 % and the octo record +38 %. Both are therefore rungs.
 
 **Traffic is the separate quantity, and it is the efficiency lever.** A solve moves
-**10.73 GB** of DRAM traffic, the compulsory minimum for these record widths to within the
-1 % the last Nsight run measured — there is no waste left to reclaim, only records to
+**10.21 GB** of DRAM traffic, the compulsory minimum for these record widths to within the
+1.5 % the last Nsight run measured — there is no waste left to reclaim, only records to
 narrow. Round 5's input is the most recent to narrow, 16 B → 8. That the narrowing
 pays is measured, not assumed: cutting round 2's record 72 B → 16 B, so the solve moves
 16 % fewer bytes, raises the clock the card sustains at a fixed 285 W by **60 MHz**, with a

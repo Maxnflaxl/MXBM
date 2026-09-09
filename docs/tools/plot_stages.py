@@ -196,10 +196,11 @@ def render(rows):
 
     # -- footnotes --------------------------------------------------------
     lo = min(rows, key=lambda r: r["w"])
+    hi = max(rows, key=lambda r: r["w"])
     c.text(L, H - 30,
            "Every stage draws the board limit — there is no single kernel to fix for "
-           "power. The one dip is %s at %.1f W, the most bandwidth-bound stage (%.2f GB)."
-           % (lo["stage"], lo["w"], lo["gb"]), 10, cl.INK_2)
+           "power. The spread is %.1f W, from %s at %.1f W to %s at %.1f W."
+           % (hi["w"] - lo["w"], lo["stage"], lo["w"], hi["stage"], hi["w"]), 10, cl.INK_2)
     meas = measured_total()
     c.text(L, H - 14,
            "Per-stage figures from benchmarks/stage_power.sh, which replays one stage "
