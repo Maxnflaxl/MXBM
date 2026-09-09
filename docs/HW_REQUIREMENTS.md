@@ -339,16 +339,15 @@ locked-clock pin while the OpenCL one is not.
 The card is power-limited, not thermally limited, in every kernel, so the board power
 limit is the most valuable knob on it: **at 220 W the solver does 69.9 sol/s for 219.7 W,
 against 74.8 at 285 W** — 93 % of the speed for 77 % of the power, and 220 W is
-also the efficiency peak (**3.14 J/solution**). Below ~167 W the memory clock is the
-second knob: `--mclk 5001` is worth +7 % at 160 W rising to +18 % at 100 W, at a
-third less throughput than the 220 W point. Against an *equally capped* lolMiner
-(measured 2026-08-18; the MXBM column there is a floor on the current build), MXBM wins on
-both speed and efficiency from ~177 W to the 285 W stock limit and again below ~104 W
-on stock memory; in between it trails — worst at 160 W (−7.5 %) — and at each miner's
-best configuration the residual is 2–3 % at 100–110 W and under 1 % at 155–177 W, with
-MXBM ahead at 120–140 W. The full curves are in
+also the efficiency peak (**3.14 J/solution**). Below ~175 W the memory clock is the
+second knob: `--mclk 5001` is worth +7 % at 160 W rising to +18 % at 100 W, at 28 %
+less throughput than the 220 W point. Against an *equally capped* lolMiner
+(its column from 2026-08-18, MXBM's from the current build), MXBM wins on both speed and
+efficiency from ~176 W to the 285 W stock limit and is level at the 100 W floor; in
+between it trails on stock memory by 6–9 % from 110 to 160 W, and at each miner's best
+configuration the residual is 4–6 % below ~114 W, with MXBM ahead from 120 W up. The full curves are in
 [Both miners under the same cap](performance.md#both-miners-under-the-same-cap) and
-[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w).
+[the 5001 memory rung](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-175-w).
 
 End-to-end is the headline figure — `solve()` including survivor readback, back-reference
 recovery and CPU verification — as a median over 300 distinct nonces. BeamHash III yields

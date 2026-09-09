@@ -106,7 +106,9 @@ one for any single number in it. Two sweeps of the same binary have disagreed by
 So: reproduce at least one cap with an interleaved A/B before publishing, **never treat a
 difference between two sweeps as evidence about a kernel change**, and take a head-to-head
 cap table **from one session** — columns measured weeks apart inherit the whole term at
-exactly the caps where the margins are a few percent.
+exactly the caps where the margins are a few percent. The current table pairs a
+2026-08-18 lolMiner column with a 2026-09-09 MXBM column and says so in its note, with
+the term sized at each band by paired old-against-new arms.
 
 ---
 

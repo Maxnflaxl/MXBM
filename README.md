@@ -32,23 +32,22 @@ picks the operating point. `--pl 220` is the reference card's efficiency peak;
 
 ## How it compares
 
-Both miners swept against each other at identical board caps, interleaved in one session
-on 2026-08-18 ([the full table](docs/performance.md#both-miners-under-the-same-cap)); the
-MXBM column is that day's build, and the current one is bounded within +0.5 % to −2.5 %
-of it by paired arms, so every margin is a floor:
+Both miners swept at identical board caps, set externally, with the watts read by one
+instrument ([the full table](docs/performance.md#both-miners-under-the-same-cap); the
+lolMiner column is the 2026-08-18 session of the unchanged reference binary, the MXBM
+column the current build's 2026-09-09 sweep):
 
 | board cap | MXBM | lolMiner 1.98a |
 |---|---|---|
-| 180 W | **54.0 sol/s** · 0.300 sol/s/W | 53.3 sol/s · 0.296 sol/s/W |
-| 220 W | **66.3 sol/s** · 0.302 sol/s/W | 53.4 sol/s · 0.243 sol/s/W |
-| 285 W | **70.0 sol/s** · 0.246 sol/s/W | 53.8 sol/s · 0.229 sol/s/W |
+| 180 W | **54.7 sol/s** · 0.304 sol/s/W | 53.3 sol/s · 0.296 sol/s/W |
+| 220 W | **69.9 sol/s** · 0.318 sol/s/W | 53.4 sol/s · 0.243 sol/s/W |
+| 285 W | **74.8 sol/s** · 0.263 sol/s/W | 53.8 sol/s · 0.229 sol/s/W |
 
-MXBM has the higher ceiling — **74.8 sol/s** on the current build against ~54.4, which
-lolMiner cannot reach at any setting — and it leads on both speed and efficiency from
-~177 W to the 285 W stock limit. Below that lolMiner is ahead on stock memory, at worst
-by 7.5 % at 160 W. With each miner at its best memory clock the band splits into two
-narrow strips: 2–3 % below 115 W and under 1 % from 155–177 W, with MXBM ahead by 8.5 %
-at 120 W and 3.5 % at 140 W between them
+MXBM has the higher ceiling — **74.8 sol/s** against ~54.4, which lolMiner cannot reach
+at any setting — and it leads on both speed and efficiency from ~176 W to the 285 W
+stock limit. Below that lolMiner is ahead on stock memory, by 6–9 % from 110 to 160 W.
+With each miner at its best memory clock MXBM leads from 120 W up and trails by 4–6 %
+only below ~114 W
 ([the low band](docs/performance.md#the-low-band-on-the-current-kernel)). The current
 build's best efficiency is 3.14 J/solution at 220 W ([the
 curve](docs/benchmarks.md#mxbm-power-curve)), 69.9 sol/s at that point against
@@ -139,8 +138,8 @@ nothing uploaded — and there is an issue template waiting for it.
 ## Roadmap
 
 - **More speed, and more of it under a power cap.** Performance work is ongoing. The
-  low-power band is where the remaining ground is: MXBM leads from ~177 W up and the gap
-  below that is down to two narrow strips ([the low
+  low-power band is where the remaining ground is: MXBM leads from ~176 W up and the gap
+  below that is single digits ([the low
   band](docs/performance.md#the-low-band-on-the-current-kernel)).
 - **AMD, via a HIP backend.** Not started. Both solvers are measured on NVIDIA today, and
   AMD cards run the portable OpenCL path.

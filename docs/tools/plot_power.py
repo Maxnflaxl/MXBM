@@ -184,10 +184,10 @@ def render(rows, above=()):
     else:
         head = "At the same cap: throughput, efficiency and power actually drawn"
     c.text(L, 28, head, 15, cl.INK, weight="bold")
-    c.text(L, 48, "RTX 4070 Ti SUPER, one session, runs interleaved and alternating. Caps "
-                  "set externally with nvidia-smi so neither miner's own", 11, cl.INK_2)
-    c.text(L, 63, "overclock code is a variable; power sampled from NVML for both, never "
-                  "from a miner's own stats block. 2 repeats per point.", 11, cl.INK_2)
+    c.text(L, 48, "RTX 4070 Ti SUPER. lolMiner: 2026-08-18, interleaved and alternating, "
+                  "2 repeats per point. MXBM: the 2026-09-09 build's own sweep, 90 s points.", 11, cl.INK_2)
+    c.text(L, 63, "Caps set externally with nvidia-smi so neither miner's own overclock code "
+                  "is a variable; power from NVML for both, never a miner's own stats block.", 11, cl.INK_2)
     c.text(L, 78, "Each miner's sol/s is its OWN definition and the two are not strictly "
                   "comparable. The watts are one instrument for both.", 11, cl.INK_2)
 
@@ -288,7 +288,7 @@ def render(rows, above=()):
     lx, ly = L + 14, A_TOP + 17
     legend = [(0, MX, None, "MXBM"), (16, LOL, None, "lolMiner 1.98a")]
     if above:
-        legend.append((32, MX, "6 4", "MXBM above stock (later session, no comparator)"))
+        legend.append((32, MX, "6 4", "MXBM above stock (2026-08-20 build, no comparator)"))
     for dy, colour, dash, nm in legend:
         c.line(lx, ly - 4 + dy, lx + 22, ly - 4 + dy, colour, 2, dash)
         c.marker(lx + 11, ly - 4 + dy, colour, 3.5 if dash else 4, cl.SURFACE)

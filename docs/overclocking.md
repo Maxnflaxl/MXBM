@@ -24,9 +24,9 @@ Four measured facts decide what to set:
 - **A rig that pays for electricity should cap.** `--pl 220` is the reference card's
   efficiency peak; `--tune` finds your card's own
   ([the curve](benchmarks.md#mxbm-power-curve)).
-- **Below ~167 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
+- **Below ~175 W, pair the cap with the card's low memory rung** (`--mclk 5001` on
   GDDR6X): worth +7 % sol/s at 160 W rising to +18 % at the 100 W floor. The crossover
-  is ~167 W and above ~180 W the rung is a wall — strictly a low-cap pairing.
+  is ~178 W and from ~180 W up the rung is a wall — strictly a low-cap pairing.
 - **Undervolting (`--cclk` + `--coff`) does nothing under a power cap** — the governor
   outranks the lock, on either knob, at any offset
   ([measured](performance-research.md#undervolting-buys-nothing-under-a-power-cap--the-cap-outranks-both-knobs)).

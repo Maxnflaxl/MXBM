@@ -123,7 +123,7 @@ everything except the curve, which is still a useful report.
 **The report is always saved**, and the path is printed:
 
 ```
-Saved to /home/you/.config/mxbm/report-nvidia-geforce-rtx-4070-ti-super-2026-08-20.md
+Saved to /home/you/.config/mxbm/report-nvidia-geforce-rtx-4070-ti-super-2026-09-09.md
 ```
 
 It lands next to the tune store, named after the card and the day; a second run on the
@@ -404,8 +404,8 @@ is a wall of text on a screen you only glance at. `--silence N` turns that down:
 | 3 | the statistics block only; even the average-speed line and the startup banner are gone |
 
 ```
-Average speed (15s): 56.53 sol/s***
-Average speed (15s): 60.87 sol/s*
+Average speed (15s): 74.61 sol/s***
+Average speed (15s): 74.28 sol/s*
 ```
 
 `--compactaccept` selects just the `*` marks, leaving job lines alone; level 2
@@ -428,9 +428,9 @@ in the same order, minus the colour and plus a timestamp on every one:
 
 ```
 [2026-09-09 00:12:04] MXBM v0.8.431 [3d2563a] — open BeamHash III miner
-[2026-07-25 19:16:23] New job received for blockheight 3974400 (job 58481) Difficulty: 512
-[2026-07-25 19:16:44] RTX 4070 Ti SUPER: Found a share of difficulty 8.0k (3.9x target of 2048)
-[2026-07-25 19:16:44] Share accepted (18 ms)
+[2026-09-09 00:12:23] New job received for blockheight 3974400 (job 58481) Difficulty: 512
+[2026-09-09 00:12:44] RTX 4070 Ti SUPER: Found a share of difficulty 8.0k (3.9x target of 2048)
+[2026-09-09 00:12:44] Share accepted (18 ms)
 ```
 
 Without `--logfile`, it lands in `logs/mxbm_<date>_<time>.log` relative to the
@@ -477,7 +477,7 @@ below the peak is *worse* on both counts. The full curve is in
 [benchmarks.md](benchmarks.md#mxbm-power-curve); these numbers are one
 card's, and `sudo mxbm --tune` measures yours ([Tuning](#tuning-measure-your-own-card)).
 
-**Running capped below ~167 W? Drop the memory clock too.** Under a low cap the GDDR
+**Running capped below ~175 W? Drop the memory clock too.** Under a low cap the GDDR
 interface burns watts for bandwidth the slowed core cannot use; the 5001 MHz rung returns
 them as core clock — **+7 % sol/s at 160 W rising to +18 % at the 100 W floor**, at the
 same wall power. Both settings are restored when the miner exits:
@@ -488,10 +488,10 @@ sudo mxbm --algo BEAM-III --pool ... --user ... --pl 160 --mclk 5001
 
 On a rig that doesn't run the miner as root, set the card once instead
 (`sudo nvidia-smi -pl 160 -lmc 5001,5001`, e.g. at boot) and mine unprivileged. The
-crossover is ~167 W and above ~180 W the rung is a wall, so this is strictly a low-cap
-pairing — and it is not an efficiency setting: 3.22 J/solution at 160 W on the rung
-against 3.14 at 220 W on stock memory, where the card does 41 % more work. Details in
-[performance.md](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-165-w).
+crossover is ~178 W and from ~180 W up the rung is a wall, so this is strictly a low-cap
+pairing — and it is not an efficiency setting: 3.19 J/solution at 160 W on the rung
+against 3.14 at 220 W on stock memory, where the card does 39 % more work. Details in
+[performance.md](performance.md#below-stock-the-other-rung-pays-7-to-18--under-caps-below-175-w).
 
 ```
 sudo mxbm --algo BEAM-III --pool ... --user ... --pl 220
@@ -521,9 +521,9 @@ mxbm ... --statsformat gpuName,speed,power,coreT,state
 ```
       Name        Speed  Power  Core   State
                   sol/s      W  Temp
-RTX 4070 Ti SUPER 12.60    284    65  mining
+RTX 4070 Ti SUPER 74.80    284    65  mining
 ---------------------------
-Total             12.60    284
+Total             74.80    284
 ```
 
 | Field | Column |
@@ -554,8 +554,8 @@ reads better on a narrow terminal or a rig with many cards:
 ```
                              GPU 0       Total
 Name:                 RTX 4070 Ti          Rig
-Speed (sol/s):               19.30       19.30
-Efficiency (sol/s/W):        0.068       0.068
+Speed (sol/s):               74.80       74.80
+Efficiency (sol/s/W):        0.263       0.263
 Power (W):                     285         285
 Temp (deg C):                   66
 ```
@@ -676,10 +676,10 @@ entry in `/summary`, with the rig's totals underneath:
 ```
       Name        Speed   Pool  Iter.   Shares   Best     Eff.  Power  CCLK   MCLK  Core  Fan
                   sol/s  sol/s   it/s    A/S/R  Share  sol/s/W      W   MHz    MHz  Temp  Pct
-GPU 0 RTX 4070 Ti 58.70     --   29.4   20/1/0  12.8k    0.207    284  2685  10251    64   50
+GPU 0 RTX 4070 Ti 74.80     --   37.2   20/1/0  12.8k    0.263    284  2625  10251    65   50
 GPU 1 RTX 3080    53.70     --   27.4   14/0/0   9.8k    0.203    264  2585  10251    65   55
 ---------------------------
-Total             112.40 110.20   56.8   34/1/0  12.8k    0.205    548
+Total             128.50 126.10   64.6   34/1/0  12.8k    0.235    548
 ```
 
 What the Total row does and does not add up is deliberate:
