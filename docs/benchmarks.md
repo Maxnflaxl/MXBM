@@ -282,8 +282,11 @@ The chart is the table below drawn as a timeline: width is time, height is power
 block's area is the energy that stage costs. Generated from the table by
 `python3 docs/tools/plot_stages.py`.
 
-Measured 2026-09-09 on the shipping build, 8 reps, 45 s per stage, harness solve
-28.04 ms, drops 0, KAT 3/3:
+Measured 2026-09-09 on the shipping build, 8 reps, 45 s per stage, drops 0, KAT 3/3.
+The figures come from the stage harness, which runs one solve at a time with nothing
+overlapped, so its solve is 28.04 ms where the miner's is 27.00: the miner runs the next
+solve's entry pass beside rounds 3 and 4 on a higher-priority stream, and that overlap is
+the missing millisecond.
 
 | stage | ms | % of solve | power | DRAM traffic | bound by |
 |---|---|---|---|---|---|
@@ -297,9 +300,7 @@ Measured 2026-09-09 on the shipping build, 8 reps, 45 s per stage, harness solve
 
 The stages sum to 28.31 ms against the harness's 28.04 ms solve, so the attribution
 residual is 1 %, and their summed energy (8.07 J) lands within 1.4 % of the counter's
-whole-solve figure (7.96 J). Entry is replayed on its own here; in the miner the next
-solve's entry pass runs beside rounds 3 and 4 on a higher-priority stream, which is where
-the 27.0 ms headline's extra millisecond comes from.
+whole-solve figure (7.96 J).
 
 Every stage draws the board limit, within a 6 W spread, so there is no single kernel to
 fix for power: the watts follow the cap, and only the time per stage differs. The front
