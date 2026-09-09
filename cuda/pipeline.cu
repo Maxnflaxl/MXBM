@@ -46,22 +46,22 @@ using namespace mxbm::cuda;
 #if MXBM_R2_FULL
 #define MXBM_R1_ARGS 7,7,2,LM_SEEDF,424u,2u,1u,2u,2u, 1u,10u,kFCap
 #define MXBM_R2_ARGS 7,7,2,LM_RAW,  400u,4u,2u,4u,4u, 10u,10u,kFCap
-#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,8u,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 10u,kR3OutWords,kFCap
 #elif MXBM_R3_QUAD
 // Round 2 emits 3 u64 (key + 4 leaves + gi) and round 3 reads 3 and rebuilds. Only the
 // two strides and round 3's mode change; every L value, tree width and cap is the same,
 // because the record carries the same INFORMATION either way -- just not the same bytes.
 #define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,3u,kFCap
-#define MXBM_R3_ARGS 7,6,4,LM_RD3,  376u,6u,4u,2u,8u, 3u,8u,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_RD3,  376u,6u,4u,2u,8u, 3u,kR3OutWords,kFCap
 #else
 #define MXBM_R1_ARGS 7,7,1,LM_SEED, 424u,2u,1u,2u,2u, 1u,2u,MXBM_R1_FCAP
 #define MXBM_R2_ARGS 7,7,2,LM_RD2,  400u,4u,2u,4u,4u, 2u,8u,kFCap
-#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 8u,8u,kFCap
+#define MXBM_R3_ARGS 7,6,4,LM_EMIT, 376u,6u,4u,2u,8u, 8u,kR3OutWords,kFCap
 #endif
 // Round 4's output is 8 B (t5_rec): the terminal round reads 48 bits of word 0 and
 // nothing else, and recovery replays the pairing rather than reading a row.
-#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, 8u,1u,kFCap
+#define MXBM_R4_ARGS 6,1,2,LM_USE,  288u,9u,2u,0u,0u, kR3OutWords,1u,kFCap
 
 
 #define CK(x) do{ cudaError_t e=(x); if(e){ printf("CUDA %s @%d\n",cudaGetErrorString(e),__LINE__); return 1; } }while(0)
@@ -429,17 +429,17 @@ struct CudaSolver {
         if (hs == 0) return out;
 
         cudaMemsetAsync(l3Slots, 0xFF, (size_t)hs*4*4, st);
-        replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], 8u, counts[1], cap,
+        replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], kR3OutWords, counts[1], cap,
                                         l3Slots, l4Lead, drops, bb);
 #if MXBM_IMPBITS
         cudaMemsetAsync(l2Slots, 0xFF, (size_t)hs*8*4, st);
-        replay_r3<<<4*hs, 256, 0, st>>>(hs, l3Slots, elem[1], 8u, elem[0], 8u, kImpDB,
+        replay_r3<<<4*hs, 256, 0, st>>>(hs, l3Slots, elem[1], kR3OutWords, elem[0], 8u, kImpDB,
                                         counts[0], cap, l2Slots, drops, bb);
         recover_from_l2<<<(hs+63)/64, 64, 0, st>>>(hs, l2Slots, l4Lead, elem[0], 8u,
                                                    dleaves);
 #else
         recover_from_l3<<<(hs+63)/64, 64, 0, st>>>(hs, capacity, left, right, l3Slots,
-                                                   l4Lead, elem[1], 8u, dleaves);
+                                                   l4Lead, elem[1], kR3OutWords, dleaves);
 #endif
         std::vector<uint32_t> hl((size_t)hs*32);
         cudaMemcpyAsync(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost, st);
@@ -562,17 +562,17 @@ struct CudaSolver {
         if (dropOut) *dropOut = hd[0] | hd[1] | hd[2] | hd[3];
         if (hs == 0) return out;
         cudaMemsetAsync(l3Slots, 0xFF, (size_t)hs*4*4, st);
-        replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], 8u, counts[1], cap,
+        replay_r4<<<2*hs, 256, 0, st>>>(hs, survL4, elem4, elem[1], kR3OutWords, counts[1], cap,
                                         l3Slots, l4Lead, drops, bb);
 #if MXBM_IMPBITS
         cudaMemsetAsync(l2Slots, 0xFF, (size_t)hs*8*4, st);
-        replay_r3<<<4*hs, 256, 0, st>>>(hs, l3Slots, elem[1], 8u, elem[0], 8u, kImpDB,
+        replay_r3<<<4*hs, 256, 0, st>>>(hs, l3Slots, elem[1], kR3OutWords, elem[0], 8u, kImpDB,
                                         counts[0], cap, l2Slots, drops, bb);
         recover_from_l2<<<(hs+63)/64, 64, 0, st>>>(hs, l2Slots, l4Lead, elem[0], 8u,
                                                    dleaves);
 #else
         recover_from_l3<<<(hs+63)/64, 64, 0, st>>>(hs, capacity, brL(p), brR(p), l3Slots,
-                                                   l4Lead, elem[1], 8u, dleaves);
+                                                   l4Lead, elem[1], kR3OutWords, dleaves);
 #endif
         std::vector<uint32_t> hl((size_t)hs*32);
         cudaMemcpyAsync(hl.data(), dleaves, (size_t)hs*32*4, cudaMemcpyDeviceToHost, st);
