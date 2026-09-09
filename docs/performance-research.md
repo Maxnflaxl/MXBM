@@ -4366,6 +4366,16 @@ What it buys at the caps a capped rig runs: **−1.75 % ms/solve at 140 and 160 
 rung. The 175–200 W rows in the head-to-head table are re-measured with the shipped
 default, with nothing interpolated.
 
+**Both gates re-measured on the priority-stream form, 2026-09-09.** The crossovers
+above were taken with the co-blocks form, and the stream form has a different cost
+shape (co-runner cost ∝ issue duty²), so a build with both gate constants at zero was
+paired against the shipped binary, 4+4 arms of 60 s, one ordering, at the cap just
+below each gate. **Rung, 140 W: +0.000 %** — 1289.75 solves in both arms, to the
+quarter-solve, with the spec arm running 100 MHz lower (1493 against 1595 MHz): the
+hosted pass costs exactly the clock it frees. **Stock memory, 210 W: −0.42 %** (1961.75
+→ 1953.50 solves, t = 9.2, 125 MHz lower). A capped solve is energy-bound and the
+stream form is no exception; both gates stand where they are.
+
 ### The full-pipeline eco mock: −29 % at the 100 W floor, −13 % at 120 W — alive at the deep floor only
 <details>
 <summary>Details</summary>
