@@ -42,9 +42,12 @@ void entry_beside(const uint64_t* __restrict__ pp4, uint32_t count,
                   uint32_t* __restrict__ drops, uint64_t chain_mask) {
     const uint32_t stride = gridDim.x * blockDim.x;
     const uint64_t pp[4] = { pp4[0], pp4[1], pp4[2], pp4[3] };
+#if __CUDA_ARCH__ >= 800
+    // L2 eviction policies are sm_80+; Turing takes plain stores below.
     uint64_t keep, done;
     asm volatile("createpolicy.fractional.L2::evict_last.b64 %0, 1.0;"  : "=l"(keep));
     asm volatile("createpolicy.fractional.L2::evict_first.b64 %0, 1.0;" : "=l"(done));
+#endif
     uint64_t dep = 0;
     for (uint32_t g = blockIdx.x*blockDim.x + threadIdx.x; g < count; g += stride) {
         bh3::Elem e;
@@ -64,9 +67,13 @@ void entry_beside(const uint64_t* __restrict__ pp4, uint32_t count,
         if (pos < bucket_cap) {
             uint64_t* dst = belem + (size_t)b*bucket_cap + pos;
             const uint64_t rec = ((uint64_t)g << 32) | key;
+#if __CUDA_ARCH__ >= 800
             const uint64_t pol = ((pos & 15u) == 15u) ? done : keep;   // 16 records per 128 B line
             asm volatile("st.global.L2::cache_hint.u64 [%0], %1, %2;"
                          :: "l"(dst), "l"(rec), "l"(pol) : "memory");
+#else
+            *dst = rec;
+#endif
         } else atomicAdd(&drops[0], 1u);
         dep ^= e.w[0];
         __nanosleep(kBesideSleepNs);

@@ -25,11 +25,13 @@ jobs:
       matrix:
         include:
           # No GPU on either runner, so the `native` arch default must be
-          # pinned; sm_89 matches the resource guard's occupancy contract.
+          # pinned. Same fatbin as release.yml, so a Turing-only PTX break
+          # fails here and not on the release run; the resource guard scopes
+          # itself to the sm_89 cubin.
           - name: linux
             os: ubuntu-24.04
             cmake_args: >-
-              -DCMAKE_CUDA_ARCHITECTURES=89
+              -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120"
               -DMXBM_CUDA_RESOURCE_GUARD=ON
 
           # windows-2022, NOT -2025: the 2025 image ships VS 18 (2026), which
@@ -48,7 +50,7 @@ jobs:
               -DCMAKE_C_COMPILER=cl
               -DCMAKE_CXX_COMPILER=cl
               -DCMAKE_CUDA_COMPILER=nvcc
-              -DCMAKE_CUDA_ARCHITECTURES=89
+              -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120"
               -DMXBM_CUDA_RESOURCE_GUARD=ON
 
     steps:
