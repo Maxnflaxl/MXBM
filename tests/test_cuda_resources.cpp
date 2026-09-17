@@ -704,6 +704,50 @@ bool check_wg(int expect) {
 
 } // namespace
 
+// Every architecture in the fatbin, not just the contract's. The blocks/SM contract
+// cannot travel -- it is Ada's register file and Ada's 100 KB carveout -- but a SPILL
+// is architecture-independent evidence that ptxas ran out of registers, and it is the
+// failure that would make a new architecture read slow for a reason nothing else here
+// would name. Round 3 on the first Blackwell report is exactly that shape of question
+// (docs/performance.md, RTX 5080), so the fatbin's other archs stop going unlooked-at.
+//
+// Reports REG/SHARED/STACK per arch so a reader can compare them by eye, and fails only
+// on a spill: asserting register counts for an architecture nobody has measured on
+// would be inventing a baseline, which is the thing this file exists to prevent.
+int check_all_archs(const std::string& out) {
+    std::string arch, line;
+    int spills = 0;
+    std::string fn;
+    for (size_t i = 0; i <= out.size(); ++i) {
+        if (i != out.size() && out[i] != '\n') { line += out[i]; continue; }
+        const size_t a = line.find("arch =");
+        if (a != std::string::npos) {
+            arch = line.substr(a + 6);
+            while (!arch.empty() && arch[0] == ' ') arch.erase(0, 1);
+            std::printf("  arch %s\n", arch.c_str());
+        } else if (line.compare(0, 10, " Function ") == 0) {
+            const size_t e = line.find_last_of(':');
+            fn = line.substr(10, e == std::string::npos ? std::string::npos : e - 10);
+        } else if (!fn.empty() && line.find("REG:") != std::string::npos) {
+            const int reg = field(line, "REG:"), stack = field(line, "STACK:");
+            const int smem = field(line, "SHARED:"), local = field(line, "LOCAL:");
+            std::printf("    %-64s REG %3d SHARED %6d STACK %4d LOCAL %d\n",
+                        fn.c_str(), reg, smem, stack, local);
+            // recover's 64 B stack is a declared local array, not a spill (see the
+            // contract table), so LOCAL is what distinguishes the two.
+            if (local > 0) {
+                ++spills;
+                failf("  FAIL: %s spills %d B to local memory on %s. ptxas ran out of "
+                      "registers; on the reference card this is silent and costs time.\n",
+                      fn.c_str(), local, arch.c_str());
+            }
+            fn.clear();
+        }
+        line.clear();
+    }
+    return spills;
+}
+
 int main() {
     const SmModel& m = kSm89;
 
@@ -727,13 +771,19 @@ int main() {
               cuobjdump_path(), MXBM_CUDA_LIB, out.c_str());
         return mxbm::summary("cuda_resources");
     }
+    // Architecture-independent first, so a fatbin without sm_89 is still checked.
+    std::printf("Resource usage, every arch in %s:\n", MXBM_CUDA_LIB);
+    check_all_archs(out);
+
     bool sawArch = false;
     (void)parse_res_usage(out, sawArch);
     if (!sawArch) {
-        std::printf("SKIPPED: cuda_resources -- %s carries no %s code. This contract is "
-                    "the reference card's (Ada, compute capability 8.9); another "
-                    "architecture has a different occupancy model and different "
-                    "baselines.\n", MXBM_CUDA_LIB, kArch);
+        std::printf("SKIPPED: the blocks/SM contract -- %s carries no %s code. That "
+                    "contract is the reference card's (Ada, compute capability 8.9) and "
+                    "does not travel: another architecture has a different register file "
+                    "and a different shared-memory carveout. The spill check above ran on "
+                    "every arch, and `mxbm --report` prints the blocks/SM each kernel "
+                    "actually reached on the card it runs on.\n", MXBM_CUDA_LIB, kArch);
         return mxbm::summary("cuda_resources");
     }
 
