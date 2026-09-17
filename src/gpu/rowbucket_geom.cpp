@@ -141,10 +141,10 @@ RbGeometry rb_geometry_for(uint32_t capacity, uint64_t max_alloc, uint64_t globa
         return allow_impb && rb_impb_ok(bb, sm, quad);
     };
     // The low-power exception to the ladder's order. (17,0) is NOT a rung: it loses
-    // 10.9 % at stock, so it can only be reached by policy under a cap -- and the
-    // policy is currently DISARMED (kRbLowPowerW == 0: the measured crossover failed
-    // reproduction; the constant's comment tells the story). Same fit rules as the
-    // ladder; if it does not fit, the ladder answers exactly as without the hint.
+    // 10.9 % at stock, so it can only be reached by policy under a cap. The policy is
+    // ARMED at kRbLowPowerW = 130 W (c3d8a4b); 0 disarms it, and rowbucket_geom.h
+    // carries the figures. Same fit rules as the ladder; if it does not fit, the
+    // ladder answers exactly as without the hint.
     // The figure max_alloc binds on: the whole larger set, or -- when the backend
     // can split each set into two bucket-halves -- whatever rowbucket_single_split
     // says is the largest piece left.
