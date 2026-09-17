@@ -708,31 +708,45 @@ bool check_wg(int expect) {
 // cannot travel -- it is Ada's register file and Ada's 100 KB carveout -- but a SPILL
 // is architecture-independent evidence that ptxas ran out of registers, and it is the
 // failure that would make a new architecture read slow for a reason nothing else here
-// would name. Round 3 on the first Blackwell report is exactly that shape of question
-// (docs/performance.md, RTX 5080), so the fatbin's other archs stop going unlooked-at.
+// would name.
 //
-// Reports REG/SHARED/STACK per arch so a reader can compare them by eye, and fails only
-// on a spill: asserting register counts for an architecture nobody has measured on
-// would be inventing a baseline, which is the thing this file exists to prevent.
+// One line per arch by default; MXBM_RES_VERBOSE=1 prints every kernel. The per-arch
+// numbers were read once off the sm_120 build (docs/performance.md, RTX 5080), and a
+// 680-line table on every build after that is noise.
+//
+// Fails only on a spill: asserting register counts for an architecture nobody has
+// measured on would be inventing a baseline, which is the thing this file exists to
+// prevent.
 int check_all_archs(const std::string& out) {
-    std::string arch, line;
-    int spills = 0;
-    std::string fn;
+    const bool verbose = std::getenv("MXBM_RES_VERBOSE") != nullptr;
+    std::string arch, line, fn;
+    int spills = 0, kernels = 0, maxReg = 0, maxSmem = 0;
+    auto flush_arch = [&]() {
+        if (arch.empty()) return;
+        std::printf("  %-7s %3d kernels, max REG %3d, max SHARED %6d\n",
+                    arch.c_str(), kernels, maxReg, maxSmem);
+        kernels = maxReg = maxSmem = 0;
+    };
     for (size_t i = 0; i <= out.size(); ++i) {
         if (i != out.size() && out[i] != '\n') { line += out[i]; continue; }
         const size_t a = line.find("arch =");
         if (a != std::string::npos) {
-            arch = line.substr(a + 6);
-            while (!arch.empty() && arch[0] == ' ') arch.erase(0, 1);
-            std::printf("  arch %s\n", arch.c_str());
+            std::string next = line.substr(a + 6);
+            while (!next.empty() && next[0] == ' ') next.erase(0, 1);
+            // cuobjdump prints the elf and ptx sections of one arch back to back.
+            if (next != arch) { flush_arch(); arch = next; }
         } else if (line.compare(0, 10, " Function ") == 0) {
             const size_t e = line.find_last_of(':');
             fn = line.substr(10, e == std::string::npos ? std::string::npos : e - 10);
         } else if (!fn.empty() && line.find("REG:") != std::string::npos) {
             const int reg = field(line, "REG:"), stack = field(line, "STACK:");
             const int smem = field(line, "SHARED:"), local = field(line, "LOCAL:");
-            std::printf("    %-64s REG %3d SHARED %6d STACK %4d LOCAL %d\n",
-                        fn.c_str(), reg, smem, stack, local);
+            ++kernels;
+            if (reg > maxReg) maxReg = reg;
+            if (smem > maxSmem) maxSmem = smem;
+            if (verbose)
+                std::printf("    %-64s REG %3d SHARED %6d STACK %4d LOCAL %d\n",
+                            fn.c_str(), reg, smem, stack, local);
             // recover's 64 B stack is a declared local array, not a spill (see the
             // contract table), so LOCAL is what distinguishes the two.
             if (local > 0) {
@@ -745,6 +759,7 @@ int check_all_archs(const std::string& out) {
         }
         line.clear();
     }
+    flush_arch();
     return spills;
 }
 
@@ -772,7 +787,8 @@ int main() {
         return mxbm::summary("cuda_resources");
     }
     // Architecture-independent first, so a fatbin without sm_89 is still checked.
-    std::printf("Resource usage, every arch in %s:\n", MXBM_CUDA_LIB);
+    std::printf("Resource usage per arch in %s (MXBM_RES_VERBOSE=1 for every kernel):\n",
+                MXBM_CUDA_LIB);
     check_all_archs(out);
 
     bool sawArch = false;
