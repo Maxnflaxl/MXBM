@@ -35,7 +35,6 @@ body:
         ### Result
         | Throughput | ... sol/s |
         | Board power | ... W |
-      render: markdown
     validations:
       required: true
   - type: input
