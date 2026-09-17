@@ -5,9 +5,9 @@ reproduced with the scripts in `benchmarks/`; the command is given under each ta
 This page is the results. How to measure a miner without fooling yourself is in
 [benchmarking.md](benchmarking.md).
 
-MXBM has been measured on five GPUs: the RTX 4070 Ti SUPER it is developed on, an M3 Max
-via Metal, and a contributed RTX 4070 SUPER, RTX 3060 Ti and GTX 1660 Ti. To add yours,
-see [send us your numbers](#send-us-your-numbers).
+MXBM has been measured on six GPUs: the RTX 4070 Ti SUPER it is developed on, an M3 Max
+via Metal, and a contributed RTX 5080, RTX 4070 SUPER, RTX 3060 Ti and GTX 1660 Ti. To add
+yours, see [send us your numbers](#send-us-your-numbers).
 
 ---
 
@@ -34,6 +34,7 @@ One row per backend per card, each at the card's stock power cap.
 |---|---|---|---|---|---|---|---|---|
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | CUDA | 74.8 | 26.9 | 285 | 0.263 | ours, `--benchmark` ‡ |
 | RTX 4070 Ti SUPER | 16 GiB GDDR6X | 610.43.03 · Linux | OpenCL | 63.2 | 31.8 | 284 | 0.222 | ours, `--benchmark` ‡ |
+| RTX 5080 | 16 GiB GDDR7 | 616.92 · Windows | CUDA | 60.9 | 32.4 | 233 | 0.261 | [#1](https://github.com/Maxnflaxl/MXBM/issues/1), `--report` 120 s ◇ ★ |
 | RTX 4070 SUPER | 12 GiB GDDR6X | 610.88 · Windows | CUDA | 55.8 | 36.2 | 211 | 0.265 | ZumZum, `--report` 120 s ※ ◇ |
 | RTX 3060 Ti | 8 GiB GDDR6 | 610.88 · Windows | CUDA | 26.5 | 75.4 | 192 | 0.138 | ZumZum, `--report` 120 s ※ |
 | GTX 1660 Ti | 6 GiB GDDR6 | 595.97 · Windows | CUDA | 9.48 | 210.6 | 106 | 0.089 | ZumZum, `--report` 120 s ◇ ◆ |
@@ -48,34 +49,41 @@ which trades a little boost for reproducibility.
 ※ 120 s `--report` on MXBM 0.8.408, 2026-08-21. The 3060 Ti runs at its thermal limit
 (81 °C) at stock, so its top end is partly a cooling figure.
 
-◇ Taken with other compute processes on the card: 26 on the 4070 SUPER, 13 plus a
-display on the 1660 Ti. Indicative only; clean re-runs are wanted. See
-[third-party hardware](performance.md#third-party-hardware--contributed-cards).
+◇ Taken with other compute processes on the card: 26 plus a display on the 5080, 26 on the
+4070 SUPER, 13 plus a display on the 1660 Ti. Indicative only; clean re-runs are wanted.
+See [third-party hardware](performance.md#third-party-hardware--contributed-cards).
 
 ◆ The first Turing measurement. The same machine on 0.8.412 fell back to OpenCL at
 4.28 sol/s / 462.9 ms, so the CUDA path is worth 2.2× there. The card never reached its
 board limit and shows no interior efficiency optimum; that may be the contention, so it
 is not yet read as a property of Turing.
 
+★ The first Blackwell measurement, and the only card where another miner leads: lolMiner
+1.98a reads 74.2 sol/s at 251.3 W on it. Also the only one where round 3 dominates the
+solve (51 % against Ada's 29 %). Overclocked by its owner, so not a stock figure.
+[The curve, the head-to-head and why it is not an arch
+fallback](performance.md#third-party-hardware--contributed-cards).
+
 The M3 Max's pipeline alone runs 101.5 ms/solve (18.8 sol/s); sustained is lower because
 the laptop throttles. macOS exposes no GPU power API, so there is no power column.
 
 ![Speed and efficiency against the cap, every card measured](tools/cards-curve.svg)
 
-Curves for the four NVIDIA cards, generated from the tables in
+Curves for the five NVIDIA cards, generated from the tables in
 [performance.md](performance.md#third-party-hardware--contributed-cards). This is not a
 controlled comparison: different machines, operating systems and instruments, so the
 distances between curves are unreliable. What holds is each curve's shape and where its
 own efficiency peak sits: 220 W on the 4070 Ti SUPER, 148 W on the 4070 SUPER, 130 W on
-the 3060 Ti, all well under stock. The 1660 Ti's efficiency was still climbing at the
-driver's 70 W floor, so its optimum is a bound, not a measurement.
+the 3060 Ti, all well under stock. Two never turned over inside the driver's band, so
+their optima are bounds, not measurements: the 1660 Ti below 70 W, the 5080 below 250 W.
 
 ---
 
 ## MXBM vs lolMiner 1.98a
 
 Both mining BeamHash III on the same card, caps set with `nvidia-smi` so one instrument
-measures both. At equal power, at MXBM's efficiency peak:
+measures both. This is the reference card and does not generalise — on the contributed
+5080, lolMiner leads by 22 %. At equal power, at MXBM's efficiency peak:
 
 | | MXBM at 220 W | lolMiner 1.98a at 220 W | |
 |---|---|---|---|
@@ -419,8 +427,9 @@ pays below ~178 W on the 4070 Ti SUPER but only below 121 W on the 4070 SUPER.
 
 Particularly wanted:
 
-- **Anything that is not Ada**: Turing, Blackwell, A-series. Ampere and Turing have one
-  report each so far, and Turing is where MXBM is furthest behind.
+- **Anything that is not Ada**: Turing, Blackwell, A-series. Ampere, Turing and Blackwell
+  have one report each, every one of them contended. A clean 5080 run at stock clocks is
+  the one most wanted.
 - **Smaller cards**, 8–12 GB. MXBM refuses to start below its threshold rather than mine
   nothing, so a refusal is itself a useful report; tell us what it said.
 - **AMD**, via the OpenCL backend. It is untested there.

@@ -3,10 +3,9 @@
 
     python3 docs/tools/plot_cards.py     -> docs/tools/cards-curve.svg
 
-Three cards from two tables in docs/performance.md: the reference 4070 Ti SUPER
-from the head-to-head section, and the contributed 4070 SUPER and 3060 Ti from
-the third-party section. Generated from the tables so the picture cannot drift
-from the numbers.
+Every card from two tables in docs/performance.md: the reference 4070 Ti SUPER
+from the head-to-head section, and the contributed cards from the third-party
+section. Generated from the tables so the picture cannot drift from the numbers.
 
 THIS IS NOT A CONTROLLED COMPARISON, and the chart says so on its face. The
 reference card was swept on Linux with caps set externally by nvidia-smi and
@@ -44,10 +43,13 @@ TP_SECTION = "## Third-party hardware — contributed cards"
 
 W, H = 1000, 640
 L, R = 74, 34
-A_TOP, A_BOT = 118, 350            # panel A: sol/s
+A_BOT = 358                        # panel A's floor; its top is derived (LEGEND_Y)
+LEGEND_Y = 112                     # first legend row's baseline
+LEGEND_COLS = 4                    # fixed columns: font metrics cannot overflow a
+                                   # count, and a longer card list just adds a row
 B_TOP, B_BOT = 400, 552            # panel B: sol/s per watt
 
-XTICKS = [70, 100, 120, 140, 160, 180, 200, 220, 240, 260, 285]
+XTICKS = [70, 100, 130, 160, 190, 220, 250, 285, 320, 360, 400]
 
 # By entity. The rung is the 4070 SUPER at another memory clock, so it shares
 # that card's hue and is separated by the dash instead of by a fourth colour.
@@ -56,8 +58,64 @@ COLOUR = {
     "RTX 4070 SUPER": cl.SERIES[1],
     "RTX 3060 Ti": cl.SERIES[2],
     "GTX 1660 Ti": cl.SERIES[3],
+    "RTX 5080": cl.SERIES[4],
 }
 RUNG = "RTX 4070 SUPER @ 5001 MHz"
+
+
+# DejaVu Sans advance widths, averaged per class. Only needed to wrap the legend
+# and to keep the inline labels inside the panel, so approximate is enough --
+# every use leaves margin for the error.
+def text_w(t, size):
+    wide = sum(ch in "MWmw@%" for ch in t)
+    narrow = sum(ch in "iljI.,:;'| " for ch in t)
+    return size * ((len(t) - wide - narrow) * 0.62 + wide * 1.0 + narrow * 0.34)
+
+
+def free_slot(rect, curves, taken):
+    """True when this label box touches no curve and no placed label.
+
+    Segments are sampled rather than clipped: at this scale a 12-point sample of
+    a segment cannot step over a box 11 px tall, and the arithmetic stays one
+    line instead of a clipper.
+    """
+    x0, y0, x1, y1 = rect
+    for a2, b2, c2, d2 in taken:
+        if x0 < c2 and a2 < x1 and y0 < d2 and b2 < y1:
+            return False
+    for pts in curves:
+        for (px, py), (qx, qy) in zip(pts, pts[1:]):
+            if max(px, qx) < x0 or min(px, qx) > x1:
+                continue
+            for k in range(13):
+                t = k / 12.0
+                sx, sy = px + (qx - px) * t, py + (qy - py) * t
+                if x0 <= sx <= x1 and y0 <= sy <= y1:
+                    return False
+    return True
+
+
+def place_label(mx, my, w, curves, taken, top, bot, left, right):
+    """A clear box for a curve's name, as near its first point as one exists.
+
+    Tried above the point first, then below, stepping out until the box misses
+    every curve and every label already placed. Four cards start within a few
+    sol/s of each other at 100 W, so nudging them apart is not enough: the names
+    have to leave the busy band entirely, and the caller draws a leader when one
+    ends up far from its point.
+    """
+    for side in (-1, 1):
+        for step in range(0, 26):
+            cy = my + side * (10 + step * 12)
+            if cy - 8 < top or cy + 3 > bot:
+                continue
+            for x in (mx + 6, mx - 6 - w):
+                if x - 3 < left or x + w + 3 > right:
+                    continue            # a name must not sit in the axis gutter
+                r = (x - 3, cy - 8, x + w + 3, cy + 3)
+                if free_slot(r, curves, taken):
+                    return x, cy, r
+    return mx + 6, my - 10, (mx + 3, my - 18, mx + w + 9, my - 7)
 
 
 def parse_reference():
@@ -122,6 +180,9 @@ def censored(rows):
 
 def render(series):
     c = cl.Canvas(W, H)
+    order0 = [n for n in COLOUR if n in series] + ([RUNG] if RUNG in series else [])
+    legend_rows = (len(order0) + LEGEND_COLS - 1) // LEGEND_COLS
+    A_TOP = LEGEND_Y + legend_rows * 16 + 18
     every = [r for rows in series.values() for r in rows]
     caps = sorted({r["cap"] for r in every})
     xs = cl.make_scale(caps[0] - 10, caps[-1] + 10, L, W - R, log=False)
@@ -136,21 +197,17 @@ def render(series):
     peaks.sort(key=lambda p: -p[1]["cap"])
     turned = [(n, p) for n, p in peaks if not censored(series[n])]
     flat = [(n, p) for n, p in peaks if censored(series[n])]
-    head = ("On stock memory every card is most efficient well below its stock cap -- at %s"
-            % ", ".join("%g W" % p["cap"] for _, p in turned))
+    # The per-card peaks are already marked on panel B, so the header does not
+    # repeat them; it defines the notation and the two things x and y are not.
+    c.text(L, 28, "Speed and efficiency against power cap", 15, cl.INK, weight="bold")
+    line2 = "Efficiency peaks below stock cap on every card."
     if flat:
-        head += "; %s never turned over above %s" % (
-            ", ".join(n for n, _ in flat),
-            ", ".join("%g W" % p["cap"] for _, p in flat))
-    c.text(L, 28, head, 15, cl.INK, weight="bold")
-    c.text(L, 50, "NOT a controlled comparison. The 4070 Ti SUPER was swept on Linux with "
-                  "caps set by nvidia-smi and power read from NVML; the other two by MXBM's "
-                  "own --tune on", 11, cl.INK_2)
-    c.text(L, 65, "Windows, in another machine with different cooling. Cross-card distances "
-                  "carry all of that. What survives it is each curve's SHAPE and where its "
-                  "own peak sits.", 11, cl.INK_2)
-    c.text(L, 80, "sol/s is CPU-verified solutions in every series. x is the cap the card "
-                  "was given, not what it drew.", 11, cl.INK_2)
+        line2 += "  \u2265 marks a bound: still rising at the lowest cap swept."
+    c.text(L, 50, line2, 11, cl.INK_2)
+    c.text(L, 66, "Different machines, operating systems and instruments: cross-card gaps "
+                  "are not comparable.", 11, cl.INK_2)
+    c.text(L, 82, "x: power cap set, not power drawn. sol/s: CPU-verified solutions.",
+           11, cl.INK_2)
 
     for p, key, rng, fmt, nt, name in (
             (pa, "sol", None, "%g", 6, "sol/s"),
@@ -161,45 +218,72 @@ def render(series):
         p.frame_y()
         p.axis_x(XTICKS, "%g W", label=(key == "eff"))
         c.text(L, p.y0 - 10, name, 11, cl.INK_2)
+        starts, curves = [], []
         for name_, rows in series.items():
             colour = COLOUR.get(name_, COLOUR["RTX 4070 SUPER"])
             dash = "6 4" if name_ == RUNG else None
-            pts = [(r["cap"], r[key]) for r in rows]
-            p.c.polyline([(xs(x), p.ys(y)) for x, y in pts], colour, dash=dash)
-            for i, (x, y) in enumerate(pts):
-                p.c.marker(xs(x), p.ys(y), colour, 3.5 if dash else 4, cl.SURFACE,
+            pts = [(xs(r["cap"]), p.ys(r[key])) for r in rows]
+            p.c.polyline(pts, colour, dash=dash)
+            for i, (px, py) in enumerate(pts):
+                p.c.marker(px, py, colour, 3.5 if dash else 4, cl.SURFACE,
                            "%s, cap %g W: %g %s (drew %g W)"
-                           % (name_, x, y, name, rows[i]["drew"]))
+                           % (name_, rows[i]["cap"], rows[i][key], name, rows[i]["drew"]))
+            curves.append(pts)
+            starts.append((name_, colour, pts[0]))
+
+        # Name each curve where it starts, so a reader tracing one does not have to
+        # go back to the legend. Panel A only: panel B is the same curves in the
+        # same colours, and naming them twice is noise.
+        if key == "sol":
+            taken = []
+            for name_, colour, (mx, my) in sorted(starts, key=lambda it: it[2][1]):
+                label = name_[:-len(" @ 5001 MHz")] + " rung" if name_ == RUNG else name_
+                w = text_w(label, 10)
+                if mx + 6 + w > W - R:
+                    mx = mx - w - 12        # a curve starting near the right edge
+                lx_, ly_, r = place_label(mx, my, w, curves, taken, p.y0 + 10, p.y1 - 4,
+                                          p.x0, p.x1)
+                taken.append(r)
+                # A name pushed clear of the busy band needs saying which curve it is.
+                if abs(ly_ - my) > 24:
+                    p.c.line(lx_ + w / 2.0, ly_ + 2, mx if mx > lx_ else mx,
+                             my - 5, colour, 1, "2 2")
+                p.c.text(lx_, ly_, label, 10, colour, weight="bold")
 
     # Each card's own peak, marked in the panel that shows it. The reader's
     # question is "where do I cap THIS card", and that is a per-curve answer.
     # The rung is annotated too: it is the 4070 SUPER's real optimum, and a
     # title about stock memory would otherwise bury the better number.
+    # Above the point by default. The 5080's bound sits at 250 W, where the
+    # 4070 Ti SUPER's tail runs just above it, so that one label goes below.
+    LABEL_DY = {"RTX 5080": 18}
     for name_, pk in peaks + ([(RUNG, peak(series[RUNG]))] if RUNG in series else []):
         # A censored optimum is labelled with a >= so the number is not read as
         # a located peak.
         mark = ("\u2265%.4f" if name_ in series and censored(series[name_])
                 else "%.4f") % pk["eff"]
-        c.text(xs(pk["cap"]), ys_b(pk["eff"]) - 11, mark, 10,
+        c.text(xs(pk["cap"]), ys_b(pk["eff"]) + LABEL_DY.get(name_, -11), mark, 10,
                COLOUR.get(name_, COLOUR["RTX 4070 SUPER"]), "middle", weight="bold")
 
-    lx, ly = L + 14, A_TOP + 18
+    # Legend above the panels, on a fixed column grid. Measuring text to wrap it
+    # was wrong twice -- the estimate undercounts DejaVu and the last entry ran
+    # off the canvas -- so the column count decides the layout and the row count
+    # decides where panel A starts.
     order = [n for n in COLOUR if n in series] + ([RUNG] if RUNG in series else [])
+    pitch = (W - R - L) / float(LEGEND_COLS)
     for i, nm in enumerate(order):
+        lx = L + (i % LEGEND_COLS) * pitch
+        ly = LEGEND_Y + (i // LEGEND_COLS) * 16
         colour = COLOUR.get(nm, COLOUR["RTX 4070 SUPER"])
         dash = "6 4" if nm == RUNG else None
-        c.line(lx, ly - 4 + i * 16, lx + 22, ly - 4 + i * 16, colour, 2, dash)
-        c.marker(lx + 11, ly - 4 + i * 16, colour, 3.5 if dash else 4, cl.SURFACE)
-        rows = series[nm]
-        c.text(lx + 30, ly + i * 16, "%s  (%g-%g W)" % (nm, rows[0]["cap"], rows[-1]["cap"]),
-               11, cl.INK_2)
+        c.line(lx, ly - 4, lx + 22, ly - 4, colour, 2, dash)
+        c.marker(lx + 11, ly - 4, colour, 3.5 if dash else 4, cl.SURFACE)
+        c.text(lx + 30, ly, nm, 11, cl.INK_2)
 
-    c.text(L, B_BOT + 46, "The dashed trace is the SAME 4070 SUPER at its 5001 MHz memory "
-                          "rung: flat from 172 W down to 120 W, because the memory system "
-                          "binds and the cap does not.", 10, cl.MUTED)
-    c.text(L, B_BOT + 62, "Generated from the tables in docs/performance.md by "
-                          "docs/tools/plot_cards.py. Contribute a card with "
-                          "mxbm --report.", 10, cl.MUTED)
+    c.text(L, B_BOT + 46, "Dashed: the same 4070 SUPER at its 5001 MHz memory rung.",
+           10, cl.MUTED)
+    c.text(L, B_BOT + 62, "docs/tools/plot_cards.py, from the tables in "
+                          "docs/performance.md.", 10, cl.MUTED)
     return c.render()
 
 

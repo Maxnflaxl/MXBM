@@ -1426,6 +1426,77 @@ optimum is below the band the driver permits. Speed is non-monotonic too, peakin
 118 W rather than at the cap. A clean re-run is wanted before any of that is read as a
 property of Turing.
 
+**RTX 5080** (Blackwell, 16 GB GDDR7), stock memory — 0.8.443 [`cc43afa`], driver
+616.92, Windows, 2026-09-17, **a display attached and 26 other compute processes on
+the card**, owner overclock (+105 MHz core, +756 MHz memory, 5 % undervolt, −10 %
+target power), sweep drift +0.37 %
+([#1](https://github.com/Maxnflaxl/MXBM/issues/1)):
+
+| cap W | draw W | sol/s | ms/solve | sol/s/W |
+|---|---|---|---|---|
+| 400 | 234.1 | 60.80 | 32.39 | 0.2597 |
+| 370 | 236.5 | 60.95 | 32.16 | 0.2577 |
+| 340 | 234.9 | 60.70 | 32.44 | 0.2584 |
+| 310 | 235.5 | 60.66 | 32.49 | 0.2576 |
+| 280 | 230.4 | 60.69 | 32.40 | 0.2634 |
+| 270 | 226.8 | 60.23 | 32.66 | 0.2655 |
+| 260 | 224.5 | 59.88 | 32.87 | 0.2667 |
+| 250 | 221.2 | 59.59 | 32.89 | 0.2694 |
+
+At stock the same run's 120 s benchmark reads **60.89 sol/s / 32.41 ms** at 233.3 W,
+2.01 verified solutions per solve, 3640 solves, 3000 MHz core, 58 °C. A single
+7001 MHz memory point at the 250 W cap reads 44.38 sol/s at 129.0 W — 0.3441 sol/s/W,
+the best efficiency anywhere in the run, for 25.5 % of the speed. One point is not a
+curve, and it is not in the chart.
+
+Like the 1660 Ti, this card never reaches its limit: 234 W against a 400 W cap,
+`limited by: nothing`, and a 150 W cut costs 2.0 % of throughput. Its efficiency is
+still climbing at the lowest cap swept, so `--tune`'s 250 W is the bottom of the range
+rather than a located optimum.
+
+**Two things make this the most interesting report so far.** The first is that lolMiner
+1.98a measures **74.2 sol/s at 251.3 W** on the same card, back to back off an idle GPU
+— 0.2953 sol/s/W against MXBM's 0.2610. That is the first contributed card where
+another miner leads. The pairing is not clean: MXBM's run carries the 26 co-tenants and
+lolMiner's does not, and the two sol/s are separate counters, a distinction worth ~17 %
+inside our own pipeline ([why](benchmarking.md#1-why-reported-sols-is-not-comparable)).
+
+The second is where the time goes. Per-solve stage medians, against the reference
+card's from [where the time and energy go](benchmarks.md#where-the-time-and-energy-go):
+
+| stage | 5080 ms | 4070 Ti SUPER ms | ratio | 5080 share |
+|---|---|---|---|---|
+| round 1 | 3.49 | 4.72 | 0.74× | 11.8 % |
+| round 2 | 5.78 | 8.14 | 0.71× | 19.6 % |
+| round 3 | 15.14 | 8.09 | **1.87×** | **51.2 %** |
+| round 4 | 4.61 | 3.94 | 1.17× | 15.6 % |
+| terminal | 0.40 | 0.73 | 0.55× | 1.4 % |
+
+The compute-bound front half is faster, as newer silicon should be. The DRAM-bound back
+half is slower, and round 3 alone takes 51.2 % of the solve against 28.9 % on Ada. Two
+harnesses are being compared — `--report`'s in-miner medians against `stage_power.sh`
+replaying one stage in isolation — so small differences mean nothing here; a 1.87×
+inversion on one stage does not fall out of that.
+
+**This is not an arch fallback.** Both release jobs build `75;80;86;89;90;120`
+([release.yml](../.github/workflows/release.yml#L45)), so the card ran a native sm_120
+cubin, and sm_120 clears the `__CUDA_ARCH__ >= 800` gate that selects the L2 eviction
+policies (`kernels/cuda/pipeline_kernels.cuh:45`). What sm_120 does **not** get is the
+occupancy contract. `tests/test_cuda_resources.cpp` is Ada-only by construction —
+`kArch = "sm_89"` and an `SmModel` of Ada's register file and 100 KB carveout — and it
+skips outright on a library carrying no sm_89 code, saying so in those words. The four
+cliff kernels (r1 48 registers, r2 64, r3-quad 80, entry_scatter 40) are tuned to that
+model; ptxas allocates for sm_120 independently, and nothing checks the result. r3-quad
+is the kernel at the 80-register cliff and round 3 is the stage that regressed, so a lost
+resident block there is the first hypothesis — **unverified**, and cheap to settle:
+
+```sh
+cuobjdump -res-usage -arch sm_120 build/libmxbm_cuda.a
+```
+
+A clean re-run at stock clocks on an idle card is wanted before any of this is read as a
+property of Blackwell.
+
 ### The memory rung's crossover belongs to the card, not to the algorithm
 
 The 5001 MHz down-rung pays below ~173 W on the 4070 Ti SUPER

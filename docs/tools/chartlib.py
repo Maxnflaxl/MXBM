@@ -37,10 +37,14 @@ AXIS      = "#c3c2b7"     # axis rules
 
 # Categorical slots, in fixed order. Validated as a set for colorblind
 # separation; assign by entity, never by rank, and never generate a 9th.
+# Slot 5 was added for the RTX 5080 and measured the same way: CIEDE2000 after a
+# Vienot deuteranope simulation. It sits 7.4 from its nearest existing neighbour,
+# where the set's own worst pair is 4.7, so it introduces no new bottleneck.
 SERIES = ["#2a78d6",      # 1 blue
           "#eb6834",      # 2 orange
           "#1baf7a",      # 3 aqua
-          "#eda100"]      # 4 yellow
+          "#eda100",      # 4 yellow
+          "#b5439b"]      # 5 magenta
 
 FONT = "DejaVu Sans, Helvetica, Arial, sans-serif"
 
