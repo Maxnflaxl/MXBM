@@ -10,6 +10,7 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -198,6 +199,11 @@ struct CudaSolver::Impl {
     // Rounds 2 and 4 launch their kFCap64K instantiations: the device has 64 KB of
     // shared memory per SM. MXBM_FCAP_SMALL=0|1 overrides, for the gate on other cards.
     bool smallShared = false;
+    // The power-keyed policy decisions, kept for --report: every threshold behind them
+    // was measured on the reference card, so a report from other silicon has to say
+    // which way they went and against what board limit.
+    unsigned obsPowerW = 0, obsMemMHz = 0;
+    bool specGated = false, matchFirstLowPower = false;
     // Stage timing (Solver::stage_timing): one event per stage boundary on the launch
     // stream, read back after the solve's own synchronising copies.
     static constexpr int kStages = 7;
@@ -425,6 +431,96 @@ std::string CudaSolver::geometry() const {
                        /*replay=*/true) + (p_->smallShared ? ", staging 280/272" : "");
 }
 
+// fmt() is a file-local helper in report.cpp and tune.cpp; this TU has none.
+static std::string dfmt(const char* f, ...) {
+    va_list a; va_start(a, f);
+    char b[512];
+    std::vsnprintf(b, sizeof b, f, a);
+    va_end(a);
+    return std::string(b);
+}
+
+// What a report from unfamiliar silicon has to carry. Every figure here was worked out
+// by hand for the first Blackwell report (issue #1): whether the fatbin held an sm_120
+// cubin at all, what the SM's budget is, and what the kernels' occupancy actually was.
+// None of it needs the CUDA toolkit on the reporter's machine, which cuobjdump does.
+//
+// The kernel rows are the stock (16,1) implicit-bits path, named with the same template
+// expressions the CARVE() list uses, so this cannot report an instantiation that never
+// launches. A card on another rung is described by the row's own label, not by these.
+std::vector<miner::Solver::DeviceFact> CudaSolver::device_facts() const {
+    std::vector<miner::Solver::DeviceFact> out;
+    cudaDeviceProp pr{};
+    if (cudaGetDeviceProperties(&pr, p_->device_index) != cudaSuccess) return out;
+    const int cc = pr.major * 10 + pr.minor;
+    auto row = [&](const char* k, const std::string& v) { out.push_back({k, v}); };
+
+    // binaryVersion is the cubin ptxas produced for the image the driver selected.
+    // Below the device's own capability it means the driver JIT-compiled from PTX
+    // instead -- correct, but not the code the build was tuned on, and the first
+    // thing to rule out when a new architecture reads slow.
+    cudaFuncAttributes fa{};
+    const bool haveFa = cudaFuncGetAttributes(
+        &fa, (const void*)&fused_round<MXBM_R3_ARGS, false, false, false, false, 16u>)
+        == cudaSuccess;
+    row("Compute capability", dfmt("%d.%d", pr.major, pr.minor));
+    if (haveFa)
+        row("Device code", fa.binaryVersion >= cc
+            ? dfmt("native sm_%d cubin", fa.binaryVersion)
+            : dfmt("**JIT from PTX** (fatbin's newest cubin is sm_%d, this card is sm_%d)",
+                  fa.binaryVersion, cc));
+    row("SMs", dfmt("%d", pr.multiProcessorCount));
+    row("Shared memory per SM", dfmt("%zu KiB", (size_t)pr.sharedMemPerMultiprocessor / 1024));
+    row("Registers per SM", dfmt("%d", pr.regsPerMultiprocessor));
+    row("L2 cache", dfmt("%d MiB", pr.l2CacheSize / (1024 * 1024)));
+    // Rounds 3 and 4 are DRAM-bound, so their time means nothing without this.
+    int busBits = 0, memKHz = 0;
+    cudaDeviceGetAttribute(&busBits, cudaDevAttrGlobalMemoryBusWidth, p_->device_index);
+    cudaDeviceGetAttribute(&memKHz, cudaDevAttrMemoryClockRate, p_->device_index);
+    if (busBits && memKHz)
+        row("Memory bus", dfmt("%d-bit, %.0f GB/s peak", busBits,
+                               2.0 * memKHz * 1e3 * (busBits / 8.0) / 1.0e9));
+
+    // The occupancy contract (tests/test_cuda_resources.cpp) is Ada's and is checked
+    // against the sm_89 cubin only, so on any other architecture this table is the
+    // only statement of what the kernels actually got.
+    struct K { const char* name; const void* fn; int wg; };
+    const K ks[] = {
+        { "entry_scatter", (const void*)&entry_scatter, 256 },
+        { "entry_beside",  (const void*)&entry_beside, (int)kBesideWG },
+        { "round 1", (const void*)&fused_round<MXBM_R1_ARGS, false, false, false, false, 16u>, (int)kWG },
+        { "round 2", (const void*)&fused_round<MXBM_R2_ARGS, false, false, false, false, 16u>, (int)kWG },
+        { "round 3", (const void*)&fused_round<MXBM_R3_ARGS, false, false, false, false, 16u>, (int)kWG },
+        { "round 4", (const void*)&fused_round<MXBM_R4_ARGS, false, false, false, true>, (int)kWG },
+        { "terminal", (const void*)&terminal_round<false>, (int)kWG },
+    };
+    std::string occ;
+    for (const K& k : ks) {
+        cudaFuncAttributes a{};
+        if (cudaFuncGetAttributes(&a, k.fn) != cudaSuccess) continue;
+        int blocks = 0;
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, k.fn, k.wg, p_->smemPad);
+        if (!occ.empty()) occ += "; ";
+        occ += dfmt("%s %d blk/SM (%d reg, %zu B smem)", k.name, blocks, a.numRegs,
+                   (size_t)a.sharedSizeBytes);
+    }
+    if (!occ.empty()) row("Occupancy, stock (16,1) path", occ);
+
+    // The three power-keyed policies. Their thresholds are the reference card's, and a
+    // card that never reaches its board limit is not described by any of them -- so the
+    // report states the limit they were given as well as which way each went.
+    if (p_->obsPowerW)
+        row("Policy gates", dfmt("board limit %u W, memory %u MHz at startup: "
+                                "speculative entry %s, match-first %s, (17,0) geometry %s",
+                                p_->obsPowerW, p_->obsMemMHz,
+                                p_->specGated ? "off (under threshold)"
+                                              : (p_->specOn ? "on" : "off (not selected)"),
+                                p_->matchFirstLowPower ? "on (under threshold)"
+                                                       : (p_->matchFirst ? "on" : "off"),
+                                (p_->bb == 17u && p_->sm == 0u) ? "on" : "off"));
+    return out;
+}
+
 CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz)
     : p_(new Impl) {
     // Bind THIS thread to the chosen device before any allocation. CUDA's current
@@ -641,6 +737,8 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
     const unsigned specMinW = lowRungMem ? kSpecMinPowerRungW : kSpecMinPowerW;
     const bool specOff =
         specMinW != 0 && power_limit_w != 0 && power_limit_w < specMinW;
+    p_->obsPowerW = power_limit_w; p_->obsMemMHz = mem_clock_mhz;
+    p_->specGated = specOff;
     if (specOff)
         std::fprintf(stderr, "CUDA: board power limit %u W is below %u W%s: speculative "
                      "entry off (it costs 1-2%% there)\n", power_limit_w, specMinW,
@@ -655,6 +753,7 @@ CudaSolver::CudaSolver(int index, unsigned power_limit_w, unsigned mem_clock_mhz
     const bool mfLowPower = kMatchFirstMaxPowerW != 0 && power_limit_w != 0
                          && power_limit_w < kMatchFirstMaxPowerW;
     p_->matchFirst = mfLowPower || p_->octo || (MXBM_MATCH_FIRST != 0);
+    p_->matchFirstLowPower = mfLowPower;
     // MXBM_MFIRST=0|1 forces it either way; without it the variant is only reachable by
     // presenting a board limit under kMatchFirstMaxPowerW.
     if (const char* e = std::getenv("MXBM_MFIRST")) p_->matchFirst = atoi(e) != 0;

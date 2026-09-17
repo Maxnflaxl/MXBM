@@ -225,6 +225,19 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
           << (procs > 1 ? fmt("**%u** - this run measured contention", procs - 1)
                         : std::string("none")) << " |\n";
 
+    // What the driver cannot say: which cubin ran, the SM's budget, the blocks/SM the
+    // kernels reached, and which power-keyed policies fired. Collapsed because it is
+    // for us, not for the reporter -- but it is the half of the first Blackwell report
+    // that had to be reconstructed from CI config by hand.
+    const std::vector<Solver::DeviceFact> facts = solver->device_facts();
+    if (!facts.empty()) {
+        o << "\n<details>\n<summary>Device and kernel detail</summary>\n\n";
+        o << "| | |\n|---|---|\n";
+        for (const Solver::DeviceFact& f : facts)
+            o << "| " << f.label << " | " << f.value << " |\n";
+        o << "</details>\n";
+    }
+
     o << "\n### Throughput — " << w(r.elapsed_s) << " s, " << r.solves << " solves\n\n";
     o << "| | |\n|---|---|\n";
     o << "| Throughput | **" << s2(r.sol_per_s) << " sol/s** |\n";
@@ -313,9 +326,11 @@ int run_report(std::unique_ptr<Solver>& solver, Stats& stats, const ReportConfig
         o << "\n### Power curve\n\nNot measured (the sweep was interrupted).\n";
     }
 
-    o << "\n### Anything unusual?\n";
-    o << "<!-- overclock/undervolt, laptop/eGPU/risers, unusual cooling, another\n"
-         "     miner's figure on this card. Leave blank if it was a clean stock run. -->\n";
+    o << "\n### Anything unusual?\n\n";
+    // NOT an HTML comment: issue #1's reporter wrote their overclock inside the one
+    // that used to be here, and it rendered as nothing at all.
+    o << "_Overclock/undervolt, laptop/eGPU/risers, unusual cooling, another miner's\n"
+         "figure on this card. Delete this line if it was a clean stock run._\n";
 
     const std::string block = o.str();
     ui::console::info("");

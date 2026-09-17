@@ -30,6 +30,14 @@ struct Solver {
     struct StageTime { std::string name; double median_ms; };
     virtual bool stage_timing(bool) { return false; }
     virtual std::vector<StageTime> stage_times() const { return {}; }
+    // What a bug report needs about the device that the driver alone cannot answer:
+    // whether the binary carried native code for this architecture, the SM's resource
+    // budget, and the blocks/SM each kernel actually reached on it. The RTX 5080
+    // report (issue #1) had to have all of this worked out from CI config by hand.
+    // Each entry is one markdown row; empty where the backend cannot answer, and
+    // --report omits the section rather than printing a table of blanks.
+    struct DeviceFact { std::string label, value; };
+    virtual std::vector<DeviceFact> device_facts() const { return {}; }
     virtual ~Solver() = default;
 };
 

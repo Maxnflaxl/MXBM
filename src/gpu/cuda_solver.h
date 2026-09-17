@@ -51,6 +51,7 @@ public:
     std::string geometry() const override;
     bool stage_timing(bool on) override;
     std::vector<miner::Solver::StageTime> stage_times() const override;
+    std::vector<miner::Solver::DeviceFact> device_facts() const override;
 
     const DeviceInfo& device() const;
 
